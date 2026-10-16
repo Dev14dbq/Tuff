@@ -1,0 +1,15 @@
+[package]
+name = "mc-entity"
+description = "Entity storage, spatial index, physics, collisions and AI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+mc-data.workspace = true
+mc-world.workspace = true
+
+[lints]
+workspace = true

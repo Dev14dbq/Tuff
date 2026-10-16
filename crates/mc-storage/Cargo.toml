@@ -1,0 +1,15 @@
+[package]
+name = "mc-storage"
+description = "Anvil region files and chunk serialization."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+mc-nbt.workspace = true
+mc-world.workspace = true
+
+[lints]
+workspace = true

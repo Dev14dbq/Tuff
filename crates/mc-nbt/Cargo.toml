@@ -1,0 +1,11 @@
+[package]
+name = "mc-nbt"
+description = "Streaming NBT reader and writer (Java Edition binary format)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "mc-server"
+description = "Minecraft Java Edition 26.3 compatible server."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+mc-nbt.workspace = true
+mc-protocol.workspace = true
+mc-data.workspace = true
+mc-world.workspace = true
+mc-worldgen.workspace = true
+mc-light.workspace = true
+mc-entity.workspace = true
+mc-tick.workspace = true
+mc-storage.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "mc-worldgen"
+description = "World generation: noise, density functions, biomes, surface rules, features, structures."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+mc-data.workspace = true
+mc-world.workspace = true
+
+[lints]
+workspace = true

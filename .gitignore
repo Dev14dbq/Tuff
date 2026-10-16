@@ -1,0 +1,9 @@
+# Proprietary Mojang code (jars + decompiled sources) — never commit
+/reference/
+# Third-party tools (decompiler)
+/tools/
+# Data extracted from the user's own server.jar (cargo xtask extract-data) — Mojang data, never commit
+/cache/
+
+/target/
+.DS_Store
