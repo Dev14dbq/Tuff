@@ -40,14 +40,18 @@ impl GameProfile {
     fn encode(&self, out: &mut Vec<u8>) {
         out.put_uuid(self.uuid);
         out.put_string(&self.name);
-        out.put_len(self.properties.len());
-        for property in &self.properties {
-            out.put_string(&property.name);
-            out.put_string(&property.value);
-            out.put_bool(property.signature.is_some());
-            if let Some(signature) = &property.signature {
-                out.put_string(signature);
-            }
+        put_properties(out, &self.properties);
+    }
+}
+
+fn put_properties(out: &mut Vec<u8>, properties: &[ProfileProperty]) {
+    out.put_len(properties.len());
+    for property in properties {
+        out.put_string(&property.name);
+        out.put_string(&property.value);
+        out.put_bool(property.signature.is_some());
+        if let Some(signature) = &property.signature {
+            out.put_string(signature);
         }
     }
 }
@@ -180,6 +184,11 @@ pub mod login {
             name: String,
             uuid: u128,
         },
+        /// Encryption Response: both fields are RSA-encrypted with our public key.
+        Key {
+            shared_secret: Vec<u8>,
+            verify_token: Vec<u8>,
+        },
         LoginAcknowledged,
         Other(String),
     }
@@ -190,6 +199,10 @@ pub mod login {
                 "minecraft:hello" => Serverbound::Hello {
                     name: r.string(16)?,
                     uuid: r.uuid()?,
+                },
+                "minecraft:key" => Serverbound::Key {
+                    shared_secret: r.byte_array(256)?.to_vec(),
+                    verify_token: r.byte_array(256)?.to_vec(),
                 },
                 "minecraft:login_acknowledged" => Serverbound::LoginAcknowledged,
                 other => Serverbound::Other(other.to_owned()),
@@ -208,6 +221,26 @@ pub mod login {
         fn encode(&self, out: &mut Vec<u8>) {
             self.profile.encode(out);
             out.put_uuid(self.session_id);
+        }
+    }
+
+    /// Encryption Request (named `hello` in the packet report).
+    #[derive(Clone, Debug)]
+    pub struct EncryptionRequest {
+        /// Always empty since 1.7.
+        pub server_id: String,
+        /// RSA public key, DER-encoded SubjectPublicKeyInfo.
+        pub public_key: Vec<u8>,
+        pub verify_token: Vec<u8>,
+        pub should_authenticate: bool,
+    }
+    packet!(EncryptionRequest, Login, "minecraft:hello");
+    impl Encode for EncryptionRequest {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.server_id);
+            out.put_byte_array(&self.public_key);
+            out.put_byte_array(&self.verify_token);
+            out.put_bool(self.should_authenticate);
         }
     }
 
@@ -448,7 +481,15 @@ pub mod play {
 
     #[derive(Clone, Debug, PartialEq)]
     pub enum Serverbound {
-        AcceptTeleportation(i32),
+        /// Confirm Teleportation; since 26.3 it also reports where the client ended up.
+        AcceptTeleportation {
+            teleport_id: i32,
+            x: f64,
+            y: f64,
+            z: f64,
+            yaw: f32,
+            pitch: f32,
+        },
         KeepAlive(i64),
         MovePlayerPos {
             x: f64,
@@ -472,6 +513,8 @@ pub mod play {
         MovePlayerStatusOnly {
             flags: u8,
         },
+        /// Settings changed in game (same layout as in configuration).
+        ClientInformation(configuration::ClientInformation),
         PlayerLoaded,
         ClientTickEnd,
         ChunkBatchReceived {
@@ -490,7 +533,14 @@ pub mod play {
     impl Serverbound {
         pub fn decode(name: &str, r: &mut Reader) -> Result<Self> {
             Ok(match name {
-                "minecraft:accept_teleportation" => Serverbound::AcceptTeleportation(r.varint()?),
+                "minecraft:accept_teleportation" => Serverbound::AcceptTeleportation {
+                    teleport_id: r.varint()?,
+                    x: r.f64()?,
+                    y: r.f64()?,
+                    z: r.f64()?,
+                    yaw: r.f32()?,
+                    pitch: r.f32()?,
+                },
                 "minecraft:keep_alive" => Serverbound::KeepAlive(r.i64()?),
                 "minecraft:move_player_pos" => Serverbound::MovePlayerPos {
                     x: r.f64()?,
@@ -513,6 +563,9 @@ pub mod play {
                 },
                 "minecraft:move_player_status_only" => {
                     Serverbound::MovePlayerStatusOnly { flags: r.u8()? }
+                }
+                "minecraft:client_information" => {
+                    Serverbound::ClientInformation(configuration::ClientInformation::decode(r)?)
                 }
                 "minecraft:player_loaded" => Serverbound::PlayerLoaded,
                 "minecraft:client_tick_end" => Serverbound::ClientTickEnd,
@@ -616,23 +669,25 @@ pub mod play {
     }
 
     /// Light for the sections of a chunk plus one below and one above the world.
-    /// Masks are `BitSet` words; arrays are 2048 bytes (two values per byte).
+    /// Masks hold one bit per section (bit 0 = below the world); arrays are 2048
+    /// bytes (two values per byte), one per set bit of the matching mask.
     #[derive(Clone, Debug, Default)]
     pub struct LightData {
-        pub sky_mask: Vec<i64>,
-        pub block_mask: Vec<i64>,
-        pub empty_sky_mask: Vec<i64>,
-        pub empty_block_mask: Vec<i64>,
+        pub sky_mask: Vec<u64>,
+        pub block_mask: Vec<u64>,
+        pub empty_sky_mask: Vec<u64>,
+        pub empty_block_mask: Vec<u64>,
         pub sky: Vec<Vec<u8>>,
         pub block: Vec<Vec<u8>>,
     }
 
     impl LightData {
         fn encode(&self, out: &mut Vec<u8>) {
-            out.put_bitset(&self.sky_mask);
-            out.put_bitset(&self.block_mask);
-            out.put_bitset(&self.empty_sky_mask);
-            out.put_bitset(&self.empty_block_mask);
+            // Observed from vanilla 26.3: masks are byte bit sets, not long arrays.
+            out.put_byte_bitset(&self.sky_mask);
+            out.put_byte_bitset(&self.block_mask);
+            out.put_byte_bitset(&self.empty_sky_mask);
+            out.put_byte_bitset(&self.empty_block_mask);
             for arrays in [&self.sky, &self.block] {
                 out.put_len(arrays.len());
                 for array in arrays {
@@ -813,6 +868,150 @@ pub mod play {
         }
     }
 
+    /// Entity metadata field indices, observed from a vanilla 26.3 server.
+    pub mod metadata {
+        /// Living entity health (Float).
+        pub const HEALTH: u8 = 9;
+        /// Player: displayed skin parts (Byte), the bit mask from Client Information.
+        pub const PLAYER_SKIN_PARTS: u8 = 16;
+    }
+
+    /// One entity metadata value; the variant decides the serializer type id.
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum MetadataValue {
+        Byte(i8),
+        VarInt(i32),
+        Float(f32),
+        Boolean(bool),
+    }
+
+    impl MetadataValue {
+        fn encode(&self, out: &mut Vec<u8>) {
+            match self {
+                MetadataValue::Byte(v) => {
+                    out.put_varint(0);
+                    out.put_i8(*v);
+                }
+                MetadataValue::VarInt(v) => {
+                    out.put_varint(1);
+                    out.put_varint(*v);
+                }
+                MetadataValue::Float(v) => {
+                    out.put_varint(3);
+                    out.put_f32(*v);
+                }
+                MetadataValue::Boolean(v) => {
+                    out.put_varint(8);
+                    out.put_bool(*v);
+                }
+            }
+        }
+    }
+
+    /// Set Entity Metadata: changed fields of one entity.
+    #[derive(Clone, Debug)]
+    pub struct SetEntityData {
+        pub entity_id: i32,
+        pub entries: Vec<(u8, MetadataValue)>,
+    }
+    packet!(SetEntityData, Play, "minecraft:set_entity_data");
+    impl Encode for SetEntityData {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            for (index, value) in &self.entries {
+                out.put_u8(*index);
+                value.encode(out);
+            }
+            out.put_u8(0xff);
+        }
+    }
+
+    pub mod player_info {
+        pub const ADD_PLAYER: u8 = 0x01;
+        pub const INITIALIZE_CHAT: u8 = 0x02;
+        pub const UPDATE_GAME_MODE: u8 = 0x04;
+        pub const UPDATE_LISTED: u8 = 0x08;
+        pub const UPDATE_LATENCY: u8 = 0x10;
+        pub const UPDATE_DISPLAY_NAME: u8 = 0x20;
+        pub const UPDATE_LIST_PRIORITY: u8 = 0x40;
+        pub const UPDATE_HAT: u8 = 0x80;
+        pub const ALL: u8 = 0xFF;
+    }
+
+    /// One player in Player Info Update. Only the fields selected by the
+    /// packet's `actions` are written.
+    #[derive(Clone, Debug)]
+    pub struct PlayerInfoEntry {
+        pub profile: GameProfile,
+        pub game_mode: i32,
+        pub listed: bool,
+        pub latency_ms: i32,
+        pub display_name: Option<Tag>,
+        pub list_priority: i32,
+        pub show_hat: bool,
+    }
+
+    /// Adds or updates entries of the player list (tab list, skins).
+    #[derive(Clone, Debug)]
+    pub struct PlayerInfoUpdate {
+        pub actions: u8,
+        pub players: Vec<PlayerInfoEntry>,
+    }
+    packet!(PlayerInfoUpdate, Play, "minecraft:player_info_update");
+    impl Encode for PlayerInfoUpdate {
+        fn encode(&self, out: &mut Vec<u8>) {
+            use player_info::*;
+            let has = |action: u8| self.actions & action != 0;
+            out.put_u8(self.actions);
+            out.put_len(self.players.len());
+            for player in &self.players {
+                out.put_uuid(player.profile.uuid);
+                if has(ADD_PLAYER) {
+                    out.put_string(&player.profile.name);
+                    put_properties(out, &player.profile.properties);
+                }
+                if has(INITIALIZE_CHAT) {
+                    out.put_bool(false); // no signed chat session
+                }
+                if has(UPDATE_GAME_MODE) {
+                    out.put_varint(player.game_mode);
+                }
+                if has(UPDATE_LISTED) {
+                    out.put_bool(player.listed);
+                }
+                if has(UPDATE_LATENCY) {
+                    out.put_varint(player.latency_ms);
+                }
+                if has(UPDATE_DISPLAY_NAME) {
+                    out.put_bool(player.display_name.is_some());
+                    if let Some(name) = &player.display_name {
+                        put_nbt(out, name);
+                    }
+                }
+                if has(UPDATE_LIST_PRIORITY) {
+                    out.put_varint(player.list_priority);
+                }
+                if has(UPDATE_HAT) {
+                    out.put_bool(player.show_hat);
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct PlayerInfoRemove {
+        pub uuids: Vec<u128>,
+    }
+    packet!(PlayerInfoRemove, Play, "minecraft:player_info_remove");
+    impl Encode for PlayerInfoRemove {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_len(self.uuids.len());
+            for &uuid in &self.uuids {
+                out.put_uuid(uuid);
+            }
+        }
+    }
+
     #[derive(Clone, Debug)]
     pub struct KeepAlive {
         pub id: i64,
@@ -891,6 +1090,57 @@ mod tests {
         expected.put_varint(1);
         expected.put_string("minecraft:overworld");
         expected.push(0);
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn entity_data_matches_vanilla_bytes() {
+        // Captured from a vanilla 26.3 server: health 20, all skin parts shown.
+        let packet = play::SetEntityData {
+            entity_id: 3,
+            entries: vec![
+                (play::metadata::HEALTH, play::MetadataValue::Float(20.0)),
+                (
+                    play::metadata::PLAYER_SKIN_PARTS,
+                    play::MetadataValue::Byte(0x7f),
+                ),
+            ],
+        };
+        let mut out = Vec::new();
+        packet.encode(&mut out);
+        assert_eq!(
+            out,
+            [
+                0x03, 0x09, 0x03, 0x41, 0xa0, 0x00, 0x00, 0x10, 0x00, 0x7f, 0xff
+            ]
+        );
+    }
+
+    #[test]
+    fn player_info_matches_vanilla_bytes() {
+        // Captured from a vanilla 26.3 server (player "Probe2", offline mode).
+        let uuid = 0x435b21f3_1630_3420_8717_2c6f1c759dd3;
+        let packet = play::PlayerInfoUpdate {
+            actions: play::player_info::ALL,
+            players: vec![play::PlayerInfoEntry {
+                profile: GameProfile {
+                    uuid,
+                    name: "Probe2".into(),
+                    properties: vec![],
+                },
+                game_mode: 0,
+                listed: true,
+                latency_ms: 0,
+                display_name: None,
+                list_priority: 0,
+                show_hat: true,
+            }],
+        };
+        let mut out = Vec::new();
+        packet.encode(&mut out);
+        let mut expected = vec![0xff, 0x01];
+        expected.extend_from_slice(&uuid.to_be_bytes());
+        expected.extend_from_slice(b"\x06Probe2\x00\x00\x00\x01\x00\x00\x00\x01");
         assert_eq!(out, expected);
     }
 

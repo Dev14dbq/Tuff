@@ -1,9 +1,10 @@
 //! Java Edition 26.3 network protocol (protocol 777): framing, VarInt, packets.
 //!
-//! Sans-IO: this crate turns bytes into packets and back; sockets live in
-//! `mc-server`. Compression and encryption are not implemented yet.
+//! Sans-IO: this crate turns bytes into packets and back (with compression and
+//! the AES/CFB8 cipher); sockets and the RSA key exchange live in `mc-server`.
 
 pub mod codec;
+pub mod crypto;
 pub mod frame;
 pub mod ids;
 pub mod packets;

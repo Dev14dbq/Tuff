@@ -34,3 +34,7 @@ debug = "line-tables-only"
 [profile.profiling]
 inherits = "release"
 debug = true
+
+# RSA key generation in debug builds (tests) is slow without optimised bignums.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3

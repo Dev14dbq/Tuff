@@ -19,6 +19,7 @@ Options:
   --max-players <n>      (default 20)
   --motd <text>          server list description
   --no-compression       disable packet compression
+  --offline              offline mode: no account check, no encryption (any name can join)
 
 Logging: RUST_LOG=debug mc-server
 ";
@@ -43,6 +44,7 @@ async fn run() -> Result<()> {
     let mut data_dir: Option<PathBuf> = None;
     let mut overrides: Vec<(String, String)> = Vec::new();
     let mut no_compression = false;
+    let mut offline = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -51,6 +53,7 @@ async fn run() -> Result<()> {
                 return Ok(());
             }
             "--no-compression" => no_compression = true,
+            "--offline" => offline = true,
             "--data" => data_dir = Some(args.next().context("--data needs a value")?.into()),
             "--bind" | "--port" | "--view-distance" | "--max-players" | "--motd" => {
                 let value = args
@@ -85,6 +88,7 @@ async fn run() -> Result<()> {
     if no_compression {
         config.compression_threshold = None;
     }
+    config.online_mode = !offline;
 
     let server = Server::bind(config).await?;
     server

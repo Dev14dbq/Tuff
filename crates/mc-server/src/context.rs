@@ -8,15 +8,45 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use anyhow::{Context as _, Result};
 use mc_data::{McData, SYNCHRONIZED_REGISTRIES, resolve_tags};
 use mc_nbt::Tag;
-use mc_protocol::packets::KnownPack;
 use mc_protocol::packets::configuration::{RegistryData, RegistryEntry, TagRegistry, UpdateTags};
-use mc_protocol::packets::play::{LevelChunkWithLight, LightData, heightmap};
+use mc_protocol::packets::play::{LevelChunkWithLight, LightData, PlayerInfoEntry, heightmap};
+use mc_protocol::packets::{GameProfile, KnownPack};
 use mc_protocol::{Direction, PacketIds, State};
 use mc_worldgen::{FlatGenerator, FlatLayer};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use crate::Config;
+use crate::auth::ServerKey;
+
+/// A player who passed login.
+#[derive(Clone, Debug)]
+pub struct OnlinePlayer {
+    pub profile: GameProfile,
+    pub game_mode: i32,
+}
+
+impl OnlinePlayer {
+    pub fn info_entry(&self) -> PlayerInfoEntry {
+        PlayerInfoEntry {
+            profile: self.profile.clone(),
+            game_mode: self.game_mode,
+            listed: true,
+            latency_ms: 0,
+            display_name: None,
+            list_priority: 0,
+            show_hat: true,
+        }
+    }
+}
+
+/// Things every connection in play needs to hear about.
+#[derive(Clone, Debug)]
+pub enum Event {
+    Chat(Tag),
+    PlayerJoined(OnlinePlayer),
+    PlayerLeft(u128),
+}
 
 pub struct ServerContext {
     pub config: Config,
@@ -28,10 +58,11 @@ pub struct ServerContext {
     pub registries: Vec<RegistryData>,
     pub tags: UpdateTags,
     pub world: FlatWorld,
-    /// Online players by UUID.
-    pub players: Mutex<HashMap<u128, String>>,
-    /// System chat messages for every player.
-    pub chat: broadcast::Sender<Tag>,
+    /// RSA key for the online-mode key exchange (`None` in offline mode).
+    pub key: Option<ServerKey>,
+    /// Logged-in players by UUID.
+    pub players: Mutex<HashMap<u128, OnlinePlayer>>,
+    pub events: broadcast::Sender<Event>,
     next_entity_id: AtomicI32,
 }
 
@@ -78,6 +109,11 @@ impl ServerContext {
             });
         }
 
+        let key = if config.online_mode {
+            Some(ServerKey::generate()?)
+        } else {
+            None
+        };
         let tags = build_tags(&data, &synced_ids)?;
         let world = FlatWorld::new(&data, &synced_ids)?;
         info!(
@@ -98,8 +134,9 @@ impl ServerContext {
             registries,
             tags,
             world,
+            key,
             players: Mutex::new(HashMap::new()),
-            chat: broadcast::channel(256).0,
+            events: broadcast::channel(256).0,
             next_entity_id: AtomicI32::new(1),
             data,
         })
@@ -246,7 +283,7 @@ impl FlatWorld {
 /// one above the world in addition to the world's own sections.
 fn full_sky_light(height: u32) -> LightData {
     let sections = height as usize / 16 + 2;
-    let all = vec![((1u64 << sections) - 1) as i64];
+    let all = vec![(1u64 << sections) - 1];
     LightData {
         sky_mask: all.clone(),
         block_mask: Vec::new(),

@@ -1,10 +1,11 @@
 //! Minecraft Java Edition 26.3 compatible server.
 //!
-//! Current scope (ROADMAP Ф1, first slice): server list status, offline-mode
-//! login, configuration with the vanilla data pack as a known pack, and a
-//! superflat world players can walk and chat in. One tokio task per connection;
+//! Current scope (ROADMAP Ф1): server list status, online- and offline-mode
+//! login, configuration with the vanilla data pack as a known pack, the player
+//! list, and a superflat world players can walk and chat in. One tokio task per connection;
 //! the tick thread from ARCHITECTURE.md §4 arrives with world simulation.
 
+mod auth;
 mod connection;
 mod context;
 mod util;
@@ -32,12 +33,16 @@ pub struct Config {
     pub view_distance: u8,
     /// Packets of at least this many bytes are compressed; `None` disables compression.
     pub compression_threshold: Option<usize>,
+    /// Verify accounts with the session server and encrypt connections.
+    pub online_mode: bool,
+    /// Base URL of the session server (Mojang's by default).
+    pub session_server: String,
 }
 
 impl Config {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
-            // Offline mode lets anyone join under any name, so stay local unless asked.
+            // A development server: stay local unless asked (--bind).
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 25565,
             data_dir,
@@ -45,6 +50,8 @@ impl Config {
             max_players: 20,
             view_distance: 10,
             compression_threshold: Some(256),
+            online_mode: true,
+            session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
         }
     }
 }
@@ -114,10 +121,15 @@ impl Server {
     /// Accepts connections until `shutdown` completes.
     pub async fn run(self, shutdown: impl Future<Output = ()>) -> Result<()> {
         info!(
-            "Minecraft {} (protocol {}) server on {}",
+            "Minecraft {} (protocol {}) server on {}, {} mode",
             self.ctx.data.version.name,
             mc_protocol::PROTOCOL_VERSION,
-            self.local_addr()
+            self.local_addr(),
+            if self.ctx.config.online_mode {
+                "online"
+            } else {
+                "offline"
+            }
         );
         tokio::pin!(shutdown);
         loop {

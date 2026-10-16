@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
+use mc_protocol::crypto::{Cfb8, server_hash};
 use mc_protocol::frame::{decode_frame_body, split_frame};
 use mc_protocol::packets::{GameProfile, configuration, handshake, login, play, status};
 use mc_protocol::text;
@@ -14,14 +15,17 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::broadcast;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 use crate::ServerContext;
+use crate::auth;
+use crate::context::{Event, OnlinePlayer};
 use crate::util::{offline_uuid, random_u64, random_uuid, uuid_string, valid_player_name};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
+const CREATIVE: i32 = 1;
 
 pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>) -> Result<()> {
     let (read, write) = stream.into_split();
@@ -39,35 +43,26 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
     match intention.intent {
         1 => status(&mut reader, &mut writer).await,
         2 | 3 => {
-            let session =
-                tokio::time::timeout(LOGIN_TIMEOUT, login(&mut reader, &mut writer, &intention))
-                    .await
-                    .context("login timed out")??;
+            let login = login(&mut reader, &mut writer, &intention);
+            let session = tokio::time::timeout(LOGIN_TIMEOUT, login)
+                .await
+                .context("login timed out")??;
             let Some(player) = session else {
                 return Ok(());
             };
-            info!(
-                "{} ({}) joined from {peer}",
-                player.name,
-                uuid_string(player.uuid)
-            );
+            let name = player.player.profile.name.clone();
+            let uuid = player.player.profile.uuid;
+            info!("{name} ({}) joined from {peer}", uuid_string(uuid));
             let result = play(&mut reader, &mut writer, &player).await;
-            ctx.players
-                .lock()
-                .expect("players lock")
-                .remove(&player.uuid);
-            let _ = ctx.chat.send(text::colored(
-                &format!("{} left the game", player.name),
-                "yellow",
-            ));
-            info!(
-                "{} left: {}",
-                player.name,
-                result
-                    .as_ref()
-                    .err()
-                    .map_or("disconnected".to_owned(), |e| format!("{e:#}"))
-            );
+            ctx.players.lock().expect("players lock").remove(&uuid);
+            let _ = ctx.events.send(Event::PlayerLeft(uuid));
+            let left = text::colored(&format!("{name} left the game"), "yellow");
+            let _ = ctx.events.send(Event::Chat(left));
+            let reason = result
+                .as_ref()
+                .err()
+                .map_or("disconnected".to_owned(), |e| format!("{e:#}"));
+            info!("{name} left: {reason}");
             result
         }
         other => bail!("unknown handshake intent {other}"),
@@ -86,9 +81,11 @@ async fn status(reader: &mut PacketReader, writer: &mut PacketWriter) -> Result<
                     .players
                     .lock()
                     .expect("players lock")
-                    .iter()
+                    .values()
                     .take(12)
-                    .map(|(uuid, name)| serde_json::json!({"name": name, "id": uuid_string(*uuid)}))
+                    .map(|p| {
+                        serde_json::json!({"name": p.profile.name, "id": uuid_string(p.profile.uuid)})
+                    })
                     .collect();
                 let json = serde_json::json!({
                     "version": {"name": ctx.data.version.name, "protocol": mc_protocol::PROTOCOL_VERSION},
@@ -96,11 +93,10 @@ async fn status(reader: &mut PacketReader, writer: &mut PacketWriter) -> Result<
                     "description": {"text": ctx.config.motd},
                     "enforcesSecureChat": false,
                 });
-                writer
-                    .send(&status::StatusResponse {
-                        json: json.to_string(),
-                    })
-                    .await?;
+                let response = status::StatusResponse {
+                    json: json.to_string(),
+                };
+                writer.send(&response).await?;
             }
             Packet::Status(status::Serverbound::PingRequest(timestamp)) => {
                 writer.send(&status::PongResponse { timestamp }).await?;
@@ -114,26 +110,31 @@ async fn status(reader: &mut PacketReader, writer: &mut PacketWriter) -> Result<
 // ---------------------------------------------------------------------------
 // Login and configuration
 
-struct Player {
-    uuid: u128,
-    name: String,
+struct Session {
+    player: OnlinePlayer,
     view_distance: i32,
+    /// Displayed skin parts from Client Information (cape, jacket, sleeves, ...).
+    skin_parts: u8,
 }
 
+fn refusal(reason: serde_json::Value) -> login::LoginDisconnect {
+    login::LoginDisconnect {
+        reason_json: reason.to_string(),
+    }
+}
+
+/// Returns `None` if the client was refused (it has been told why).
 async fn login(
     reader: &mut PacketReader,
     writer: &mut PacketWriter,
     intention: &handshake::Intention,
-) -> Result<Option<Player>> {
+) -> Result<Option<Session>> {
     let ctx = writer.ctx.clone();
-    let (name, _client_uuid) = match reader.next(State::Login).await? {
-        Packet::Login(login::Serverbound::Hello { name, uuid }) => (name, uuid),
+    let name = match reader.next(State::Login).await? {
+        Packet::Login(login::Serverbound::Hello { name, .. }) => name,
         other => bail!("expected Login Start, got {other:?}"),
     };
 
-    let refuse = |reason: String| login::LoginDisconnect {
-        reason_json: serde_json::json!({ "text": reason }).to_string(),
-    };
     if intention.protocol_version != mc_protocol::PROTOCOL_VERSION {
         let reason = format!(
             "This server runs Minecraft {} (protocol {}), you have protocol {}",
@@ -141,76 +142,137 @@ async fn login(
             mc_protocol::PROTOCOL_VERSION,
             intention.protocol_version
         );
-        writer.send(&refuse(reason)).await?;
+        writer
+            .send(&refusal(serde_json::json!({ "text": reason })))
+            .await?;
         return Ok(None);
     }
     if !valid_player_name(&name) {
+        let reason = format!("Invalid player name {name:?}");
         writer
-            .send(&refuse(format!("Invalid player name {name:?}")))
+            .send(&refusal(serde_json::json!({ "text": reason })))
             .await?;
         return Ok(None);
     }
 
-    // Offline mode: the UUID is derived from the name, as vanilla does.
-    let uuid = offline_uuid(&name);
+    let profile = match &ctx.key {
+        Some(key) => match authenticate(reader, writer, key, &name).await? {
+            Some(profile) => profile,
+            None => {
+                let reason =
+                    serde_json::json!({"translate": "multiplayer.disconnect.unverified_username"});
+                writer.send(&refusal(reason)).await?;
+                return Ok(None);
+            }
+        },
+        // Offline mode: the UUID is derived from the name, as vanilla does.
+        None => GameProfile {
+            uuid: offline_uuid(&name),
+            name,
+            properties: Vec::new(),
+        },
+    };
+
+    let player = OnlinePlayer {
+        profile,
+        game_mode: CREATIVE,
+    };
+    let uuid = player.profile.uuid;
     // The lock guard must not live across an await.
-    let refusal = {
+    let refused = {
         let mut players = ctx.players.lock().expect("players lock");
         if players.contains_key(&uuid) {
             Some("You are already connected to this server")
         } else if players.len() >= ctx.config.max_players {
             Some("The server is full")
         } else {
-            players.insert(uuid, name.clone());
+            players.insert(uuid, player.clone());
             None
         }
     };
-    if let Some(reason) = refusal {
-        writer.send(&refuse(reason.to_owned())).await?;
+    if let Some(reason) = refused {
+        writer
+            .send(&refusal(serde_json::json!({ "text": reason })))
+            .await?;
         return Ok(None);
     }
-    let mut player = Player {
-        uuid,
-        name,
+
+    let mut session = Session {
+        player,
         view_distance: i32::from(ctx.config.view_distance),
+        skin_parts: 0,
     };
     // From here on the player is registered; remove them if login fails.
-    let result = configure(reader, writer, &mut player).await;
+    let result = configure(reader, writer, &mut session).await;
     match result {
-        Ok(true) => Ok(Some(player)),
+        Ok(true) => Ok(Some(session)),
         Ok(false) | Err(_) => {
-            ctx.players
-                .lock()
-                .expect("players lock")
-                .remove(&player.uuid);
+            ctx.players.lock().expect("players lock").remove(&uuid);
             result.map(|_| None)
         }
     }
+}
+
+/// Online mode: RSA key exchange, then both directions switch to AES/CFB8 and we
+/// ask the session server who this is. `None` if the session server says no.
+async fn authenticate(
+    reader: &mut PacketReader,
+    writer: &mut PacketWriter,
+    key: &auth::ServerKey,
+    name: &str,
+) -> Result<Option<GameProfile>> {
+    let token = auth::verify_token();
+    writer
+        .send(&login::EncryptionRequest {
+            server_id: String::new(),
+            public_key: key.public_der.clone(),
+            verify_token: token.to_vec(),
+            should_authenticate: true,
+        })
+        .await?;
+    let (encrypted_secret, encrypted_token) = match reader.next(State::Login).await? {
+        Packet::Login(login::Serverbound::Key {
+            shared_secret,
+            verify_token,
+        }) => (shared_secret, verify_token),
+        other => bail!("expected Encryption Response, got {other:?}"),
+    };
+    if key.decrypt(&encrypted_token)? != token {
+        bail!("verify token mismatch");
+    }
+    let secret: [u8; 16] = key
+        .decrypt(&encrypted_secret)?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("shared secret is not 16 bytes"))?;
+    reader.enable_encryption(&secret);
+    writer.enable_encryption(&secret);
+
+    let hash = server_hash("", &secret, &key.public_der);
+    let profile = auth::has_joined(&writer.ctx.config.session_server, name, &hash).await?;
+    if profile.is_none() {
+        warn!("session server did not verify {name}");
+    }
+    Ok(profile)
 }
 
 /// Returns `Ok(false)` if the client was refused during configuration.
 async fn configure(
     reader: &mut PacketReader,
     writer: &mut PacketWriter,
-    player: &mut Player,
+    session: &mut Session,
 ) -> Result<bool> {
     let ctx = writer.ctx.clone();
     if let Some(threshold) = ctx.config.compression_threshold {
-        writer
-            .send(&login::LoginCompression {
-                threshold: threshold as i32,
-            })
-            .await?;
+        let compression = login::LoginCompression {
+            threshold: threshold as i32,
+        };
+        writer.send(&compression).await?;
         writer.compression = Some(threshold);
         reader.compression = Some(threshold);
     }
     writer
         .send(&login::LoginFinished {
-            profile: GameProfile {
-                uuid: player.uuid,
-                name: player.name.clone(),
-                properties: Vec::new(),
-            },
+            profile: session.player.profile.clone(),
             session_id: random_uuid(),
         })
         .await?;
@@ -236,6 +298,9 @@ async fn configure(
     })?;
     writer.flush().await?;
 
+    let view_distance = |info: &configuration::ClientInformation| {
+        i32::from(info.view_distance).clamp(2, i32::from(ctx.config.view_distance))
+    };
     loop {
         match reader.next(State::Configuration).await? {
             Packet::Configuration(configuration::Serverbound::SelectKnownPacks(packs)) => {
@@ -246,18 +311,17 @@ async fn configure(
                         "This server needs the Minecraft {} client",
                         ctx.data.version.name
                     );
-                    writer
-                        .send(&configuration::Disconnect {
-                            reason: text::plain(&reason),
-                        })
-                        .await?;
+                    let disconnect = configuration::Disconnect {
+                        reason: text::plain(&reason),
+                    };
+                    writer.send(&disconnect).await?;
                     return Ok(false);
                 }
                 break;
             }
             Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
-                player.view_distance =
-                    i32::from(info.view_distance).clamp(2, i32::from(ctx.config.view_distance));
+                session.view_distance = view_distance(&info);
+                session.skin_parts = info.skin_parts;
             }
             other => trace!("configuration: {other:?}"),
         }
@@ -275,8 +339,8 @@ async fn configure(
                 return Ok(true);
             }
             Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
-                player.view_distance =
-                    i32::from(info.view_distance).clamp(2, i32::from(ctx.config.view_distance));
+                session.view_distance = view_distance(&info);
+                session.skin_parts = info.skin_parts;
             }
             other => trace!("configuration: {other:?}"),
         }
@@ -286,14 +350,20 @@ async fn configure(
 // ---------------------------------------------------------------------------
 // Play
 
-async fn play(reader: &mut PacketReader, writer: &mut PacketWriter, player: &Player) -> Result<()> {
+async fn play(
+    reader: &mut PacketReader,
+    writer: &mut PacketWriter,
+    session: &Session,
+) -> Result<()> {
     let ctx = writer.ctx.clone();
     let world = &ctx.world;
-    let mut chat = ctx.chat.subscribe();
+    let me = &session.player;
+    let mut events = ctx.events.subscribe();
     let (x, y, z) = world.spawn;
 
+    let entity_id = ctx.next_entity_id();
     writer.queue(&play::Login {
-        entity_id: ctx.next_entity_id(),
+        entity_id,
         hardcore: false,
         dimensions: vec![world.dimension.clone()],
         max_players: ctx.config.max_players as i32,
@@ -305,14 +375,14 @@ async fn play(reader: &mut PacketReader, writer: &mut PacketWriter, player: &Pla
         dimension_type: world.dimension_type_id,
         dimension: world.dimension.clone(),
         hashed_seed: 0,
-        game_mode: 1, // creative
+        game_mode: me.game_mode,
         previous_game_mode: None,
         is_debug: false,
         is_flat: true,
         death_location: None,
         portal_cooldown: 0,
         sea_level: world.sea_level,
-        online_mode: false,
+        online_mode: ctx.config.online_mode,
         enforces_secure_chat: false,
     })?;
     {
@@ -323,12 +393,6 @@ async fn play(reader: &mut PacketReader, writer: &mut PacketWriter, player: &Pla
             fov_modifier: 0.1,
         })?;
     }
-    writer.queue(&play::SetDefaultSpawnPosition {
-        dimension: world.dimension.clone(),
-        position: Position::new(x.floor() as i32, y as i32, z.floor() as i32),
-        yaw: 0.0,
-        pitch: 0.0,
-    })?;
     let mut awaiting_teleport = Some(1);
     writer.queue(&play::PlayerPosition {
         teleport_id: 1,
@@ -340,11 +404,36 @@ async fn play(reader: &mut PacketReader, writer: &mut PacketWriter, player: &Pla
         pitch: 0.0,
         flags: 0,
     })?;
+
+    // Player list: everyone already online, including ourselves (the client
+    // takes its own skin from this list).
+    let everyone: Vec<_> = ctx
+        .players
+        .lock()
+        .expect("players lock")
+        .values()
+        .map(OnlinePlayer::info_entry)
+        .collect();
+    writer.queue(&play::PlayerInfoUpdate {
+        actions: play::player_info::ALL,
+        players: everyone,
+    })?;
+    let _ = ctx.events.send(Event::PlayerJoined(me.clone()));
+
+    writer.queue(&play::SetDefaultSpawnPosition {
+        dimension: world.dimension.clone(),
+        position: Position::new(x.floor() as i32, y as i32, z.floor() as i32),
+        yaw: 0.0,
+        pitch: 0.0,
+    })?;
     writer.queue(&play::GameEvent {
         event: play::game_event::START_WAITING_FOR_CHUNKS,
         value: 0.0,
     })?;
-    let mut view = ChunkView::new(player.view_distance);
+    // Which skin layers to draw comes back from the server as entity metadata;
+    // without it the client shows only the base layer.
+    writer.queue(&skin_parts_metadata(entity_id, session.skin_parts))?;
+    let mut view = ChunkView::new(session.view_distance);
     view.move_to(writer, chunk_of(x), chunk_of(z))?;
     writer.queue(&play::SystemChat {
         content: text::colored(
@@ -354,20 +443,20 @@ async fn play(reader: &mut PacketReader, writer: &mut PacketWriter, player: &Pla
         overlay: false,
     })?;
     writer.flush().await?;
-    let _ = ctx.chat.send(text::colored(
-        &format!("{} joined the game", player.name),
-        "yellow",
-    ));
+    let joined = text::colored(&format!("{} joined the game", me.profile.name), "yellow");
+    let _ = ctx.events.send(Event::Chat(joined));
 
     let mut keep_alive = tokio::time::interval(KEEP_ALIVE_INTERVAL);
     let mut pending_keep_alive: Option<(i64, Instant)> = None;
     loop {
         tokio::select! {
             packet = reader.next(State::Play) => {
-                let Packet::Play(packet) = packet? else { unreachable!("play state decodes play packets") };
+                let Packet::Play(packet) = packet? else {
+                    unreachable!("play state decodes play packets")
+                };
                 match packet {
-                    play::Serverbound::AcceptTeleportation(id) => {
-                        if awaiting_teleport == Some(id) {
+                    play::Serverbound::AcceptTeleportation { teleport_id, .. } => {
+                        if awaiting_teleport == Some(teleport_id) {
                             awaiting_teleport = None;
                         }
                     }
@@ -384,9 +473,9 @@ async fn play(reader: &mut PacketReader, writer: &mut PacketWriter, player: &Pla
                         }
                     }
                     play::Serverbound::Chat { message } => {
-                        let line = format!("<{}> {}", player.name, message);
+                        let line = format!("<{}> {}", me.profile.name, message);
                         info!("{line}");
-                        let _ = ctx.chat.send(text::plain(&line));
+                        let _ = ctx.events.send(Event::Chat(text::plain(&line)));
                     }
                     play::Serverbound::ChatCommand { command } => {
                         writer.queue(&play::SystemChat {
@@ -394,13 +483,17 @@ async fn play(reader: &mut PacketReader, writer: &mut PacketWriter, player: &Pla
                             overlay: false,
                         })?;
                     }
+                    play::Serverbound::ClientInformation(info) => {
+                        writer.queue(&skin_parts_metadata(entity_id, info.skin_parts))?;
+                    }
                     other => trace!("play: {other:?}"),
                 }
             }
             _ = keep_alive.tick() => {
                 if let Some((_, sent)) = pending_keep_alive {
                     if sent.elapsed() > KEEP_ALIVE_TIMEOUT {
-                        writer.send(&play::Disconnect { reason: text::plain("Timed out") }).await?;
+                        let disconnect = play::Disconnect { reason: text::plain("Timed out") };
+                        writer.send(&disconnect).await?;
                         bail!("keep-alive timeout");
                     }
                 } else {
@@ -409,15 +502,37 @@ async fn play(reader: &mut PacketReader, writer: &mut PacketWriter, player: &Pla
                     writer.queue(&play::KeepAlive { id })?;
                 }
             }
-            message = chat.recv() => {
-                match message {
-                    Ok(content) => writer.queue(&play::SystemChat { content, overlay: false })?,
+            event = events.recv() => {
+                match event {
+                    Ok(Event::Chat(content)) => {
+                        writer.queue(&play::SystemChat { content, overlay: false })?;
+                    }
+                    Ok(Event::PlayerJoined(other)) if other.profile.uuid != me.profile.uuid => {
+                        writer.queue(&play::PlayerInfoUpdate {
+                            actions: play::player_info::ALL,
+                            players: vec![other.info_entry()],
+                        })?;
+                    }
+                    Ok(Event::PlayerLeft(uuid)) if uuid != me.profile.uuid => {
+                        writer.queue(&play::PlayerInfoRemove { uuids: vec![uuid] })?;
+                    }
+                    Ok(_) => {}
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => bail!("server shutting down"),
                 }
             }
         }
         writer.flush().await?;
+    }
+}
+
+fn skin_parts_metadata(entity_id: i32, skin_parts: u8) -> play::SetEntityData {
+    play::SetEntityData {
+        entity_id,
+        entries: vec![(
+            play::metadata::PLAYER_SKIN_PARTS,
+            play::MetadataValue::Byte(skin_parts as i8),
+        )],
     }
 }
 
@@ -499,6 +614,7 @@ struct PacketReader {
     half: OwnedReadHalf,
     buf: Vec<u8>,
     compression: Option<usize>,
+    cipher: Option<Cfb8>,
     ctx: Arc<ServerContext>,
 }
 
@@ -508,14 +624,28 @@ impl PacketReader {
             half,
             buf: Vec::with_capacity(4096),
             compression: None,
+            cipher: None,
             ctx,
         }
     }
 
+    /// Everything after the Encryption Response is encrypted, including bytes
+    /// already buffered.
+    fn enable_encryption(&mut self, secret: &[u8; 16]) {
+        let mut cipher = Cfb8::new(secret);
+        cipher.decrypt(&mut self.buf);
+        self.cipher = Some(cipher);
+    }
+
     async fn fill(&mut self) -> Result<()> {
-        // `read_buf` is cancel-safe, so `next` can sit in a `select!`.
+        // `read_buf` is cancel-safe, and decryption runs right after it without
+        // another await, so `next` can sit in a `select!`.
+        let start = self.buf.len();
         if self.half.read_buf(&mut self.buf).await? == 0 {
             bail!("connection closed");
+        }
+        if let Some(cipher) = &mut self.cipher {
+            cipher.decrypt(&mut self.buf[start..]);
         }
         Ok(())
     }
@@ -561,6 +691,7 @@ struct PacketWriter {
     half: OwnedWriteHalf,
     out: Vec<u8>,
     compression: Option<usize>,
+    cipher: Option<Cfb8>,
     ctx: Arc<ServerContext>,
 }
 
@@ -570,8 +701,15 @@ impl PacketWriter {
             half,
             out: Vec::with_capacity(4096),
             compression: None,
+            cipher: None,
             ctx,
         }
+    }
+
+    /// Called right after the Encryption Response; nothing may be queued yet.
+    fn enable_encryption(&mut self, secret: &[u8; 16]) {
+        assert!(self.out.is_empty(), "unflushed plaintext before encryption");
+        self.cipher = Some(Cfb8::new(secret));
     }
 
     fn queue<P: Encode>(&mut self, packet: &P) -> Result<()> {
@@ -583,6 +721,9 @@ impl PacketWriter {
 
     async fn flush(&mut self) -> Result<()> {
         if !self.out.is_empty() {
+            if let Some(cipher) = &mut self.cipher {
+                cipher.encrypt(&mut self.out);
+            }
             self.half.write_all(&self.out).await?;
             self.out.clear();
         }

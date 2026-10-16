@@ -10,10 +10,14 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-/// Registries the server sends to the client in Registry Data packets, from the
-/// protocol documentation's list for 26.3.
+/// Registries the server sends to the client in Registry Data packets.
+///
+/// Starts from the protocol documentation's list; the documentation lags behind
+/// 26.3, so the set was completed by observing a vanilla 26.3 server on the
+/// wire with `cargo xtask probe` (32 registries).
 pub const SYNCHRONIZED_REGISTRIES: &[&str] = &[
     "minecraft:banner_pattern",
+    "minecraft:block_transformer", // not documented, seen from vanilla
     "minecraft:cat_sound_variant",
     "minecraft:cat_variant",
     "minecraft:chat_type",
@@ -22,6 +26,7 @@ pub const SYNCHRONIZED_REGISTRIES: &[&str] = &[
     "minecraft:cow_sound_variant",
     "minecraft:cow_variant",
     "minecraft:damage_type",
+    "minecraft:decorated_pot_pattern", // not documented, seen from vanilla
     "minecraft:dialog",
     "minecraft:dimension_type",
     "minecraft:enchantment",
@@ -41,6 +46,7 @@ pub const SYNCHRONIZED_REGISTRIES: &[&str] = &[
     "minecraft:wolf_variant",
     "minecraft:world_clock",
     "minecraft:worldgen/biome",
+    "minecraft:worldgen/block_state_provider", // not documented, seen from vanilla
     "minecraft:zombie_nautilus_variant",
 ];
 

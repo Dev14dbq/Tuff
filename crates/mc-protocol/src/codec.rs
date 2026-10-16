@@ -293,6 +293,16 @@ pub trait Write {
             self.put_i64(w);
         }
     }
+    /// Bit set as a VarInt-prefixed byte array, bit `i` in byte `i / 8` (Java's
+    /// `BitSet.toByteArray`, trailing zero bytes dropped). 26.3 sends light masks
+    /// this way; the documentation still says longs.
+    fn put_byte_bitset(&mut self, words: &[u64]) {
+        let mut bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        while bytes.last() == Some(&0) {
+            bytes.pop();
+        }
+        self.put_byte_array(&bytes);
+    }
 }
 
 impl Write for Vec<u8> {
@@ -388,6 +398,20 @@ mod tests {
         for p in [Position::new(-1, -64, -1), Position::new(0, 319, 0)] {
             assert_eq!(Position::unpack(p.pack()), p);
         }
+    }
+
+    #[test]
+    fn byte_bitset_matches_vanilla_light_masks() {
+        // Masks from a vanilla 26.3 flat-world chunk: bits {1, 2}, {}, {0}, {0, 1, 2}.
+        let mut out = Vec::new();
+        out.put_byte_bitset(&[0b110]);
+        out.put_byte_bitset(&[]);
+        out.put_byte_bitset(&[0b1]);
+        out.put_byte_bitset(&[0b111]);
+        assert_eq!(out, [0x01, 0x06, 0x00, 0x01, 0x01, 0x01, 0x07]);
+        let mut wide = Vec::new();
+        wide.put_byte_bitset(&[0, 1 << 1]);
+        assert_eq!(wide, [9, 0, 0, 0, 0, 0, 0, 0, 0, 0x02]);
     }
 
     #[test]

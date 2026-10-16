@@ -1,6 +1,6 @@
-//! End-to-end: a protocol bot pings the server, logs in, configures, spawns,
-//! receives chunks and chats. Needs extracted data (`cargo xtask extract-data`);
-//! skipped otherwise.
+//! End-to-end: a protocol bot pings the server, logs in (offline and online
+//! mode, against a fake session server), configures, spawns, receives chunks
+//! and chats. Needs extracted data (`cargo xtask extract-data`); skipped otherwise.
 //!
 //! The bot is written from the protocol documentation, independently of the
 //! server's encoders, so layout mistakes on either side show up as failures.
@@ -9,16 +9,22 @@ use std::path::Path;
 use std::time::Duration;
 
 use mc_nbt::Tag;
+use mc_protocol::crypto::{Cfb8, server_hash};
 use mc_protocol::frame::{decode_frame_body, split_frame, write_frame};
 use mc_protocol::{Direction, PacketIds, Reader, State, Write as _};
 use mc_server::{Config, Server, find_data_dir};
+use rsa::pkcs8::DecodePublicKey;
+use rsa::rand_core::OsRng;
+use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 
 struct Bot {
     stream: TcpStream,
     buf: Vec<u8>,
     compression: Option<usize>,
+    /// (to server, from server) once encryption is on.
+    ciphers: Option<(Cfb8, Cfb8)>,
     ids: PacketIds,
     state: State,
 }
@@ -29,6 +35,7 @@ impl Bot {
             stream: TcpStream::connect(addr).await.unwrap(),
             buf: Vec::new(),
             compression: None,
+            ciphers: None,
             ids,
             state: State::Handshake,
         }
@@ -41,6 +48,9 @@ impl Bot {
             .unwrap_or_else(|| panic!("no serverbound {name} in {:?}", self.state));
         let mut out = Vec::new();
         write_frame(&mut out, id, &body, self.compression);
+        if let Some((encrypt, _)) = &mut self.ciphers {
+            encrypt.encrypt(&mut out);
+        }
         self.stream.write_all(&out).await.unwrap();
     }
 
@@ -60,12 +70,16 @@ impl Bot {
                     .to_owned();
                 return (name, r.rest().to_vec());
             }
+            let start = self.buf.len();
             let n =
                 tokio::time::timeout(Duration::from_secs(10), self.stream.read_buf(&mut self.buf))
                     .await
                     .expect("server answered in time")
                     .unwrap();
             assert!(n > 0, "server closed the connection");
+            if let Some((_, decrypt)) = &mut self.ciphers {
+                decrypt.decrypt(&mut self.buf[start..]);
+            }
         }
     }
 
@@ -116,6 +130,7 @@ async fn ping_login_spawn_and_chat() {
     let mut config = Config::new(data_dir);
     config.port = 0;
     config.view_distance = 3;
+    config.online_mode = false;
     let server = Server::bind(config).await.unwrap();
     let addr = server.local_addr();
     let ids = server.context().ids.clone();
@@ -179,20 +194,38 @@ async fn ping_login_spawn_and_chat() {
         seen.iter()
             .filter(|n| *n == "minecraft:registry_data")
             .count(),
-        29
+        mc_data::SYNCHRONIZED_REGISTRIES.len()
     );
     assert!(seen.contains(&"minecraft:update_tags".to_owned()));
     bot.send("minecraft:finish_configuration", Vec::new()).await;
     bot.state = State::Play;
 
     // --- play: spawn and chunks
-    let mut teleport_id = None;
+    let mut teleport = None;
     let mut chunks = 0;
     let mut started_waiting = false;
+    let mut listed_self = false;
+    let mut skin_layers = None;
     loop {
         let (name, body) = bot.recv().await;
         match name.as_str() {
-            "minecraft:player_position" => teleport_id = Some(Reader::new(&body).varint().unwrap()),
+            "minecraft:player_position" => teleport = Some(body),
+            "minecraft:set_entity_data" => {
+                // entity id, then (index 16, type Byte, value) and the 0xff end marker
+                let mut r = Reader::new(&body);
+                r.varint().unwrap();
+                assert_eq!((r.u8().unwrap(), r.varint().unwrap()), (16, 0));
+                skin_layers = Some(r.u8().unwrap());
+                assert_eq!(r.u8().unwrap(), 0xff);
+            }
+            "minecraft:player_info_update" => {
+                let mut r = Reader::new(&body);
+                assert_eq!(r.u8().unwrap(), 0xff, "all player info actions");
+                assert_eq!(r.length_prefix().unwrap(), 1);
+                assert_eq!(r.uuid().unwrap(), uuid);
+                assert_eq!(r.string(16).unwrap(), "Bot");
+                listed_self = true;
+            }
             "minecraft:game_event" => started_waiting |= body[0] == 13,
             "minecraft:level_chunk_with_light" => {
                 check_flat_chunk(&body);
@@ -206,9 +239,24 @@ async fn ping_login_spawn_and_chat() {
         }
     }
     assert!(started_waiting, "game event 13 (start waiting for chunks)");
+    assert!(listed_self, "the player list contains ourselves (own skin)");
+    assert_eq!(
+        skin_layers,
+        Some(0x7f),
+        "skin layers echo Client Information"
+    );
     assert_eq!(chunks, 7 * 7, "view distance 3 around spawn");
+    // Confirm Teleportation (26.3): teleport id, resulting x, y, z, yaw, pitch.
+    let teleport = teleport.expect("spawn teleport");
+    let mut r = Reader::new(&teleport);
     let mut confirm = Vec::new();
-    confirm.put_varint(teleport_id.expect("spawn teleport"));
+    confirm.put_varint(r.varint().unwrap());
+    for _ in 0..3 {
+        confirm.put_f64(r.f64().unwrap());
+    }
+    r.bytes(24).unwrap(); // velocity
+    confirm.put_f32(r.f32().unwrap());
+    confirm.put_f32(r.f32().unwrap());
     bot.send("minecraft:accept_teleportation", confirm).await;
 
     // Walk 3 chunks east: new column of chunks arrives, old one is forgotten.
@@ -267,6 +315,148 @@ async fn ping_login_spawn_and_chat() {
     running.await.unwrap().unwrap();
 }
 
+/// Stands in for sessionserver.mojang.com: answers one HTTP request with
+/// `response` and hands back the request line it received.
+async fn fake_session_server(response: String) -> (String, tokio::task::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buf = [0u8; 1024];
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = stream.read(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..n]);
+        }
+        stream.write_all(response.as_bytes()).await.unwrap();
+        let _ = stream.shutdown().await;
+        String::from_utf8_lossy(&request)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    });
+    (base, handle)
+}
+
+/// Starts an online-mode server using `session_server`, logs a bot in up to
+/// the key exchange, and returns the bot (encryption on), the shared secret
+/// and the server's public key.
+async fn online_bot(
+    session_server: String,
+) -> (Bot, [u8; 16], Vec<u8>, tokio::sync::oneshot::Sender<()>) {
+    let mut config = Config::new(data_dir().unwrap());
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = true;
+    config.session_server = session_server;
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ids = server.context().ids.clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+
+    let mut bot = Bot::connect(addr, ids).await;
+    bot.login("Bot").await;
+    let (name, body) = bot.recv().await;
+    assert_eq!(name, "minecraft:hello", "Encryption Request");
+    let mut r = Reader::new(&body);
+    assert_eq!(r.string(20).unwrap(), "", "empty server id");
+    let public_der = r.byte_array(1024).unwrap().to_vec();
+    let token = r.byte_array(64).unwrap().to_vec();
+    assert!(r.bool().unwrap(), "should authenticate");
+
+    let public = RsaPublicKey::from_public_key_der(&public_der).unwrap();
+    let secret = [0x5a; 16];
+    let mut response = Vec::new();
+    response.put_byte_array(
+        &public
+            .encrypt(&mut OsRng, Pkcs1v15Encrypt, &secret)
+            .unwrap(),
+    );
+    response.put_byte_array(&public.encrypt(&mut OsRng, Pkcs1v15Encrypt, &token).unwrap());
+    bot.send("minecraft:key", response).await;
+    bot.ciphers = Some((Cfb8::new(&secret), Cfb8::new(&secret)));
+    (bot, secret, public_der, stop)
+}
+
+fn http_response(status: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+#[tokio::test]
+async fn online_login_uses_session_server_profile() {
+    if data_dir().is_none() {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    }
+    let profile = r#"{"id":"069a79f444e94726a5befca90e38aaf5","name":"Bot","properties":[{"name":"textures","value":"dGV4dHVyZXM=","signature":"c2lnbmF0dXJl"}]}"#;
+    let (session_server, request) = fake_session_server(http_response("200 OK", profile)).await;
+    let (mut bot, secret, public_der, stop) = online_bot(session_server).await;
+
+    // Everything from here on is encrypted.
+    let (name, body) = bot.recv().await;
+    assert_eq!(name, "minecraft:login_compression");
+    bot.compression = Some(Reader::new(&body).varint().unwrap() as usize);
+    let (name, body) = bot.recv().await;
+    assert_eq!(name, "minecraft:login_finished");
+    let mut r = Reader::new(&body);
+    assert_eq!(
+        r.uuid().unwrap(),
+        0x069a79f444e94726a5befca90e38aaf5,
+        "UUID from the session server"
+    );
+    assert_eq!(r.string(16).unwrap(), "Bot");
+    assert_eq!(r.length_prefix().unwrap(), 1, "skin textures property");
+    assert_eq!(r.string(64).unwrap(), "textures");
+    assert_eq!(r.string(32767).unwrap(), "dGV4dHVyZXM=");
+    assert!(r.bool().unwrap(), "signed");
+    assert_eq!(r.string(1024).unwrap(), "c2lnbmF0dXJl");
+
+    // The server asked about exactly this login.
+    let line = request.await.unwrap();
+    let hash = server_hash("", &secret, &public_der);
+    assert!(
+        line.starts_with("GET /session/minecraft/hasJoined?"),
+        "{line}"
+    );
+    assert!(line.contains("username=Bot"), "{line}");
+    assert!(line.contains(&format!("serverId={hash}")), "{line}");
+
+    // And the encrypted connection keeps working into configuration.
+    bot.send("minecraft:login_acknowledged", Vec::new()).await;
+    bot.state = State::Configuration;
+    bot.recv_until("minecraft:select_known_packs").await;
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn online_login_refused_when_session_server_does_not_know_the_player() {
+    if data_dir().is_none() {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    }
+    let (session_server, request) = fake_session_server(http_response("204 No Content", "")).await;
+    let (mut bot, _, _, stop) = online_bot(session_server).await;
+    let (name, body) = bot.recv().await;
+    assert_eq!(name, "minecraft:login_disconnect");
+    let reason = Reader::new(&body).string(32767).unwrap();
+    assert!(
+        reason.contains("multiplayer.disconnect.unverified_username"),
+        "{reason}"
+    );
+    request.await.unwrap();
+    let _ = stop.send(());
+}
+
 /// Parses a flat-world chunk packet following the documented layout.
 fn check_flat_chunk(body: &[u8]) {
     let mut r = Reader::new(body);
@@ -306,10 +496,16 @@ fn check_flat_chunk(body: &[u8]) {
     assert!(non_air[1..].iter().all(|&n| n == 0));
 
     assert_eq!(r.length_prefix().unwrap(), 0, "no block entities");
-    for _ in 0..4 {
-        let longs = r.length_prefix().unwrap();
-        r.bytes(longs * 8).unwrap();
-    }
+    // Four light masks, each a byte bit set (26.3).
+    let masks: Vec<Vec<u8>> = (0..4)
+        .map(|_| r.byte_array(1024).unwrap().to_vec())
+        .collect();
+    assert_eq!(
+        masks[0],
+        [0xff, 0xff, 0xff, 0x03],
+        "sky data for all 26 sections"
+    );
+    assert!(masks[1].is_empty() && masks[2].is_empty());
     let sky = r.length_prefix().unwrap();
     assert_eq!(sky, 26, "24 sections + 1 below + 1 above");
     for _ in 0..sky {

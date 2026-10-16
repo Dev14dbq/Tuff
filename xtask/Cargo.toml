@@ -11,6 +11,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+mc-data.workspace = true
+mc-protocol.workspace = true
 anyhow = "1.0.104"
 serde_json = "1.0.154"
 sha1_smol = "1.0.1"

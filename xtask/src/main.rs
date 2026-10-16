@@ -1,6 +1,8 @@
 //! Development tasks, run as `cargo xtask <task>`.
 
+mod bots;
 mod extract_data;
+mod probe;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -12,12 +14,21 @@ Tasks:
   extract-data [--version <id>]
       Extract vanilla game data from reference/<id>/server.jar into cache/mcdata/<id>/.
       Without --version, the newest release found in reference/ is used.
+  probe [--addr <host:port>] [--name <player>] [--version <id>] [--dump <dir>]
+      Connect to a server as a client (status, login, configuration, spawn) and
+      report what it sent, checking our packet layouts against it. --dump writes
+      the raw play packets to <dir>.
+  bots [--addr <host:port>] [--count <n>] [--seconds <s>] [--version <id>]
+      Load test: n bots (default 100) log in, get their chunks and walk around
+      for s seconds (default 30). The server must run with --offline.
 ";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("extract-data") => extract_data::run(&args[1..]),
+        Some("probe") => probe::run(&args[1..]),
+        Some("bots") => bots::run(&args[1..]),
         None | Some("-h" | "--help" | "help") => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
