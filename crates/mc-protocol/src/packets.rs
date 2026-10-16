@@ -1,0 +1,903 @@
+//! Packet layouts for protocol 777 (Minecraft 26.3).
+//!
+//! Source: the public protocol documentation (minecraft.wiki, "Java Edition
+//! protocol"), not the decompiled game. Packet ids come from [`crate::PacketIds`].
+//!
+//! Clientbound packets implement [`Encode`]; serverbound packets are decoded per
+//! state into an enum, with `Other` for packets we do not handle yet.
+
+use mc_nbt::Tag;
+
+use crate::codec::{Position, Reader, Result, Write, put_nbt};
+use crate::ids::State;
+
+pub trait Packet {
+    /// Resource name as in the packet report, e.g. `minecraft:login`.
+    const NAME: &'static str;
+    const STATE: State;
+}
+
+pub trait Encode: Packet {
+    fn encode(&self, out: &mut Vec<u8>);
+}
+
+/// Player profile as sent in Login Success and Player Info Update.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GameProfile {
+    pub uuid: u128,
+    pub name: String,
+    pub properties: Vec<ProfileProperty>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProfileProperty {
+    pub name: String,
+    pub value: String,
+    pub signature: Option<String>,
+}
+
+impl GameProfile {
+    fn encode(&self, out: &mut Vec<u8>) {
+        out.put_uuid(self.uuid);
+        out.put_string(&self.name);
+        out.put_len(self.properties.len());
+        for property in &self.properties {
+            out.put_string(&property.name);
+            out.put_string(&property.value);
+            out.put_bool(property.signature.is_some());
+            if let Some(signature) = &property.signature {
+                out.put_string(signature);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnownPack {
+    pub namespace: String,
+    pub id: String,
+    pub version: String,
+}
+
+fn put_known_packs(out: &mut Vec<u8>, packs: &[KnownPack]) {
+    out.put_len(packs.len());
+    for pack in packs {
+        out.put_string(&pack.namespace);
+        out.put_string(&pack.id);
+        out.put_string(&pack.version);
+    }
+}
+
+fn read_known_packs(r: &mut Reader) -> Result<Vec<KnownPack>> {
+    let count = r.length_prefix()?;
+    let mut packs = Vec::with_capacity(count.min(64));
+    for _ in 0..count {
+        packs.push(KnownPack {
+            namespace: r.string(32767)?,
+            id: r.string(32767)?,
+            version: r.string(32767)?,
+        });
+    }
+    Ok(packs)
+}
+
+macro_rules! packet {
+    ($ty:ty, $state:ident, $name:literal) => {
+        impl Packet for $ty {
+            const NAME: &'static str = $name;
+            const STATE: State = State::$state;
+        }
+    };
+}
+
+// ===========================================================================
+pub mod handshake {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum Serverbound {
+        Intention(Intention),
+        Other(String),
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Intention {
+        pub protocol_version: i32,
+        pub server_address: String,
+        pub server_port: u16,
+        /// 1 status, 2 login, 3 transfer.
+        pub intent: i32,
+    }
+
+    impl Serverbound {
+        pub fn decode(name: &str, r: &mut Reader) -> Result<Self> {
+            Ok(match name {
+                "minecraft:intention" => Serverbound::Intention(Intention {
+                    protocol_version: r.varint()?,
+                    server_address: r.string(255)?,
+                    server_port: r.u16()?,
+                    intent: r.varint()?,
+                }),
+                other => Serverbound::Other(other.to_owned()),
+            })
+        }
+    }
+}
+
+// ===========================================================================
+pub mod status {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum Serverbound {
+        StatusRequest,
+        PingRequest(i64),
+        Other(String),
+    }
+
+    impl Serverbound {
+        pub fn decode(name: &str, r: &mut Reader) -> Result<Self> {
+            Ok(match name {
+                "minecraft:status_request" => Serverbound::StatusRequest,
+                "minecraft:ping_request" => Serverbound::PingRequest(r.i64()?),
+                other => Serverbound::Other(other.to_owned()),
+            })
+        }
+    }
+
+    /// Server list entry as JSON (version, players, description, ...).
+    #[derive(Clone, Debug)]
+    pub struct StatusResponse {
+        pub json: String,
+    }
+    packet!(StatusResponse, Status, "minecraft:status_response");
+    impl Encode for StatusResponse {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.json);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct PongResponse {
+        pub timestamp: i64,
+    }
+    packet!(PongResponse, Status, "minecraft:pong_response");
+    impl Encode for PongResponse {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_i64(self.timestamp);
+        }
+    }
+}
+
+// ===========================================================================
+pub mod login {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum Serverbound {
+        /// Login Start.
+        Hello {
+            name: String,
+            uuid: u128,
+        },
+        LoginAcknowledged,
+        Other(String),
+    }
+
+    impl Serverbound {
+        pub fn decode(name: &str, r: &mut Reader) -> Result<Self> {
+            Ok(match name {
+                "minecraft:hello" => Serverbound::Hello {
+                    name: r.string(16)?,
+                    uuid: r.uuid()?,
+                },
+                "minecraft:login_acknowledged" => Serverbound::LoginAcknowledged,
+                other => Serverbound::Other(other.to_owned()),
+            })
+        }
+    }
+
+    /// Login Success.
+    #[derive(Clone, Debug)]
+    pub struct LoginFinished {
+        pub profile: GameProfile,
+        pub session_id: u128,
+    }
+    packet!(LoginFinished, Login, "minecraft:login_finished");
+    impl Encode for LoginFinished {
+        fn encode(&self, out: &mut Vec<u8>) {
+            self.profile.encode(out);
+            out.put_uuid(self.session_id);
+        }
+    }
+
+    /// Set Compression: packets of at least `threshold` bytes are compressed.
+    #[derive(Clone, Debug)]
+    pub struct LoginCompression {
+        pub threshold: i32,
+    }
+    packet!(LoginCompression, Login, "minecraft:login_compression");
+    impl Encode for LoginCompression {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.threshold);
+        }
+    }
+
+    /// Disconnect during login; the reason is a JSON text component.
+    #[derive(Clone, Debug)]
+    pub struct LoginDisconnect {
+        pub reason_json: String,
+    }
+    packet!(LoginDisconnect, Login, "minecraft:login_disconnect");
+    impl Encode for LoginDisconnect {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.reason_json);
+        }
+    }
+}
+
+// ===========================================================================
+pub mod configuration {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum Serverbound {
+        ClientInformation(ClientInformation),
+        CustomPayload {
+            channel: String,
+            data: Vec<u8>,
+        },
+        /// Acknowledge Finish Configuration.
+        FinishConfiguration,
+        KeepAlive(i64),
+        SelectKnownPacks(Vec<KnownPack>),
+        Other(String),
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ClientInformation {
+        pub locale: String,
+        pub view_distance: i8,
+        pub chat_mode: i32,
+        pub chat_colors: bool,
+        pub skin_parts: u8,
+        pub main_hand: i32,
+        pub text_filtering: bool,
+        pub allow_server_listings: bool,
+        pub particle_status: i32,
+    }
+
+    impl ClientInformation {
+        pub fn decode(r: &mut Reader) -> Result<Self> {
+            Ok(Self {
+                locale: r.string(16)?,
+                view_distance: r.i8()?,
+                chat_mode: r.varint()?,
+                chat_colors: r.bool()?,
+                skin_parts: r.u8()?,
+                main_hand: r.varint()?,
+                text_filtering: r.bool()?,
+                allow_server_listings: r.bool()?,
+                particle_status: r.varint()?,
+            })
+        }
+    }
+
+    impl Serverbound {
+        pub fn decode(name: &str, r: &mut Reader) -> Result<Self> {
+            Ok(match name {
+                "minecraft:client_information" => {
+                    Serverbound::ClientInformation(ClientInformation::decode(r)?)
+                }
+                "minecraft:custom_payload" => Serverbound::CustomPayload {
+                    channel: r.identifier()?,
+                    data: r.rest().to_vec(),
+                },
+                "minecraft:finish_configuration" => Serverbound::FinishConfiguration,
+                "minecraft:keep_alive" => Serverbound::KeepAlive(r.i64()?),
+                "minecraft:select_known_packs" => {
+                    Serverbound::SelectKnownPacks(read_known_packs(r)?)
+                }
+                other => Serverbound::Other(other.to_owned()),
+            })
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct CustomPayload {
+        pub channel: String,
+        pub data: Vec<u8>,
+    }
+    packet!(CustomPayload, Configuration, "minecraft:custom_payload");
+    impl Encode for CustomPayload {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.channel);
+            out.put_slice(&self.data);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct Disconnect {
+        pub reason: Tag,
+    }
+    packet!(Disconnect, Configuration, "minecraft:disconnect");
+    impl Encode for Disconnect {
+        fn encode(&self, out: &mut Vec<u8>) {
+            put_nbt(out, &self.reason);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct KeepAlive {
+        pub id: i64,
+    }
+    packet!(KeepAlive, Configuration, "minecraft:keep_alive");
+    impl Encode for KeepAlive {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_i64(self.id);
+        }
+    }
+
+    /// Feature Flags.
+    #[derive(Clone, Debug)]
+    pub struct UpdateEnabledFeatures {
+        pub flags: Vec<String>,
+    }
+    packet!(
+        UpdateEnabledFeatures,
+        Configuration,
+        "minecraft:update_enabled_features"
+    );
+    impl Encode for UpdateEnabledFeatures {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_len(self.flags.len());
+            for flag in &self.flags {
+                out.put_string(flag);
+            }
+        }
+    }
+
+    /// Known Packs (clientbound).
+    #[derive(Clone, Debug)]
+    pub struct SelectKnownPacks {
+        pub packs: Vec<KnownPack>,
+    }
+    packet!(
+        SelectKnownPacks,
+        Configuration,
+        "minecraft:select_known_packs"
+    );
+    impl Encode for SelectKnownPacks {
+        fn encode(&self, out: &mut Vec<u8>) {
+            put_known_packs(out, &self.packs);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct RegistryEntry {
+        pub id: String,
+        /// `None` when the client takes the data from a known pack.
+        pub data: Option<Tag>,
+    }
+
+    /// One synchronized registry. Entry order defines the network ids.
+    #[derive(Clone, Debug)]
+    pub struct RegistryData {
+        pub registry: String,
+        pub entries: Vec<RegistryEntry>,
+    }
+    packet!(RegistryData, Configuration, "minecraft:registry_data");
+    impl Encode for RegistryData {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.registry);
+            out.put_len(self.entries.len());
+            for entry in &self.entries {
+                out.put_string(&entry.id);
+                out.put_bool(entry.data.is_some());
+                if let Some(data) = &entry.data {
+                    put_nbt(out, data);
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct TagRegistry {
+        pub registry: String,
+        /// Tag name (without `#`) and the numeric ids of its members.
+        pub tags: Vec<(String, Vec<i32>)>,
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct UpdateTags {
+        pub registries: Vec<TagRegistry>,
+    }
+    packet!(UpdateTags, Configuration, "minecraft:update_tags");
+    impl Encode for UpdateTags {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_len(self.registries.len());
+            for registry in &self.registries {
+                out.put_string(&registry.registry);
+                out.put_len(registry.tags.len());
+                for (name, ids) in &registry.tags {
+                    out.put_string(name);
+                    out.put_len(ids.len());
+                    for &id in ids {
+                        out.put_varint(id);
+                    }
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct FinishConfiguration;
+    packet!(
+        FinishConfiguration,
+        Configuration,
+        "minecraft:finish_configuration"
+    );
+    impl Encode for FinishConfiguration {
+        fn encode(&self, _out: &mut Vec<u8>) {}
+    }
+}
+
+// ===========================================================================
+pub mod play {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum Serverbound {
+        AcceptTeleportation(i32),
+        KeepAlive(i64),
+        MovePlayerPos {
+            x: f64,
+            y: f64,
+            z: f64,
+            flags: u8,
+        },
+        MovePlayerPosRot {
+            x: f64,
+            y: f64,
+            z: f64,
+            yaw: f32,
+            pitch: f32,
+            flags: u8,
+        },
+        MovePlayerRot {
+            yaw: f32,
+            pitch: f32,
+            flags: u8,
+        },
+        MovePlayerStatusOnly {
+            flags: u8,
+        },
+        PlayerLoaded,
+        ClientTickEnd,
+        ChunkBatchReceived {
+            chunks_per_tick: f32,
+        },
+        /// Only the message text; signing fields are ignored for now.
+        Chat {
+            message: String,
+        },
+        ChatCommand {
+            command: String,
+        },
+        Other(String),
+    }
+
+    impl Serverbound {
+        pub fn decode(name: &str, r: &mut Reader) -> Result<Self> {
+            Ok(match name {
+                "minecraft:accept_teleportation" => Serverbound::AcceptTeleportation(r.varint()?),
+                "minecraft:keep_alive" => Serverbound::KeepAlive(r.i64()?),
+                "minecraft:move_player_pos" => Serverbound::MovePlayerPos {
+                    x: r.f64()?,
+                    y: r.f64()?,
+                    z: r.f64()?,
+                    flags: r.u8()?,
+                },
+                "minecraft:move_player_pos_rot" => Serverbound::MovePlayerPosRot {
+                    x: r.f64()?,
+                    y: r.f64()?,
+                    z: r.f64()?,
+                    yaw: r.f32()?,
+                    pitch: r.f32()?,
+                    flags: r.u8()?,
+                },
+                "minecraft:move_player_rot" => Serverbound::MovePlayerRot {
+                    yaw: r.f32()?,
+                    pitch: r.f32()?,
+                    flags: r.u8()?,
+                },
+                "minecraft:move_player_status_only" => {
+                    Serverbound::MovePlayerStatusOnly { flags: r.u8()? }
+                }
+                "minecraft:player_loaded" => Serverbound::PlayerLoaded,
+                "minecraft:client_tick_end" => Serverbound::ClientTickEnd,
+                "minecraft:chunk_batch_received" => Serverbound::ChunkBatchReceived {
+                    chunks_per_tick: r.f32()?,
+                },
+                "minecraft:chat" => Serverbound::Chat {
+                    message: r.string(256)?,
+                },
+                "minecraft:chat_command" => Serverbound::ChatCommand {
+                    command: r.string(32767)?,
+                },
+                other => Serverbound::Other(other.to_owned()),
+            })
+        }
+    }
+
+    /// Login (play).
+    #[derive(Clone, Debug)]
+    pub struct Login {
+        pub entity_id: i32,
+        pub hardcore: bool,
+        pub dimensions: Vec<String>,
+        pub max_players: i32,
+        pub view_distance: i32,
+        pub simulation_distance: i32,
+        pub reduced_debug_info: bool,
+        pub enable_respawn_screen: bool,
+        pub do_limited_crafting: bool,
+        /// Id in the `minecraft:dimension_type` registry as we sent it.
+        pub dimension_type: i32,
+        pub dimension: String,
+        pub hashed_seed: i64,
+        /// 0 survival, 1 creative, 2 adventure, 3 spectator.
+        pub game_mode: i32,
+        pub previous_game_mode: Option<i32>,
+        pub is_debug: bool,
+        pub is_flat: bool,
+        pub death_location: Option<(String, Position)>,
+        pub portal_cooldown: i32,
+        pub sea_level: i32,
+        pub online_mode: bool,
+        pub enforces_secure_chat: bool,
+    }
+    packet!(Login, Play, "minecraft:login");
+    impl Encode for Login {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_i32(self.entity_id);
+            out.put_bool(self.hardcore);
+            out.put_len(self.dimensions.len());
+            for dimension in &self.dimensions {
+                out.put_string(dimension);
+            }
+            out.put_varint(self.max_players);
+            out.put_varint(self.view_distance);
+            out.put_varint(self.simulation_distance);
+            out.put_bool(self.reduced_debug_info);
+            out.put_bool(self.enable_respawn_screen);
+            out.put_bool(self.do_limited_crafting);
+            out.put_varint(self.dimension_type);
+            out.put_string(&self.dimension);
+            out.put_i64(self.hashed_seed);
+            out.put_varint(self.game_mode);
+            // 0 = undefined, otherwise game mode + 1.
+            out.put_varint(self.previous_game_mode.map_or(0, |mode| mode + 1));
+            out.put_bool(self.is_debug);
+            out.put_bool(self.is_flat);
+            out.put_bool(self.death_location.is_some());
+            if let Some((dimension, position)) = &self.death_location {
+                out.put_string(dimension);
+                out.put_position(*position);
+            }
+            out.put_varint(self.portal_cooldown);
+            out.put_varint(self.sea_level);
+            out.put_bool(self.online_mode);
+            out.put_bool(self.enforces_secure_chat);
+        }
+    }
+
+    pub mod game_event {
+        pub const START_WAITING_FOR_CHUNKS: u8 = 13;
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct GameEvent {
+        pub event: u8,
+        pub value: f32,
+    }
+    packet!(GameEvent, Play, "minecraft:game_event");
+    impl Encode for GameEvent {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_u8(self.event);
+            out.put_f32(self.value);
+        }
+    }
+
+    pub mod heightmap {
+        pub const WORLD_SURFACE: i32 = 1;
+        pub const MOTION_BLOCKING: i32 = 4;
+        pub const MOTION_BLOCKING_NO_LEAVES: i32 = 5;
+    }
+
+    /// Light for the sections of a chunk plus one below and one above the world.
+    /// Masks are `BitSet` words; arrays are 2048 bytes (two values per byte).
+    #[derive(Clone, Debug, Default)]
+    pub struct LightData {
+        pub sky_mask: Vec<i64>,
+        pub block_mask: Vec<i64>,
+        pub empty_sky_mask: Vec<i64>,
+        pub empty_block_mask: Vec<i64>,
+        pub sky: Vec<Vec<u8>>,
+        pub block: Vec<Vec<u8>>,
+    }
+
+    impl LightData {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_bitset(&self.sky_mask);
+            out.put_bitset(&self.block_mask);
+            out.put_bitset(&self.empty_sky_mask);
+            out.put_bitset(&self.empty_block_mask);
+            for arrays in [&self.sky, &self.block] {
+                out.put_len(arrays.len());
+                for array in arrays {
+                    out.put_byte_array(array);
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct ChunkBlockEntity {
+        /// `(x & 15) << 4 | (z & 15)`.
+        pub packed_xz: u8,
+        pub y: i16,
+        pub kind: i32,
+        pub data: Tag,
+    }
+
+    /// Chunk Data and Update Light.
+    #[derive(Clone, Debug)]
+    pub struct LevelChunkWithLight {
+        pub x: i32,
+        pub z: i32,
+        /// Heightmap type and its packed long array.
+        pub heightmaps: Vec<(i32, Vec<i64>)>,
+        /// Encoded chunk sections, bottom to top.
+        pub data: Vec<u8>,
+        pub block_entities: Vec<ChunkBlockEntity>,
+        pub light: LightData,
+    }
+    packet!(
+        LevelChunkWithLight,
+        Play,
+        "minecraft:level_chunk_with_light"
+    );
+    impl Encode for LevelChunkWithLight {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_i32(self.x);
+            out.put_i32(self.z);
+            out.put_len(self.heightmaps.len());
+            for (kind, data) in &self.heightmaps {
+                out.put_varint(*kind);
+                out.put_len(data.len());
+                for &word in data {
+                    out.put_i64(word);
+                }
+            }
+            out.put_byte_array(&self.data);
+            out.put_len(self.block_entities.len());
+            for entity in &self.block_entities {
+                out.put_u8(entity.packed_xz);
+                out.put_i16(entity.y);
+                out.put_varint(entity.kind);
+                put_nbt(out, &entity.data);
+            }
+            self.light.encode(out);
+        }
+    }
+
+    /// Set Center Chunk.
+    #[derive(Clone, Debug)]
+    pub struct SetChunkCacheCenter {
+        pub x: i32,
+        pub z: i32,
+    }
+    packet!(
+        SetChunkCacheCenter,
+        Play,
+        "minecraft:set_chunk_cache_center"
+    );
+    impl Encode for SetChunkCacheCenter {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.x);
+            out.put_varint(self.z);
+        }
+    }
+
+    /// Unload Chunk. Z comes first on the wire (read as one long by the client).
+    #[derive(Clone, Debug)]
+    pub struct ForgetLevelChunk {
+        pub x: i32,
+        pub z: i32,
+    }
+    packet!(ForgetLevelChunk, Play, "minecraft:forget_level_chunk");
+    impl Encode for ForgetLevelChunk {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_i32(self.z);
+            out.put_i32(self.x);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct ChunkBatchStart;
+    packet!(ChunkBatchStart, Play, "minecraft:chunk_batch_start");
+    impl Encode for ChunkBatchStart {
+        fn encode(&self, _out: &mut Vec<u8>) {}
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct ChunkBatchFinished {
+        pub batch_size: i32,
+    }
+    packet!(ChunkBatchFinished, Play, "minecraft:chunk_batch_finished");
+    impl Encode for ChunkBatchFinished {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.batch_size);
+        }
+    }
+
+    /// Synchronize Player Position. `flags` are Teleport Flags (relative bits).
+    #[derive(Clone, Debug)]
+    pub struct PlayerPosition {
+        pub teleport_id: i32,
+        pub x: f64,
+        pub y: f64,
+        pub z: f64,
+        pub velocity: [f64; 3],
+        pub yaw: f32,
+        pub pitch: f32,
+        pub flags: i32,
+    }
+    packet!(PlayerPosition, Play, "minecraft:player_position");
+    impl Encode for PlayerPosition {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.teleport_id);
+            out.put_f64(self.x);
+            out.put_f64(self.y);
+            out.put_f64(self.z);
+            for v in self.velocity {
+                out.put_f64(v);
+            }
+            out.put_f32(self.yaw);
+            out.put_f32(self.pitch);
+            out.put_i32(self.flags);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct SetDefaultSpawnPosition {
+        pub dimension: String,
+        pub position: Position,
+        pub yaw: f32,
+        pub pitch: f32,
+    }
+    packet!(
+        SetDefaultSpawnPosition,
+        Play,
+        "minecraft:set_default_spawn_position"
+    );
+    impl Encode for SetDefaultSpawnPosition {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.dimension);
+            out.put_position(self.position);
+            out.put_f32(self.yaw);
+            out.put_f32(self.pitch);
+        }
+    }
+
+    pub mod abilities {
+        pub const INVULNERABLE: u8 = 0x01;
+        pub const FLYING: u8 = 0x02;
+        pub const ALLOW_FLYING: u8 = 0x04;
+        pub const INSTANT_BREAK: u8 = 0x08;
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct PlayerAbilities {
+        pub flags: u8,
+        pub flying_speed: f32,
+        pub fov_modifier: f32,
+    }
+    packet!(PlayerAbilities, Play, "minecraft:player_abilities");
+    impl Encode for PlayerAbilities {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_u8(self.flags);
+            out.put_f32(self.flying_speed);
+            out.put_f32(self.fov_modifier);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct KeepAlive {
+        pub id: i64,
+    }
+    packet!(KeepAlive, Play, "minecraft:keep_alive");
+    impl Encode for KeepAlive {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_i64(self.id);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct SystemChat {
+        pub content: Tag,
+        /// Action bar instead of chat.
+        pub overlay: bool,
+    }
+    packet!(SystemChat, Play, "minecraft:system_chat");
+    impl Encode for SystemChat {
+        fn encode(&self, out: &mut Vec<u8>) {
+            put_nbt(out, &self.content);
+            out.put_bool(self.overlay);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct Disconnect {
+        pub reason: Tag,
+    }
+    packet!(Disconnect, Play, "minecraft:disconnect");
+    impl Encode for Disconnect {
+        fn encode(&self, out: &mut Vec<u8>) {
+            put_nbt(out, &self.reason);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intention_decodes() {
+        // protocol 777, "localhost", 25565, login
+        let mut body = Vec::new();
+        body.put_varint(777);
+        body.put_string("localhost");
+        body.put_u16(25565);
+        body.put_varint(2);
+        let packet =
+            handshake::Serverbound::decode("minecraft:intention", &mut Reader::new(&body)).unwrap();
+        assert_eq!(
+            packet,
+            handshake::Serverbound::Intention(handshake::Intention {
+                protocol_version: 777,
+                server_address: "localhost".into(),
+                server_port: 25565,
+                intent: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn registry_data_layout() {
+        let packet = configuration::RegistryData {
+            registry: "minecraft:dimension_type".into(),
+            entries: vec![configuration::RegistryEntry {
+                id: "minecraft:overworld".into(),
+                data: None,
+            }],
+        };
+        let mut out = Vec::new();
+        packet.encode(&mut out);
+        let mut expected = Vec::new();
+        expected.put_string("minecraft:dimension_type");
+        expected.put_varint(1);
+        expected.put_string("minecraft:overworld");
+        expected.push(0);
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn unknown_packets_are_kept_by_name() {
+        let packet =
+            play::Serverbound::decode("minecraft:swing", &mut Reader::new(&[0x00])).unwrap();
+        assert_eq!(packet, play::Serverbound::Other("minecraft:swing".into()));
+    }
+}

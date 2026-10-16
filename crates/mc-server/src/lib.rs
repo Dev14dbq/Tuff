@@ -1,0 +1,142 @@
+//! Minecraft Java Edition 26.3 compatible server.
+//!
+//! Current scope (ROADMAP Ф1, first slice): server list status, offline-mode
+//! login, configuration with the vanilla data pack as a known pack, and a
+//! superflat world players can walk and chat in. One tokio task per connection;
+//! the tick thread from ARCHITECTURE.md §4 arrives with world simulation.
+
+mod connection;
+mod context;
+mod util;
+
+use std::future::Future;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{Context as _, Result, ensure};
+use tokio::net::TcpListener;
+use tracing::{debug, info};
+
+pub use context::ServerContext;
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub bind: IpAddr,
+    pub port: u16,
+    /// `cache/mcdata/<version>` from `cargo xtask extract-data`.
+    pub data_dir: PathBuf,
+    pub motd: String,
+    pub max_players: usize,
+    /// Server view distance in chunks; players get min(this, their own setting).
+    pub view_distance: u8,
+    /// Packets of at least this many bytes are compressed; `None` disables compression.
+    pub compression_threshold: Option<usize>,
+}
+
+impl Config {
+    pub fn new(data_dir: PathBuf) -> Self {
+        Self {
+            // Offline mode lets anyone join under any name, so stay local unless asked.
+            bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            port: 25565,
+            data_dir,
+            motd: "minecraft-rewrite".to_owned(),
+            max_players: 20,
+            view_distance: 10,
+            compression_threshold: Some(256),
+        }
+    }
+}
+
+/// Finds extracted data for the protocol we implement: `cache/mcdata/<version>`
+/// in `start` or any parent directory.
+pub fn find_data_dir(start: &Path) -> Result<PathBuf> {
+    for dir in start.ancestors() {
+        let cache = dir.join("cache").join("mcdata");
+        let Ok(entries) = std::fs::read_dir(&cache) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let candidate = entry.path();
+            let Ok(text) = std::fs::read_to_string(candidate.join("version.json")) else {
+                continue;
+            };
+            let protocol = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v["protocol_version"].as_i64());
+            if protocol == Some(i64::from(mc_protocol::PROTOCOL_VERSION)) {
+                return Ok(candidate);
+            }
+        }
+    }
+    anyhow::bail!(
+        "no extracted data for protocol {} under cache/mcdata/ (run `cargo xtask extract-data`)",
+        mc_protocol::PROTOCOL_VERSION
+    )
+}
+
+#[derive(Debug)]
+pub struct Server {
+    listener: TcpListener,
+    ctx: Arc<ServerContext>,
+}
+
+impl Server {
+    pub async fn bind(config: Config) -> Result<Self> {
+        let data = mc_data::McData::load(&config.data_dir)
+            .with_context(|| format!("loading game data from {}", config.data_dir.display()))?;
+        ensure!(
+            data.version.protocol_version == mc_protocol::PROTOCOL_VERSION,
+            "data in {} is for protocol {}, this server implements {}",
+            config.data_dir.display(),
+            data.version.protocol_version,
+            mc_protocol::PROTOCOL_VERSION
+        );
+        let addr = SocketAddr::new(config.bind, config.port);
+        let ctx = Arc::new(ServerContext::new(config, data)?);
+        let listener = TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("cannot listen on {addr}"))?;
+        Ok(Self { listener, ctx })
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.listener
+            .local_addr()
+            .expect("bound listener has an address")
+    }
+
+    pub fn context(&self) -> &Arc<ServerContext> {
+        &self.ctx
+    }
+
+    /// Accepts connections until `shutdown` completes.
+    pub async fn run(self, shutdown: impl Future<Output = ()>) -> Result<()> {
+        info!(
+            "Minecraft {} (protocol {}) server on {}",
+            self.ctx.data.version.name,
+            mc_protocol::PROTOCOL_VERSION,
+            self.local_addr()
+        );
+        tokio::pin!(shutdown);
+        loop {
+            tokio::select! {
+                accepted = self.listener.accept() => {
+                    let (stream, peer) = accepted?;
+                    stream.set_nodelay(true)?;
+                    let ctx = self.ctx.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = connection::handle(stream, peer, ctx).await {
+                            debug!("{peer}: {err:#}");
+                        }
+                    });
+                }
+                () = &mut shutdown => {
+                    info!("stopping");
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
