@@ -164,6 +164,19 @@ impl Shapes {
         self.blocks.is_air(state)
     }
 
+    pub fn block_name(&self, state: u32) -> Option<&str> {
+        self.blocks.block_name(state)
+    }
+
+    pub fn property(&self, state: u32, name: &str) -> Option<&str> {
+        self.blocks.property(state, name)
+    }
+
+    /// A state by block name and properties (others at their defaults).
+    pub fn state(&self, name: &str, properties: &[(&str, &str)]) -> Option<u32> {
+        self.blocks.state_id(name, properties)
+    }
+
     /// Whether the fence table came from observation.
     pub fn observed(&self) -> bool {
         self.observed

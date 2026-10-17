@@ -161,6 +161,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         }
         if runs {
             lock(&ctx.time).advance();
+            run_scheduled_ticks(&ctx);
         }
 
         while let Ok(request) = requests.try_recv() {
@@ -197,6 +198,29 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
                 );
             }
         }
+    }
+}
+
+/// Due block ticks, then due fluid ticks; what they change goes to everyone.
+fn run_scheduled_ticks(ctx: &ServerContext) {
+    let now = lock(&ctx.time).age;
+    let due = {
+        let mut ticks = lock(&ctx.ticks);
+        let fluids = ticks.fluids.take_due(now);
+        let blocks = ticks.blocks.take_due(now);
+        (blocks, fluids)
+    };
+    if due.0.is_empty() && due.1.is_empty() {
+        return;
+    }
+    let mut level = crate::level::WorldLevel::new(ctx);
+    let logic = level.logic();
+    for (pos, fluid) in due.1 {
+        mc_tick::fluids::tick(&mut level, logic, pos, fluid);
+    }
+    let changes = level.into_changes();
+    if !changes.is_empty() {
+        let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
     }
 }
 

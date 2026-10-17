@@ -1,17 +1,27 @@
 //! Setting a block and the updates that follow (minecraft.wiki, "Block
-//! update"): neighbour-changed updates to the six neighbours, then
-//! post-placement (shape) updates to them, depth first.
+//! update"): the new block reacts to being placed, then neighbour-changed
+//! updates go to the six neighbours, then post-placement (shape) updates,
+//! depth first.
 //!
 //! A block that only changes its shape in answer to a shape update passes
 //! shape updates on, but no neighbour-changed updates; one that breaks
 //! (becomes air) sends both.
 
 use crate::dir::{BlockPos, Dir};
+use crate::facts::BlockRules;
+use crate::fluids;
 use crate::level::Level;
 use crate::shapes::Shapes;
 
 /// How deep shape updates may chain from one change.
 pub const SHAPE_UPDATE_LIMIT: u32 = 512;
+
+/// The block facts the update logic reads.
+#[derive(Clone, Copy, Debug)]
+pub struct Ctx<'a> {
+    pub shapes: &'a Shapes,
+    pub facts: &'a BlockRules,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Flags {
@@ -37,19 +47,13 @@ impl Flags {
 }
 
 /// Sets the block at `p` and runs the updates. Returns whether it changed.
-pub fn set_block(
-    level: &mut dyn Level,
-    shapes: &Shapes,
-    p: BlockPos,
-    state: u32,
-    flags: Flags,
-) -> bool {
-    set_with_limit(level, shapes, p, state, flags, SHAPE_UPDATE_LIMIT)
+pub fn set_block(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, flags: Flags) -> bool {
+    set_with_limit(level, ctx, p, state, flags, SHAPE_UPDATE_LIMIT)
 }
 
 fn set_with_limit(
     level: &mut dyn Level,
-    shapes: &Shapes,
+    ctx: Ctx,
     p: BlockPos,
     state: u32,
     flags: Flags,
@@ -58,13 +62,15 @@ fn set_with_limit(
     if level.block(p) == state || !level.set(p, state) {
         return false;
     }
+    // The new block reacts to being placed before its neighbours hear of it.
+    fluids::on_place(level, ctx, p, state);
     if flags.neighbors {
         for dir in Dir::NC_ORDER {
-            neighbor_changed(level, shapes, p.offset(dir), p);
+            neighbor_changed(level, ctx, p.offset(dir), p);
         }
     }
     if flags.shapes && limit > 0 {
-        update_neighbor_shapes(level, shapes, p, state, limit - 1);
+        update_neighbor_shapes(level, ctx, p, state, limit - 1);
     }
     true
 }
@@ -72,7 +78,7 @@ fn set_with_limit(
 /// Shape updates from the block at `p` (now `state`) to its neighbours.
 pub fn update_neighbor_shapes(
     level: &mut dyn Level,
-    shapes: &Shapes,
+    ctx: Ctx,
     p: BlockPos,
     state: u32,
     limit: u32,
@@ -80,18 +86,23 @@ pub fn update_neighbor_shapes(
     for dir in Dir::PP_ORDER {
         let np = p.offset(dir);
         let current = level.block(np);
-        let new = shapes.update_shape(level, np, current, dir.opposite(), state);
+        fluids::shape_updated(level, ctx, np, current, state);
+        let new = ctx
+            .shapes
+            .update_shape(level, np, current, dir.opposite(), state);
         if new != current {
-            let flags = if shapes.is_air(new) {
+            let flags = if ctx.shapes.is_air(new) {
                 Flags::ALL
             } else {
                 Flags::SHAPES_ONLY
             };
-            set_with_limit(level, shapes, np, new, flags, limit);
+            set_with_limit(level, ctx, np, new, flags, limit);
         }
     }
 }
 
-/// A neighbour-changed update to the block at `p` from `from`. No block
-/// reacts yet; redstone components and fluids will (ROADMAP Ф3).
-fn neighbor_changed(_level: &mut dyn Level, _shapes: &Shapes, _p: BlockPos, _from: BlockPos) {}
+/// A neighbour-changed update to the block at `p` from `from`. Fluids react;
+/// redstone components will (ROADMAP Ф3).
+fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: BlockPos) {
+    fluids::neighbor_changed(level, ctx, p);
+}

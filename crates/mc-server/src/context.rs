@@ -139,6 +139,8 @@ pub struct ServerContext {
     pub rules: BlockRules,
     /// Neighbour-dependent block shapes.
     pub shapes: mc_tick::Shapes,
+    /// Block and fluid ticks waiting to run (tick thread only).
+    pub ticks: Mutex<mc_tick::ScheduledTicks>,
     /// `minecraft:player` in `minecraft:entity_type`.
     pub player_entity_type: i32,
     /// RSA key for the online-mode key exchange (`None` in offline mode).
@@ -224,7 +226,7 @@ impl ServerContext {
             None
         };
         let tags = build_tags(&data, &synced_ids)?;
-        let rules = BlockRules::new(&data)?;
+        let rules = BlockRules::new(&data).map_err(anyhow::Error::msg)?;
         let observed = config.data_dir.join("observed/fence_attach.json");
         let attach = std::fs::read_to_string(&observed)
             .ok()
@@ -268,6 +270,7 @@ impl ServerContext {
             world,
             rules,
             shapes,
+            ticks: Mutex::new(mc_tick::ScheduledTicks::default()),
             player_entity_type,
             key,
             players: Mutex::new(HashMap::new()),

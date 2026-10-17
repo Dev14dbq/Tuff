@@ -9,4 +9,14 @@ pub trait Level {
     /// Stores a block without any updates; `false` if it cannot change there
     /// (outside the world, not loaded).
     fn set(&mut self, p: BlockPos, state: u32) -> bool;
+
+    /// Game time (world age) in ticks.
+    fn game_time(&self) -> i64;
+
+    /// Asks for a fluid tick at `p` after `delay` ticks; `fluid` is a
+    /// [`crate::fluids::Fluid`] id.
+    fn schedule_fluid_tick(&mut self, p: BlockPos, fluid: u32, delay: i64);
+
+    /// Asks for a block tick at `p` after `delay` ticks.
+    fn schedule_block_tick(&mut self, p: BlockPos, block: u32, delay: i64, priority: i32);
 }

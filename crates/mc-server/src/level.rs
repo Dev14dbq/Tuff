@@ -32,10 +32,17 @@ impl<'a> WorldLevel<'a> {
         }
     }
 
+    pub fn logic(&self) -> mc_tick::Ctx<'a> {
+        mc_tick::Ctx {
+            shapes: &self.ctx.shapes,
+            facts: &self.ctx.rules,
+        }
+    }
+
     /// Sets a block with all updates (as a player or `/setblock` does).
     pub fn set_block(&mut self, p: Position, state: u32) -> bool {
-        let ctx = self.ctx;
-        mc_tick::set_block(self, &ctx.shapes, to_pos(p), state, mc_tick::Flags::ALL)
+        let logic = self.logic();
+        mc_tick::set_block(self, logic, to_pos(p), state, mc_tick::Flags::ALL)
     }
 
     /// What changed, each block once with its final state.
@@ -69,5 +76,21 @@ impl Level for WorldLevel<'_> {
             }
         }
         true
+    }
+
+    fn game_time(&self) -> i64 {
+        self.ctx.time.lock().expect("time lock").age
+    }
+
+    fn schedule_fluid_tick(&mut self, p: BlockPos, fluid: u32, delay: i64) {
+        let at = self.game_time() + delay;
+        let mut ticks = self.ctx.ticks.lock().expect("ticks lock");
+        ticks.fluids.schedule(p, fluid, at, 0);
+    }
+
+    fn schedule_block_tick(&mut self, p: BlockPos, block: u32, delay: i64, priority: i32) {
+        let at = self.game_time() + delay;
+        let mut ticks = self.ctx.ticks.lock().expect("ticks lock");
+        ticks.blocks.schedule(p, block, at, priority);
     }
 }
