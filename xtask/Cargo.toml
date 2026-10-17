@@ -11,6 +11,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+mc-nbt.workspace = true
 mc-data.workspace = true
 mc-protocol.workspace = true
 anyhow = "1.0.104"

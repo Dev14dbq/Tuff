@@ -315,6 +315,178 @@ async fn ping_login_spawn_and_chat() {
     running.await.unwrap().unwrap();
 }
 
+#[tokio::test]
+async fn client_without_known_packs_gets_registry_data_as_nbt() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ids = server.context().ids.clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+
+    let mut bot = Bot::connect(addr, ids).await;
+    bot.login("NoPacks").await;
+    let (_, body) = bot.recv_until("minecraft:login_compression").await;
+    bot.compression = Some(Reader::new(&body).varint().unwrap() as usize);
+    bot.recv_until("minecraft:login_finished").await;
+    bot.send("minecraft:login_acknowledged", Vec::new()).await;
+    bot.state = State::Configuration;
+    bot.recv_until("minecraft:select_known_packs").await;
+    let mut none = Vec::new();
+    none.put_varint(0);
+    bot.send("minecraft:select_known_packs", none).await;
+
+    let (mut registries, mut entries) = (0, 0);
+    loop {
+        let (name, body) = bot.recv().await;
+        match name.as_str() {
+            "minecraft:registry_data" => {
+                registries += 1;
+                let mut r = Reader::new(&body);
+                r.identifier().unwrap();
+                for _ in 0..r.length_prefix().unwrap() {
+                    r.identifier().unwrap();
+                    assert!(r.bool().unwrap(), "every entry carries NBT");
+                    // Usually a compound; some registries use other root tags,
+                    // exactly as vanilla sends them (see `cargo xtask registry-diff`).
+                    r.nbt().unwrap();
+                    entries += 1;
+                }
+                assert_eq!(r.remaining(), 0);
+            }
+            "minecraft:finish_configuration" => break,
+            _ => {}
+        }
+    }
+    assert_eq!(registries, mc_data::SYNCHRONIZED_REGISTRIES.len());
+    assert!(entries > 400, "{entries} entries");
+    bot.send("minecraft:finish_configuration", Vec::new()).await;
+    bot.state = State::Play;
+    bot.recv_until("minecraft:login").await;
+    let _ = stop.send(());
+}
+
+/// Logs an offline-mode bot all the way into play (first chunk batch received,
+/// spawn teleport confirmed) and returns it with its spawn position.
+async fn join_offline(
+    addr: std::net::SocketAddr,
+    ids: PacketIds,
+    name: &str,
+) -> (Bot, (f64, f64, f64)) {
+    let mut bot = Bot::connect(addr, ids).await;
+    bot.login(name).await;
+    let (_, body) = bot.recv_until("minecraft:login_compression").await;
+    bot.compression = Some(Reader::new(&body).varint().unwrap() as usize);
+    bot.recv_until("minecraft:login_finished").await;
+    bot.send("minecraft:login_acknowledged", Vec::new()).await;
+    bot.state = State::Configuration;
+    let (_, packs) = bot.recv_until("minecraft:select_known_packs").await;
+    bot.send("minecraft:select_known_packs", packs).await;
+    bot.recv_until("minecraft:finish_configuration").await;
+    bot.send("minecraft:finish_configuration", Vec::new()).await;
+    bot.state = State::Play;
+    let (_, teleport) = bot.recv_until("minecraft:player_position").await;
+    let mut r = Reader::new(&teleport);
+    let mut confirm = Vec::new();
+    confirm.put_varint(r.varint().unwrap());
+    let position = (r.f64().unwrap(), r.f64().unwrap(), r.f64().unwrap());
+    for v in [position.0, position.1, position.2] {
+        confirm.put_f64(v);
+    }
+    confirm.put_f32(0.0);
+    confirm.put_f32(0.0);
+    bot.send("minecraft:accept_teleportation", confirm).await;
+    bot.recv_until("minecraft:chunk_batch_finished").await;
+    (bot, position)
+}
+
+#[tokio::test]
+async fn players_see_each_other_spawn_move_and_leave() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ids = server.context().ids.clone();
+    let player_type = server.context().player_entity_type;
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+
+    let (mut alice, _) = join_offline(addr, ids.clone(), "Alice").await;
+    let (mut bob, spawn) = join_offline(addr, ids.clone(), "Bob").await;
+
+    // Alice learns about Bob, then sees his entity appear.
+    let (_, info) = alice.recv_until("minecraft:player_info_update").await;
+    let mut r = Reader::new(&info);
+    r.u8().unwrap();
+    r.length_prefix().unwrap();
+    let bob_uuid = r.uuid().unwrap();
+    assert_eq!(r.string(16).unwrap(), "Bob");
+    let (_, spawned) = alice.recv_until("minecraft:add_entity").await;
+    let mut r = Reader::new(&spawned);
+    let bob_entity = r.varint().unwrap();
+    assert_eq!(r.uuid().unwrap(), bob_uuid);
+    assert_eq!(r.varint().unwrap(), player_type);
+    assert_eq!(
+        (r.f64().unwrap(), r.f64().unwrap(), r.f64().unwrap()),
+        spawn
+    );
+
+    // Bob walks and turns; Alice sees where he went.
+    let mut moved = Vec::new();
+    for v in [spawn.0 + 3.0, spawn.1, spawn.2 - 2.0] {
+        moved.put_f64(v);
+    }
+    moved.put_f32(90.0);
+    moved.put_f32(-15.0);
+    moved.put_u8(0x01);
+    bob.send("minecraft:move_player_pos_rot", moved).await;
+    let (_, sync) = alice.recv_until("minecraft:entity_position_sync").await;
+    let mut r = Reader::new(&sync);
+    assert_eq!(r.varint().unwrap(), bob_entity);
+    assert_eq!(r.varint().unwrap(), 0, "linear path");
+    assert_eq!(
+        (r.f64().unwrap(), r.f64().unwrap(), r.f64().unwrap()),
+        (spawn.0 + 3.0, spawn.1, spawn.2 - 2.0)
+    );
+    assert_eq!(
+        (r.f32().unwrap(), r.f32().unwrap(), r.bool().unwrap()),
+        (90.0, -15.0, true)
+    );
+
+    // Bob leaves: his entity and list entry go away.
+    drop(bob);
+    let (_, removed) = alice.recv_until("minecraft:remove_entities").await;
+    let mut r = Reader::new(&removed);
+    assert_eq!(
+        (r.length_prefix().unwrap(), r.varint().unwrap()),
+        (1, bob_entity)
+    );
+    let (_, gone) = alice.recv_until("minecraft:player_info_remove").await;
+    let mut r = Reader::new(&gone);
+    assert_eq!(
+        (r.length_prefix().unwrap(), r.uuid().unwrap()),
+        (1, bob_uuid)
+    );
+    let _ = stop.send(());
+}
+
 /// Stands in for sessionserver.mojang.com: answers one HTTP request with
 /// `response` and hands back the request line it received.
 async fn fake_session_server(response: String) -> (String, tokio::task::JoinHandle<String>) {

@@ -106,6 +106,20 @@ impl Compound {
         self.0.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut Tag> {
+        self.0.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    pub fn remove(&mut self, key: &str) -> Option<Tag> {
+        let index = self.0.iter().position(|(k, _)| k == key)?;
+        Some(self.0.remove(index).1)
+    }
+
+    /// Keeps the entries for which `keep(key, value)` is true.
+    pub fn retain(&mut self, mut keep: impl FnMut(&str, &Tag) -> bool) {
+        self.0.retain(|(k, v)| keep(k, v));
+    }
+
     pub fn len(&self) -> usize {
         self.0.len()
     }

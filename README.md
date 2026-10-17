@@ -64,7 +64,8 @@ cargo run --release -p mc-server
 ```bash
 cargo run --release -p mc-server -- --offline
 cargo xtask bots --count 100 --seconds 30   # нагрузочный тест
-cargo xtask probe                           # сверка форматов, см. docs/specs/protocol-26.3.md
+cargo xtask probe --mover                   # сверка форматов, см. docs/specs/protocol-26.3.md
+cargo xtask registry-diff --a <ваниль> --b <наш>   # реестры в NBT против ванили
 ```
 
 `extract-data` сверяет SHA1 server.jar с JSON версии, достаёт встроенный датапак и `version.json`

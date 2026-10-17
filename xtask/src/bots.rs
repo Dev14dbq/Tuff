@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail, ensure};
 use mc_protocol::{PacketIds, Reader, State, Write as _};
 
-use crate::probe::{Client, load_packet_ids, teleport_confirmation};
+use crate::probe::{Client, is_timeout, load_packet_ids, teleport_confirmation};
 
 #[derive(Default)]
 struct Stats {
@@ -180,15 +180,4 @@ fn bot(
     }
     ensure!(spawned, "never received its chunks");
     Ok(())
-}
-
-fn is_timeout(err: &anyhow::Error) -> bool {
-    err.chain().any(|e| {
-        e.downcast_ref::<std::io::Error>().is_some_and(|io| {
-            matches!(
-                io.kind(),
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-            )
-        })
-    })
 }

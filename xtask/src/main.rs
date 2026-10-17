@@ -3,6 +3,7 @@
 mod bots;
 mod extract_data;
 mod probe;
+mod registry_diff;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -21,6 +22,9 @@ Tasks:
   bots [--addr <host:port>] [--count <n>] [--seconds <s>] [--version <id>]
       Load test: n bots (default 100) log in, get their chunks and walk around
       for s seconds (default 30). The server must run with --offline.
+  registry-diff --a <host:port> --b <host:port> [--details <n>]
+      Log into two offline-mode servers without known packs and compare every
+      registry entry they send as NBT (e.g. vanilla vs ours).
 ";
 
 fn main() -> ExitCode {
@@ -29,6 +33,7 @@ fn main() -> ExitCode {
         Some("extract-data") => extract_data::run(&args[1..]),
         Some("probe") => probe::run(&args[1..]),
         Some("bots") => bots::run(&args[1..]),
+        Some("registry-diff") => registry_diff::run(&args[1..]),
         None | Some("-h" | "--help" | "help") => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;

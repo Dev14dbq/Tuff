@@ -24,6 +24,21 @@ use crate::auth::ServerKey;
 pub struct OnlinePlayer {
     pub profile: GameProfile,
     pub game_mode: i32,
+    pub entity_id: i32,
+    /// Displayed skin parts, sent to others as entity metadata.
+    pub skin_parts: u8,
+    /// Where the player is; `None` until they spawn in play.
+    pub pose: Option<Pose>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pose {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub on_ground: bool,
 }
 
 impl OnlinePlayer {
@@ -45,7 +60,20 @@ impl OnlinePlayer {
 pub enum Event {
     Chat(Tag),
     PlayerJoined(OnlinePlayer),
-    PlayerLeft(u128),
+    PlayerLeft {
+        uuid: u128,
+        entity_id: i32,
+    },
+    PlayerMoved {
+        uuid: u128,
+        entity_id: i32,
+        pose: Pose,
+    },
+    SkinParts {
+        uuid: u128,
+        entity_id: i32,
+        parts: u8,
+    },
 }
 
 pub struct ServerContext {
@@ -56,8 +84,13 @@ pub struct ServerContext {
     pub core_pack: KnownPack,
     /// Registry Data packets; entry order defines the network ids.
     pub registries: Vec<RegistryData>,
+    /// The same registries with every entry's data as NBT, for clients that do
+    /// not know the vanilla data pack.
+    pub registries_with_data: Vec<RegistryData>,
     pub tags: UpdateTags,
     pub world: FlatWorld,
+    /// `minecraft:player` in `minecraft:entity_type`.
+    pub player_entity_type: i32,
     /// RSA key for the online-mode key exchange (`None` in offline mode).
     pub key: Option<ServerKey>,
     /// Logged-in players by UUID.
@@ -90,6 +123,7 @@ impl ServerContext {
         // Network ids of data-driven registry entries are their position in our list.
         let mut synced_ids: HashMap<String, HashMap<String, i32>> = HashMap::new();
         let mut registries = Vec::new();
+        let mut registries_with_data = Vec::new();
         for &registry in SYNCHRONIZED_REGISTRIES {
             let entries = pack.registry_entries(registry)?;
             synced_ids.insert(
@@ -100,6 +134,21 @@ impl ServerContext {
                     .map(|(i, e)| (e.clone(), i as i32))
                     .collect(),
             );
+            let mut with_data = Vec::with_capacity(entries.len());
+            for id in &entries {
+                let json = pack.read_entry(registry, id)?;
+                let mut data = mc_data::json_to_nbt(&json)
+                    .with_context(|| format!("{registry} {id} is null"))?;
+                mc_data::strip_server_only(registry, &mut data);
+                with_data.push(RegistryEntry {
+                    id: id.clone(),
+                    data: Some(data),
+                });
+            }
+            registries_with_data.push(RegistryData {
+                registry: registry.to_owned(),
+                entries: with_data,
+            });
             registries.push(RegistryData {
                 registry: registry.to_owned(),
                 entries: entries
@@ -116,6 +165,10 @@ impl ServerContext {
         };
         let tags = build_tags(&data, &synced_ids)?;
         let world = FlatWorld::new(&data, &synced_ids)?;
+        let player_entity_type = data
+            .builtin
+            .id("minecraft:entity_type", "minecraft:player")
+            .context("minecraft:player missing from the registries report")?;
         info!(
             "loaded {} packets, {} synchronized registries, tags for {} registries",
             ids.len(),
@@ -132,11 +185,14 @@ impl ServerContext {
             config,
             ids,
             registries,
+            registries_with_data,
             tags,
             world,
+            player_entity_type,
             key,
             players: Mutex::new(HashMap::new()),
-            events: broadcast::channel(256).0,
+            // Every movement is an event; leave room for many moving players.
+            events: broadcast::channel(4096).0,
             next_entity_id: AtomicI32::new(1),
             data,
         })

@@ -19,6 +19,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut name = "Probe".to_owned();
     let mut version = None;
     let mut dump: Option<std::path::PathBuf> = None;
+    let mut mover = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let mut value = || {
@@ -31,6 +32,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--name" => name = value()?,
             "--version" => version = Some(value()?),
             "--dump" => dump = Some(value()?.into()),
+            "--mover" => mover = true,
             other => bail!("unknown option `{other}` for probe"),
         }
     }
@@ -194,6 +196,110 @@ pub fn run(args: &[String]) -> Result<()> {
         }
     }
     println!("packets: {}", compact(&sequence));
+
+    if mover {
+        println!("\n== another player joins and walks (5 s)");
+        let (mover_addr, mover_ids) = (addr.clone(), client.ids.clone());
+        let walker = std::thread::spawn(move || walk(&mover_addr, mover_ids));
+        let mut sequence = Vec::new();
+        let until = Instant::now() + Duration::from_secs(6);
+        client.set_read_timeout(Duration::from_millis(200))?;
+        while Instant::now() < until {
+            let (packet, body) = match client.recv() {
+                Ok(p) => p,
+                Err(err) if is_timeout(&err) => continue,
+                Err(err) => return Err(err),
+            };
+            sequence.push(packet.clone());
+            if let Some(result) = check_play(&packet, &body) {
+                report_check(&packet, result);
+            }
+            if packet == "minecraft:keep_alive" {
+                client.send("minecraft:keep_alive", body)?;
+            }
+        }
+        walker.join().expect("walker thread")?;
+        println!("packets: {}", compact(&sequence));
+    }
+    Ok(())
+}
+
+pub(crate) fn is_timeout(err: &anyhow::Error) -> bool {
+    err.chain().any(|e| {
+        e.downcast_ref::<std::io::Error>().is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            )
+        })
+    })
+}
+
+/// A second player (offline mode) that logs in and walks with turning head.
+fn walk(addr: &str, ids: PacketIds) -> Result<()> {
+    let mut client = Client::connect(addr, ids)?;
+    client.handshake(2)?;
+    let mut hello = Vec::new();
+    hello.put_string("ProbeMover");
+    hello.put_uuid(0);
+    client.send("minecraft:hello", hello)?;
+    loop {
+        let (packet, body) = client.recv()?;
+        match packet.as_str() {
+            "minecraft:login_compression" => {
+                client.compression = usize::try_from(Reader::new(&body).varint()?).ok();
+            }
+            "minecraft:login_finished" => break,
+            other if other.contains("disconnect") || other == "minecraft:hello" => {
+                bail!("mover refused ({other})")
+            }
+            _ => {}
+        }
+    }
+    client.send("minecraft:login_acknowledged", Vec::new())?;
+    client.state = State::Configuration;
+    loop {
+        let (packet, body) = client.recv()?;
+        match packet.as_str() {
+            "minecraft:select_known_packs" => client.send("minecraft:select_known_packs", body)?,
+            "minecraft:keep_alive" => client.send("minecraft:keep_alive", body)?,
+            "minecraft:finish_configuration" => break,
+            _ => {}
+        }
+    }
+    client.send("minecraft:finish_configuration", Vec::new())?;
+    client.state = State::Play;
+    let start = loop {
+        let (packet, body) = client.recv()?;
+        if packet == "minecraft:player_position" {
+            client.send(
+                "minecraft:accept_teleportation",
+                teleport_confirmation(&body)?,
+            )?;
+            let mut r = Reader::new(&body);
+            r.varint()?;
+            break (r.f64()?, r.f64()?, r.f64()?);
+        }
+    };
+    client.send("minecraft:player_loaded", Vec::new())?;
+    client.set_read_timeout(Duration::from_millis(20))?;
+    for step in 0..60 {
+        let mut moved = Vec::new();
+        moved.put_f64(start.0 + f64::from(step) * 0.2);
+        moved.put_f64(start.1);
+        moved.put_f64(start.2);
+        moved.put_f32(step as f32 * 6.0); // yaw
+        moved.put_f32(10.0); // pitch
+        moved.put_u8(0x01);
+        client.send("minecraft:move_player_pos_rot", moved)?;
+        client.send("minecraft:client_tick_end", Vec::new())?;
+        std::thread::sleep(Duration::from_millis(50));
+        while let Ok((packet, body)) = client.recv() {
+            if packet == "minecraft:keep_alive" {
+                client.send("minecraft:keep_alive", body)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -376,6 +482,103 @@ fn check_play(packet: &str, body: &[u8]) -> Option<Result<String>> {
                 finish(r, format!("{tag:?} overlay {overlay}"))?
             }
             "minecraft:level_chunk_with_light" => check_chunk(r)?,
+            "minecraft:add_entity" => {
+                let (id, uuid, kind) = (r.varint()?, r.uuid()?, r.varint()?);
+                let pos = (r.f64()?, r.f64()?, r.f64()?);
+                let velocity = lp_vec3(r)?;
+                let (pitch, yaw, head) = (r.u8()?, r.u8()?, r.u8()?);
+                let data = r.varint()?;
+                finish(
+                    r,
+                    format!(
+                        "entity {id} {uuid:032x} type {kind} at {pos:?} velocity {velocity} angles {pitch}/{yaw}/{head} data {data}"
+                    ),
+                )?
+            }
+            "minecraft:entity_position_sync" => {
+                let id = r.varint()?;
+                let path = r.varint()?;
+                let path = match path {
+                    0 => format!("linear to {:?}", (r.f64()?, r.f64()?, r.f64()?)),
+                    1 => {
+                        let steps = r.length_prefix()?;
+                        for _ in 0..steps {
+                            for _ in 0..3 {
+                                r.f64()?;
+                            }
+                            r.varint()?;
+                        }
+                        format!("{steps} steps")
+                    }
+                    other => bail!("unknown path type {other}"),
+                };
+                let (yaw, pitch, ground) = (r.f32()?, r.f32()?, r.bool()?);
+                finish(
+                    r,
+                    format!("entity {id} {path} yaw {yaw} pitch {pitch} ground {ground}"),
+                )?
+            }
+            "minecraft:move_entity_pos" | "minecraft:move_entity_pos_rot" => {
+                let id = r.varint()?;
+                let properties = r.varint()? as u32;
+                let steps = properties >> 1;
+                if steps == 0 {
+                    for _ in 0..3 {
+                        r.i16()?;
+                    }
+                } else {
+                    for _ in 0..steps {
+                        r.varint()?;
+                        for _ in 0..3 {
+                            r.i16()?;
+                        }
+                    }
+                }
+                if packet.ends_with("_rot") {
+                    r.u8()?;
+                    r.u8()?;
+                }
+                finish(
+                    r,
+                    format!("entity {id} steps {steps} ground {}", properties & 1),
+                )?
+            }
+            "minecraft:move_entity_rot" => {
+                let (id, ground, yaw, pitch) = (r.varint()?, r.bool()?, r.u8()?, r.u8()?);
+                finish(
+                    r,
+                    format!("entity {id} ground {ground} yaw {yaw} pitch {pitch}"),
+                )?
+            }
+            "minecraft:rotate_head" => {
+                let (id, head) = (r.varint()?, r.u8()?);
+                finish(r, format!("entity {id} head {head}"))?
+            }
+            "minecraft:remove_entities" => {
+                let ids: Vec<i32> = (0..r.length_prefix()?)
+                    .map(|_| r.varint())
+                    .collect::<Result<_, _>>()?;
+                finish(r, format!("{ids:?}"))?
+            }
+            "minecraft:set_entity_data" => {
+                let id = r.varint()?;
+                let mut fields = Vec::new();
+                loop {
+                    let index = r.u8()?;
+                    if index == 0xff {
+                        break;
+                    }
+                    let kind = r.varint()?;
+                    match kind {
+                        0 => fields.push(format!("{index}:byte {}", r.u8()?)),
+                        1 => fields.push(format!("{index}:varint {}", r.varint()?)),
+                        3 => fields.push(format!("{index}:float {}", r.f32()?)),
+                        8 => fields.push(format!("{index}:bool {}", r.bool()?)),
+                        other => bail!("field {index}: serializer {other} not known to the probe"),
+                    }
+                }
+                finish(r, format!("entity {id} {}", fields.join(", ")))?
+            }
             _ => return Err(anyhow::anyhow!("unchecked")),
         })
     })();
@@ -383,6 +586,21 @@ fn check_play(packet: &str, body: &[u8]) -> Option<Result<String>> {
         Err(err) if err.to_string() == "unchecked" => None,
         other => Some(other),
     }
+}
+
+/// LpVec3 (documented layout): a zero byte, or 6 bytes plus an optional VarInt
+/// when the continuation flag (bit 2 of the first byte) is set.
+fn lp_vec3(r: &mut Reader) -> Result<String> {
+    let first = r.u8()?;
+    if first == 0 {
+        return Ok("0".into());
+    }
+    r.u8()?;
+    r.bytes(4)?;
+    if first & 0x04 != 0 {
+        r.varint()?;
+    }
+    Ok("non-zero".into())
 }
 
 /// Chunk Data and Update Light, parsed with the documented layout. Section
@@ -461,7 +679,7 @@ pub(crate) struct Client {
     stream: TcpStream,
     buf: Vec<u8>,
     pub(crate) compression: Option<usize>,
-    ids: PacketIds,
+    pub(crate) ids: PacketIds,
     pub(crate) state: State,
 }
 

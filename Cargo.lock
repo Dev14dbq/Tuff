@@ -348,6 +348,7 @@ dependencies = [
 name = "mc-data"
 version = "0.0.0"
 dependencies = [
+ "mc-nbt",
  "serde_json",
 ]
 
@@ -1165,6 +1166,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mc-data",
+ "mc-nbt",
  "mc-protocol",
  "serde_json",
  "sha1_smol",

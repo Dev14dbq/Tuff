@@ -926,6 +926,93 @@ pub mod play {
         }
     }
 
+    /// Spawn Entity. Velocity is sent as LpVec3; only zero velocity (a single
+    /// 0x00 byte) is supported for now.
+    #[derive(Clone, Debug)]
+    pub struct AddEntity {
+        pub entity_id: i32,
+        pub uuid: u128,
+        /// Id in `minecraft:entity_type`.
+        pub kind: i32,
+        pub x: f64,
+        pub y: f64,
+        pub z: f64,
+        pub pitch: f32,
+        pub yaw: f32,
+        pub head_yaw: f32,
+        pub data: i32,
+    }
+    packet!(AddEntity, Play, "minecraft:add_entity");
+    impl Encode for AddEntity {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            out.put_uuid(self.uuid);
+            out.put_varint(self.kind);
+            out.put_f64(self.x);
+            out.put_f64(self.y);
+            out.put_f64(self.z);
+            out.put_u8(0); // LpVec3 zero velocity
+            out.put_angle(self.pitch);
+            out.put_angle(self.yaw);
+            out.put_angle(self.head_yaw);
+            out.put_varint(self.data);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct RemoveEntities {
+        pub entity_ids: Vec<i32>,
+    }
+    packet!(RemoveEntities, Play, "minecraft:remove_entities");
+    impl Encode for RemoveEntities {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_len(self.entity_ids.len());
+            for &id in &self.entity_ids {
+                out.put_varint(id);
+            }
+        }
+    }
+
+    /// Teleport Entity in the documentation (`entity_position_sync` in the
+    /// packet report): absolute position as a linear path, plus rotation.
+    #[derive(Clone, Debug)]
+    pub struct EntityPositionSync {
+        pub entity_id: i32,
+        pub x: f64,
+        pub y: f64,
+        pub z: f64,
+        pub yaw: f32,
+        pub pitch: f32,
+        pub on_ground: bool,
+    }
+    packet!(EntityPositionSync, Play, "minecraft:entity_position_sync");
+    impl Encode for EntityPositionSync {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            out.put_varint(0); // position path type: linear
+            out.put_f64(self.x);
+            out.put_f64(self.y);
+            out.put_f64(self.z);
+            out.put_f32(self.yaw);
+            out.put_f32(self.pitch);
+            out.put_bool(self.on_ground);
+        }
+    }
+
+    /// Set Head Rotation.
+    #[derive(Clone, Debug)]
+    pub struct RotateHead {
+        pub entity_id: i32,
+        pub head_yaw: f32,
+    }
+    packet!(RotateHead, Play, "minecraft:rotate_head");
+    impl Encode for RotateHead {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            out.put_angle(self.head_yaw);
+        }
+    }
+
     pub mod player_info {
         pub const ADD_PLAYER: u8 = 0x01;
         pub const INITIALIZE_CHAT: u8 = 0x02;

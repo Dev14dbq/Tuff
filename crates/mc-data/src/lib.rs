@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+mod json_nbt;
+
+pub use json_nbt::json_to_nbt;
+
 /// Registries the server sends to the client in Registry Data packets.
 ///
 /// Starts from the protocol documentation's list; the documentation lags behind
@@ -49,6 +53,58 @@ pub const SYNCHRONIZED_REGISTRIES: &[&str] = &[
     "minecraft:worldgen/block_state_provider", // not documented, seen from vanilla
     "minecraft:zombie_nautilus_variant",
 ];
+
+/// Environment attributes a vanilla 26.3 server does not send to clients
+/// (observed with `cargo xtask registry-diff`). Other `minecraft:gameplay/*`
+/// attributes, like `sky_light_level` or `fast_lava`, are sent.
+pub const SERVER_ONLY_ATTRIBUTES: &[&str] = &[
+    "minecraft:gameplay/baby_villager_activity",
+    "minecraft:gameplay/bed_rule",
+    "minecraft:gameplay/bees_stay_in_hive",
+    "minecraft:gameplay/can_pillager_patrol_spawn",
+    "minecraft:gameplay/can_start_raid",
+    "minecraft:gameplay/cat_waking_up_gift_chance",
+    "minecraft:gameplay/creature_world_gen_spawn_probability",
+    "minecraft:gameplay/eyeblossom_open",
+    "minecraft:gameplay/increased_fire_burnout",
+    "minecraft:gameplay/monsters_burn",
+    "minecraft:gameplay/natural_mob_spawns",
+    "minecraft:gameplay/nether_portal_spawns_piglin",
+    "minecraft:gameplay/respawn_anchor_works",
+    "minecraft:gameplay/snow_golem_melts",
+    "minecraft:gameplay/straw_bed_rule",
+    "minecraft:gameplay/surface_slime_spawn_chance",
+    "minecraft:gameplay/turtle_egg_hatch_chance",
+    "minecraft:gameplay/villager_activity",
+];
+
+/// Removes what a vanilla 26.3 server leaves out when it sends `registry`
+/// entries to clients: spawn conditions, biome generation and server-only
+/// environment attributes. With this, every registry entry we send as NBT
+/// matches vanilla (`cargo xtask registry-diff`).
+pub fn strip_server_only(registry: &str, entry: &mut mc_nbt::Tag) {
+    let mc_nbt::Tag::Compound(root) = entry else {
+        return;
+    };
+    if registry.ends_with("_variant") {
+        root.remove("spawn_conditions");
+    }
+    if registry == "minecraft:worldgen/biome" {
+        root.remove("carvers");
+        root.remove("features");
+    }
+    let server_only = |key: &str, _: &mc_nbt::Tag| !SERVER_ONLY_ATTRIBUTES.contains(&key);
+    if let Some(mc_nbt::Tag::Compound(attributes)) = root.get_mut("attributes") {
+        attributes.retain(server_only);
+    }
+    // An emptied `attributes` stays (vanilla sends `{}`), an emptied `tracks` goes.
+    if let Some(mc_nbt::Tag::Compound(tracks)) = root.get_mut("tracks") {
+        tracks.retain(server_only);
+        if tracks.is_empty() {
+            root.remove("tracks");
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct DataError {

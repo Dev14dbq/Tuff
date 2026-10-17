@@ -283,6 +283,10 @@ pub trait Write {
         self.put_len(v.len());
         self.put_slice(v);
     }
+    /// Angle: a rotation in steps of 1/256 of a full turn.
+    fn put_angle(&mut self, degrees: f32) {
+        self.put_u8(angle_byte(degrees));
+    }
     fn put_position(&mut self, p: Position) {
         self.put_i64(p.pack());
     }
@@ -318,6 +322,11 @@ impl Write for Vec<u8> {
 /// our own code never builds.
 pub fn put_nbt(out: &mut Vec<u8>, tag: &Tag) {
     mc_nbt::write_network(tag, out).expect("well-formed NBT");
+}
+
+/// Degrees → protocol Angle byte (wraps around like the vanilla encoding).
+pub fn angle_byte(degrees: f32) -> u8 {
+    (degrees * 256.0 / 360.0).floor() as i32 as u8
 }
 
 pub fn varint_len(v: i32) -> usize {

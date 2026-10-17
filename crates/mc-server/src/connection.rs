@@ -19,7 +19,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::ServerContext;
 use crate::auth;
-use crate::context::{Event, OnlinePlayer};
+use crate::context::{Event, OnlinePlayer, Pose};
 use crate::util::{offline_uuid, random_u64, random_uuid, uuid_string, valid_player_name};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
@@ -55,7 +55,8 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
             info!("{name} ({}) joined from {peer}", uuid_string(uuid));
             let result = play(&mut reader, &mut writer, &player).await;
             ctx.players.lock().expect("players lock").remove(&uuid);
-            let _ = ctx.events.send(Event::PlayerLeft(uuid));
+            let entity_id = player.player.entity_id;
+            let _ = ctx.events.send(Event::PlayerLeft { uuid, entity_id });
             let left = text::colored(&format!("{name} left the game"), "yellow");
             let _ = ctx.events.send(Event::Chat(left));
             let reason = result
@@ -176,6 +177,9 @@ async fn login(
     let player = OnlinePlayer {
         profile,
         game_mode: CREATIVE,
+        entity_id: ctx.next_entity_id(),
+        skin_parts: 0,
+        pose: None,
     };
     let uuid = player.profile.uuid;
     // The lock guard must not live across an await.
@@ -301,23 +305,10 @@ async fn configure(
     let view_distance = |info: &configuration::ClientInformation| {
         i32::from(info.view_distance).clamp(2, i32::from(ctx.config.view_distance))
     };
-    loop {
+    let client_knows_core = loop {
         match reader.next(State::Configuration).await? {
             Packet::Configuration(configuration::Serverbound::SelectKnownPacks(packs)) => {
-                if !packs.contains(&ctx.core_pack) {
-                    // Without the vanilla pack on the client we would have to send
-                    // every registry entry as NBT; not implemented yet.
-                    let reason = format!(
-                        "This server needs the Minecraft {} client",
-                        ctx.data.version.name
-                    );
-                    let disconnect = configuration::Disconnect {
-                        reason: text::plain(&reason),
-                    };
-                    writer.send(&disconnect).await?;
-                    return Ok(false);
-                }
-                break;
+                break packs.contains(&ctx.core_pack);
             }
             Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
                 session.view_distance = view_distance(&info);
@@ -325,8 +316,16 @@ async fn configure(
             }
             other => trace!("configuration: {other:?}"),
         }
-    }
-    for registry in &ctx.registries {
+    };
+    // Clients with the vanilla data pack only need entry names; others get
+    // every entry's data as NBT.
+    let registries = if client_knows_core {
+        &ctx.registries
+    } else {
+        debug!("client does not know minecraft:core, sending registry data as NBT");
+        &ctx.registries_with_data
+    };
+    for registry in registries {
         writer.queue(registry)?;
     }
     writer.queue(&ctx.tags)?;
@@ -358,10 +357,19 @@ async fn play(
     let ctx = writer.ctx.clone();
     let world = &ctx.world;
     let me = &session.player;
+    let (uuid, entity_id) = (me.profile.uuid, me.entity_id);
+    // Subscribe before reading the player list, so nobody slips through.
     let mut events = ctx.events.subscribe();
     let (x, y, z) = world.spawn;
+    let mut pose = Pose {
+        x,
+        y,
+        z,
+        yaw: 0.0,
+        pitch: 0.0,
+        on_ground: true,
+    };
 
-    let entity_id = ctx.next_entity_id();
     writer.queue(&play::Login {
         entity_id,
         hardcore: false,
@@ -405,20 +413,27 @@ async fn play(
         flags: 0,
     })?;
 
-    // Player list: everyone already online, including ourselves (the client
-    // takes its own skin from this list).
-    let everyone: Vec<_> = ctx
+    // Player list first (the client takes skins, including its own, from it),
+    // then the players who are already in the world.
+    let everyone: Vec<OnlinePlayer> = ctx
         .players
         .lock()
         .expect("players lock")
         .values()
-        .map(OnlinePlayer::info_entry)
+        .cloned()
         .collect();
     writer.queue(&play::PlayerInfoUpdate {
         actions: play::player_info::ALL,
-        players: everyone,
+        players: everyone.iter().map(OnlinePlayer::info_entry).collect(),
     })?;
     let _ = ctx.events.send(Event::PlayerJoined(me.clone()));
+    let mut visible: HashSet<u128> = HashSet::new();
+    for other in everyone.iter().filter(|p| p.profile.uuid != uuid) {
+        if let Some(other_pose) = other.pose {
+            spawn_player(writer, &ctx, other, other_pose)?;
+            visible.insert(other.profile.uuid);
+        }
+    }
 
     writer.queue(&play::SetDefaultSpawnPosition {
         dimension: world.dimension.clone(),
@@ -443,6 +458,17 @@ async fn play(
         overlay: false,
     })?;
     writer.flush().await?;
+
+    // Now others can see us.
+    update_player(&ctx, uuid, |p| {
+        p.pose = Some(pose);
+        p.skin_parts = session.skin_parts;
+    });
+    let _ = ctx.events.send(Event::PlayerMoved {
+        uuid,
+        entity_id,
+        pose,
+    });
     let joined = text::colored(&format!("{} joined the game", me.profile.name), "yellow");
     let _ = ctx.events.send(Event::Chat(joined));
 
@@ -454,17 +480,28 @@ async fn play(
                 let Packet::Play(packet) = packet? else {
                     unreachable!("play state decodes play packets")
                 };
+                // Movement sent before the client saw our teleport is stale.
+                let settled = awaiting_teleport.is_none();
+                let mut moved = false;
                 match packet {
                     play::Serverbound::AcceptTeleportation { teleport_id, .. } => {
                         if awaiting_teleport == Some(teleport_id) {
                             awaiting_teleport = None;
                         }
                     }
-                    play::Serverbound::MovePlayerPos { x, z, .. }
-                    | play::Serverbound::MovePlayerPosRot { x, z, .. } => {
-                        // Movement sent before the client saw our teleport is stale.
-                        if awaiting_teleport.is_none() && x.is_finite() && z.is_finite() {
-                            view.move_to(writer, chunk_of(x), chunk_of(z))?;
+                    play::Serverbound::MovePlayerPos { x, y, z, flags } if settled => {
+                        moved = set_position(&mut pose, x, y, z, flags);
+                    }
+                    play::Serverbound::MovePlayerPosRot { x, y, z, yaw, pitch, flags } if settled => {
+                        moved = set_position(&mut pose, x, y, z, flags);
+                        if moved && yaw.is_finite() && pitch.is_finite() {
+                            (pose.yaw, pose.pitch) = (yaw, pitch);
+                        }
+                    }
+                    play::Serverbound::MovePlayerRot { yaw, pitch, flags } if settled => {
+                        if yaw.is_finite() && pitch.is_finite() {
+                            (pose.yaw, pose.pitch, pose.on_ground) = (yaw, pitch, flags & 1 != 0);
+                            moved = true;
                         }
                     }
                     play::Serverbound::KeepAlive(id) => {
@@ -485,8 +522,19 @@ async fn play(
                     }
                     play::Serverbound::ClientInformation(info) => {
                         writer.queue(&skin_parts_metadata(entity_id, info.skin_parts))?;
+                        update_player(&ctx, uuid, |p| p.skin_parts = info.skin_parts);
+                        let _ = ctx.events.send(Event::SkinParts {
+                            uuid,
+                            entity_id,
+                            parts: info.skin_parts,
+                        });
                     }
                     other => trace!("play: {other:?}"),
+                }
+                if moved {
+                    view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z))?;
+                    update_player(&ctx, uuid, |p| p.pose = Some(pose));
+                    let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
                 }
             }
             _ = keep_alive.tick() => {
@@ -507,23 +555,101 @@ async fn play(
                     Ok(Event::Chat(content)) => {
                         writer.queue(&play::SystemChat { content, overlay: false })?;
                     }
-                    Ok(Event::PlayerJoined(other)) if other.profile.uuid != me.profile.uuid => {
+                    Ok(Event::PlayerJoined(other)) if other.profile.uuid != uuid => {
                         writer.queue(&play::PlayerInfoUpdate {
                             actions: play::player_info::ALL,
                             players: vec![other.info_entry()],
                         })?;
                     }
-                    Ok(Event::PlayerLeft(uuid)) if uuid != me.profile.uuid => {
-                        writer.queue(&play::PlayerInfoRemove { uuids: vec![uuid] })?;
+                    Ok(Event::PlayerMoved { uuid: other, entity_id: other_entity, pose: other_pose })
+                        if other != uuid =>
+                    {
+                        if visible.contains(&other) {
+                            writer.queue(&play::EntityPositionSync {
+                                entity_id: other_entity,
+                                x: other_pose.x,
+                                y: other_pose.y,
+                                z: other_pose.z,
+                                yaw: other_pose.yaw,
+                                pitch: other_pose.pitch,
+                                on_ground: other_pose.on_ground,
+                            })?;
+                            writer.queue(&play::RotateHead {
+                                entity_id: other_entity,
+                                head_yaw: other_pose.yaw,
+                            })?;
+                        } else {
+                            let known = ctx.players.lock().expect("players lock").get(&other).cloned();
+                            if let Some(player) = known {
+                                spawn_player(writer, &ctx, &player, other_pose)?;
+                                visible.insert(other);
+                            }
+                        }
+                    }
+                    Ok(Event::SkinParts { uuid: other, entity_id: other_entity, parts })
+                        if other != uuid && visible.contains(&other) =>
+                    {
+                        writer.queue(&skin_parts_metadata(other_entity, parts))?;
+                    }
+                    Ok(Event::PlayerLeft { uuid: other, entity_id: other_entity }) if other != uuid => {
+                        if visible.remove(&other) {
+                            writer.queue(&play::RemoveEntities { entity_ids: vec![other_entity] })?;
+                        }
+                        writer.queue(&play::PlayerInfoRemove { uuids: vec![other] })?;
                     }
                     Ok(_) => {}
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Lagged(missed)) => {
+                        debug!("{} missed {missed} events", me.profile.name);
+                    }
                     Err(broadcast::error::RecvError::Closed) => bail!("server shutting down"),
                 }
             }
         }
         writer.flush().await?;
     }
+}
+
+/// Applies a movement packet's position; ignores non-finite values.
+fn set_position(pose: &mut Pose, x: f64, y: f64, z: f64, flags: u8) -> bool {
+    if !(x.is_finite() && y.is_finite() && z.is_finite()) {
+        return false;
+    }
+    (pose.x, pose.y, pose.z, pose.on_ground) = (x, y, z, flags & 1 != 0);
+    true
+}
+
+fn update_player(ctx: &ServerContext, uuid: u128, change: impl FnOnce(&mut OnlinePlayer)) {
+    if let Some(player) = ctx.players.lock().expect("players lock").get_mut(&uuid) {
+        change(player);
+    }
+}
+
+/// Makes another player appear: the entity, its skin layers and head rotation.
+/// Their Player Info entry must already have been sent.
+fn spawn_player(
+    writer: &mut PacketWriter,
+    ctx: &ServerContext,
+    player: &OnlinePlayer,
+    pose: Pose,
+) -> Result<()> {
+    writer.queue(&play::AddEntity {
+        entity_id: player.entity_id,
+        uuid: player.profile.uuid,
+        kind: ctx.player_entity_type,
+        x: pose.x,
+        y: pose.y,
+        z: pose.z,
+        pitch: pose.pitch,
+        yaw: pose.yaw,
+        head_yaw: pose.yaw,
+        data: 0,
+    })?;
+    writer.queue(&skin_parts_metadata(player.entity_id, player.skin_parts))?;
+    writer.queue(&play::RotateHead {
+        entity_id: player.entity_id,
+        head_yaw: pose.yaw,
+    })?;
+    Ok(())
 }
 
 fn skin_parts_metadata(entity_id: i32, skin_parts: u8) -> play::SetEntityData {
