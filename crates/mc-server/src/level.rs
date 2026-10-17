@@ -124,6 +124,58 @@ impl Level for WorldLevel<'_> {
         p.y >= world.min_y && p.y < world.min_y + world.height as i32
     }
 
+    fn set_hidden(&mut self, p: BlockPos, state: u32) -> bool {
+        let ctx = self.ctx;
+        if ctx
+            .world
+            .set_block(to_position(p), state, &ctx.data.blocks, &ctx.rules)
+            .is_none()
+        {
+            return false;
+        }
+        for chunk in ctx.world.relight(to_position(p)) {
+            if !self.lit.contains(&chunk) {
+                self.lit.push(chunk);
+            }
+        }
+        // Already changed this tick: clients get it as it ends up.
+        if let Some(&i) = self.index.get(&p) {
+            self.changes[i].1 = state;
+        }
+        true
+    }
+
+    fn block_event(&mut self, p: BlockPos, block: u32, action: u8, param: u8) {
+        let mut events = self.ctx.block_events.lock().expect("block events lock");
+        if !events.contains(&(p, block, action, param)) {
+            events.push((p, block, action, param));
+        }
+    }
+
+    fn add_moving(&mut self, p: BlockPos, moving: mc_tick::pistons::Moving) {
+        let mut all = self.ctx.moving.lock().expect("moving lock");
+        match all.iter_mut().find(|(q, _)| *q == p) {
+            Some(entry) => entry.1 = moving,
+            None => all.push((p, moving)),
+        }
+    }
+
+    fn moving(&self, p: BlockPos) -> Option<mc_tick::pistons::Moving> {
+        let all = self.ctx.moving.lock().expect("moving lock");
+        all.iter().find(|(q, _)| *q == p).map(|(_, m)| *m)
+    }
+
+    fn remove_moving(&mut self, p: BlockPos) -> Option<mc_tick::pistons::Moving> {
+        let mut all = self.ctx.moving.lock().expect("moving lock");
+        let i = all.iter().position(|(q, _)| *q == p)?;
+        Some(all.remove(i).1)
+    }
+
+    fn moving_positions(&self) -> Vec<BlockPos> {
+        let all = self.ctx.moving.lock().expect("moving lock");
+        all.iter().map(|(p, _)| *p).collect()
+    }
+
     fn brightness(&self, p: BlockPos) -> u8 {
         self.ctx.world.brightness(to_position(p))
     }

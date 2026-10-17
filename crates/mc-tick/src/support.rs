@@ -57,6 +57,7 @@ pub fn check(ctx: Ctx, state: u32) -> Check {
         "cactus" | "sugar_cane" | "bamboo" => Check::Tick,
         "cocoa" => facing(ctx, state).map_or(Check::Never, Check::From),
         "candle" => Check::Never,
+        "piston_head" => facing(ctx, state).map_or(Check::Never, |f| Check::From(f.opposite())),
         "lantern" | "soul_lantern" => lantern_check(ctx, state),
         _ if name.ends_with("copper_lantern") => lantern_check(ctx, state),
         _ if name.ends_with("_candle") => Check::Never,
@@ -208,6 +209,15 @@ pub fn can_survive(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> bool
         _ if name.ends_with("_hanging_sign") => holds(above, BOTTOM_CENTER | BOTTOM_FULL),
         _ if name.ends_with("_sign") || name.ends_with("_banner") => holds(below, TOP_CENTER),
         "candle" => true,
+        // A head lives on its extended piston.
+        "piston_head" => facing(ctx, state).is_some_and(|f| {
+            let base = level.block(p.offset(f.opposite()));
+            matches!(
+                ctx.shapes.block_name(base),
+                Some("minecraft:piston" | "minecraft:sticky_piston")
+            ) && ctx.shapes.property(base, "extended") == Some("true")
+                && ctx.shapes.property(base, "facing") == Some(f.name())
+        }),
         _ if name.ends_with("_candle") => true,
         "lantern" | "soul_lantern" => lantern(ctx, state, below, above),
         _ if name.ends_with("copper_lantern") => lantern(ctx, state, below, above),

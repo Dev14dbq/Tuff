@@ -134,7 +134,7 @@ pub fn run(args: &[String]) -> Result<()> {
                     } else {
                         failures += 1;
                         println!("  DIFF  {label}: {} blocks", diffs.len());
-                        for diff in diffs.iter().take(8) {
+                        for diff in diffs.iter().take(24) {
                             println!("        {diff}");
                         }
                     }

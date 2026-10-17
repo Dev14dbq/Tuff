@@ -918,6 +918,26 @@ pub mod play {
         }
     }
 
+    /// Block Action: a block event clients play themselves (pistons, note
+    /// blocks, chest lids).
+    #[derive(Clone, Debug)]
+    pub struct BlockEvent {
+        pub position: Position,
+        pub action: u8,
+        pub param: u8,
+        /// `minecraft:block` registry id.
+        pub block: i32,
+    }
+    packet!(BlockEvent, Play, "minecraft:block_event");
+    impl Encode for BlockEvent {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_position(self.position);
+            out.put_u8(self.action);
+            out.put_u8(self.param);
+            out.put_varint(self.block);
+        }
+    }
+
     /// Set Container Property: a window's number (furnace progress...).
     #[derive(Clone, Debug)]
     pub struct ContainerSetData {

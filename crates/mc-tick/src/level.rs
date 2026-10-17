@@ -29,6 +29,28 @@ pub trait Level {
     /// Turns the block that was at `p` into a falling block entity.
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32);
 
+    /// Sets a block without telling clients (they play the piston block
+    /// event themselves); a block already changed this tick is still sent
+    /// as it ends up.
+    fn set_hidden(&mut self, p: BlockPos, state: u32) -> bool {
+        self.set(p, state)
+    }
+
+    /// Queues a block event (pistons) for the end of the tick's block work.
+    fn block_event(&mut self, _p: BlockPos, _block: u32, _action: u8, _param: u8) {}
+
+    /// Moving pistons (blocks on their way).
+    fn add_moving(&mut self, _p: BlockPos, _moving: crate::pistons::Moving) {}
+    fn moving(&self, _p: BlockPos) -> Option<crate::pistons::Moving> {
+        None
+    }
+    fn remove_moving(&mut self, _p: BlockPos) -> Option<crate::pistons::Moving> {
+        None
+    }
+    fn moving_positions(&self) -> Vec<BlockPos> {
+        Vec::new()
+    }
+
     /// The light level at `p` (the brighter of sky and block light).
     fn brightness(&self, _p: BlockPos) -> u8 {
         15

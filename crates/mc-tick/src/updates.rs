@@ -82,6 +82,7 @@ fn set_with_limit(
     }
     if ctx.shapes.block_index(old) != ctx.shapes.block_index(state) {
         crate::support::placed(level, ctx, p, state);
+        crate::pistons::check(level, ctx, p);
     }
     true
 }
@@ -178,6 +179,7 @@ pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: Blo
     }
     fluids::neighbor_changed(level, ctx, p);
     redstone::neighbor_changed(level, ctx, p);
+    crate::pistons::check(level, ctx, p);
     let state = level.block(p);
     gravity::wake(level, ctx, p, state);
 }

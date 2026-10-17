@@ -120,6 +120,14 @@ pub enum Event {
         entity_id: i32,
         hand: Option<i32>,
     },
+    /// A block event clients play (a piston moving).
+    BlockAction {
+        position: mc_protocol::Position,
+        action: u8,
+        param: u8,
+        /// `minecraft:block` registry id.
+        block: i32,
+    },
     /// A furnace's progress changed (its window's four properties).
     FurnaceProgress {
         position: mc_protocol::Position,
@@ -230,6 +238,10 @@ pub struct ServerContext {
     pub vitals: Mutex<crate::vitals::AllVitals>,
     /// Stack sizes, food and more of every item.
     pub items: crate::items::Items,
+    /// Piston block events waiting for this tick (tick thread).
+    pub block_events: Mutex<Vec<(mc_tick::BlockPos, u32, u8, u8)>>,
+    /// Blocks on their way, moved by pistons (tick thread).
+    pub moving: Mutex<Vec<(mc_tick::BlockPos, mc_tick::pistons::Moving)>>,
     /// Burn times of fuels.
     pub fuels: crate::furnaces::Fuels,
     /// Furnaces burning or cooking (tick thread).
@@ -363,7 +375,8 @@ impl ServerContext {
             observed("conductor.json"),
         )
         .with_instruments(observed("instrument.json"))
-        .with_support(observed("support.json"));
+        .with_support(observed("support.json"))
+        .with_push(observed("push.json"));
         let world = match &config.world {
             Some(dir) => World::open(dir, &data, &synced_ids, light)?,
             None => World::flat(&data, &synced_ids, &rules, light)?,
@@ -424,6 +437,8 @@ impl ServerContext {
             container_updates: Mutex::new(Vec::new()),
             fuels,
             furnaces: Mutex::new(HashMap::new()),
+            block_events: Mutex::new(Vec::new()),
+            moving: Mutex::new(Vec::new()),
             difficulty,
             damage_types,
             player_files,

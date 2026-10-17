@@ -1,0 +1,74 @@
+# Pistons on a frozen superflat world (stone floor at y=-60).
+region -2 -61 -2 22 -54 14
+run fill -2 -60 -2 22 -60 14 stone
+compare
+
+# A piston pushes three planks, then retracts.
+run fill 1 -59 0 3 -59 0 oak_planks
+run setblock 0 -59 0 piston[facing=east]
+compare
+run setblock -1 -59 0 redstone_block
+step 1
+step 1
+step 1
+step 1
+run setblock -1 -59 0 air
+step 1
+step 1
+step 1
+step 1
+
+# A sticky piston pulls its block back.
+run setblock 1 -59 2 stone
+run setblock 0 -59 2 sticky_piston[facing=east]
+run setblock -1 -59 2 redstone_block
+step 4
+run setblock -1 -59 2 air
+step 1
+step 1
+step 1
+step 1
+
+# Thirteen blocks are too many.
+run fill 1 -59 4 13 -59 4 cobblestone
+run setblock 0 -59 4 piston[facing=east]
+run setblock -1 -59 4 redstone_block
+step 4
+
+# Things in the way: a torch breaks, obsidian stops it, glazed terracotta is not pulled.
+run setblock 1 -59 6 torch
+run setblock 0 -59 6 piston[facing=east]
+run setblock 3 -59 8 obsidian
+run setblock 1 -59 8 stone
+run setblock 0 -59 8 piston[facing=east]
+run setblock 1 -59 10 white_glazed_terracotta
+run setblock 0 -59 10 sticky_piston[facing=east]
+run setblock -1 -59 6 redstone_block
+run setblock -1 -59 8 redstone_block
+run setblock -1 -59 10 redstone_block
+step 4
+run setblock -1 -59 10 air
+step 4
+
+# Quasi-connectivity: power two above, noticed at the next update.
+run setblock 17 -59 0 stone
+run setblock 16 -59 0 piston[facing=east]
+run setblock 16 -57 0 redstone_block
+step 4
+run setblock 15 -59 0 stone
+step 1
+step 4
+
+# Up: a piston lifts sand; a slime block takes its neighbours along.
+run setblock 16 -59 4 piston[facing=up]
+run setblock 16 -58 4 sand
+run setblock 17 -59 4 redstone_block
+step 4
+run setblock 16 -59 8 sticky_piston[facing=east]
+run setblock 17 -59 8 slime_block
+run setblock 17 -58 8 stone
+run setblock 17 -59 9 oak_planks
+run setblock 15 -59 8 redstone_block
+step 4
+run setblock 15 -59 8 air
+step 4

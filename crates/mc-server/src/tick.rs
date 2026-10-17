@@ -226,8 +226,10 @@ fn run_scheduled_ticks(ctx: &ServerContext) {
     for (pos, fluid) in due.1 {
         mc_tick::fluids::tick(&mut level, logic, pos, fluid);
     }
+    run_block_events(ctx, &mut level);
     tick_entities(ctx, &mut level);
     press_plates(ctx, &mut level);
+    mc_tick::pistons::tick(&mut level, logic);
     let (changes, spawned) = level.finish();
     if !changes.is_empty() {
         let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
@@ -237,6 +239,36 @@ fn run_scheduled_ticks(ctx: &ServerContext) {
         for entity in spawned {
             let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
             entities.push(entity);
+        }
+    }
+}
+
+/// Block events queued so far (and those they queue), each once.
+fn run_block_events(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
+    use mc_tick::Level as _;
+    let logic = level.logic();
+    for _ in 0..64 {
+        let events = std::mem::take(&mut *lock(&ctx.block_events));
+        if events.is_empty() {
+            return;
+        }
+        for (p, block, action, param) in events {
+            if ctx.shapes.block_index(level.block(p)) != block {
+                continue;
+            }
+            let name = ctx
+                .shapes
+                .block_name(level.block(p))
+                .unwrap_or("")
+                .to_owned();
+            if mc_tick::pistons::block_event(level, logic, p, action, param) {
+                let _ = ctx.events.send(Event::BlockAction {
+                    position: crate::level::to_position(p),
+                    action,
+                    param,
+                    block: ctx.data.builtin.id("minecraft:block", &name).unwrap_or(0),
+                });
+            }
         }
     }
 }

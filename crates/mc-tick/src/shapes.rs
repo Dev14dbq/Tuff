@@ -55,6 +55,8 @@ pub struct Shapes {
     post_override: Vec<bool>,
     /// What each state's faces hold up ([`crate::support`] bits), observed.
     support: Vec<u8>,
+    /// How each state reacts to pistons, observed (`observed/push.json`).
+    push: Vec<crate::pistons::Push>,
     /// Block tags support rules read, by block (index in `blocks_of`).
     tags: std::collections::HashMap<&'static str, std::collections::HashSet<u32>>,
 }
@@ -241,6 +243,7 @@ impl Shapes {
         Self {
             instrument: vec![0; states],
             support: vec![TOP_ALL; states],
+            push: vec![crate::pistons::Push::Normal; states],
             tags: support_tags,
             post_override,
             kind,
@@ -527,6 +530,64 @@ impl Shapes {
             }
         }
         self
+    }
+
+    /// With the observed piston reactions (`observed/push.json`: 1 pushed, 2
+    /// broken, 4 blocks the piston, 8 pulled back).
+    pub fn with_push(mut self, table: Option<Vec<i32>>) -> Self {
+        use crate::pistons::Push;
+        if let Some(table) = table.filter(|t| t.len() == self.push.len()) {
+            for (state, v) in table.into_iter().enumerate() {
+                self.push[state] = match v {
+                    // Not observed (it could not stand there): things that
+                    // hold nothing up break, the rest move.
+                    v if v < 0 && self.support[state] == 0 && self.attach[state] == 0 => {
+                        Push::Destroy
+                    }
+                    v if v < 0 => Push::Normal,
+                    v if v & 4 != 0 => Push::Block,
+                    v if v & 2 != 0 => Push::Destroy,
+                    v if v & 9 == 9 => Push::Normal,
+                    v if v & 1 != 0 => Push::PushOnly,
+                    _ => Push::Block,
+                };
+            }
+        }
+        for name in [
+            "minecraft:moving_piston",
+            "minecraft:piston_head",
+            "minecraft:bedrock",
+            "minecraft:obsidian",
+        ] {
+            if let Some(info) = self.blocks.get(name) {
+                for s in info.first_state..=info.last_state {
+                    self.push[s as usize] = Push::Block;
+                }
+            }
+        }
+        // Slime and honey looked stuck only because the bench's floor came
+        // along with them.
+        for name in ["minecraft:slime_block", "minecraft:honey_block"] {
+            if let Some(info) = self.blocks.get(name) {
+                for s in info.first_state..=info.last_state {
+                    self.push[s as usize] = Push::Normal;
+                }
+            }
+        }
+        self
+    }
+
+    /// How `state` reacts to a piston.
+    pub fn push_reaction(&self, state: u32) -> crate::pistons::Push {
+        self.push
+            .get(state as usize)
+            .copied()
+            .unwrap_or(crate::pistons::Push::Block)
+    }
+
+    /// The default state of a block.
+    pub fn default_state(&self, name: &str) -> Option<u32> {
+        self.blocks.default_state(name)
     }
 
     /// What `state`'s faces hold up ([`crate::support`] bits).

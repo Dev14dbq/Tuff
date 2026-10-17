@@ -6,6 +6,7 @@ pub mod facts;
 pub mod fluids;
 pub mod gravity;
 pub mod level;
+pub mod pistons;
 pub mod redstone;
 pub mod shapes;
 pub mod support;

@@ -879,6 +879,9 @@ async fn play(
                         windows.container_slots(writer, position, slots)?;
                     }
                     Ok(Event::ContainerGone { position }) => windows.container_gone(writer, position)?,
+                    Ok(Event::BlockAction { position, action, param, block }) if view.has_block(position) => {
+                        writer.queue(&play::BlockEvent { position, action, param, block })?;
+                    }
                     Ok(Event::FurnaceProgress { position, values }) => {
                         windows.container_data(writer, position, &values)?;
                     }

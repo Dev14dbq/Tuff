@@ -6,6 +6,9 @@
 //! 1 a torch on top (centre), 2 a rail on top (rigid), 4 a floor button on
 //! top (full face), 8 a hanging lantern below (centre of the bottom), 16 a
 //! ceiling button below (full bottom face).
+//! `push`: what each state does in front of a sticky piston: 1 it is
+//! pushed, 2 it breaks, 4 it stops the piston, 8 it comes back when the
+//! piston pulls.
 //! `instrument`: the note block instrument each block gives the note block
 //! on top of it (default states only; the index in the `instrument` values).
 //! `conductor`: whether the block conducts redstone power: a powered lever
@@ -40,6 +43,7 @@ pub fn run(args: &[String]) -> Result<()> {
         Some("opacity") => observe(&args[1..], Fact::Opacity),
         Some("instrument") => observe(&args[1..], Fact::Instrument),
         Some("support") => observe(&args[1..], Fact::Support),
+        Some("push") => observe(&args[1..], Fact::Push),
         _ => bail!(
             "usage: observe attach|conductor|opacity|instrument [--first <state>] [--count <n>]"
         ),
@@ -57,6 +61,7 @@ enum Fact {
     Opacity,
     Instrument,
     Support,
+    Push,
 }
 
 impl Fact {
@@ -67,6 +72,7 @@ impl Fact {
             Fact::Opacity => "opacity.json",
             Fact::Instrument => "instrument.json",
             Fact::Support => "support.json",
+            Fact::Push => "push.json",
         }
     }
 
@@ -80,6 +86,9 @@ impl Fact {
             }
             Fact::Opacity => {
                 "how much sky light each block state takes away going down into a closed cell below it (0-15); +16 = state changed after placing; -1 = not observed"
+            }
+            Fact::Push => {
+                "each state in front of a sticky piston: 1 pushed, 2 broken, 4 stops the piston, 8 pulled back; -1 = not observed"
             }
             Fact::Support => {
                 "faces of each state that hold blocks up: 1 torch on top, 2 rail on top, 4 floor button on top, 8 hanging lantern below, 16 ceiling button below; -1 = not observed"
@@ -165,6 +174,9 @@ fn observe_batch(
     states: &[u32],
     fact: Fact,
 ) -> Result<Vec<(u32, i32)>> {
+    if fact == Fact::Push {
+        return observe_push(root, data, states);
+    }
     let mut vanilla = Server::vanilla(root)?;
     let result = (|| -> Result<Vec<(u32, i32)>> {
         let mut mirror = Mirror::join(&format!("127.0.0.1:{VANILLA_PORT}"), packet_ids(data))?;
@@ -173,10 +185,12 @@ fn observe_batch(
             "gamerule spawn_mobs false",
             "kill @e[type=!player]",
             "tp Parity 0 -40 0",
-            "fill -80 -60 -80 80 -60 80 stone",
         ] {
             vanilla.send(setup)?;
         }
+        vanilla.drain()?;
+        wait_quiet(&mut mirror, Duration::from_secs(3))?;
+        vanilla.send("fill -80 -60 -80 80 -60 80 stone")?;
         // Light only spreads while the game runs.
         if fact != Fact::Opacity {
             vanilla.send("tick freeze")?;
@@ -246,7 +260,7 @@ fn observe_batch(
                     vanilla.send(&format!("setblock {} {Y} {z} redstone_lamp", x + 1))?;
                     vanilla.send(&format!("setblock {} {Y} {} redstone_lamp", x + 1, z + 2))?;
                 }
-                Fact::Opacity | Fact::Instrument | Fact::Support => {}
+                Fact::Opacity | Fact::Instrument | Fact::Support | Fact::Push => {}
             }
         }
         if fact == Fact::Conductor {
@@ -383,6 +397,103 @@ fn observe_batch(
                 (state, bits)
             })
             .collect())
+    })();
+    vanilla.stop();
+    result
+}
+
+/// Each state east of a sticky piston facing east: power the piston from
+/// behind, see where the block went; take the power away, see whether it
+/// came back.
+fn observe_push(
+    root: &std::path::Path,
+    data: &mc_data::McData,
+    states: &[u32],
+) -> Result<Vec<(u32, i32)>> {
+    let mut vanilla = Server::vanilla(root)?;
+    let result = (|| -> Result<Vec<(u32, i32)>> {
+        let mut mirror = Mirror::join(&format!("127.0.0.1:{VANILLA_PORT}"), packet_ids(data))?;
+        for setup in [
+            "gamerule random_tick_speed 0",
+            "gamerule spawn_mobs false",
+            "kill @e[type=!player]",
+            "tp Parity 0 -40 0",
+            "tick freeze",
+        ] {
+            vanilla.send(setup)?;
+        }
+        vanilla.drain()?;
+        // The floor only once the chunks are there (a fill over unloaded
+        // chunks does nothing).
+        wait_quiet(&mut mirror, Duration::from_secs(3))?;
+        vanilla.send("fill -80 -60 -80 80 -60 80 stone")?;
+        vanilla.drain()?;
+        wait_quiet(&mut mirror, Duration::from_secs(2))?;
+        for (i, &state) in states.iter().enumerate() {
+            let (x, z) = cell(i);
+            let text = data.blocks.describe(state).context("unknown state")?;
+            let text = text.trim_end_matches("[]");
+            vanilla.send(&format!("setblock {} {Y} {z} {text}", x + 1))?;
+            vanilla.send(&format!("setblock {x} {Y} {z} sticky_piston[facing=east]"))?;
+        }
+        vanilla.drain()?;
+        wait_quiet(&mut mirror, Duration::from_secs(3))?;
+        let name = |mirror: &Mirror, x: i32, z: i32| {
+            mirror
+                .block(x, Y, z)
+                .and_then(|s| data.blocks.block_name(s))
+                .map(str::to_owned)
+        };
+        let names: Vec<Option<String>> = (0..states.len())
+            .map(|i| {
+                let (x, z) = cell(i);
+                name(&mirror, x + 1, z)
+            })
+            .collect();
+        for i in 0..states.len() {
+            let (x, z) = cell(i);
+            // From below: nothing the moved block touches is powered.
+            vanilla.send(&format!("setblock {x} {} {z} redstone_block", Y - 1))?;
+        }
+        // A few ticks, frozen otherwise (as on the parity bench).
+        vanilla.send("tick step 10")?;
+        vanilla.drain()?;
+        wait_quiet(&mut mirror, Duration::from_secs(4))?;
+        let mut bits = vec![0i32; states.len()];
+        for (i, own) in names.iter().enumerate() {
+            let (x, z) = cell(i);
+            let extended = mirror
+                .block(x, Y, z)
+                .and_then(|s| data.blocks.property(s, "extended"))
+                == Some("true");
+            let (at1, at2) = (name(&mirror, x + 1, z), name(&mirror, x + 2, z));
+            bits[i] = if own.as_deref().is_none_or(|n| n == "minecraft:air") {
+                // Gone before the piston moved (it could not stay there).
+                -1
+            } else if !extended {
+                4
+            } else if at2.is_some() && at2 == *own {
+                1
+            } else if at1.as_deref() == Some("minecraft:piston_head") {
+                2
+            } else {
+                0
+            };
+        }
+        for i in 0..states.len() {
+            let (x, z) = cell(i);
+            vanilla.send(&format!("setblock {x} {} {z} stone", Y - 1))?;
+        }
+        vanilla.send("tick step 10")?;
+        vanilla.drain()?;
+        wait_quiet(&mut mirror, Duration::from_secs(4))?;
+        for (i, own) in names.iter().enumerate() {
+            let (x, z) = cell(i);
+            if bits[i] == 1 && name(&mirror, x + 1, z) == *own {
+                bits[i] |= 8;
+            }
+        }
+        Ok(states.iter().copied().zip(bits).collect())
     })();
     vanilla.stop();
     result
