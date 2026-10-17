@@ -33,6 +33,8 @@ pub enum Kind {
     TwoTall,
     /// Beds: `part` is `foot` or `head`.
     Bed,
+    /// Chests and trapped chests: `type` single, left or right.
+    Chest,
 }
 
 /// Per block state facts for shape updates.
@@ -137,6 +139,10 @@ impl Shapes {
         mark(tagged("minecraft:walls"), Kind::Wall);
         mark(tagged("minecraft:stairs"), Kind::Stairs);
         mark(tagged("minecraft:beds"), Kind::Bed);
+        mark(
+            vec!["minecraft:chest".into(), "minecraft:trapped_chest".into()],
+            Kind::Chest,
+        );
         let all_names: Vec<String> = registry.keys().cloned().collect();
         let named = |f: &dyn Fn(&str) -> bool| -> Vec<String> {
             all_names.iter().filter(|n| f(n)).cloned().collect()
@@ -341,6 +347,40 @@ impl Shapes {
             Kind::Fence { .. } => false,
             _ => self.face_attaches(neighbor, dir),
         }
+    }
+
+    /// Where the other half of a chest is: clockwise of its facing for a
+    /// `left` half, counter-clockwise for a `right` one (observed).
+    pub fn chest_partner(&self, state: u32) -> Option<Dir> {
+        let facing = self.prop(state, "facing").and_then(Dir::from_name)?;
+        match self.prop(state, "type") {
+            Some("left") => Some(facing.cw()),
+            Some("right") => Some(facing.ccw()),
+            _ => None,
+        }
+    }
+
+    /// A single chest beside a half that points at it becomes its other
+    /// half; a half whose partner is gone becomes single.
+    fn chest_shape(&self, state: u32, dir: Dir, neighbor: u32) -> u32 {
+        let facing = self.prop(state, "facing");
+        let same = self.same_block(state, neighbor) && self.prop(neighbor, "facing") == facing;
+        if same
+            && self.prop(state, "type") == Some("single")
+            && self.chest_partner(neighbor) == Some(dir.opposite())
+        {
+            let half = match self.prop(neighbor, "type") {
+                Some("left") => "right",
+                _ => "left",
+            };
+            return self.with(state, "type", half);
+        }
+        if self.chest_partner(state) == Some(dir)
+            && !(same && self.chest_partner(neighbor) == Some(dir.opposite()))
+        {
+            return self.with(state, "type", "single");
+        }
+        state
     }
 
     /// A fence gate between walls sits lower (`in_wall`).
@@ -566,6 +606,7 @@ impl Shapes {
                 }
                 new
             }
+            Kind::Chest if dir.is_horizontal() => self.chest_shape(state, dir, neighbor),
             Kind::Bed => {
                 let Some(facing) = self.prop(state, "facing").and_then(Dir::from_name) else {
                     return state;

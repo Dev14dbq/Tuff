@@ -408,6 +408,7 @@ pub fn use_item_on(
         cursor,
         yaw: actor.pose.yaw,
         pitch: actor.pose.pitch,
+        sneaking: actor.sneaking,
     };
     let Some(placed) = blocks::place(&ctx.data, &ctx.rules, block, placement, &block_at) else {
         return refuse(outcome);

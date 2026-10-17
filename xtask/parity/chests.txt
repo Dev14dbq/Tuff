@@ -1,0 +1,35 @@
+# Chests joining into double chests (stone floor at y=-60).
+region -2 -61 -2 16 -55 8
+run fill -2 -60 -2 16 -60 8 stone
+compare
+# A half alone becomes single.
+run setblock 0 -59 0 chest[facing=north,type=left]
+compare
+# A left half next to a single chest, on either side.
+run setblock 2 -59 0 chest[facing=north]
+run setblock 3 -59 0 chest[facing=north,type=left]
+run setblock 6 -59 0 chest[facing=north]
+run setblock 5 -59 0 chest[facing=north,type=left]
+compare
+# Right halves, other facings.
+run setblock 8 -59 0 chest[facing=north]
+run setblock 9 -59 0 chest[facing=north,type=right]
+run setblock 12 -59 0 chest[facing=north]
+run setblock 11 -59 0 chest[facing=north,type=right]
+run setblock 2 -59 3 chest[facing=east]
+run setblock 2 -59 4 chest[facing=east,type=left]
+run setblock 6 -59 3 chest[facing=east]
+run setblock 6 -59 2 chest[facing=east,type=left]
+compare
+# Breaking one half leaves the other single; a trapped chest does not join a chest.
+run setblock 3 -59 0 air
+compare
+run setblock 14 -59 0 trapped_chest[facing=north]
+run setblock 15 -59 0 chest[facing=north,type=left]
+run setblock 13 -59 0 chest[facing=north,type=left]
+compare
+# Breaking one half of a pair: the other becomes single.
+run setblock 6 -59 0 air
+compare
+run setblock 8 -59 0 air
+compare

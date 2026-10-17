@@ -15,20 +15,39 @@ use crate::containers;
 use crate::context::{Event, Pose, ServerContext};
 
 enum Kind {
-    Container {
-        position: Position,
-        size: usize,
-    },
+    /// One container, or a large chest made of two (window slots in order).
+    Container { parts: Vec<(Position, usize)> },
     /// Crafting table: 0 result, 1–9 grid (not shared, not stored).
-    Crafting {
-        grid: Vec<Option<ItemStack>>,
-    },
+    Crafting { grid: Vec<Option<ItemStack>> },
 }
 
 impl Kind {
+    /// The part holding window slot `slot`, and the slot in it.
+    fn part_of(&self, slot: usize) -> Option<(Position, usize)> {
+        match self {
+            Kind::Container { parts } => open_part(parts, slot),
+            Kind::Crafting { .. } => None,
+        }
+    }
+
+    /// Where the part at `position` starts in the window.
+    fn offset_of(&self, position: Position) -> Option<usize> {
+        let Kind::Container { parts } = self else {
+            return None;
+        };
+        let mut start = 0;
+        for &(p, n) in parts {
+            if p == position {
+                return Some(start);
+            }
+            start += n;
+        }
+        None
+    }
+
     fn size(&self) -> usize {
         match self {
-            Kind::Container { size, .. } => *size,
+            Kind::Container { parts } => parts.iter().map(|(_, n)| n).sum(),
             Kind::Crafting { .. } => 10,
         }
     }
@@ -139,18 +158,38 @@ impl Windows {
     ) -> anyhow::Result<()> {
         let Who { ctx, uuid, .. } = who;
         self.close_current(writer, who)?;
-        let slots = containers::open(ctx, uuid, position, kind);
-        self.show(
-            writer,
-            who,
-            kind.menu,
-            kind.title,
-            slots,
-            Kind::Container {
-                position,
-                size: kind.slots,
-            },
-        )?;
+        // Two chest halves open together as a large chest, the right half
+        // first.
+        let state = ctx.world.block(position, &ctx.data.blocks).unwrap_or(0);
+        let partner = ctx.shapes.chest_partner(state).and_then(|d| {
+            let (dx, dy, dz) = d.offset();
+            let other = Position::new(position.x + dx, position.y + dy, position.z + dz);
+            let s = ctx.world.block(other, &ctx.data.blocks)?;
+            (ctx.data.blocks.block_name(s) == ctx.data.blocks.block_name(state)
+                && ctx.shapes.chest_partner(s) == Some(d.opposite()))
+            .then_some(other)
+        });
+        let (parts, menu, title) = match partner {
+            Some(other) => {
+                let right = ctx.data.blocks.property(state, "type") == Some("right");
+                let (first, second) = if right {
+                    (position, other)
+                } else {
+                    (other, position)
+                };
+                (
+                    vec![(first, kind.slots), (second, kind.slots)],
+                    "minecraft:generic_9x6",
+                    "Large Chest",
+                )
+            }
+            None => (vec![(position, kind.slots)], kind.menu, kind.title),
+        };
+        let mut slots = Vec::new();
+        for &(p, _) in &parts {
+            slots.extend(containers::open(ctx, uuid, p, kind));
+        }
+        self.show(writer, who, menu, title, slots, Kind::Container { parts })?;
         // A furnace window shows its fire and progress.
         if kind.slots == 3 {
             let values = crate::furnaces::progress(ctx, position).values();
@@ -241,12 +280,13 @@ impl Windows {
             && s < size
         {
             let before = match &open.kind {
-                Kind::Container { position, .. } => ctx
-                    .containers
-                    .lock()
-                    .expect("containers lock")
-                    .get(&(position.x, position.y, position.z))
-                    .and_then(|o| o.slots.get(s).cloned().flatten()),
+                Kind::Container { .. } => open.kind.part_of(s).and_then(|(p, local)| {
+                    ctx.containers
+                        .lock()
+                        .expect("containers lock")
+                        .get(&(p.x, p.y, p.z))
+                        .and_then(|o| o.slots.get(local).cloned().flatten())
+                }),
                 Kind::Crafting { grid } => grid[s].clone(),
             };
             if let Some(stack) = before {
@@ -269,12 +309,22 @@ impl Windows {
         }
         let id = open.id;
         match &mut open.kind {
-            Kind::Container { position, .. } => {
-                if !theirs.is_empty() {
-                    let (viewers, slots) = containers::change(ctx, uuid, *position, &theirs);
+            Kind::Container { parts } => {
+                for &(p, _) in parts.iter() {
+                    let local: Vec<(usize, Option<HashedStack>)> = theirs
+                        .iter()
+                        .filter_map(|(s, stack)| {
+                            let (q, slot) = open_part(parts, *s)?;
+                            (q == p).then(|| (slot, stack.clone()))
+                        })
+                        .collect();
+                    if local.is_empty() {
+                        continue;
+                    }
+                    let (viewers, slots) = containers::change(ctx, uuid, p, &local);
                     if !viewers.is_empty() {
                         let _ = ctx.events.send(Event::ContainerSlots {
-                            position: *position,
+                            position: p,
                             viewers,
                             slots,
                         });
@@ -394,7 +444,11 @@ impl Windows {
             return Ok(());
         };
         match open.kind {
-            Kind::Container { position, .. } => containers::close(ctx, uuid, position),
+            Kind::Container { parts } => {
+                for (p, _) in parts {
+                    containers::close(ctx, uuid, p);
+                }
+            }
             Kind::Crafting { grid } => {
                 let left: Vec<ItemStack> = grid.into_iter().skip(1).flatten().collect();
                 self.give_back(writer, who, left)?;
@@ -410,14 +464,15 @@ impl Windows {
         position: Position,
         slots: Vec<(usize, Option<ItemStack>)>,
     ) -> anyhow::Result<()> {
-        let Some(id) = self.open.as_ref().and_then(|o| match o.kind {
-            Kind::Container { position: p, .. } if p == position => Some(o.id),
-            _ => None,
-        }) else {
+        let Some((id, start)) = self
+            .open
+            .as_ref()
+            .and_then(|o| Some((o.id, o.kind.offset_of(position)?)))
+        else {
             return Ok(());
         };
         for (slot, item) in slots {
-            self.set_slot(writer, id, slot, item)?;
+            self.set_slot(writer, id, start + slot, item)?;
         }
         Ok(())
     }
@@ -429,10 +484,11 @@ impl Windows {
         position: Position,
         values: &[i16],
     ) -> anyhow::Result<()> {
-        let Some(id) = self.open.as_ref().and_then(|o| match o.kind {
-            Kind::Container { position: p, .. } if p == position => Some(o.id),
-            _ => None,
-        }) else {
+        let Some(id) = self
+            .open
+            .as_ref()
+            .and_then(|o| o.kind.offset_of(position).map(|_| o.id))
+        else {
             return Ok(());
         };
         for (property, &value) in values.iter().enumerate() {
@@ -452,7 +508,7 @@ impl Windows {
         position: Position,
     ) -> anyhow::Result<()> {
         if let Some(open) = &self.open
-            && matches!(open.kind, Kind::Container { position: p, .. } if p == position)
+            && open.kind.offset_of(position).is_some()
         {
             writer.queue(&play::ContainerCloseClientbound { window: open.id })?;
             self.open = None;
@@ -469,4 +525,16 @@ impl Windows {
     ) -> anyhow::Result<()> {
         self.set_slot(writer, 0, slot as usize, item)
     }
+}
+
+/// The part of a container window that holds window slot `slot`.
+fn open_part(parts: &[(Position, usize)], slot: usize) -> Option<(Position, usize)> {
+    let mut start = 0;
+    for &(p, n) in parts {
+        if slot < start + n {
+            return Some((p, slot - start));
+        }
+        start += n;
+    }
+    None
 }

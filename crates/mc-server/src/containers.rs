@@ -179,19 +179,23 @@ fn store(ctx: &ServerContext, p: Position, open: &Open) {
 pub fn signal(ctx: &ServerContext, p: Position) -> Option<u8> {
     let state = ctx.world.block(p, &ctx.data.blocks)?;
     let kind = kind_of(ctx.data.blocks.block_name(state)?)?;
-    let slots = match ctx.containers.lock().expect("containers lock").get(&key(p)) {
-        Some(open) => open.slots.clone(),
-        None => match ctx.world.block_entity(p, &ctx.data.blocks) {
-            Some(be) => read_items(ctx, &be.data, kind.slots).0,
-            None => vec![None; kind.slots],
-        },
-    };
+    let mut slots = self::slots(ctx, p, kind);
+    // Both halves of a large chest count.
+    if let Some(d) = ctx.shapes.chest_partner(state) {
+        let (dx, dy, dz) = d.offset();
+        let other = Position::new(p.x + dx, p.y + dy, p.z + dz);
+        let partner = ctx.world.block(other, &ctx.data.blocks);
+        if partner.is_some_and(|s| ctx.shapes.chest_partner(s) == Some(d.opposite())) {
+            slots.extend(self::slots(ctx, other, kind));
+        }
+    }
+    let total = slots.len();
     let fullness: f64 = slots
         .iter()
         .flatten()
         .map(|s| f64::from(s.count) / f64::from(ctx.items.max_stack(s.item).max(1)))
         .sum::<f64>()
-        / kind.slots as f64;
+        / total as f64;
     Some(if slots.iter().all(Option::is_none) {
         0
     } else {

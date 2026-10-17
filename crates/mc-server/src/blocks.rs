@@ -72,6 +72,8 @@ pub struct Placement {
     pub cursor: [f32; 3],
     pub yaw: f32,
     pub pitch: f32,
+    /// Sneaking players place chests single.
+    pub sneaking: bool,
 }
 
 /// Horizontal direction a yaw looks at.
@@ -233,6 +235,29 @@ pub fn place(
             if face == 0 { "true" } else { "false" },
         );
     }
+    if matches!(name, "minecraft:chest" | "minecraft:trapped_chest") && !p.sneaking {
+        // Joins a single chest beside it facing the same way: as the left
+        // half if that chest is clockwise of its facing, else the right.
+        let facing = blocks.property(state, "facing").unwrap_or("north");
+        let side = |clockwise: bool| {
+            let turns = ["north", "east", "south", "west"];
+            let i = turns.iter().position(|d| *d == facing).unwrap_or(0);
+            let d = turns[if clockwise { (i + 1) % 4 } else { (i + 3) % 4 }];
+            FACE_NAMES.iter().position(|f| *f == d).unwrap_or(2)
+        };
+        let joins = |clockwise: bool| {
+            block_at(offset(target, side(clockwise))).is_some_and(|s| {
+                blocks.block_name(s) == Some(name)
+                    && blocks.property(s, "type") == Some("single")
+                    && blocks.property(s, "facing") == Some(facing)
+            })
+        };
+        if joins(true) {
+            set(&mut state, "type", "left");
+        } else if joins(false) {
+            set(&mut state, "type", "right");
+        }
+    }
     let upper_half = match face {
         0 => true,
         1 => false,
@@ -382,6 +407,7 @@ mod tests {
                 cursor: [0.5; 3],
                 yaw,
                 pitch: 0.0,
+                sneaking: false,
             };
             let placed = super::place(&data, &rules, block, p, &block_at).unwrap();
             data.blocks.describe(placed.blocks[0].1).unwrap().to_owned()

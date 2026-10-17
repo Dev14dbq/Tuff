@@ -1996,3 +1996,90 @@ async fn furnaces_smelt_with_fuel() {
     assert!(!text.contains("raw_iron"), "{text}");
     let _ = stop.send(());
 }
+
+#[tokio::test]
+async fn two_chests_open_as_a_large_chest() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Hoarder".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut hoarder, _) = join_offline(addr, ctx.ids.clone(), "Hoarder").await;
+    // A left half west of a single chest: they join, the single one as right.
+    for line in [
+        "setblock 3 -60 0 chest[facing=north]",
+        "setblock 2 -60 0 chest[facing=north,type=left]",
+        "item replace block 3 -60 0 container.0 with diamond 5",
+        "item replace block 2 -60 0 container.0 with emerald 7",
+    ] {
+        let mut command = Vec::new();
+        command.put_string(line);
+        hoarder.send("minecraft:chat_command", command).await;
+    }
+    loop {
+        let (_, chat) = hoarder.recv_until("minecraft:system_chat").await;
+        if format!("{:?}", Reader::new(&chat).nbt().unwrap()).contains("emerald") {
+            break;
+        }
+    }
+    let right = ctx
+        .world
+        .block(mc_protocol::Position::new(3, -60, 0), &ctx.data.blocks)
+        .unwrap();
+    assert_eq!(ctx.data.blocks.property(right, "type"), Some("right"));
+
+    let mut use_on = Vec::new();
+    use_on.put_varint(0);
+    use_on.put_position(mc_protocol::Position::new(2, -60, 0));
+    use_on.put_varint(1);
+    for c in [0.5f32, 1.0, 0.5] {
+        use_on.put_f32(c);
+    }
+    use_on.put_bool(false);
+    use_on.put_bool(false);
+    use_on.put_varint(1);
+    hoarder.send("minecraft:use_item_on", use_on).await;
+    let (_, screen) = hoarder.recv_until("minecraft:open_screen").await;
+    let mut r = Reader::new(&screen);
+    r.varint().unwrap();
+    let large = ctx
+        .data
+        .builtin
+        .id("minecraft:menu", "minecraft:generic_9x6")
+        .unwrap();
+    assert_eq!(r.varint().unwrap(), large);
+    let (_, content) = hoarder.recv_until("minecraft:container_set_content").await;
+    let mut r = Reader::new(&content);
+    r.varint().unwrap();
+    r.varint().unwrap();
+    assert_eq!(r.length_prefix().unwrap(), 54 + 36);
+    // The right half comes first: its diamonds in slot 0, the emeralds in 27.
+    let diamond = ctx.items.id("minecraft:diamond").unwrap();
+    let emerald = ctx.items.id("minecraft:emerald").unwrap();
+    let mut seen = Vec::new();
+    for _ in 0..54 {
+        let count = r.varint().unwrap();
+        if count > 0 {
+            let item = r.varint().unwrap();
+            let (add, remove) = (r.varint().unwrap(), r.varint().unwrap());
+            assert_eq!((add, remove), (0, 0));
+            seen.push((count, item));
+        } else {
+            seen.push((0, 0));
+        }
+    }
+    assert_eq!(seen[0], (5, diamond));
+    assert_eq!(seen[27], (7, emerald));
+    let _ = stop.send(());
+}
