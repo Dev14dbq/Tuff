@@ -351,8 +351,7 @@ impl Windows {
             pose,
         } = who;
         for stack in stacks {
-            let name = containers::item_name(ctx, stack.item).unwrap_or_default();
-            let max = crate::interact::max_stack(&name);
+            let max = ctx.items.max_stack(stack.item);
             let mut result = (0, Vec::new());
             change_hands(ctx, uuid, entity_id, |hands| {
                 result = hands.insert(stack.item, stack.count, max)

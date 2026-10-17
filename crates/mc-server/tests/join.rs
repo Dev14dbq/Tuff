@@ -1872,3 +1872,72 @@ async fn light_sources_light_up_around_them() {
     assert!(dark, "the light goes when the glowstone does");
     let _ = stop.send(());
 }
+
+#[tokio::test]
+async fn hungry_players_eat_food() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Eater".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut eater, _) = join_offline(addr, ctx.ids.clone(), "Eater").await;
+    for line in ["gamemode survival", "give Eater bread 2"] {
+        let mut command = Vec::new();
+        command.put_string(line);
+        eater.send("minecraft:chat_command", command).await;
+    }
+    eater.recv_until("minecraft:container_set_slot").await;
+    let uuid = mc_server_uuid(&ctx, "Eater");
+    ctx.vitals.lock().unwrap().get_mut(&uuid).unwrap().food = 10;
+
+    let mut use_item = Vec::new();
+    use_item.put_varint(0); // main hand
+    use_item.put_varint(1);
+    use_item.put_f32(0.0);
+    use_item.put_f32(0.0);
+    let started = std::time::Instant::now();
+    eater.send("minecraft:use_item", use_item).await;
+    // The stack shrinks, then food and saturation go up.
+    let (_, slot) = eater.recv_until("minecraft:container_set_slot").await;
+    assert!(
+        started.elapsed() >= Duration::from_millis(1400),
+        "eating takes 1.6 s"
+    );
+    let mut r = Reader::new(&slot);
+    r.varint().unwrap();
+    r.varint().unwrap();
+    assert_eq!(r.i16().unwrap(), 36, "first hotbar slot");
+    assert_eq!(r.varint().unwrap(), 1, "one bread left");
+    let (_, health) = eater.recv_until("minecraft:set_health").await;
+    let mut r = Reader::new(&health);
+    let (_, food, saturation) = (r.f32().unwrap(), r.varint().unwrap(), r.f32().unwrap());
+    assert_eq!(food, 15, "bread gives 5");
+    assert!((saturation - 11.0).abs() < 1e-4, "5 + 6 = {saturation}");
+    eater.recv_until("minecraft:entity_event").await;
+
+    // Full players cannot eat bread: nothing happens.
+    ctx.vitals.lock().unwrap().get_mut(&uuid).unwrap().food = 20;
+    let mut use_item = Vec::new();
+    use_item.put_varint(0);
+    use_item.put_varint(2);
+    use_item.put_f32(0.0);
+    use_item.put_f32(0.0);
+    eater.send("minecraft:use_item", use_item).await;
+    tokio::time::sleep(Duration::from_millis(1800)).await;
+    let left = ctx.inventories.lock().unwrap().get(&uuid).unwrap().slots[36]
+        .as_ref()
+        .map(|s| s.count);
+    assert_eq!(left, Some(1));
+    let _ = stop.send(());
+}

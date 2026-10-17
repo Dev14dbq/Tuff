@@ -163,6 +163,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             lock(&ctx.time).advance();
             run_scheduled_ticks(&ctx);
             crate::vitals::tick(&ctx);
+            crate::vitals::tick_using(&ctx);
         }
 
         while let Ok(request) = requests.try_recv() {
@@ -445,18 +446,7 @@ fn pick_up(
         if *mode == 3 || !picks_up(pose, entity) {
             continue;
         }
-        let name = ctx
-            .data
-            .builtin
-            .get("minecraft:item")
-            .and_then(|items| {
-                items
-                    .iter()
-                    .find(|(_, id)| **id == item)
-                    .map(|(n, _)| n.clone())
-            })
-            .unwrap_or_default();
-        let max = crate::interact::max_stack(&name);
+        let max = ctx.items.max_stack(item);
         let mut inventories = lock(&ctx.inventories);
         let Some(hands) = inventories.get_mut(uuid) else {
             continue;

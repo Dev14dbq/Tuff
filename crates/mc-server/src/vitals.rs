@@ -12,6 +12,12 @@
 //! - exhaustion: 4 of it costs a point of saturation, or of food.
 //!
 //! Creative and spectator players take no damage and do not get hungry.
+//!
+//! Eating and drinking ("Food"): holding use with a consumable in hand for
+//! its time (1.6 s unless the item says otherwise) eats it; food can be eaten
+//! only when hungry unless it says it always can, or in creative. Food adds
+//! its nutrition (up to 20) and saturation (up to the food level); the stack
+//! loses one (not in creative) and what is left (a bottle) goes in its place.
 
 use std::collections::HashMap;
 
@@ -77,6 +83,186 @@ impl Vitals {
 
 pub type AllVitals = HashMap<u128, Vitals>;
 
+/// A player eating or drinking.
+#[derive(Clone, Debug)]
+pub struct Using {
+    pub entity_id: i32,
+    /// 0 main hand, 1 off hand.
+    pub hand: i32,
+    /// Inventory slot of the item and the item.
+    pub slot: usize,
+    pub item: i32,
+    pub ticks_left: i32,
+    pub game_mode: i32,
+}
+
+/// Starts using what is in `hand` if it can be eaten or drunk now. Returns
+/// whether it started.
+pub fn start_using(
+    ctx: &ServerContext,
+    uuid: u128,
+    entity_id: i32,
+    hand: i32,
+    game_mode: i32,
+) -> bool {
+    let Some((slot, item)) = lock(&ctx.inventories).get(&uuid).and_then(|h| {
+        let slot = h.hand_slot(hand);
+        h.slots[slot].as_ref().map(|s| (slot, s.item))
+    }) else {
+        return false;
+    };
+    let Some(info) = ctx.items.get(item) else {
+        return false;
+    };
+    let Some(ticks) = info.use_ticks else {
+        return false;
+    };
+    if let Some(food) = &info.food {
+        let hungry = lock(&ctx.vitals).get(&uuid).is_some_and(|v| v.food < 20);
+        if !(hungry || food.always || game_mode == 1) {
+            return false;
+        }
+    }
+    lock(&ctx.using).insert(
+        uuid,
+        Using {
+            entity_id,
+            hand,
+            slot,
+            item,
+            ticks_left: ticks,
+            game_mode,
+        },
+    );
+    let _ = ctx.events.send(Event::UsingItem {
+        uuid,
+        entity_id,
+        hand: Some(hand),
+    });
+    true
+}
+
+/// The player let go of use (or changed what they hold).
+pub fn stop_using(ctx: &ServerContext, uuid: u128) {
+    if let Some(using) = lock(&ctx.using).remove(&uuid) {
+        let _ = ctx.events.send(Event::UsingItem {
+            uuid,
+            entity_id: using.entity_id,
+            hand: None,
+        });
+    }
+}
+
+/// One tick of eating and drinking: finished items are consumed.
+pub fn tick_using(ctx: &ServerContext) {
+    let done: Vec<(u128, Using)> = {
+        let mut all = lock(&ctx.using);
+        for using in all.values_mut() {
+            using.ticks_left -= 1;
+        }
+        let uuids: Vec<u128> = all
+            .iter()
+            .filter(|(_, u)| u.ticks_left <= 0)
+            .map(|(&id, _)| id)
+            .collect();
+        uuids
+            .into_iter()
+            .filter_map(|id| all.remove(&id).map(|u| (id, u)))
+            .collect()
+    };
+    for (uuid, using) in done {
+        finish_using(ctx, uuid, &using);
+        let _ = ctx.events.send(Event::UsingItem {
+            uuid,
+            entity_id: using.entity_id,
+            hand: None,
+        });
+    }
+}
+
+fn finish_using(ctx: &ServerContext, uuid: u128, using: &Using) {
+    let Some(info) = ctx.items.get(using.item) else {
+        return;
+    };
+    // The item must still be there.
+    let mut changed = Vec::new();
+    {
+        let mut inventories = lock(&ctx.inventories);
+        let Some(hands) = inventories.get_mut(&uuid) else {
+            return;
+        };
+        let still = hands.slots[using.slot]
+            .as_ref()
+            .is_some_and(|s| s.item == using.item);
+        if !still {
+            return;
+        }
+        if using.game_mode != 1 {
+            let stack = hands.slots[using.slot].as_mut().expect("checked");
+            stack.count -= 1;
+            if stack.count <= 0 {
+                hands.slots[using.slot] = None;
+                hands.components.remove(&using.slot);
+            }
+            changed.push(using.slot);
+            if let Some(id) = info.remainder.as_deref().and_then(|n| ctx.items.id(n)) {
+                if hands.slots[using.slot].is_none() {
+                    hands.slots[using.slot] = Some(mc_protocol::packets::play::ItemStack {
+                        count: 1,
+                        item: id,
+                        has_component_changes: false,
+                    });
+                } else {
+                    let (taken, slots) = hands.insert(id, 1, ctx.items.max_stack(id));
+                    changed.extend(slots);
+                    if taken == 0 {
+                        // No room: it falls at the player's feet.
+                        let pose = lock(&ctx.players).get(&uuid).and_then(|p| p.pose);
+                        if let Some(pose) = pose {
+                            drop(inventories);
+                            crate::tick::throw_item(
+                                ctx,
+                                pose,
+                                mc_protocol::packets::play::ItemStack {
+                                    count: 1,
+                                    item: id,
+                                    has_component_changes: false,
+                                },
+                            );
+                            inventories = lock(&ctx.inventories);
+                        }
+                    }
+                }
+            }
+        }
+        let hands = inventories.get(&uuid);
+        for slot in changed {
+            let _ = ctx.events.send(Event::InventorySlot {
+                uuid,
+                slot: slot as i16,
+                item: hands.and_then(|h| h.slots[slot].clone()),
+            });
+        }
+    }
+    if let Some(food) = &info.food {
+        let packet = {
+            let mut all = lock(&ctx.vitals);
+            let Some(v) = all.get_mut(&uuid) else { return };
+            v.food = (v.food + food.nutrition).min(20);
+            v.saturation = (v.saturation + food.saturation).min(v.food as f32);
+            v.packet()
+        };
+        let _ = ctx.events.send(Event::Health {
+            uuid,
+            health: packet,
+        });
+    }
+    let _ = ctx.events.send(Event::UsedItem {
+        uuid,
+        entity_id: using.entity_id,
+    });
+}
+
 fn takes_damage(game_mode: i32) -> bool {
     game_mode == 0 || game_mode == 2
 }
@@ -97,38 +283,12 @@ fn death_message(key: &str, names: &[&str]) -> Tag {
     Tag::Compound(message)
 }
 
-/// Melee damage of what is in the hand (minecraft.wiki, "Damage"; items'
-/// attack attributes are not loaded yet).
-pub fn melee_damage(item_name: Option<&str>) -> f32 {
-    let Some(name) = item_name else { return 1.0 };
-    let tier = |prefix: &str| match prefix {
-        "wooden" | "golden" => 0,
-        "stone" | "copper" => 1,
-        "iron" => 2,
-        "diamond" => 3,
-        "netherite" => 4,
-        _ => 0,
-    };
-    let material = name
-        .trim_start_matches("minecraft:")
-        .split('_')
-        .next()
-        .unwrap_or("");
-    if name.ends_with("_sword") {
-        [4.0, 5.0, 6.0, 7.0, 8.0][tier(material)]
-    } else if name.ends_with("_axe") {
-        [7.0, 9.0, 9.0, 9.0, 10.0][tier(material)]
-    } else if name.ends_with("_pickaxe") {
-        [2.0, 3.0, 4.0, 5.0, 6.0][tier(material)]
-    } else if name.ends_with("_shovel") {
-        [2.5, 3.5, 4.5, 5.5, 6.5][tier(material)]
-    } else if name == "minecraft:trident" {
-        9.0
-    } else if name == "minecraft:mace" {
-        6.0
-    } else {
-        1.0
-    }
+/// Melee damage of what is in the hand: 1 plus the item's attack damage
+/// (its `attribute_modifiers`).
+pub fn melee_damage(ctx: &ServerContext, item: Option<i32>) -> f32 {
+    1.0 + item
+        .and_then(|i| ctx.items.get(i))
+        .map_or(0.0, |i| i.attack_damage)
 }
 
 /// Hurts a player; returns whether they died. Sends what clients need.

@@ -13,6 +13,7 @@ mod containers;
 mod context;
 mod crafting;
 mod interact;
+mod items;
 mod level;
 mod loot;
 mod players;

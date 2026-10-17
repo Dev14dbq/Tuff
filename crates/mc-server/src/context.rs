@@ -113,6 +113,18 @@ pub enum Event {
     EntitySpawned(mc_entity::Entity),
     /// Light changed in these chunks.
     LightChanged(Vec<(i32, i32)>),
+    /// A player started (`hand` 0 main, 1 off) or stopped (`None`) using an
+    /// item.
+    UsingItem {
+        uuid: u128,
+        entity_id: i32,
+        hand: Option<i32>,
+    },
+    /// A player finished eating or drinking.
+    UsedItem {
+        uuid: u128,
+        entity_id: i32,
+    },
     /// Entities moved this tick.
     EntitiesMoved(Vec<(i32, [f64; 3], bool)>),
     EntitiesRemoved(Vec<i32>),
@@ -211,6 +223,10 @@ pub struct ServerContext {
     pub recipes: crate::crafting::Recipes,
     /// Health and food of players in play.
     pub vitals: Mutex<crate::vitals::AllVitals>,
+    /// Stack sizes, food and more of every item.
+    pub items: crate::items::Items,
+    /// Players eating or drinking (tick thread counts down).
+    pub using: Mutex<HashMap<u128, crate::vitals::Using>>,
     /// 0 peaceful, 1 easy, 2 normal, 3 hard (level.dat).
     pub difficulty: i32,
     /// `minecraft:damage_type` entries in Registry Data order.
@@ -308,6 +324,10 @@ impl ServerContext {
         let tags = build_tags(&data, &synced_ids)?;
         let rules = BlockRules::new(&data).map_err(anyhow::Error::msg)?;
         let light = light_tables(&data, &config);
+        let items = match data.builtin.get("minecraft:item") {
+            Some(ids) => crate::items::Items::load(&config.data_dir, ids)?,
+            None => crate::items::Items::default(),
+        };
         let observed = |file: &str| {
             let path = config.data_dir.join("observed").join(file);
             let table = std::fs::read_to_string(&path)
@@ -382,6 +402,8 @@ impl ServerContext {
             loot: crate::loot::BlockLoot::load(&data),
             recipes: crate::crafting::Recipes::load(&data),
             vitals: Mutex::new(HashMap::new()),
+            items,
+            using: Mutex::new(HashMap::new()),
             difficulty,
             damage_types,
             player_files,

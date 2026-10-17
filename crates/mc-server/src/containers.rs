@@ -54,12 +54,7 @@ fn key(p: Position) -> (i32, i32, i32) {
 }
 
 pub fn item_name(ctx: &ServerContext, item: i32) -> Option<String> {
-    ctx.data
-        .builtin
-        .get("minecraft:item")?
-        .iter()
-        .find(|(_, id)| **id == item)
-        .map(|(n, _)| n.clone())
+    ctx.items.name(item).map(str::to_owned)
 }
 
 /// Reads `Items` of a block entity into slots.

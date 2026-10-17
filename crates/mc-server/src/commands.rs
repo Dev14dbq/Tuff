@@ -569,7 +569,7 @@ fn give(ctx: &ServerContext, args: &[&str], out: &mut Output) -> Result<String> 
         .id("minecraft:item", &name)
         .ok_or_else(|| format!("Unknown item '{name}'"))?;
     let (uuid, _) = find_player(ctx, who)?;
-    let max = crate::interact::max_stack(&name);
+    let max = ctx.items.max_stack(id);
     let mut inventories = lock(&ctx.inventories);
     let hands = inventories
         .get_mut(&uuid)

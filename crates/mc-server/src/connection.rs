@@ -626,6 +626,7 @@ async fn play(
                         }
                     }
                     play::Serverbound::SetCarriedItem { slot } => {
+                        crate::vitals::stop_using(&ctx, uuid);
                         if let Ok(slot @ 0..=8) = usize::try_from(slot) {
                             change_hands(&ctx, uuid, entity_id, |hands| hands.selected = slot);
                         }
@@ -637,6 +638,7 @@ async fn play(
                     play::Serverbound::ContainerClose { window } => {
                         windows.close(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window)?;
                     }
+                    play::Serverbound::PlayerAction { status: 5, .. } => crate::vitals::stop_using(&ctx, uuid),
                     play::Serverbound::PlayerAction { status: status @ (3 | 4), .. } => {
                         // Q: drop one (4) or the whole stack (3) from the main hand.
                         let mut thrown = None;
@@ -726,8 +728,7 @@ async fn play(
                             if dx * dx + dy * dy + dz * dz <= 36.0 {
                                 let held = ctx.inventories.lock().expect("inventories lock").get(&uuid)
                                     .and_then(|h| h.main_hand().map(|s| s.item));
-                                let name = held.and_then(|i| crate::containers::item_name(&ctx, i));
-                                let damage = crate::vitals::melee_damage(name.as_deref());
+                                let damage = crate::vitals::melee_damage(&ctx, held);
                                 crate::vitals::hurt_by(&ctx, victim, damage, "minecraft:player_attack", "death.attack.player", Some(&me.profile.name));
                             }
                         }
@@ -747,8 +748,9 @@ async fn play(
                         let action = Action::UseItemOn { hand, position, face, cursor, sequence };
                         let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                     }
-                    play::Serverbound::UseItem { sequence, .. } => {
+                    play::Serverbound::UseItem { hand, sequence, .. } => {
                         writer.queue(&play::BlockChangedAck { sequence })?;
+                        crate::vitals::start_using(&ctx, uuid, entity_id, hand, game_mode);
                     }
                     play::Serverbound::ClientInformation(info) => {
                         writer.queue(&skin_parts_metadata(entity_id, info.skin_parts))?;
@@ -958,6 +960,18 @@ async fn play(
                             data: state as i32,
                             global: false,
                         })?;
+                    }
+                    Ok(Event::UsingItem { uuid: other, entity_id: other_entity, hand })
+                        if other == uuid || visible.contains(&other) =>
+                    {
+                        let flags = hand.map_or(0, |h| 1 | if h == 1 { 2 } else { 0 });
+                        writer.queue(&play::SetEntityData {
+                            entity_id: other_entity,
+                            entries: vec![(play::metadata::HAND_STATES, play::MetadataValue::Byte(flags))],
+                        })?;
+                    }
+                    Ok(Event::UsedItem { uuid: other, entity_id: other_entity }) if other == uuid => {
+                        writer.queue(&play::EntityEvent { entity_id: other_entity, status: 9 })?;
                     }
                     Ok(Event::Swing { uuid: other, entity_id: other_entity, times })
                         if other != uuid && visible.contains(&other) =>

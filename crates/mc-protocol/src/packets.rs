@@ -918,6 +918,21 @@ pub mod play {
         }
     }
 
+    /// Entity Event: a status for an entity's client-side logic (9: done
+    /// using an item).
+    #[derive(Clone, Debug)]
+    pub struct EntityEvent {
+        pub entity_id: i32,
+        pub status: i8,
+    }
+    packet!(EntityEvent, Play, "minecraft:entity_event");
+    impl Encode for EntityEvent {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_i32(self.entity_id);
+            out.put_i8(self.status);
+        }
+    }
+
     /// Damage Event: an entity was hurt (red flash, sound).
     #[derive(Clone, Debug)]
     pub struct DamageEvent {
@@ -1201,6 +1216,8 @@ pub mod play {
     pub mod metadata {
         /// Dropped item entity: the stack (Slot).
         pub const ITEM: u8 = 8;
+        /// Living entity: hand states (Byte): 1 using an item, 2 the off hand.
+        pub const HAND_STATES: u8 = 8;
         /// Living entity health (Float).
         pub const HEALTH: u8 = 9;
         /// Player: displayed skin parts (Byte), the bit mask from Client Information.

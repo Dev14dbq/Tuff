@@ -50,43 +50,6 @@ impl Default for Hands {
     }
 }
 
-/// Most items stack to 64; tools, armour and a few others do not stack, and
-/// some stack to 16. (Item components are not loaded yet.)
-pub fn max_stack(item_name: &str) -> i32 {
-    let single = [
-        "_sword",
-        "_pickaxe",
-        "_axe",
-        "_shovel",
-        "_hoe",
-        "_helmet",
-        "_chestplate",
-        "_leggings",
-        "_boots",
-        "_bucket",
-        "_boat",
-        "_raft",
-        "_minecart",
-        "_bed",
-        "_horse_armor",
-    ];
-    let sixteen = [
-        "ender_pearl",
-        "snowball",
-        "egg",
-        "_sign",
-        "_banner",
-        "honey_bottle",
-    ];
-    if single.iter().any(|s| item_name.ends_with(s)) || item_name == "minecraft:bucket" {
-        1
-    } else if sixteen.iter().any(|s| item_name.ends_with(s)) {
-        16
-    } else {
-        64
-    }
-}
-
 impl Hands {
     pub fn main_hand(&self) -> Option<&ItemStack> {
         self.slots[36 + self.selected].as_ref()
