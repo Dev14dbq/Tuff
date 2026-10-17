@@ -1,12 +1,12 @@
 //! Chunk columns and 16³ sections, with their network encoding.
 //!
-//! Sections store global ids directly for now; palette-compressed in-memory
-//! storage comes with world loading (ROADMAP Ф2). The network encoding already
-//! uses palettes as the protocol requires.
+//! Sections keep block states and biomes in paletted containers, packed the
+//! way the protocol sends them.
 
 use mc_data::Blocks;
 
 use crate::bits::{BitStorage, bits_needed};
+use crate::palette::{BIOMES, BLOCKS, PalettedContainer};
 
 pub const SECTION_SIZE: usize = 16;
 pub const SECTION_VOLUME: usize = 16 * 16 * 16;
@@ -15,15 +15,15 @@ pub const BIOME_VOLUME: usize = 4 * 4 * 4;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {
-    blocks: Vec<u32>,
-    biomes: Vec<u32>,
+    pub blocks: PalettedContainer,
+    pub biomes: PalettedContainer,
 }
 
 impl Section {
     pub fn filled(block: u32, biome: u32) -> Self {
         Self {
-            blocks: vec![block; SECTION_VOLUME],
-            biomes: vec![biome; BIOME_VOLUME],
+            blocks: PalettedContainer::single(BLOCKS, block),
+            biomes: PalettedContainer::single(BIOMES, biome),
         }
     }
 
@@ -32,7 +32,10 @@ impl Section {
     pub fn from_parts(blocks: Vec<u32>, biomes: Vec<u32>) -> Self {
         assert_eq!(blocks.len(), SECTION_VOLUME, "a section has 4096 blocks");
         assert_eq!(biomes.len(), BIOME_VOLUME, "a section has 64 biome cells");
-        Self { blocks, biomes }
+        Self {
+            blocks: PalettedContainer::from_values(BLOCKS, &blocks),
+            biomes: PalettedContainer::from_values(BIOMES, &biomes),
+        }
     }
 
     /// Index of a block, x fastest, then z, then y.
@@ -41,75 +44,25 @@ impl Section {
     }
 
     pub fn block(&self, x: usize, y: usize, z: usize) -> u32 {
-        self.blocks[Self::index(x, y, z)]
+        self.blocks.get(Self::index(x, y, z))
     }
 
-    pub fn set_block(&mut self, x: usize, y: usize, z: usize, state: u32) {
-        self.blocks[Self::index(x, y, z)] = state;
+    /// Returns the previous state.
+    pub fn set_block(&mut self, x: usize, y: usize, z: usize, state: u32) -> u32 {
+        self.blocks.set(Self::index(x, y, z), state)
     }
 
     /// Network form: block count, fluid count, block states, biomes.
     pub fn write_network(&self, blocks: &Blocks, biome_count: u32, out: &mut Vec<u8>) {
-        let non_air = self.blocks.iter().filter(|&&s| !blocks.is_air(s)).count();
-        let fluids = self.blocks.iter().filter(|&&s| blocks.is_fluid(s)).count();
+        let non_air = self.blocks.count(|s| !blocks.is_air(s));
+        let fluids = self.blocks.count(|s| blocks.is_fluid(s));
         out.extend_from_slice(&(non_air as i16).to_be_bytes());
         out.extend_from_slice(&(fluids as i16).to_be_bytes());
-        let direct_blocks = bits_needed(blocks.state_count().saturating_sub(1));
-        write_container(&self.blocks, 4..=8, direct_blocks, out);
-        let direct_biomes = bits_needed(biome_count.saturating_sub(1));
-        write_container(&self.biomes, 1..=3, direct_biomes, out);
+        self.blocks
+            .write_network(bits_needed(blocks.state_count().saturating_sub(1)), out);
+        self.biomes
+            .write_network(bits_needed(biome_count.saturating_sub(1)), out);
     }
-}
-
-/// Paletted container: single value, indirect palette, or direct global ids.
-/// The data array has no length prefix (since 1.21.5).
-fn write_container(
-    values: &[u32],
-    indirect: std::ops::RangeInclusive<u32>,
-    direct_bits: u32,
-    out: &mut Vec<u8>,
-) {
-    let mut palette: Vec<u32> = Vec::new();
-    for &value in values {
-        if !palette.contains(&value) {
-            palette.push(value);
-            if palette.len() > 1 << indirect.end() {
-                break; // too many for an indirect palette anyway
-            }
-        }
-    }
-
-    if let [single] = palette.as_slice() {
-        out.push(0);
-        put_varint(out, *single as i32);
-        return;
-    }
-
-    let bits = bits_needed(palette.len() as u32 - 1).max(*indirect.start());
-    let storage = if bits <= *indirect.end() {
-        out.push(bits as u8);
-        put_varint(out, palette.len() as i32);
-        for &entry in &palette {
-            put_varint(out, entry as i32);
-        }
-        let index = |v: u32| palette.iter().position(|&p| p == v).expect("in palette") as u32;
-        BitStorage::from_values(bits, values.iter().map(|&v| index(v)))
-    } else {
-        out.push(direct_bits as u8);
-        BitStorage::from_values(direct_bits, values.iter().copied())
-    };
-    for &word in storage.words() {
-        out.extend_from_slice(&word.to_be_bytes());
-    }
-}
-
-fn put_varint(out: &mut Vec<u8>, value: i32) {
-    let mut v = value as u32;
-    while v & !0x7F != 0 {
-        out.push((v & 0x7F) as u8 | 0x80);
-        v >>= 7;
-    }
-    out.push(v as u8);
 }
 
 /// Stored light of one section: 2048 bytes, two 4-bit values per byte.
@@ -167,9 +120,56 @@ impl Chunk {
     }
 
     /// `x` and `z` are 0..16 inside the chunk, `y` is the world coordinate.
-    pub fn set_block(&mut self, x: usize, y: i32, z: usize, state: u32) {
+    /// Returns the previous state. Heightmaps are not touched (see
+    /// [`Chunk::update_heightmap`]).
+    pub fn set_block(&mut self, x: usize, y: i32, z: usize, state: u32) -> u32 {
         let local = (y - self.min_y) as usize;
-        self.sections[local / 16].set_block(x, local % 16, z, state);
+        self.sections[local / 16].set_block(x, local % 16, z, state)
+    }
+
+    /// Whether `y` (world coordinate) is inside the chunk's height.
+    pub fn contains_y(&self, y: i32) -> bool {
+        y >= self.min_y && y < self.min_y + self.height() as i32
+    }
+
+    /// Fixes one column of the stored heightmap `name` after the block at
+    /// world height `y` changed to `state`; `counts` says which states the
+    /// heightmap counts. Does nothing if the chunk has no such heightmap.
+    pub fn update_heightmap(
+        &mut self,
+        name: &str,
+        x: usize,
+        y: i32,
+        z: usize,
+        state: u32,
+        counts: impl Fn(u32) -> bool,
+    ) {
+        let height = self.height();
+        let bits = bits_needed(height);
+        let Some(index) = self.heightmaps.iter().position(|(n, _)| n == name) else {
+            return;
+        };
+        let Some(mut storage) = BitStorage::from_words(bits, 256, self.heightmaps[index].1.clone())
+        else {
+            return;
+        };
+        let column = z * 16 + x;
+        let current = storage.get(column);
+        let local = (y - self.min_y) as u32;
+        let top = if counts(state) {
+            current.max(local + 1)
+        } else if local + 1 == current {
+            (0..local as i32)
+                .rev()
+                .find(|&l| counts(self.block(x, self.min_y + l, z)))
+                .map_or(0, |l| l as u32 + 1)
+        } else {
+            current
+        };
+        if top != current {
+            storage.set(column, top);
+            self.heightmaps[index].1 = storage.words().to_vec();
+        }
     }
 
     pub fn block(&self, x: usize, y: i32, z: usize) -> u32 {
@@ -207,38 +207,6 @@ impl Chunk {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn single_value_container() {
-        let mut out = Vec::new();
-        write_container(&[7; SECTION_VOLUME], 4..=8, 16, &mut out);
-        assert_eq!(out, [0x00, 0x07]);
-    }
-
-    #[test]
-    fn indirect_container_uses_at_least_minimum_bits() {
-        let mut values = vec![0; SECTION_VOLUME];
-        values[0] = 300;
-        let mut out = Vec::new();
-        write_container(&values, 4..=8, 16, &mut out);
-        // bits=4, palette in first-seen order [300, 0], then 4096*4/64 = 256 longs.
-        assert_eq!(&out[..5], &[4, 2, 0xac, 0x02, 0]);
-        assert_eq!(out.len(), 5 + 256 * 8);
-        // First long holds entries 0..16, lowest bits first: 300 -> index 0, rest -> 1.
-        assert_eq!(
-            &out[5..13],
-            &[0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x10]
-        );
-    }
-
-    #[test]
-    fn direct_container_when_palette_is_too_big() {
-        let values: Vec<u32> = (0..64).collect();
-        let mut out = Vec::new();
-        write_container(&values, 1..=3, 7, &mut out);
-        assert_eq!(out[0], 7);
-        assert_eq!(out.len(), 1 + BitStorage::word_count(7, 64) * 8);
-    }
 
     #[test]
     fn heightmap_counts_from_world_bottom() {

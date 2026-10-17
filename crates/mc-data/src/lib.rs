@@ -246,6 +246,8 @@ pub struct Blocks {
     fluid: Vec<bool>,
     /// `name[k=v,...]` with properties sorted by name → state id.
     by_key: HashMap<String, u32>,
+    /// State id → its `name[k=v,...]` key.
+    keys: Vec<String>,
 }
 
 /// `minecraft:oak_log[axis=y]`; properties must be sorted by name.
@@ -288,6 +290,7 @@ impl Blocks {
         let mut state_count = 0;
         let (mut air, mut fluid) = (Vec::new(), Vec::new());
         let mut by_key = HashMap::new();
+        let mut keys = Vec::new();
         for (name, block) in blocks {
             let states = block["states"]
                 .as_array()
@@ -316,6 +319,7 @@ impl Blocks {
                 if air.len() <= id {
                     air.resize(id + 1, false);
                     fluid.resize(id + 1, false);
+                    keys.resize(id + 1, String::new());
                 }
                 air[id] = is_air;
                 fluid[id] =
@@ -325,6 +329,7 @@ impl Blocks {
                     name,
                     properties.iter().map(|(k, v)| (k.as_str(), v.as_str())),
                 );
+                keys[id].clone_from(&key);
                 by_key.insert(key, id as u32);
             }
             let default_properties = states
@@ -348,7 +353,48 @@ impl Blocks {
             air,
             fluid,
             by_key,
+            keys,
         })
+    }
+
+    /// `minecraft:oak_log[axis=y]` for a state id (`minecraft:stone[]` without
+    /// properties).
+    pub fn describe(&self, state: u32) -> Option<&str> {
+        self.keys
+            .get(state as usize)
+            .map(String::as_str)
+            .filter(|k| !k.is_empty())
+    }
+
+    /// Block name of a state: `minecraft:oak_log`.
+    pub fn block_name(&self, state: u32) -> Option<&str> {
+        let key = self.describe(state)?;
+        Some(&key[..key.find('[').unwrap_or(key.len())])
+    }
+
+    /// Value of one property of a state.
+    pub fn property(&self, state: u32, property: &str) -> Option<&str> {
+        let key = self.describe(state)?;
+        let inner = key[key.find('[')? + 1..].strip_suffix(']')?;
+        inner
+            .split(',')
+            .filter_map(|kv| kv.split_once('='))
+            .find(|(k, _)| *k == property)
+            .map(|(_, v)| v)
+    }
+
+    /// The same state with one property changed; `None` if the block has no
+    /// such property or value.
+    pub fn with_property(&self, state: u32, property: &str, value: &str) -> Option<u32> {
+        self.property(state, property)?;
+        let key = self.describe(state)?;
+        let name = self.block_name(state)?;
+        let inner = &key[name.len() + 1..key.len() - 1];
+        let changed = inner
+            .split(',')
+            .filter_map(|kv| kv.split_once('='))
+            .map(|(k, v)| if k == property { (k, value) } else { (k, v) });
+        self.by_key.get(&state_key(name, changed)).copied()
     }
 
     /// Global state id of block `name` with `properties`; properties not given

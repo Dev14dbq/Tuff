@@ -6,8 +6,10 @@
 //! the tick thread from ARCHITECTURE.md §4 arrives with world simulation.
 
 mod auth;
+mod blocks;
 mod connection;
 mod context;
+mod interact;
 mod util;
 mod world;
 

@@ -8,8 +8,9 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use anyhow::{Context as _, Result};
 use mc_data::{McData, SYNCHRONIZED_REGISTRIES, resolve_tags};
 use mc_nbt::Tag;
+use mc_protocol::Position;
 use mc_protocol::packets::configuration::{RegistryData, RegistryEntry, TagRegistry, UpdateTags};
-use mc_protocol::packets::play::PlayerInfoEntry;
+use mc_protocol::packets::play::{ItemStack, PlayerInfoEntry};
 use mc_protocol::packets::{GameProfile, KnownPack};
 use mc_protocol::{Direction, PacketIds, State};
 use tokio::sync::broadcast;
@@ -17,6 +18,7 @@ use tracing::{debug, info, warn};
 
 use crate::Config;
 use crate::auth::ServerKey;
+use crate::blocks::BlockRules;
 use crate::world::World;
 
 /// A player who passed login.
@@ -29,6 +31,8 @@ pub struct OnlinePlayer {
     pub skin_parts: u8,
     /// Where the player is; `None` until they spawn in play.
     pub pose: Option<Pose>,
+    /// What others see in their main hand.
+    pub main_hand: Option<ItemStack>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -74,6 +78,30 @@ pub enum Event {
         entity_id: i32,
         parts: u8,
     },
+    /// Blocks changed; `by` is the player who did it (they already got
+    /// their own updates).
+    BlocksChanged {
+        by: u128,
+        changes: Vec<(Position, u32)>,
+    },
+    /// A player broke a block: others see particles and hear it.
+    BlockBroken {
+        by: u128,
+        position: Position,
+        state: u32,
+    },
+    /// A player's arm swings (`times` in a row, as vanilla does on placing).
+    Swing {
+        uuid: u128,
+        entity_id: i32,
+        times: u8,
+    },
+    /// What a player holds in the main hand changed.
+    Equipment {
+        uuid: u128,
+        entity_id: i32,
+        main_hand: Option<ItemStack>,
+    },
 }
 
 pub struct ServerContext {
@@ -89,6 +117,8 @@ pub struct ServerContext {
     pub registries_with_data: Vec<RegistryData>,
     pub tags: UpdateTags,
     pub world: World,
+    /// How placing and breaking blocks works (until block behaviours exist).
+    pub rules: BlockRules,
     /// `minecraft:player` in `minecraft:entity_type`.
     pub player_entity_type: i32,
     /// RSA key for the online-mode key exchange (`None` in offline mode).
@@ -164,9 +194,10 @@ impl ServerContext {
             None
         };
         let tags = build_tags(&data, &synced_ids)?;
+        let rules = BlockRules::new(&data)?;
         let world = match &config.world {
             Some(dir) => World::open(dir, &data, &synced_ids)?,
-            None => World::flat(&data, &synced_ids)?,
+            None => World::flat(&data, &synced_ids, &rules)?,
         };
         let player_entity_type = data
             .builtin
@@ -191,6 +222,7 @@ impl ServerContext {
             registries_with_data,
             tags,
             world,
+            rules,
             player_entity_type,
             key,
             players: Mutex::new(HashMap::new()),

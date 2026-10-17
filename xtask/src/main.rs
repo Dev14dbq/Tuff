@@ -1,5 +1,6 @@
 //! Development tasks, run as `cargo xtask <task>`.
 
+mod blocks;
 mod bots;
 mod chunk_diff;
 mod chunk_info;
@@ -24,6 +25,9 @@ Tasks:
   bots [--addr <host:port>] [--count <n>] [--seconds <s>] [--view-distance <n>] [--version <id>]
       Load test: n bots (default 100) log in, get their chunks and walk around
       for s seconds (default 30). The server must run with --offline.
+  blocks [--addr <host:port>] [--version <id>]
+      Two players on an offline creative server with a superflat world: one
+      places and breaks blocks, and what both receive is printed.
   registry-diff --a <host:port> --b <host:port> [--details <n>]
       Log into two offline-mode servers without known packs and compare every
       registry entry they send as NBT (e.g. vanilla vs ours).
@@ -40,6 +44,7 @@ fn main() -> ExitCode {
         Some("extract-data") => extract_data::run(&args[1..]),
         Some("probe") => probe::run(&args[1..]),
         Some("bots") => bots::run(&args[1..]),
+        Some("blocks") => blocks::run(&args[1..]),
         Some("registry-diff") => registry_diff::run(&args[1..]),
         Some("chunk-info") => chunk_info::run(&args[1..]),
         Some("chunk-diff") => chunk_diff::run(&args[1..]),

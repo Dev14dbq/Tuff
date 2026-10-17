@@ -15,8 +15,7 @@ use std::fmt;
 use mc_data::Blocks;
 use mc_nbt::{Compound, Tag};
 use mc_world::{
-    BIOME_VOLUME, BitStorage, BlockEntity, Chunk, SECTION_VOLUME, Section, SectionLight,
-    bits_needed,
+    BIOMES, BLOCKS, BlockEntity, Chunk, Kind, PalettedContainer, Section, SectionLight,
 };
 
 #[derive(Debug, PartialEq)]
@@ -114,13 +113,13 @@ pub fn decode_chunk(
             };
             let blocks = match get(section, "block_states") {
                 Some(Tag::Compound(states)) => decode_blocks(states, palettes)?,
-                _ => vec![palettes.air; SECTION_VOLUME],
+                _ => PalettedContainer::single(BLOCKS, palettes.air),
             };
             let biomes = match get(section, "biomes") {
                 Some(Tag::Compound(biomes)) => decode_biomes(biomes, palettes)?,
-                _ => vec![palettes.fallback_biome; BIOME_VOLUME],
+                _ => PalettedContainer::single(BIOMES, palettes.fallback_biome),
             };
-            chunk.sections[index] = Section::from_parts(blocks, biomes);
+            chunk.sections[index] = Section { blocks, biomes };
             chunk.light[index] = SectionLight {
                 sky: light_array(section, "SkyLight")?,
                 block: light_array(section, "BlockLight")?,
@@ -170,17 +169,30 @@ fn light_array(section: &Compound, key: &str) -> Result<Option<Vec<u8>>, ChunkEr
     }
 }
 
-/// Unpacks `count` palette indices stored with `bits` per entry.
-fn unpack(words: Option<&Tag>, bits: u32, count: usize) -> Result<Vec<u32>, ChunkError> {
-    let Some(Tag::LongArray(words)) = words else {
-        return Err(bad("palette with several entries but no data"));
+/// A stored palette and its packed indices → container. Indices use
+/// `bits_needed(len - 1)` bits, at least 4 for blocks (the protocol's packing).
+fn container(
+    kind: Kind,
+    ids: Vec<u32>,
+    data: Option<&Tag>,
+    what: &str,
+) -> Result<PalettedContainer, ChunkError> {
+    if ids.is_empty() {
+        return Err(bad(format!("empty {what} palette")));
+    }
+    if ids.len() == 1 {
+        return Ok(PalettedContainer::single(kind, ids[0]));
+    }
+    let Some(Tag::LongArray(words)) = data else {
+        return Err(bad(format!(
+            "{what} palette with several entries but no data"
+        )));
     };
-    let storage = BitStorage::from_words(bits, count, words.clone())
-        .ok_or_else(|| bad(format!("data has wrong length for {bits} bits")))?;
-    Ok((0..count).map(|i| storage.get(i)).collect())
+    PalettedContainer::from_palette(kind, ids, words.clone())
+        .ok_or_else(|| bad(format!("{what} data does not match its palette")))
 }
 
-fn decode_blocks(states: &Compound, palettes: &Palettes) -> Result<Vec<u32>, ChunkError> {
+fn decode_blocks(states: &Compound, palettes: &Palettes) -> Result<PalettedContainer, ChunkError> {
     let Some(Tag::List(palette)) = get(states, "palette") else {
         return Err(bad("block_states without palette"));
     };
@@ -188,22 +200,7 @@ fn decode_blocks(states: &Compound, palettes: &Palettes) -> Result<Vec<u32>, Chu
         .iter()
         .map(|entry| block_entry(entry, palettes))
         .collect();
-    match ids.as_slice() {
-        [] => Err(bad("empty block palette")),
-        [single] => Ok(vec![*single; SECTION_VOLUME]),
-        _ => {
-            let bits = bits_needed(ids.len() as u32 - 1).max(4);
-            let indices = unpack(get(states, "data"), bits, SECTION_VOLUME)?;
-            indices
-                .into_iter()
-                .map(|i| {
-                    ids.get(i as usize)
-                        .copied()
-                        .ok_or_else(|| bad("block index past the palette"))
-                })
-                .collect()
-        }
-    }
+    container(BLOCKS, ids, get(states, "data"), "block")
 }
 
 /// One block palette entry → global state id (air if unknown).
@@ -235,7 +232,7 @@ fn block_entry(entry: &Tag, palettes: &Palettes) -> u32 {
     })
 }
 
-fn decode_biomes(biomes: &Compound, palettes: &Palettes) -> Result<Vec<u32>, ChunkError> {
+fn decode_biomes(biomes: &Compound, palettes: &Palettes) -> Result<PalettedContainer, ChunkError> {
     let Some(Tag::List(palette)) = get(biomes, "palette") else {
         return Err(bad("biomes without palette"));
     };
@@ -252,20 +249,5 @@ fn decode_biomes(biomes: &Compound, palettes: &Palettes) -> Result<Vec<u32>, Chu
             })
         })
         .collect();
-    match ids.as_slice() {
-        [] => Err(bad("empty biome palette")),
-        [single] => Ok(vec![*single; BIOME_VOLUME]),
-        _ => {
-            let bits = bits_needed(ids.len() as u32 - 1);
-            let indices = unpack(get(biomes, "data"), bits, BIOME_VOLUME)?;
-            indices
-                .into_iter()
-                .map(|i| {
-                    ids.get(i as usize)
-                        .copied()
-                        .ok_or_else(|| bad("biome index past the palette"))
-                })
-                .collect()
-        }
-    }
+    container(BIOMES, ids, get(biomes, "data"), "biome")
 }

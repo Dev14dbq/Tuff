@@ -20,6 +20,7 @@ use tracing::{debug, info, trace, warn};
 use crate::ServerContext;
 use crate::auth;
 use crate::context::{Event, OnlinePlayer, Pose};
+use crate::interact::{self, Actor, Hands, Outcome};
 use crate::util::{offline_uuid, random_u64, random_uuid, uuid_string, valid_player_name};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
@@ -180,6 +181,7 @@ async fn login(
         entity_id: ctx.next_entity_id(),
         skin_parts: 0,
         pose: None,
+        main_hand: None,
     };
     let uuid = player.profile.uuid;
     // The lock guard must not live across an await.
@@ -477,6 +479,7 @@ async fn play(
 
     let mut keep_alive = tokio::time::interval(KEEP_ALIVE_INTERVAL);
     let mut pending_keep_alive: Option<(i64, Instant)> = None;
+    let mut hands = Hands::default();
     loop {
         tokio::select! {
             packet = reader.next(State::Play) => {
@@ -522,6 +525,40 @@ async fn play(
                             content: text::colored(&format!("Unknown command: /{command}"), "red"),
                             overlay: false,
                         })?;
+                    }
+                    play::Serverbound::SetCreativeModeSlot { slot, item } if me.game_mode == CREATIVE => {
+                        if let Ok(slot) = usize::try_from(slot)
+                            && slot < hands.slots.len()
+                        {
+                            let before = hands.main_hand().cloned();
+                            hands.slots[slot] = item;
+                            announce_main_hand(&ctx, uuid, entity_id, before, &hands);
+                        }
+                    }
+                    play::Serverbound::SetCarriedItem { slot } => {
+                        if let Ok(slot @ 0..=8) = usize::try_from(slot) {
+                            let before = hands.main_hand().cloned();
+                            hands.selected = slot;
+                            announce_main_hand(&ctx, uuid, entity_id, before, &hands);
+                        }
+                    }
+                    play::Serverbound::Punch => {
+                        let _ = ctx.events.send(Event::Swing { uuid, entity_id, times: 1 });
+                    }
+                    play::Serverbound::PlayerAction { status, position, sequence, .. } => {
+                        let actor = Actor { uuid, entity_id, game_mode: me.game_mode, pose };
+                        let outcome = interact::dig(&ctx, actor, status, position, sequence);
+                        answer(writer, &ctx, outcome)?;
+                    }
+                    play::Serverbound::UseItemOn { hand, position, face, cursor, sequence, .. } => {
+                        let actor = Actor { uuid, entity_id, game_mode: me.game_mode, pose };
+                        let outcome = interact::use_item_on(
+                            &ctx, actor, &hands, hand, position, face, cursor, sequence,
+                        );
+                        answer(writer, &ctx, outcome)?;
+                    }
+                    play::Serverbound::UseItem { sequence, .. } => {
+                        writer.queue(&play::BlockChangedAck { sequence })?;
                     }
                     play::Serverbound::ClientInformation(info) => {
                         writer.queue(&skin_parts_metadata(entity_id, info.skin_parts))?;
@@ -594,6 +631,41 @@ async fn play(
                     {
                         writer.queue(&skin_parts_metadata(other_entity, parts))?;
                     }
+                    Ok(Event::BlocksChanged { by, changes }) if by != uuid => {
+                        for (position, state) in changes {
+                            if view.has_block(position) {
+                                writer.queue(&play::BlockUpdate { position, state })?;
+                            }
+                        }
+                    }
+                    Ok(Event::BlockBroken { by, position, state }) if by != uuid && view.has_block(position) => {
+                        writer.queue(&play::LevelEvent {
+                            event: play::level_event::BLOCK_BROKEN,
+                            position,
+                            data: state as i32,
+                            global: false,
+                        })?;
+                    }
+                    Ok(Event::Swing { uuid: other, entity_id: other_entity, times })
+                        if other != uuid && visible.contains(&other) =>
+                    {
+                        for _ in 0..times {
+                            writer.queue(&play::SwingAnimation {
+                                entity_id: other_entity,
+                                hand: 0,
+                                kind: 1,
+                                duration: 6,
+                            })?;
+                        }
+                    }
+                    Ok(Event::Equipment { uuid: other, entity_id: other_entity, main_hand })
+                        if other != uuid && visible.contains(&other) =>
+                    {
+                        writer.queue(&play::SetEquipment {
+                            entity_id: other_entity,
+                            slots: vec![(0, main_hand)],
+                        })?;
+                    }
                     Ok(Event::PlayerLeft { uuid: other, entity_id: other_entity }) if other != uuid => {
                         if visible.remove(&other) {
                             writer.queue(&play::RemoveEntities { entity_ids: vec![other_entity] })?;
@@ -619,6 +691,40 @@ fn set_position(pose: &mut Pose, x: f64, y: f64, z: f64, flags: u8) -> bool {
     }
     (pose.x, pose.y, pose.z, pose.on_ground) = (x, y, z, flags & 1 != 0);
     true
+}
+
+/// Sends the player what changed for them and tells everyone else.
+fn answer(writer: &mut PacketWriter, ctx: &ServerContext, outcome: Outcome) -> Result<()> {
+    for (position, state) in outcome.updates {
+        writer.queue(&play::BlockUpdate { position, state })?;
+    }
+    if let Some(sequence) = outcome.ack {
+        writer.queue(&play::BlockChangedAck { sequence })?;
+    }
+    for event in outcome.events {
+        let _ = ctx.events.send(event);
+    }
+    Ok(())
+}
+
+/// Tells others when the item in the main hand changes.
+fn announce_main_hand(
+    ctx: &ServerContext,
+    uuid: u128,
+    entity_id: i32,
+    before: Option<play::ItemStack>,
+    hands: &Hands,
+) {
+    let now = hands.main_hand().cloned();
+    if now == before {
+        return;
+    }
+    update_player(ctx, uuid, |p| p.main_hand.clone_from(&now));
+    let _ = ctx.events.send(Event::Equipment {
+        uuid,
+        entity_id,
+        main_hand: now,
+    });
 }
 
 fn update_player(ctx: &ServerContext, uuid: u128, change: impl FnOnce(&mut OnlinePlayer)) {
@@ -652,6 +758,12 @@ fn spawn_player(
         entity_id: player.entity_id,
         head_yaw: pose.yaw,
     })?;
+    if player.main_hand.is_some() {
+        writer.queue(&play::SetEquipment {
+            entity_id: player.entity_id,
+            slots: vec![(0, player.main_hand.clone())],
+        })?;
+    }
     Ok(())
 }
 
@@ -677,6 +789,11 @@ struct ChunkView {
 }
 
 impl ChunkView {
+    /// Whether the client has the chunk with this block.
+    fn has_block(&self, p: Position) -> bool {
+        self.loaded.contains(&(p.x >> 4, p.z >> 4))
+    }
+
     fn new(radius: i32) -> Self {
         Self {
             radius,

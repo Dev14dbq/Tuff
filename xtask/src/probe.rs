@@ -260,50 +260,7 @@ pub(crate) fn is_timeout(err: &anyhow::Error) -> bool {
 
 /// A second player (offline mode) that logs in and walks with turning head.
 fn walk(addr: &str, ids: PacketIds) -> Result<()> {
-    let mut client = Client::connect(addr, ids)?;
-    client.handshake(2)?;
-    let mut hello = Vec::new();
-    hello.put_string("ProbeMover");
-    hello.put_uuid(0);
-    client.send("minecraft:hello", hello)?;
-    loop {
-        let (packet, body) = client.recv()?;
-        match packet.as_str() {
-            "minecraft:login_compression" => {
-                client.compression = usize::try_from(Reader::new(&body).varint()?).ok();
-            }
-            "minecraft:login_finished" => break,
-            other if other.contains("disconnect") || other == "minecraft:hello" => {
-                bail!("mover refused ({other})")
-            }
-            _ => {}
-        }
-    }
-    client.send("minecraft:login_acknowledged", Vec::new())?;
-    client.state = State::Configuration;
-    loop {
-        let (packet, body) = client.recv()?;
-        match packet.as_str() {
-            "minecraft:select_known_packs" => client.send("minecraft:select_known_packs", body)?,
-            "minecraft:keep_alive" => client.send("minecraft:keep_alive", body)?,
-            "minecraft:finish_configuration" => break,
-            _ => {}
-        }
-    }
-    client.send("minecraft:finish_configuration", Vec::new())?;
-    client.state = State::Play;
-    let start = loop {
-        let (packet, body) = client.recv()?;
-        if packet == "minecraft:player_position" {
-            client.send(
-                "minecraft:accept_teleportation",
-                teleport_confirmation(&body)?,
-            )?;
-            let mut r = Reader::new(&body);
-            r.varint()?;
-            break (r.f64()?, r.f64()?, r.f64()?);
-        }
-    };
+    let (mut client, start) = join_player(addr, ids, "ProbeMover")?;
     client.send("minecraft:player_loaded", Vec::new())?;
     client.set_read_timeout(Duration::from_millis(20))?;
     for step in 0..60 {
@@ -324,6 +281,72 @@ fn walk(addr: &str, ids: PacketIds) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Logs in as an offline-mode player, goes through configuration (accepting
+/// known packs) and confirms the first teleport. Returns the client in the
+/// play state and where it was placed.
+pub(crate) fn join_player(
+    addr: &str,
+    ids: PacketIds,
+    name: &str,
+) -> Result<(Client, (f64, f64, f64))> {
+    let mut client = Client::connect(addr, ids)?;
+    client.handshake(2)?;
+    let mut hello = Vec::new();
+    hello.put_string(name);
+    hello.put_uuid(0);
+    client.send("minecraft:hello", hello)?;
+    loop {
+        let (packet, body) = client.recv()?;
+        match packet.as_str() {
+            "minecraft:login_compression" => {
+                client.compression = usize::try_from(Reader::new(&body).varint()?).ok();
+            }
+            "minecraft:login_finished" => break,
+            other if other.contains("disconnect") || other == "minecraft:hello" => {
+                bail!("{name} refused ({other})")
+            }
+            _ => {}
+        }
+    }
+    client.send("minecraft:login_acknowledged", Vec::new())?;
+    client.state = State::Configuration;
+    // Vanilla sends no chunks to a client that never sent its settings.
+    let mut info = Vec::new();
+    info.put_string("en_us");
+    info.put_i8(4); // view distance
+    info.put_varint(0);
+    info.put_bool(true);
+    info.put_u8(0x7f);
+    info.put_varint(1);
+    info.put_bool(false);
+    info.put_bool(true);
+    info.put_varint(0);
+    client.send("minecraft:client_information", info)?;
+    loop {
+        let (packet, body) = client.recv()?;
+        match packet.as_str() {
+            "minecraft:select_known_packs" => client.send("minecraft:select_known_packs", body)?,
+            "minecraft:keep_alive" => client.send("minecraft:keep_alive", body)?,
+            "minecraft:finish_configuration" => break,
+            _ => {}
+        }
+    }
+    client.send("minecraft:finish_configuration", Vec::new())?;
+    client.state = State::Play;
+    loop {
+        let (packet, body) = client.recv()?;
+        if packet == "minecraft:player_position" {
+            client.send(
+                "minecraft:accept_teleportation",
+                teleport_confirmation(&body)?,
+            )?;
+            let mut r = Reader::new(&body);
+            r.varint()?;
+            return Ok((client, (r.f64()?, r.f64()?, r.f64()?)));
+        }
+    }
 }
 
 /// Confirm Teleportation for a Synchronize Player Position body: the teleport
@@ -348,12 +371,20 @@ pub(crate) fn teleport_confirmation(position: &[u8]) -> Result<Vec<u8>> {
 
 /// Packet ids from extracted data (`cache/mcdata/<version>`, newest by default).
 pub(crate) fn load_packet_ids(version: Option<String>) -> Result<PacketIds> {
+    Ok(packet_ids(&load_data(version)?))
+}
+
+/// Extracted game data (`cache/mcdata/<version>`, newest by default).
+pub(crate) fn load_data(version: Option<String>) -> Result<mc_data::McData> {
     let cache = crate::workspace_root().join("cache").join("mcdata");
     let version = match version {
         Some(version) => version,
         None => newest_cache_version(&cache)?,
     };
-    let data = mc_data::McData::load(&cache.join(&version))?;
+    Ok(mc_data::McData::load(&cache.join(&version))?)
+}
+
+pub(crate) fn packet_ids(data: &mc_data::McData) -> PacketIds {
     let mut ids = PacketIds::new();
     for p in &data.packets {
         if let (Some(state), Some(direction)) = (
@@ -363,7 +394,7 @@ pub(crate) fn load_packet_ids(version: Option<String>) -> Result<PacketIds> {
             ids.insert(state, direction, &p.name, p.id);
         }
     }
-    Ok(ids)
+    ids
 }
 
 pub(crate) fn newest_cache_version(cache: &std::path::Path) -> Result<String> {

@@ -1,5 +1,9 @@
 //! The overworld players are in: a superflat generator, or a world folder saved
 //! by vanilla (Anvil region files). One dimension for now.
+//!
+//! Chunks are loaded on first use and kept in memory with their encoded
+//! packet; a change to a chunk drops the packet, the next request encodes it
+//! again. Nothing is unloaded yet.
 
 use std::collections::HashMap;
 use std::io::Read as _;
@@ -10,11 +14,14 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context as _, Result, bail};
 use mc_data::{Blocks, McData};
 use mc_nbt::Tag;
+use mc_protocol::Position;
 use mc_protocol::packets::play::{ChunkBlockEntity, LevelChunkWithLight, LightData, heightmap};
 use mc_storage::{Decoded, Palettes, RegionStorage, decode_chunk};
 use mc_world::Chunk;
 use mc_worldgen::{FlatGenerator, FlatLayer};
 use tracing::{info, warn};
+
+use crate::blocks::BlockRules;
 
 type SyncedIds = HashMap<String, HashMap<String, i32>>;
 
@@ -31,48 +38,57 @@ pub struct World {
     /// Shown to players on join.
     pub description: String,
     source: Source,
+    chunks: Mutex<HashMap<(i32, i32), Slot>>,
+    /// Sent where a world folder has no finished chunk: air with full daylight.
+    empty: Chunk,
+    biome_count: u32,
+    block_entity_types: HashMap<String, i32>,
 }
 
 #[derive(Debug)]
 enum Source {
-    /// Every flat chunk is identical except for its coordinates.
-    Flat(ChunkTemplate),
+    /// Every flat chunk is a copy of this one at other coordinates.
+    Flat(Box<Chunk>),
     Anvil(Box<Anvil>),
-}
-
-#[derive(Debug, Clone)]
-struct ChunkTemplate {
-    sections: Vec<u8>,
-    heightmaps: Vec<(i32, Vec<i64>)>,
-    light: LightData,
-}
-
-impl ChunkTemplate {
-    fn packet(&self, x: i32, z: i32) -> LevelChunkWithLight {
-        LevelChunkWithLight {
-            x,
-            z,
-            heightmaps: self.heightmaps.clone(),
-            data: self.sections.clone(),
-            block_entities: Vec::new(),
-            light: self.light.clone(),
-        }
-    }
 }
 
 #[derive(Debug)]
 struct Anvil {
     storage: Mutex<RegionStorage>,
-    /// Encoded chunks; a world folder is read-only for now (ROADMAP Ф2).
-    cache: Mutex<HashMap<(i32, i32), Arc<LevelChunkWithLight>>>,
-    /// Sent where the world has no finished chunk: air with full daylight.
-    empty: ChunkTemplate,
     biome_ids: HashMap<String, u32>,
-    biome_count: u32,
     fallback_biome: u32,
     air: u32,
-    block_entity_types: HashMap<String, i32>,
     unresolved_reported: AtomicU32,
+}
+
+/// A chunk in memory.
+#[derive(Debug)]
+struct Slot {
+    /// `None`: the world has no finished chunk here. It is sent empty and
+    /// cannot be changed (that would write a chunk vanilla never generated).
+    chunk: Option<Box<Chunk>>,
+    packet: Option<Arc<LevelChunkWithLight>>,
+    /// Changed since it was loaded or saved.
+    dirty: bool,
+}
+
+/// The stored heightmaps and the blocks each one counts.
+pub const HEIGHTMAPS: [&str; 4] = [
+    "WORLD_SURFACE",
+    "MOTION_BLOCKING",
+    "MOTION_BLOCKING_NO_LEAVES",
+    "OCEAN_FLOOR",
+];
+
+fn heightmap_counts(name: &str, state: u32, blocks: &Blocks, rules: &BlockRules) -> bool {
+    match name {
+        "WORLD_SURFACE" => !blocks.is_air(state),
+        "MOTION_BLOCKING" => rules.blocks_motion(state) || blocks.is_fluid(state),
+        "MOTION_BLOCKING_NO_LEAVES" => {
+            (rules.blocks_motion(state) || blocks.is_fluid(state)) && !rules.is_leaves(state)
+        }
+        _ => rules.blocks_motion(state),
+    }
 }
 
 struct Dimension {
@@ -116,22 +132,17 @@ fn full_sky_light(height: u32) -> LightData {
     }
 }
 
-fn template(chunk: &Chunk, blocks: &Blocks, biome_count: u32, height: u32) -> ChunkTemplate {
-    let surface = chunk.heightmap(|s| !blocks.is_air(s));
-    ChunkTemplate {
-        sections: chunk.write_sections(blocks, biome_count),
-        heightmaps: vec![
-            (heightmap::WORLD_SURFACE, surface.clone()),
-            (heightmap::MOTION_BLOCKING, surface.clone()),
-            (heightmap::MOTION_BLOCKING_NO_LEAVES, surface),
-        ],
-        light: full_sky_light(height),
-    }
+fn block_entity_types(data: &McData) -> Result<HashMap<String, i32>> {
+    Ok(data
+        .builtin
+        .get("minecraft:block_entity_type")
+        .context("block entity types missing from the registries report")?
+        .clone())
 }
 
 impl World {
     /// Classic superflat: bedrock, two dirt, grass.
-    pub fn flat(data: &McData, synced: &SyncedIds) -> Result<Self> {
+    pub fn flat(data: &McData, synced: &SyncedIds, rules: &BlockRules) -> Result<Self> {
         let dim = overworld(data, synced)?;
         let biomes = &synced["minecraft:worldgen/biome"];
         let generator = FlatGenerator {
@@ -152,15 +163,18 @@ impl World {
             biome: biomes["minecraft:plains"] as u32,
             air: state(data, "minecraft:air")?,
         };
-        let chunk = generator.generate(0, 0, dim.min_y, dim.height);
+        let mut chunk = generator.generate(0, 0, dim.min_y, dim.height);
+        for name in HEIGHTMAPS {
+            let words = chunk.heightmap(|s| heightmap_counts(name, s, &data.blocks, rules));
+            chunk.heightmaps.push((name.to_owned(), words));
+        }
         let surface_y = generator.surface_y(dim.min_y);
         Ok(Self {
-            source: Source::Flat(template(
-                &chunk,
-                &data.blocks,
-                biomes.len() as u32,
-                dim.height,
-            )),
+            empty: Chunk::new(0, 0, dim.min_y, dim.height, generator.air, generator.biome),
+            source: Source::Flat(Box::new(chunk)),
+            chunks: Mutex::new(HashMap::new()),
+            biome_count: biomes.len() as u32,
+            block_entity_types: block_entity_types(data)?,
             dimension: dim.name,
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
@@ -190,12 +204,6 @@ impl World {
         let biomes = &synced["minecraft:worldgen/biome"];
         let air = state(data, "minecraft:air")?;
         let fallback_biome = biomes["minecraft:plains"] as u32;
-        let empty_chunk = Chunk::new(0, 0, dim.min_y, dim.height, air, fallback_biome);
-        let block_entity_types = data
-            .builtin
-            .get("minecraft:block_entity_type")
-            .context("block entity types missing from the registries report")?
-            .clone();
         let name = dir.file_name().map_or_else(
             || dir.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
@@ -204,15 +212,15 @@ impl World {
         Ok(Self {
             source: Source::Anvil(Box::new(Anvil {
                 storage: Mutex::new(RegionStorage::new(regions)),
-                cache: Mutex::new(HashMap::new()),
-                empty: template(&empty_chunk, &data.blocks, biomes.len() as u32, dim.height),
                 biome_ids: biomes.iter().map(|(k, &v)| (k.clone(), v as u32)).collect(),
-                biome_count: biomes.len() as u32,
                 fallback_biome,
                 air,
-                block_entity_types,
                 unresolved_reported: AtomicU32::new(0),
             })),
+            chunks: Mutex::new(HashMap::new()),
+            empty: Chunk::new(0, 0, dim.min_y, dim.height, air, fallback_biome),
+            biome_count: biomes.len() as u32,
+            block_entity_types: block_entity_types(data)?,
             dimension: dim.name,
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
@@ -225,75 +233,102 @@ impl World {
         })
     }
 
-    pub fn chunk_packet(&self, x: i32, z: i32, blocks: &Blocks) -> Arc<LevelChunkWithLight> {
-        match &self.source {
-            Source::Flat(template) => Arc::new(template.packet(x, z)),
-            Source::Anvil(anvil) => anvil.chunk_packet(x, z, blocks, self.min_y, self.height),
+    /// Runs `f` on the chunk at `x, z`, loading it first if needed. Loading
+    /// happens outside the chunk map lock.
+    fn with_slot<R>(&self, x: i32, z: i32, blocks: &Blocks, f: impl FnOnce(&mut Slot) -> R) -> R {
+        if let Some(slot) = self.chunks.lock().expect("chunks lock").get_mut(&(x, z)) {
+            return f(slot);
         }
-    }
-}
-
-impl Anvil {
-    fn chunk_packet(
-        &self,
-        x: i32,
-        z: i32,
-        blocks: &Blocks,
-        min_y: i32,
-        height: u32,
-    ) -> Arc<LevelChunkWithLight> {
-        if let Some(packet) = self.cache.lock().expect("chunk cache").get(&(x, z)) {
-            return packet.clone();
-        }
-        let packet = Arc::new(match self.load(x, z, blocks, min_y, height) {
-            Ok(Some(packet)) => packet,
-            Ok(None) => self.empty.packet(x, z),
-            Err(err) => {
-                warn!("chunk {x},{z}: {err:#}; sending it empty");
-                self.empty.packet(x, z)
-            }
+        let chunk = self.load(x, z, blocks);
+        let mut chunks = self.chunks.lock().expect("chunks lock");
+        // Someone else may have loaded it meanwhile; theirs wins.
+        let slot = chunks.entry((x, z)).or_insert(Slot {
+            chunk,
+            packet: None,
+            dirty: false,
         });
-        self.cache
-            .lock()
-            .expect("chunk cache")
-            .insert((x, z), packet.clone());
-        packet
+        f(slot)
     }
 
-    /// `None` if the world has no finished chunk here.
-    fn load(
-        &self,
-        x: i32,
-        z: i32,
-        blocks: &Blocks,
-        min_y: i32,
-        height: u32,
-    ) -> Result<Option<LevelChunkWithLight>> {
-        let Some(tag) = self
-            .storage
-            .lock()
-            .expect("region storage")
-            .read_chunk(x, z)?
-        else {
-            return Ok(None);
-        };
-        let biome = |name: &str| self.biome_ids.get(name).copied();
-        let palettes = Palettes {
-            blocks,
-            biome: &biome,
-            air: self.air,
-            fallback_biome: self.fallback_biome,
-            unresolved: Default::default(),
-        };
-        let chunk = match decode_chunk(&tag, min_y, height, &palettes)? {
-            Decoded::Chunk(chunk) => chunk,
-            Decoded::NotFull(_) => return Ok(None),
-        };
-        let unresolved = palettes.unresolved.get();
-        if unresolved > 0 && self.unresolved_reported.fetch_add(1, Ordering::Relaxed) < 5 {
-            warn!("chunk {x},{z}: {unresolved} unknown blocks or biomes replaced");
+    fn load(&self, x: i32, z: i32, blocks: &Blocks) -> Option<Box<Chunk>> {
+        match &self.source {
+            Source::Flat(template) => {
+                let mut chunk = template.as_ref().clone();
+                (chunk.x, chunk.z) = (x, z);
+                Some(Box::new(chunk))
+            }
+            Source::Anvil(anvil) => match anvil.load(x, z, blocks, self.min_y, self.height) {
+                Ok(chunk) => chunk,
+                Err(err) => {
+                    warn!("chunk {x},{z}: {err:#}; sending it empty");
+                    None
+                }
+            },
         }
-        Ok(Some(self.encode(&chunk, blocks)))
+    }
+
+    pub fn chunk_packet(&self, x: i32, z: i32, blocks: &Blocks) -> Arc<LevelChunkWithLight> {
+        self.with_slot(x, z, blocks, |slot| {
+            if let Some(packet) = &slot.packet {
+                return packet.clone();
+            }
+            let packet = Arc::new(match &slot.chunk {
+                Some(chunk) => self.encode(chunk, blocks),
+                None => {
+                    let mut empty = self.empty.clone();
+                    (empty.x, empty.z) = (x, z);
+                    self.encode(&empty, blocks)
+                }
+            });
+            slot.packet = Some(packet.clone());
+            packet
+        })
+    }
+
+    /// The block at `p`; `None` outside the world's height or where the world
+    /// has no chunk.
+    pub fn block(&self, p: Position, blocks: &Blocks) -> Option<u32> {
+        self.with_slot(p.x >> 4, p.z >> 4, blocks, |slot| {
+            let chunk = slot.chunk.as_ref()?;
+            chunk
+                .contains_y(p.y)
+                .then(|| chunk.block((p.x & 15) as usize, p.y, (p.z & 15) as usize))
+        })
+    }
+
+    /// Sets one block, keeping heightmaps and block entities consistent.
+    /// Returns the previous state, or `None` if the block cannot change there.
+    pub fn set_block(
+        &self,
+        p: Position,
+        state: u32,
+        blocks: &Blocks,
+        rules: &BlockRules,
+    ) -> Option<u32> {
+        self.with_slot(p.x >> 4, p.z >> 4, blocks, |slot| {
+            let chunk = slot.chunk.as_mut()?;
+            if !chunk.contains_y(p.y) {
+                return None;
+            }
+            let (x, z) = ((p.x & 15) as usize, (p.z & 15) as usize);
+            let old = chunk.set_block(x, p.y, z, state);
+            if old == state {
+                return Some(old);
+            }
+            for name in HEIGHTMAPS {
+                chunk.update_heightmap(name, x, p.y, z, state, |s| {
+                    heightmap_counts(name, s, blocks, rules)
+                });
+            }
+            if blocks.block_name(old) != blocks.block_name(state) {
+                chunk
+                    .block_entities
+                    .retain(|be| (be.x, be.y, be.z) != (p.x, p.y, p.z));
+            }
+            slot.packet = None;
+            slot.dirty = true;
+            Some(old)
+        })
     }
 
     fn encode(&self, chunk: &Chunk, blocks: &Blocks) -> LevelChunkWithLight {
@@ -328,8 +363,50 @@ impl Anvil {
             heightmaps,
             data: chunk.write_sections(blocks, self.biome_count),
             block_entities,
-            light: stored_light(chunk),
+            light: if chunk.light.is_empty() {
+                full_sky_light(self.height)
+            } else {
+                stored_light(chunk)
+            },
         }
+    }
+}
+
+impl Anvil {
+    /// `None` if the world has no finished chunk here.
+    fn load(
+        &self,
+        x: i32,
+        z: i32,
+        blocks: &Blocks,
+        min_y: i32,
+        height: u32,
+    ) -> Result<Option<Box<Chunk>>> {
+        let Some(tag) = self
+            .storage
+            .lock()
+            .expect("region storage")
+            .read_chunk(x, z)?
+        else {
+            return Ok(None);
+        };
+        let biome = |name: &str| self.biome_ids.get(name).copied();
+        let palettes = Palettes {
+            blocks,
+            biome: &biome,
+            air: self.air,
+            fallback_biome: self.fallback_biome,
+            unresolved: Default::default(),
+        };
+        let chunk = match decode_chunk(&tag, min_y, height, &palettes)? {
+            Decoded::Chunk(chunk) => chunk,
+            Decoded::NotFull(_) => return Ok(None),
+        };
+        let unresolved = palettes.unresolved.get();
+        if unresolved > 0 && self.unresolved_reported.fetch_add(1, Ordering::Relaxed) < 5 {
+            warn!("chunk {x},{z}: {unresolved} unknown blocks or biomes replaced");
+        }
+        Ok(Some(chunk))
     }
 }
 

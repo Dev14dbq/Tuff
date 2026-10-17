@@ -527,7 +527,96 @@ pub mod play {
         ChatCommand {
             command: String,
         },
+        /// Digging, dropping items, swapping hands (`status`, see [`dig`]).
+        PlayerAction {
+            status: i32,
+            position: Position,
+            /// 0 −Y, 1 +Y, 2 −Z, 3 +Z, 4 −X, 5 +X.
+            face: i8,
+            sequence: i32,
+        },
+        /// Right click on a block.
+        UseItemOn {
+            /// 0 main hand, 1 off hand.
+            hand: i32,
+            position: Position,
+            face: i32,
+            /// Where on the face the crosshair is, 0..1 per axis.
+            cursor: [f32; 3],
+            inside_block: bool,
+            world_border_hit: bool,
+            sequence: i32,
+        },
+        /// Right click in the air.
+        UseItem {
+            hand: i32,
+            sequence: i32,
+            yaw: f32,
+            pitch: f32,
+        },
+        /// Selected hotbar slot, 0..9.
+        SetCarriedItem {
+            slot: i16,
+        },
+        /// A creative-mode client sets an inventory slot (or −1 to drop it).
+        SetCreativeModeSlot {
+            slot: i16,
+            item: Option<ItemStack>,
+        },
+        /// Left click that hits nothing (the hand swings).
+        Punch,
         Other(String),
+    }
+
+    /// Player Action statuses.
+    pub mod dig {
+        pub const START: i32 = 0;
+        pub const CANCEL: i32 = 1;
+        pub const FINISH: i32 = 2;
+    }
+
+    /// An item stack as the client sends it. Component changes are not
+    /// decoded yet; `has_component_changes` says whether there were any.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ItemStack {
+        pub count: i32,
+        /// Id in the `minecraft:item` registry.
+        pub item: i32,
+        pub has_component_changes: bool,
+    }
+
+    impl ItemStack {
+        /// Slot data; `None` for an empty slot. Reading stops after the
+        /// component counts when there are components.
+        pub fn decode(r: &mut Reader) -> Result<Option<Self>> {
+            let count = r.varint()?;
+            if count <= 0 {
+                return Ok(None);
+            }
+            let item = r.varint()?;
+            let (added, removed) = (r.varint()?, r.varint()?);
+            if added != 0 || removed != 0 {
+                r.rest();
+            }
+            Ok(Some(Self {
+                count,
+                item,
+                has_component_changes: added != 0 || removed != 0,
+            }))
+        }
+
+        /// Slot data without component changes.
+        pub fn encode(stack: Option<&Self>, out: &mut Vec<u8>) {
+            match stack {
+                None => out.put_varint(0),
+                Some(stack) => {
+                    out.put_varint(stack.count);
+                    out.put_varint(stack.item);
+                    out.put_varint(0);
+                    out.put_varint(0);
+                }
+            }
+        }
     }
 
     impl Serverbound {
@@ -578,6 +667,33 @@ pub mod play {
                 "minecraft:chat_command" => Serverbound::ChatCommand {
                     command: r.string(32767)?,
                 },
+                "minecraft:player_action" => Serverbound::PlayerAction {
+                    status: r.varint()?,
+                    position: r.position()?,
+                    face: r.i8()?,
+                    sequence: r.varint()?,
+                },
+                "minecraft:use_item_on" => Serverbound::UseItemOn {
+                    hand: r.varint()?,
+                    position: r.position()?,
+                    face: r.varint()?,
+                    cursor: [r.f32()?, r.f32()?, r.f32()?],
+                    inside_block: r.bool()?,
+                    world_border_hit: r.bool()?,
+                    sequence: r.varint()?,
+                },
+                "minecraft:use_item" => Serverbound::UseItem {
+                    hand: r.varint()?,
+                    sequence: r.varint()?,
+                    yaw: r.f32()?,
+                    pitch: r.f32()?,
+                },
+                "minecraft:set_carried_item" => Serverbound::SetCarriedItem { slot: r.i16()? },
+                "minecraft:set_creative_mode_slot" => Serverbound::SetCreativeModeSlot {
+                    slot: r.i16()?,
+                    item: ItemStack::decode(r)?,
+                },
+                "minecraft:punch" => Serverbound::Punch,
                 other => Serverbound::Other(other.to_owned()),
             })
         }
@@ -1017,6 +1133,98 @@ pub mod play {
         }
     }
 
+    /// Block Update: one block changed.
+    #[derive(Clone, Debug)]
+    pub struct BlockUpdate {
+        pub position: Position,
+        pub state: u32,
+    }
+    packet!(BlockUpdate, Play, "minecraft:block_update");
+    impl Encode for BlockUpdate {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_position(self.position);
+            out.put_varint(self.state as i32);
+        }
+    }
+
+    /// Acknowledge Block Change: the client may stop predicting changes up to
+    /// this sequence and show what the server sent.
+    #[derive(Clone, Debug)]
+    pub struct BlockChangedAck {
+        pub sequence: i32,
+    }
+    packet!(BlockChangedAck, Play, "minecraft:block_changed_ack");
+    impl Encode for BlockChangedAck {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.sequence);
+        }
+    }
+
+    /// World Event: a sound or particle effect at a block.
+    #[derive(Clone, Debug)]
+    pub struct LevelEvent {
+        pub event: i32,
+        pub position: Position,
+        pub data: i32,
+        /// Heard everywhere, not only nearby.
+        pub global: bool,
+    }
+    packet!(LevelEvent, Play, "minecraft:level_event");
+    impl Encode for LevelEvent {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_i32(self.event);
+            out.put_position(self.position);
+            out.put_i32(self.data);
+            out.put_bool(self.global);
+        }
+    }
+
+    pub mod level_event {
+        /// Block broken: particles and sound; data is the block state id.
+        pub const BLOCK_BROKEN: i32 = 2001;
+    }
+
+    /// Swing Animation (26.x): an entity swings a hand.
+    #[derive(Clone, Debug)]
+    pub struct SwingAnimation {
+        pub entity_id: i32,
+        /// 0 main hand, 1 off hand.
+        pub hand: i32,
+        /// 0 none, 1 whack, 2 stab.
+        pub kind: i32,
+        /// In ticks.
+        pub duration: i32,
+    }
+    packet!(SwingAnimation, Play, "minecraft:swing_animation");
+    impl Encode for SwingAnimation {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            out.put_varint(self.hand);
+            out.put_varint(self.kind);
+            out.put_varint(self.duration);
+        }
+    }
+
+    /// Set Equipment: what an entity holds and wears.
+    #[derive(Clone, Debug)]
+    pub struct SetEquipment {
+        pub entity_id: i32,
+        /// Slot (0 main hand, 1 off hand, 2–5 armour, ...) and item.
+        pub slots: Vec<(u8, Option<ItemStack>)>,
+    }
+    packet!(SetEquipment, Play, "minecraft:set_equipment");
+    impl Encode for SetEquipment {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            for (i, (slot, item)) in self.slots.iter().enumerate() {
+                // The top bit says another entry follows.
+                let more = if i + 1 < self.slots.len() { 0x80 } else { 0 };
+                out.put_u8(slot | more);
+                ItemStack::encode(item.as_ref(), out);
+            }
+        }
+    }
+
     pub mod player_info {
         pub const ADD_PLAYER: u8 = 0x01;
         pub const INITIALIZE_CHAT: u8 = 0x02;
@@ -1240,5 +1448,84 @@ mod tests {
         let packet =
             play::Serverbound::decode("minecraft:swing", &mut Reader::new(&[0x00])).unwrap();
         assert_eq!(packet, play::Serverbound::Other("minecraft:swing".into()));
+    }
+
+    #[test]
+    fn block_packets_match_vanilla_bytes() {
+        // Seen from vanilla 26.3 (`cargo xtask blocks`): the watcher gets the
+        // builder's (entity 495) main hand set to item 163, then a swing.
+        let mut out = Vec::new();
+        play::SetEquipment {
+            entity_id: 495,
+            slots: vec![(
+                0,
+                Some(play::ItemStack {
+                    count: 1,
+                    item: 163,
+                    has_component_changes: false,
+                }),
+            )],
+        }
+        .encode(&mut out);
+        assert_eq!(out, [0xef, 0x03, 0x00, 0x01, 0xa3, 0x01, 0x00, 0x00]);
+        out.clear();
+        play::SwingAnimation {
+            entity_id: 495,
+            hand: 0,
+            kind: 1,
+            duration: 6,
+        }
+        .encode(&mut out);
+        assert_eq!(out, [0xef, 0x03, 0x00, 0x01, 0x06]);
+    }
+
+    #[test]
+    fn creative_slot_and_use_item_on_decode() {
+        let mut body = Vec::new();
+        body.put_i16(36);
+        body.put_varint(1);
+        body.put_varint(1); // stone
+        body.put_varint(0);
+        body.put_varint(0);
+        let packet =
+            play::Serverbound::decode("minecraft:set_creative_mode_slot", &mut Reader::new(&body))
+                .unwrap();
+        assert_eq!(
+            packet,
+            play::Serverbound::SetCreativeModeSlot {
+                slot: 36,
+                item: Some(play::ItemStack {
+                    count: 1,
+                    item: 1,
+                    has_component_changes: false
+                }),
+            }
+        );
+
+        let mut body = Vec::new();
+        body.put_varint(0);
+        body.put_position(Position::new(-8, -61, 10));
+        body.put_varint(1);
+        for c in [0.5f32, 1.0, 0.5] {
+            body.put_f32(c);
+        }
+        body.put_bool(false);
+        body.put_bool(false);
+        body.put_varint(3);
+        let mut r = Reader::new(&body);
+        let packet = play::Serverbound::decode("minecraft:use_item_on", &mut r).unwrap();
+        assert_eq!(r.remaining(), 0);
+        assert_eq!(
+            packet,
+            play::Serverbound::UseItemOn {
+                hand: 0,
+                position: Position::new(-8, -61, 10),
+                face: 1,
+                cursor: [0.5, 1.0, 0.5],
+                inside_block: false,
+                world_border_hit: false,
+                sequence: 3,
+            }
+        );
     }
 }

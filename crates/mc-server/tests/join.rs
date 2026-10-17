@@ -488,6 +488,187 @@ async fn players_see_each_other_spawn_move_and_leave() {
 }
 
 #[tokio::test]
+async fn placed_and_broken_blocks_are_seen_by_everyone() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let ids = ctx.ids.clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let blocks = &ctx.data.blocks;
+    let stone = blocks.default_state("minecraft:stone").unwrap() as i32;
+    let air = blocks.default_state("minecraft:air").unwrap() as i32;
+    let stone_item = ctx
+        .data
+        .builtin
+        .id("minecraft:item", "minecraft:stone")
+        .unwrap();
+
+    let (mut alice, _) = join_offline(addr, ids.clone(), "Alice").await;
+    let (mut bob, spawn) = join_offline(addr, ids.clone(), "Bob").await;
+    assert_eq!(spawn, (0.5, -60.0, 0.5));
+    let (_, spawned) = alice.recv_until("minecraft:add_entity").await;
+    let bob_entity = Reader::new(&spawned).varint().unwrap();
+
+    // Bob takes stone from the creative inventory into his first hotbar slot.
+    let mut slot = Vec::new();
+    slot.put_i16(36);
+    slot.put_varint(1);
+    slot.put_varint(stone_item);
+    slot.put_varint(0);
+    slot.put_varint(0);
+    bob.send("minecraft:set_creative_mode_slot", slot).await;
+    let (_, equipment) = alice.recv_until("minecraft:set_equipment").await;
+    let mut r = Reader::new(&equipment);
+    assert_eq!(r.varint().unwrap(), bob_entity);
+    assert_eq!(r.u8().unwrap(), 0, "main hand, last entry");
+    assert_eq!((r.varint().unwrap(), r.varint().unwrap()), (1, stone_item));
+
+    let use_item_on = |x: i32, y: i32, z: i32, sequence: i32| {
+        let mut body = Vec::new();
+        body.put_varint(0);
+        body.put_position(mc_protocol::Position::new(x, y, z));
+        body.put_varint(1); // top face
+        for c in [0.5f32, 1.0, 0.5] {
+            body.put_f32(c);
+        }
+        body.put_bool(false);
+        body.put_bool(false);
+        body.put_varint(sequence);
+        body
+    };
+    let block_update = |body: &[u8]| {
+        let mut r = Reader::new(body);
+        let p = r.position().unwrap();
+        ((p.x, p.y, p.z), r.varint().unwrap())
+    };
+
+    // Placing on top of the grass two blocks east.
+    bob.send("minecraft:use_item_on", use_item_on(2, -61, 0, 1))
+        .await;
+    let (_, update) = alice.recv_until("minecraft:block_update").await;
+    assert_eq!(block_update(&update), ((2, -60, 0), stone));
+    let (_, swing) = alice.recv_until("minecraft:swing_animation").await;
+    assert_eq!(Reader::new(&swing).varint().unwrap(), bob_entity);
+    let mut placer = Vec::new();
+    let ack = loop {
+        let (name, body) = bob.recv().await;
+        match name.as_str() {
+            "minecraft:block_update" => placer.push(block_update(&body)),
+            "minecraft:block_changed_ack" => break Reader::new(&body).varint().unwrap(),
+            _ => {}
+        }
+    };
+    assert_eq!(ack, 1);
+    assert!(placer.contains(&((2, -60, 0), stone)), "{placer:?}");
+
+    // Where Bob stands: refused, and he is told the block is still air.
+    bob.send("minecraft:use_item_on", use_item_on(0, -61, 0, 2))
+        .await;
+    let mut refused = Vec::new();
+    let ack = loop {
+        let (name, body) = bob.recv().await;
+        match name.as_str() {
+            "minecraft:block_update" => refused.push(block_update(&body)),
+            "minecraft:block_changed_ack" => break Reader::new(&body).varint().unwrap(),
+            _ => {}
+        }
+    };
+    assert_eq!(ack, 2);
+    assert!(refused.contains(&((0, -60, 0), air)), "{refused:?}");
+
+    // Breaking it: Alice sees particles, then air.
+    let mut dig = Vec::new();
+    dig.put_varint(0); // start digging (instant in creative)
+    dig.put_position(mc_protocol::Position::new(2, -60, 0));
+    dig.put_i8(1);
+    dig.put_varint(3);
+    bob.send("minecraft:player_action", dig).await;
+    let (_, event) = alice.recv_until("minecraft:level_event").await;
+    let mut r = Reader::new(&event);
+    assert_eq!(r.i32().unwrap(), 2001);
+    let p = r.position().unwrap();
+    assert_eq!(((p.x, p.y, p.z), r.i32().unwrap()), ((2, -60, 0), stone));
+    let (_, update) = alice.recv_until("minecraft:block_update").await;
+    assert_eq!(block_update(&update), ((2, -60, 0), air));
+
+    // One more block; a player who joins later gets it with the chunk.
+    bob.send("minecraft:use_item_on", use_item_on(3, -61, 0, 4))
+        .await;
+    let (_, update) = alice.recv_until("minecraft:block_update").await;
+    assert_eq!(block_update(&update), ((3, -60, 0), stone));
+    let mut carol = Bot::connect(addr, ids).await;
+    carol.login("Carol").await;
+    let (_, body) = carol.recv_until("minecraft:login_compression").await;
+    carol.compression = Some(Reader::new(&body).varint().unwrap() as usize);
+    carol.recv_until("minecraft:login_finished").await;
+    carol.send("minecraft:login_acknowledged", Vec::new()).await;
+    carol.state = State::Configuration;
+    let (_, packs) = carol.recv_until("minecraft:select_known_packs").await;
+    carol.send("minecraft:select_known_packs", packs).await;
+    carol.recv_until("minecraft:finish_configuration").await;
+    carol
+        .send("minecraft:finish_configuration", Vec::new())
+        .await;
+    carol.state = State::Play;
+    let chunk = loop {
+        let (_, body) = carol.recv_until("minecraft:level_chunk_with_light").await;
+        let mut r = Reader::new(&body);
+        if (r.i32().unwrap(), r.i32().unwrap()) == (0, 0) {
+            break body;
+        }
+    };
+    assert_eq!(block_in_flat_chunk(&chunk, 3, -60, 0), stone);
+    assert_eq!(block_in_flat_chunk(&chunk, 2, -60, 0), air);
+    assert_eq!(block_in_flat_chunk(&chunk, 2, -61, 0), {
+        blocks.default_state("minecraft:grass_block").unwrap() as i32
+    });
+    let _ = stop.send(());
+}
+
+/// Block state at (x, y, z) in the bottom section of a chunk packet, decoded
+/// by the documented layout (y must be in -64..-48).
+fn block_in_flat_chunk(body: &[u8], x: usize, y: i32, z: usize) -> i32 {
+    let mut r = Reader::new(body);
+    r.i32().unwrap();
+    r.i32().unwrap();
+    for _ in 0..r.length_prefix().unwrap() {
+        r.varint().unwrap();
+        let longs = r.length_prefix().unwrap();
+        r.bytes(longs * 8).unwrap();
+    }
+    let data = r.byte_array(1 << 21).unwrap().to_vec();
+    let mut s = Reader::new(&data);
+    s.i16().unwrap();
+    s.i16().unwrap();
+    let bits = s.u8().unwrap();
+    if bits == 0 {
+        return s.varint().unwrap();
+    }
+    let palette: Vec<i32> = (0..s.length_prefix().unwrap())
+        .map(|_| s.varint().unwrap())
+        .collect();
+    let index = (((y + 64) as usize) << 8) | (z << 4) | x;
+    let per_long = 64 / bits as usize;
+    let longs: Vec<u64> = (0..4096usize.div_ceil(per_long))
+        .map(|_| s.i64().unwrap() as u64)
+        .collect();
+    let word = longs[index / per_long];
+    let value = (word >> ((index % per_long) * bits as usize)) & ((1 << bits) - 1);
+    palette[value as usize]
+}
+
+#[tokio::test]
 async fn serves_a_world_saved_by_vanilla() {
     let world =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/vanilla-server/26.3/world-normal");

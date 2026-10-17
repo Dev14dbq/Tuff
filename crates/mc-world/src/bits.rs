@@ -36,6 +36,10 @@ impl BitStorage {
         self.len
     }
 
+    pub fn bits(&self) -> u32 {
+        self.bits
+    }
+
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
