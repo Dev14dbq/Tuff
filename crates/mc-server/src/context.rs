@@ -120,10 +120,10 @@ pub enum Event {
         uuid: u128,
         mode: i32,
     },
-    /// One slot of a player's inventory (player inventory index) changed.
+    /// One slot of a player's inventory window (container numbering) changed.
     InventorySlot {
         uuid: u128,
-        slot: i32,
+        slot: i16,
         item: Option<ItemStack>,
     },
     /// A player picked up an item entity (the pickup animation).
@@ -176,6 +176,10 @@ pub struct ServerContext {
     pub inventories: Mutex<HashMap<u128, crate::interact::Hands>>,
     /// What broken blocks drop.
     pub loot: crate::loot::BlockLoot,
+    /// Player files of the world folder (none for the flat test world).
+    pub player_files: Option<crate::players::Store>,
+    /// Game mode of players who never played here (level.dat `GameType`).
+    pub default_game_mode: i32,
     /// `minecraft:entity_type` ids of the entities we have.
     pub entity_types: EntityTypes,
     /// `minecraft:player` in `minecraft:entity_type`.
@@ -288,6 +292,15 @@ impl ServerContext {
             None => World::flat(&data, &synced_ids, &rules)?,
         };
         let time = world.load_time(&synced_ids)?;
+        let player_files = config.world.as_ref().map(|dir| {
+            crate::players::Store::new(
+                dir,
+                data.builtin
+                    .get("minecraft:item")
+                    .unwrap_or(&HashMap::new()),
+            )
+        });
+        let default_game_mode = world.default_game_mode();
         let (actions, action_queue) = std::sync::mpsc::channel();
         let entity_type = |name: &str| {
             data.builtin
@@ -320,6 +333,8 @@ impl ServerContext {
             entities: Mutex::new(Vec::new()),
             inventories: Mutex::new(HashMap::new()),
             loot: crate::loot::BlockLoot::load(&data),
+            player_files,
+            default_game_mode,
             entity_types: EntityTypes {
                 falling_block: entity_type("minecraft:falling_block")?,
                 item: entity_type("minecraft:item")?,

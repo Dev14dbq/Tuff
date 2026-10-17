@@ -1328,6 +1328,37 @@ pub mod play {
         }
     }
 
+    /// Set Container Slot: one slot of a window (0 = the inventory, numbered
+    /// as the window: 36–44 hotbar, 9–35 main, 5–8 armour, 45 off hand).
+    #[derive(Clone, Debug)]
+    pub struct ContainerSetSlot {
+        pub window: i32,
+        pub state_id: i32,
+        pub slot: i16,
+        pub item: Option<ItemStack>,
+    }
+    packet!(ContainerSetSlot, Play, "minecraft:container_set_slot");
+    impl Encode for ContainerSetSlot {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.window);
+            out.put_varint(self.state_id);
+            out.put_i16(self.slot);
+            ItemStack::encode(self.item.as_ref(), out);
+        }
+    }
+
+    /// Set Held Item: which hotbar slot is selected.
+    #[derive(Clone, Debug)]
+    pub struct SetHeldSlot {
+        pub slot: i32,
+    }
+    packet!(SetHeldSlot, Play, "minecraft:set_held_slot");
+    impl Encode for SetHeldSlot {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.slot);
+        }
+    }
+
     /// Set Container Content: every slot of a window (0 = the inventory).
     #[derive(Clone, Debug)]
     pub struct ContainerSetContent {

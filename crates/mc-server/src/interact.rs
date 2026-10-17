@@ -32,6 +32,9 @@ pub struct Hands {
     pub slots: Vec<Option<ItemStack>>,
     /// Selected hotbar slot, 0..9.
     pub selected: usize,
+    /// Component data of stacks loaded from the player file, kept until the
+    /// slot changes (the network form does not carry it yet).
+    pub components: std::collections::HashMap<usize, mc_nbt::Tag>,
 }
 
 impl Default for Hands {
@@ -39,19 +42,8 @@ impl Default for Hands {
         Self {
             slots: vec![None; 46],
             selected: 0,
+            components: std::collections::HashMap::new(),
         }
-    }
-}
-
-/// Container slot (window 0) → player inventory index (Set Player Inventory
-/// Slot): hotbar 36..45 → 0..9, main 9..36 stays, off hand 45 → 40, armour
-/// 5..9 → 39..35.
-pub fn inventory_index(container_slot: usize) -> i32 {
-    match container_slot {
-        36..=44 => container_slot as i32 - 36,
-        45 => 40,
-        5..=8 => 44 - container_slot as i32,
-        other => other as i32,
     }
 }
 
@@ -129,6 +121,7 @@ impl Hands {
                 break;
             }
             if self.slots[slot].is_none() {
+                self.components.remove(&slot);
                 let n = max.min(count);
                 self.slots[slot] = Some(ItemStack {
                     count: n,
@@ -397,11 +390,12 @@ pub fn use_item_on(
                 stack.count -= 1;
                 if stack.count <= 0 {
                     hands.slots[slot] = None;
+                    hands.components.remove(&slot);
                 }
             }
             outcome.events.push(Event::InventorySlot {
                 uuid: actor.uuid,
-                slot: inventory_index(slot),
+                slot: slot as i16,
                 item: hands.slots[slot].clone(),
             });
         }

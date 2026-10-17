@@ -406,7 +406,7 @@ fn pick_up(
         for slot in changed {
             let _ = ctx.events.send(Event::InventorySlot {
                 uuid: *uuid,
-                slot: crate::interact::inventory_index(slot),
+                slot: slot as i16,
                 item: hands.slots[slot].clone(),
             });
         }

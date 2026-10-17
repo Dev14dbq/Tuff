@@ -548,6 +548,23 @@ impl World {
         write_gz(&clocks_path, &stored)
     }
 
+    /// Game mode for new players: level.dat `GameType` (creative on the flat
+    /// test world).
+    pub fn default_game_mode(&self) -> i32 {
+        let Some(dir) = &self.folder else {
+            return 1;
+        };
+        match read_gz(&dir.join("level.dat"))
+            .ok()
+            .and_then(|root| match root.get("Data") {
+                Some(Tag::Compound(data)) => data.get("GameType").cloned(),
+                _ => None,
+            }) {
+            Some(Tag::Int(mode)) => mode,
+            _ => 0,
+        }
+    }
+
     /// Whether changes are written anywhere.
     pub fn is_saved(&self) -> bool {
         matches!(self.source, Source::Anvil(_))

@@ -57,7 +57,15 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
             let uuid = player.player.profile.uuid;
             info!("{name} ({}) joined from {peer}", uuid_string(uuid));
             let result = play(&mut reader, &mut writer, &player).await;
+            {
+                let ctx = ctx.clone();
+                tokio::task::spawn_blocking(move || crate::save_player(&ctx, uuid)).await?;
+            }
             ctx.players.lock().expect("players lock").remove(&uuid);
+            ctx.inventories
+                .lock()
+                .expect("inventories lock")
+                .remove(&uuid);
             let entity_id = player.player.entity_id;
             let _ = ctx.events.send(Event::PlayerLeft { uuid, entity_id });
             let left = text::colored(&format!("{name} left the game"), "yellow");
@@ -116,6 +124,8 @@ async fn status(reader: &mut PacketReader, writer: &mut PacketWriter) -> Result<
 
 struct Session {
     player: OnlinePlayer,
+    /// What the player file says, if they played here before.
+    saved: Option<crate::players::Saved>,
     view_distance: i32,
     /// Displayed skin parts from Client Information (cape, jacket, sleeves, ...).
     skin_parts: u8,
@@ -177,9 +187,18 @@ async fn login(
         },
     };
 
+    let saved = match &ctx.player_files {
+        Some(store) => store.load(profile.uuid).unwrap_or_else(|err| {
+            warn!("player file of {}: {err:#}", profile.name);
+            None
+        }),
+        None => None,
+    };
     let player = OnlinePlayer {
         profile,
-        game_mode: CREATIVE,
+        game_mode: saved
+            .as_ref()
+            .map_or(ctx.default_game_mode, |s| s.game_mode),
         entity_id: ctx.next_entity_id(),
         skin_parts: 0,
         pose: None,
@@ -207,6 +226,7 @@ async fn login(
 
     let mut session = Session {
         player,
+        saved,
         view_distance: i32::from(ctx.config.view_distance),
         skin_parts: 0,
     };
@@ -364,15 +384,19 @@ async fn play(
     let (uuid, entity_id) = (me.profile.uuid, me.entity_id);
     // Subscribe before reading the player list, so nobody slips through.
     let mut events = ctx.events.subscribe();
-    let (x, y, z) = world.spawn;
-    let mut pose = Pose {
-        x,
-        y,
-        z,
-        yaw: world.spawn_yaw,
-        pitch: 0.0,
-        on_ground: true,
-    };
+    let (sx, sy, sz) = world.spawn;
+    let mut pose = session.saved.as_ref().map_or(
+        Pose {
+            x: sx,
+            y: sy,
+            z: sz,
+            yaw: world.spawn_yaw,
+            pitch: 0.0,
+            on_ground: true,
+        },
+        |s| s.pose,
+    );
+    let (x, y, z) = (pose.x, pose.y, pose.z);
 
     writer.queue(&play::Login {
         entity_id,
@@ -406,8 +430,8 @@ async fn play(
         y,
         z,
         velocity: [0.0; 3],
-        yaw: world.spawn_yaw,
-        pitch: 0.0,
+        yaw: pose.yaw,
+        pitch: pose.pitch,
         flags: 0,
     })?;
 
@@ -482,10 +506,27 @@ async fn play(
 
     let mut keep_alive = tokio::time::interval(KEEP_ALIVE_INTERVAL);
     let mut pending_keep_alive: Option<(i64, Instant)> = None;
+    // The inventory from the player file, sent whole as vanilla does on join.
+    let hands = session
+        .saved
+        .as_ref()
+        .map_or_else(Hands::default, |s| s.hands.clone());
+    writer.queue(&play::ContainerSetContent {
+        window: 0,
+        state_id: 1,
+        slots: hands.slots.clone(),
+        carried: None,
+    })?;
+    writer.queue(&play::SetHeldSlot {
+        slot: hands.selected as i32,
+    })?;
+    let main_hand = hands.main_hand().cloned();
     ctx.inventories
         .lock()
         .expect("inventories lock")
-        .insert(uuid, Hands::default());
+        .insert(uuid, hands);
+    update_player(&ctx, uuid, |p| p.main_hand = main_hand);
+    let mut state_id = 1;
     let mut game_mode = me.game_mode;
     let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
     // Non-player entities this client has been told about.
@@ -671,7 +712,8 @@ async fn play(
                         }
                     }
                     Ok(Event::InventorySlot { uuid: who, slot, item }) if who == uuid => {
-                        writer.queue(&play::SetPlayerInventory { slot, item })?;
+                        state_id += 1;
+                        writer.queue(&play::ContainerSetSlot { window: 0, state_id, slot, item })?;
                     }
                     Ok(Event::ItemTaken { item_entity, collector, count }) => {
                         if seen_entities.contains(&item_entity) {

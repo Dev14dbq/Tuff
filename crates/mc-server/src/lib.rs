@@ -13,6 +13,7 @@ mod context;
 mod interact;
 mod level;
 mod loot;
+mod players;
 mod tick;
 mod util;
 mod world;
@@ -199,6 +200,39 @@ impl Server {
     }
 }
 
+/// Writes one online player's file (world folders only).
+pub(crate) fn save_player(ctx: &ServerContext, uuid: u128) {
+    let Some(store) = &ctx.player_files else {
+        return;
+    };
+    let player = ctx
+        .players
+        .lock()
+        .expect("players lock")
+        .get(&uuid)
+        .cloned();
+    let hands = ctx
+        .inventories
+        .lock()
+        .expect("inventories lock")
+        .get(&uuid)
+        .cloned();
+    let (Some(player), Some(hands)) = (player, hands) else {
+        return;
+    };
+    let Some(pose) = player.pose else {
+        return;
+    };
+    let saved = players::Saved {
+        pose,
+        game_mode: player.game_mode,
+        hands,
+    };
+    if let Err(err) = store.save(uuid, &saved, ctx.data.version.world_version) {
+        tracing::warn!("saving {}: {err:#}", player.profile.name);
+    }
+}
+
 /// Reads commands from standard input until it closes; each runs on the
 /// tick thread and its feedback is printed.
 fn console(ctx: &Arc<ServerContext>) {
@@ -237,6 +271,16 @@ fn save(ctx: &ServerContext) {
     let time = ctx.time.lock().expect("time lock").clone();
     if let Err(err) = ctx.world.save_time(&time) {
         tracing::warn!("saving the time: {err:#}");
+    }
+    let online: Vec<u128> = ctx
+        .players
+        .lock()
+        .expect("players lock")
+        .keys()
+        .copied()
+        .collect();
+    for uuid in online {
+        save_player(ctx, uuid);
     }
     let saved = ctx.world.save(&ctx.data.blocks);
     if saved.chunks > 0 || saved.failed > 0 {

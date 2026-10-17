@@ -884,10 +884,12 @@ async fn survival_breaking_drops_items_that_get_picked_up() {
                 assert_eq!(Reader::new(&body).varint().unwrap(), item_entity);
                 taken_seen = true;
             }
-            "minecraft:set_player_inventory" => {
+            "minecraft:container_set_slot" => {
                 let mut r = Reader::new(&body);
+                assert_eq!(r.varint().unwrap(), 0, "inventory window");
+                r.varint().unwrap(); // state id
                 slot_seen = Some((
-                    r.varint().unwrap(),
+                    i32::from(r.i16().unwrap()),
                     r.varint().unwrap(),
                     r.varint().unwrap(),
                 ));
@@ -897,10 +899,125 @@ async fn survival_breaking_drops_items_that_get_picked_up() {
     }
     assert_eq!(
         slot_seen,
-        Some((0, 1, cobblestone)),
+        Some((36, 1, cobblestone)),
         "one cobblestone in the first hotbar slot"
     );
     let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn players_come_back_where_they_left_with_their_items() {
+    let original =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/vanilla-server/26.3/world-normal");
+    let (Some(data_dir), true) = (data_dir(), original.join("level.dat").is_file()) else {
+        eprintln!("skipped: no extracted data or vanilla test world");
+        return;
+    };
+    let world = copy_world(&original, "players");
+    let start = |data_dir: std::path::PathBuf, world: std::path::PathBuf| async move {
+        let mut config = Config::new(data_dir);
+        config.port = 0;
+        config.view_distance = 2;
+        config.online_mode = false;
+        config.world = Some(world);
+        let server = Server::bind(config).await.unwrap();
+        let addr = server.local_addr();
+        let ctx = server.context().clone();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let running = tokio::spawn(server.run(async {
+            let _ = stopped.await;
+        }));
+        (addr, ctx, stop, running)
+    };
+
+    let (addr, ctx, stop, running) = start(data_dir.clone(), world.clone()).await;
+    let stone = ctx
+        .data
+        .builtin
+        .id("minecraft:item", "minecraft:stone")
+        .unwrap();
+    let (mut walker, spawn) = join_offline(addr, ctx.ids.clone(), "Walker").await;
+    // The world's default game mode is survival: no creative slots. Put the
+    // stone in through the server, then walk off.
+    ctx.inventories
+        .lock()
+        .unwrap()
+        .get_mut(&mc_server_uuid(&ctx, "Walker"))
+        .unwrap()
+        .slots[38] = Some(mc_protocol::packets::play::ItemStack {
+        count: 7,
+        item: stone,
+        has_component_changes: false,
+    });
+    let target = (spawn.0 + 3.0, spawn.1, spawn.2 - 1.5);
+    let mut moved = Vec::new();
+    for v in [target.0, target.1, target.2] {
+        moved.put_f64(v);
+    }
+    moved.put_f32(45.0);
+    moved.put_f32(10.0);
+    moved.put_u8(0x01);
+    walker.send("minecraft:move_player_pos_rot", moved).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(walker);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let _ = stop.send(());
+    running.await.unwrap().unwrap();
+
+    // Next session: same place, same items.
+    let (addr, ctx, stop, running) = start(data_dir, world.clone()).await;
+    let mut bot = Bot::connect(addr, ctx.ids.clone()).await;
+    bot.login("Walker").await;
+    let (_, body) = bot.recv_until("minecraft:login_compression").await;
+    bot.compression = Some(Reader::new(&body).varint().unwrap() as usize);
+    bot.recv_until("minecraft:login_finished").await;
+    bot.send("minecraft:login_acknowledged", Vec::new()).await;
+    bot.state = State::Configuration;
+    let (_, packs) = bot.recv_until("minecraft:select_known_packs").await;
+    bot.send("minecraft:select_known_packs", packs).await;
+    bot.recv_until("minecraft:finish_configuration").await;
+    bot.send("minecraft:finish_configuration", Vec::new()).await;
+    bot.state = State::Play;
+    let (_, position) = bot.recv_until("minecraft:player_position").await;
+    let mut r = Reader::new(&position);
+    r.varint().unwrap();
+    assert_eq!(
+        (r.f64().unwrap(), r.f64().unwrap(), r.f64().unwrap()),
+        target
+    );
+    let (_, content) = bot.recv_until("minecraft:container_set_content").await;
+    let mut r = Reader::new(&content);
+    assert_eq!((r.varint().unwrap(), r.varint().unwrap()), (0, 1));
+    assert_eq!(r.length_prefix().unwrap(), 46);
+    for slot in 0..46 {
+        let count = r.varint().unwrap();
+        if slot == 38 {
+            assert_eq!(
+                (count, r.varint().unwrap()),
+                (7, stone),
+                "stone in hotbar slot 3"
+            );
+            r.varint().unwrap();
+            r.varint().unwrap();
+        } else {
+            assert_eq!(count, 0, "slot {slot} empty");
+        }
+    }
+    drop(bot);
+    let _ = stop.send(());
+    running.await.unwrap().unwrap();
+    std::fs::remove_dir_all(&world).unwrap();
+}
+
+/// The offline-mode UUID the server gives a name.
+fn mc_server_uuid(ctx: &mc_server::ServerContext, name: &str) -> u128 {
+    ctx.players
+        .lock()
+        .unwrap()
+        .values()
+        .find(|p| p.profile.name == name)
+        .map(|p| p.profile.uuid)
+        .unwrap()
 }
 
 #[tokio::test]
@@ -1010,7 +1127,7 @@ async fn changes_to_a_vanilla_world_are_saved_on_shutdown() {
     let below =
         mc_protocol::Position::new(x.floor() as i32, y.floor() as i32 - 1, z.floor() as i32);
     let mut dig = Vec::new();
-    dig.put_varint(0); // start digging: instant in creative
+    dig.put_varint(2); // finished digging (the world's game mode is survival)
     dig.put_position(below);
     dig.put_i8(1);
     dig.put_varint(1);
