@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 mc-world.workspace = true
 mc-storage.workspace = true
+mc-worldgen.workspace = true
 mc-nbt.workspace = true
 mc-data.workspace = true
 mc-protocol.workspace = true

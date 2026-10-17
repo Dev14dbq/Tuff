@@ -3,6 +3,12 @@
 //! For now only the superflat generator exists (ROADMAP Ф1); the noise
 //! generator with vanilla parity is ROADMAP Ф4.
 
+pub mod climate;
+pub mod density;
+mod md5;
+pub mod noise;
+pub mod random;
+
 use mc_world::Chunk;
 
 /// One horizontal layer of a flat world, from the bottom up.

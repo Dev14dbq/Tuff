@@ -188,9 +188,24 @@ pub(crate) struct Server {
 
 impl Server {
     pub(crate) fn vanilla(root: &Path) -> Result<Self> {
+        let properties = format!(
+            "online-mode=false\nserver-ip=127.0.0.1\nserver-port={VANILLA_PORT}\n\
+             level-name=parity\nlevel-type=minecraft\\:flat\ngamemode=creative\n\
+             spawn-protection=0\nview-distance=6\nsimulation-distance=6\nwhite-list=false\n\
+             generate-structures=false\npause-when-empty-seconds=0\nmotd=parity\n\
+             enable-status=true\nsync-chunk-writes=false\n"
+        );
         let dir = root.join("cache/vanilla-server/26.3-parity");
+        Self::prepare(root, &dir, &properties)?;
+        let _ = std::fs::remove_dir_all(dir.join("parity"));
+        Self::start_java(root, &dir)
+    }
+
+    /// Copies the accepted EULA of the local test server into `dir` and
+    /// writes its `server.properties`.
+    pub(crate) fn prepare(root: &Path, dir: &Path, properties: &str) -> Result<()> {
         let source = root.join("cache/vanilla-server/26.3");
-        std::fs::create_dir_all(&dir)?;
+        std::fs::create_dir_all(dir)?;
         let eula = source.join("eula.txt");
         ensure!(
             eula.is_file(),
@@ -198,24 +213,19 @@ impl Server {
             eula.display()
         );
         std::fs::copy(&eula, dir.join("eula.txt"))?;
-        let _ = std::fs::remove_dir_all(dir.join("parity"));
-        std::fs::write(
-            dir.join("server.properties"),
-            format!(
-                "online-mode=false\nserver-ip=127.0.0.1\nserver-port={VANILLA_PORT}\n\
-                 level-name=parity\nlevel-type=minecraft\\:flat\ngamemode=creative\n\
-                 spawn-protection=0\nview-distance=6\nsimulation-distance=6\nwhite-list=false\n\
-                 generate-structures=false\npause-when-empty-seconds=0\nmotd=parity\n\
-                 enable-status=true\nsync-chunk-writes=false\n"
-            ),
-        )?;
+        std::fs::write(dir.join("server.properties"), properties)?;
+        Ok(())
+    }
+
+    /// Starts the vanilla server jar in `dir`.
+    pub(crate) fn start_java(root: &Path, dir: &Path) -> Result<Self> {
         let jar = root.join("reference/26.3/server.jar");
         let child = Command::new("java")
             .arg("-Xmx2G")
             .arg("-jar")
             .arg(&jar)
             .arg("nogui")
-            .current_dir(&dir)
+            .current_dir(dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

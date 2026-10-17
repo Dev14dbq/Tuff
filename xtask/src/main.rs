@@ -11,6 +11,8 @@ mod parity;
 mod probe;
 mod registry_diff;
 mod watch;
+mod worldgen_diff;
+mod worldgen_ref;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -68,6 +70,8 @@ fn main() -> ExitCode {
         Some("watch") => watch::run(&args[1..]),
         Some("parity") => parity::run(&args[1..]),
         Some("observe") => observe::run(&args[1..]),
+        Some("worldgen-ref") => worldgen_ref::run(&args[1..]),
+        Some("worldgen-diff") => worldgen_diff::run(&args[1..]),
         None | Some("-h" | "--help" | "help") => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
