@@ -5,16 +5,25 @@
 //! count), sector 1 holds 1024 timestamps. A chunk starts with a 4-byte length
 //! (including the compression byte), a compression byte, then the data.
 //! Compression bit 0x80 means the data lives in an external `c.<x>.<z>.mcc`.
+//!
+//! Writing puts a chunk into free sectors (never over its old ones), then
+//! updates the header, so a crash in between leaves the previous version.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use flate2::read::{GzDecoder, ZlibDecoder};
 
 pub const SECTOR: usize = 4096;
+/// A location entry counts sectors in one byte; bigger chunks go external.
+const MAX_SECTORS: usize = 255;
+/// Compression bytes.
+pub const GZIP: u8 = 1;
+pub const ZLIB: u8 = 2;
+pub const UNCOMPRESSED: u8 = 3;
 
 #[derive(Debug)]
 pub enum StorageError {
@@ -129,6 +138,118 @@ impl RegionFile {
         decompress(&self.path, compression & 0x7F, &payload).map(Some)
     }
 
+    /// An empty region (just the two header sectors) that will live at `path`.
+    pub fn create(path: &Path) -> Self {
+        Self {
+            path: path.to_owned(),
+            data: vec![0; 2 * SECTOR],
+        }
+    }
+
+    /// Stores chunk (`x`, `z`) as zlib-compressed `nbt` with timestamp `time`
+    /// (Unix seconds), writing the region file to disk.
+    pub fn write_chunk(&mut self, x: usize, z: usize, nbt: &[u8], time: u32) -> Result<()> {
+        assert!(x < 32 && z < 32, "local chunk coordinates are 0..32");
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder
+            .write_all(nbt)
+            .and_then(|()| encoder.flush())
+            .map_err(|e| StorageError::Io(self.path.clone(), e))?;
+        let compressed = encoder
+            .finish()
+            .map_err(|e| StorageError::Io(self.path.clone(), e))?;
+        if self.data.is_empty() {
+            self.data = vec![0; 2 * SECTOR];
+        }
+
+        // Body: length (compression byte included), compression byte, data.
+        let mut body = Vec::with_capacity(compressed.len() + 5);
+        let external = self.external_path(x, z);
+        if (compressed.len() + 5).div_ceil(SECTOR) > MAX_SECTORS {
+            fs::write(&external, &compressed).map_err(|e| StorageError::Io(external.clone(), e))?;
+            body.extend_from_slice(&1u32.to_be_bytes());
+            body.push(ZLIB | 0x80);
+        } else {
+            body.extend_from_slice(&(compressed.len() as u32 + 1).to_be_bytes());
+            body.push(ZLIB);
+            body.extend_from_slice(&compressed);
+            if external.exists() {
+                let _ = fs::remove_file(&external);
+            }
+        }
+        let sectors = body.len().div_ceil(SECTOR);
+        body.resize(sectors * SECTOR, 0);
+
+        let start = self.free_run(sectors);
+        let end = (start + sectors) * SECTOR;
+        if self.data.len() < end {
+            self.data.resize(end, 0);
+        }
+        self.data[start * SECTOR..end].copy_from_slice(&body);
+        let i = 4 * (x + z * 32);
+        let location = ((start as u32) << 8) | sectors as u32;
+        self.data[i..i + 4].copy_from_slice(&location.to_be_bytes());
+        self.data[SECTOR + i..SECTOR + i + 4].copy_from_slice(&time.to_be_bytes());
+
+        // Data first, then the header that points at it.
+        let io = |e| StorageError::Io(self.path.clone(), e);
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&self.path)
+            .map_err(io)?;
+        let on_disk = file.metadata().map_err(io)?.len() as usize;
+        if on_disk < 2 * SECTOR {
+            file.write_all(&self.data[..2 * SECTOR]).map_err(io)?;
+        }
+        file.seek(SeekFrom::Start((start * SECTOR) as u64))
+            .map_err(io)?;
+        file.write_all(&self.data[start * SECTOR..end])
+            .map_err(io)?;
+        file.sync_data().map_err(io)?;
+        file.seek(SeekFrom::Start(i as u64)).map_err(io)?;
+        file.write_all(&self.data[i..i + 4]).map_err(io)?;
+        file.seek(SeekFrom::Start((SECTOR + i) as u64))
+            .map_err(io)?;
+        file.write_all(&self.data[SECTOR + i..SECTOR + i + 4])
+            .map_err(io)?;
+        Ok(())
+    }
+
+    /// First run of `count` sectors used by no chunk (the one being replaced
+    /// included, so its old copy survives until the header changes).
+    fn free_run(&self, count: usize) -> usize {
+        let total = self.data.len().div_ceil(SECTOR);
+        let mut used = vec![false; total.max(2)];
+        used[0] = true;
+        used[1] = true;
+        for cz in 0..32 {
+            for cx in 0..32 {
+                let (offset, sectors) = self.location(cx, cz);
+                if offset == 0 {
+                    continue;
+                }
+                for s in offset..offset + sectors {
+                    if s < used.len() {
+                        used[s] = true;
+                    }
+                }
+            }
+        }
+        let mut run = 0;
+        for (sector, &taken) in used.iter().enumerate() {
+            run = if taken { 0 } else { run + 1 };
+            if run == count {
+                return sector + 1 - count;
+            }
+        }
+        // Append, after any free sectors at the end.
+        total - run
+    }
+
     /// `c.<chunk x>.<chunk z>.mcc` next to the region, for oversized chunks.
     fn external_path(&self, x: usize, z: usize) -> PathBuf {
         let (rx, rz) = region_coords(&self.path).unwrap_or((0, 0));
@@ -178,10 +299,8 @@ impl RegionStorage {
         &self.dir
     }
 
-    /// The parsed NBT root of chunk (`x`, `z`) in world chunk coordinates.
-    pub fn read_chunk(&mut self, x: i32, z: i32) -> Result<Option<mc_nbt::Tag>> {
-        let (rx, rz) = (x.div_euclid(32), z.div_euclid(32));
-        let region = match self.open.entry((rx, rz)) {
+    fn region(&mut self, rx: i32, rz: i32) -> Result<&mut Option<RegionFile>> {
+        Ok(match self.open.entry((rx, rz)) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(e) => {
                 let path = self.dir.join(format!("r.{rx}.{rz}.mca"));
@@ -192,8 +311,29 @@ impl RegionStorage {
                 };
                 e.insert(file)
             }
-        };
-        let Some(region) = region else {
+        })
+    }
+
+    /// Writes chunk (`x`, `z`) (world chunk coordinates) as uncompressed NBT
+    /// bytes, creating the region file if needed.
+    pub fn write_chunk(&mut self, x: i32, z: i32, nbt: &[u8], time: u32) -> Result<()> {
+        let (rx, rz) = (x.div_euclid(32), z.div_euclid(32));
+        let dir = self.dir.clone();
+        let region = self.region(rx, rz)?;
+        let region =
+            region.get_or_insert_with(|| RegionFile::create(&dir.join(format!("r.{rx}.{rz}.mca"))));
+        region.write_chunk(
+            x.rem_euclid(32) as usize,
+            z.rem_euclid(32) as usize,
+            nbt,
+            time,
+        )
+    }
+
+    /// The parsed NBT root of chunk (`x`, `z`) in world chunk coordinates.
+    pub fn read_chunk(&mut self, x: i32, z: i32) -> Result<Option<mc_nbt::Tag>> {
+        let (rx, rz) = (x.div_euclid(32), z.div_euclid(32));
+        let Some(region) = self.region(rx, rz)? else {
             return Ok(None);
         };
         let Some(bytes) =
@@ -210,7 +350,6 @@ impl RegionStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
 
     /// Builds a region with one zlib chunk at local (3, 5).
     fn region_with_one_chunk(nbt: &[u8]) -> Vec<u8> {
@@ -257,6 +396,42 @@ mod tests {
             None,
             "missing region file"
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn written_chunks_read_back_and_keep_old_copies_until_replaced() {
+        let dir = std::env::temp_dir().join(format!("mc-storage-write-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let tag = |n: i32, filler: usize| {
+            let mut root = mc_nbt::Compound::new();
+            root.insert("DataVersion", mc_nbt::Tag::Int(n));
+            // Random-looking bytes so the chunk does not compress to nothing.
+            let noise: Vec<i8> = (0..filler).map(|i| (i * 7919 % 251) as i8).collect();
+            root.insert("noise", mc_nbt::Tag::ByteArray(noise));
+            let mut nbt = Vec::new();
+            mc_nbt::write_named("", &mc_nbt::Tag::Compound(root.clone()), &mut nbt).unwrap();
+            (mc_nbt::Tag::Compound(root), nbt)
+        };
+        let mut storage = RegionStorage::new(&dir);
+        let (_, small_nbt) = tag(1, 100);
+        storage.write_chunk(-1, 33, &small_nbt, 7).unwrap();
+        let (big, big_nbt) = tag(2, 20_000);
+        storage.write_chunk(-1, 33, &big_nbt, 8).unwrap();
+        let (other, other_nbt) = tag(3, 10);
+        storage.write_chunk(-32, 32, &other_nbt, 9).unwrap();
+
+        // A fresh reader sees what is on disk.
+        let mut fresh = RegionStorage::new(&dir);
+        assert_eq!(fresh.read_chunk(-1, 33).unwrap(), Some(big));
+        assert_eq!(fresh.read_chunk(-32, 32).unwrap(), Some(other));
+        let region = RegionFile::open(&dir.join("r.-1.1.mca")).unwrap();
+        assert_eq!(region.timestamp(31, 1), 8);
+        assert_eq!(region.chunks(), vec![(0, 0), (31, 1)]);
+        // The big chunk did not overwrite the small one's sector; the third
+        // chunk reused it.
+        assert_eq!(region.location(0, 0).0, 2);
+        assert_eq!(region.location(31, 1).0, 3);
         fs::remove_dir_all(&dir).unwrap();
     }
 

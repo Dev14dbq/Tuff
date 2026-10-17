@@ -42,6 +42,8 @@ pub struct Config {
     pub session_server: String,
     /// A world folder saved by vanilla 26.3; `None` for a superflat test world.
     pub world: Option<PathBuf>,
+    /// How often changed chunks are written (vanilla: every 5 minutes).
+    pub autosave: std::time::Duration,
 }
 
 impl Config {
@@ -58,6 +60,7 @@ impl Config {
             online_mode: true,
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
             world: None,
+            autosave: std::time::Duration::from_secs(300),
         }
     }
 }
@@ -138,8 +141,14 @@ impl Server {
             }
         );
         tokio::pin!(shutdown);
+        let mut autosave = tokio::time::interval(self.ctx.config.autosave);
+        autosave.tick().await; // the first tick is immediate
         loop {
             tokio::select! {
+                _ = autosave.tick(), if self.ctx.world.is_saved() => {
+                    let ctx = self.ctx.clone();
+                    tokio::task::spawn_blocking(move || save(&ctx));
+                }
                 accepted = self.listener.accept() => {
                     let (stream, peer) = accepted?;
                     stream.set_nodelay(true)?;
@@ -152,9 +161,32 @@ impl Server {
                 }
                 () = &mut shutdown => {
                     info!("stopping");
+                    let ctx = self.ctx.clone();
+                    tokio::task::spawn_blocking(move || save(&ctx)).await?;
                     return Ok(());
                 }
             }
         }
+    }
+}
+
+/// Writes changed chunks and reports it.
+fn save(ctx: &ServerContext) {
+    if !ctx.world.is_saved() {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let saved = ctx.world.save(&ctx.data.blocks);
+    if saved.chunks > 0 || saved.failed > 0 {
+        info!(
+            "saved {} chunks in {} ms{}",
+            saved.chunks,
+            started.elapsed().as_millis(),
+            if saved.failed > 0 {
+                format!(", {} failed", saved.failed)
+            } else {
+                String::new()
+            }
+        );
     }
 }

@@ -16,7 +16,7 @@ use mc_data::{Blocks, McData};
 use mc_nbt::Tag;
 use mc_protocol::Position;
 use mc_protocol::packets::play::{ChunkBlockEntity, LevelChunkWithLight, LightData, heightmap};
-use mc_storage::{Decoded, Palettes, RegionStorage, decode_chunk};
+use mc_storage::{Decoded, Names, Palettes, RegionStorage, decode_chunk, encode_chunk};
 use mc_world::Chunk;
 use mc_worldgen::{FlatGenerator, FlatLayer};
 use tracing::{info, warn};
@@ -42,7 +42,17 @@ pub struct World {
     /// Sent where a world folder has no finished chunk: air with full daylight.
     empty: Chunk,
     biome_count: u32,
+    /// Biome network id → name, for saving.
+    biome_names: Vec<String>,
+    data_version: i32,
     block_entity_types: HashMap<String, i32>,
+}
+
+/// What one save did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Saved {
+    pub chunks: usize,
+    pub failed: usize,
 }
 
 #[derive(Debug)]
@@ -132,6 +142,15 @@ fn full_sky_light(height: u32) -> LightData {
     }
 }
 
+fn biome_names(synced: &SyncedIds) -> Vec<String> {
+    let ids = &synced["minecraft:worldgen/biome"];
+    let mut names = vec![String::new(); ids.len()];
+    for (name, &id) in ids {
+        names[id as usize].clone_from(name);
+    }
+    names
+}
+
 fn block_entity_types(data: &McData) -> Result<HashMap<String, i32>> {
     Ok(data
         .builtin
@@ -174,6 +193,8 @@ impl World {
             source: Source::Flat(Box::new(chunk)),
             chunks: Mutex::new(HashMap::new()),
             biome_count: biomes.len() as u32,
+            biome_names: biome_names(synced),
+            data_version: data.version.world_version,
             block_entity_types: block_entity_types(data)?,
             dimension: dim.name,
             dimension_type_id: dim.type_id,
@@ -220,6 +241,8 @@ impl World {
             chunks: Mutex::new(HashMap::new()),
             empty: Chunk::new(0, 0, dim.min_y, dim.height, air, fallback_biome),
             biome_count: biomes.len() as u32,
+            biome_names: biome_names(synced),
+            data_version: data.version.world_version,
             block_entity_types: block_entity_types(data)?,
             dimension: dim.name,
             dimension_type_id: dim.type_id,
@@ -329,6 +352,68 @@ impl World {
             slot.dirty = true;
             Some(old)
         })
+    }
+
+    /// Writes every changed chunk to its region file (world folders only; a
+    /// flat test world lives in memory). Changed chunks are saved with
+    /// `isLightOn` cleared: their stored light is stale, vanilla relights them.
+    pub fn save(&self, blocks: &Blocks) -> Saved {
+        let Source::Anvil(anvil) = &self.source else {
+            return Saved::default();
+        };
+        let dirty: Vec<Chunk> = self
+            .chunks
+            .lock()
+            .expect("chunks lock")
+            .values_mut()
+            .filter(|slot| slot.dirty)
+            .filter_map(|slot| {
+                slot.dirty = false;
+                slot.chunk.as_deref().cloned()
+            })
+            .collect();
+        let names = Names {
+            blocks,
+            biomes: &self.biome_names,
+            data_version: self.data_version,
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as u32);
+        let mut saved = Saved::default();
+        let mut storage = anvil.storage.lock().expect("region storage");
+        for chunk in dirty {
+            let result = (|| -> Result<()> {
+                let stored = storage.read_chunk(chunk.x, chunk.z)?;
+                let tag = encode_chunk(&chunk, stored.as_ref(), &names, true)?;
+                let mut bytes = Vec::new();
+                mc_nbt::write_named("", &tag, &mut bytes)?;
+                storage.write_chunk(chunk.x, chunk.z, &bytes, now)?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => saved.chunks += 1,
+                Err(err) => {
+                    warn!("saving chunk {},{}: {err:#}", chunk.x, chunk.z);
+                    saved.failed += 1;
+                    // Try again next time.
+                    if let Some(slot) = self
+                        .chunks
+                        .lock()
+                        .expect("chunks lock")
+                        .get_mut(&(chunk.x, chunk.z))
+                    {
+                        slot.dirty = true;
+                    }
+                }
+            }
+        }
+        saved
+    }
+
+    /// Whether changes are written anywhere.
+    pub fn is_saved(&self) -> bool {
+        matches!(self.source, Source::Anvil(_))
     }
 
     fn encode(&self, chunk: &Chunk, blocks: &Blocks) -> LevelChunkWithLight {

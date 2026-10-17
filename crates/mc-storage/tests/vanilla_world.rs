@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use mc_storage::{Decoded, Palettes, RegionFile, RegionStorage, decode_chunk};
+use mc_storage::{Decoded, Names, Palettes, RegionFile, RegionStorage, decode_chunk, encode_chunk};
 
 #[test]
 fn decodes_every_chunk_of_a_vanilla_world() {
@@ -29,6 +29,11 @@ fn decodes_every_chunk_of_a_vanilla_world() {
         unresolved: Default::default(),
     };
     let bedrock = data.blocks.default_state("minecraft:bedrock").unwrap();
+    let names = Names {
+        blocks: &data.blocks,
+        biomes: &biomes,
+        data_version: 5023,
+    };
 
     let mut storage = RegionStorage::new(&regions);
     let (mut full, mut partial, mut with_block_entities) = (0, 0, 0);
@@ -63,6 +68,25 @@ fn decodes_every_chunk_of_a_vanilla_world() {
                         "sky light stored"
                     );
                     with_block_entities += usize::from(!chunk.block_entities.is_empty());
+                    // Encoding on top of the stored NBT and decoding again
+                    // gives the same chunk, and keeps what we do not model.
+                    let encoded = encode_chunk(&chunk, Some(&tag), &names, false).unwrap();
+                    let Decoded::Chunk(again) =
+                        decode_chunk(&encoded, -64, 384, &palettes).unwrap()
+                    else {
+                        panic!("re-encoded chunk {x},{z} is not full");
+                    };
+                    assert!(*again == *chunk, "chunk {x},{z} changed in a round trip");
+                    let (mc_nbt::Tag::Compound(before), mc_nbt::Tag::Compound(after)) =
+                        (&tag, &encoded)
+                    else {
+                        unreachable!()
+                    };
+                    for (key, _) in before.iter() {
+                        assert!(after.get(key).is_some(), "chunk {x},{z} lost {key}");
+                    }
+                    let mut bytes = Vec::new();
+                    mc_nbt::write_named("", &encoded, &mut bytes).unwrap();
                 }
                 Decoded::NotFull(_) => partial += 1,
             }

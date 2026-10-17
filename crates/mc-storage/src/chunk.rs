@@ -9,13 +9,17 @@
 //!   otherwise;
 //! - indices are packed like the protocol, at least 4 bits for blocks, the
 //!   minimum needed for biomes; a one-entry palette has no `data`.
+//!
+//! Encoding goes the other way on top of the chunk's stored NBT, so whatever
+//! we do not model (structures, scheduled ticks, post-processing) is kept.
 
 use std::fmt;
 
 use mc_data::Blocks;
 use mc_nbt::{Compound, Tag};
 use mc_world::{
-    BIOMES, BLOCKS, BlockEntity, Chunk, Kind, PalettedContainer, Section, SectionLight,
+    BIOMES, BLOCKS, BitStorage, BlockEntity, Chunk, Kind, PalettedContainer, Section, SectionLight,
+    bits_needed,
 };
 
 #[derive(Debug, PartialEq)]
@@ -250,4 +254,191 @@ fn decode_biomes(biomes: &Compound, palettes: &Palettes) -> Result<PalettedConta
         })
         .collect();
     container(BIOMES, ids, get(biomes, "data"), "biome")
+}
+
+/// What encoding needs from the game data.
+#[derive(Debug)]
+pub struct Names<'a> {
+    pub blocks: &'a Blocks,
+    /// Biome network id → name.
+    pub biomes: &'a [String],
+    /// Written when there is no stored chunk to start from.
+    pub data_version: i32,
+}
+
+/// One block palette entry: the name for a default state, `{id, properties}`
+/// otherwise (vanilla writes the same; a mixed list wraps the strings).
+fn block_palette_entry(state: u32, names: &Names) -> Result<Tag, ChunkError> {
+    let blocks = names.blocks;
+    let name = blocks
+        .block_name(state)
+        .ok_or_else(|| bad(format!("unknown block state {state}")))?;
+    if blocks.default_state(name) == Some(state) {
+        return Ok(Tag::String(name.to_owned()));
+    }
+    let key = blocks.describe(state).unwrap_or_default();
+    let inner = key[name.len()..]
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    let mut properties = Compound::new();
+    for (k, v) in inner.split(',').filter_map(|kv| kv.split_once('=')) {
+        properties.insert(k, Tag::String(v.to_owned()));
+    }
+    let mut entry = Compound::new();
+    entry.insert("id", Tag::String(name.to_owned()));
+    entry.insert("properties", Tag::Compound(properties));
+    Ok(Tag::Compound(entry))
+}
+
+/// A list whose elements may differ in type: if they do, every element that is
+/// not a compound is wrapped as `{"": value}`.
+fn mixed_list(items: Vec<Tag>) -> Tag {
+    let first = items.first().map(Tag::type_id);
+    if items.iter().all(|t| Some(t.type_id()) == first) {
+        return Tag::List(items);
+    }
+    Tag::List(
+        items
+            .into_iter()
+            .map(|t| match t {
+                Tag::Compound(c) => Tag::Compound(c),
+                other => {
+                    let mut wrapper = Compound::new();
+                    wrapper.insert("", other);
+                    Tag::Compound(wrapper)
+                }
+            })
+            .collect(),
+    )
+}
+
+fn encode_container(
+    container: &PalettedContainer,
+    entry: impl Fn(u32) -> Result<Tag, ChunkError>,
+) -> Result<Compound, ChunkError> {
+    let (palette, indices) = container.compact();
+    let mut out = Compound::new();
+    let entries = palette
+        .iter()
+        .map(|&v| entry(v))
+        .collect::<Result<Vec<_>, _>>()?;
+    out.insert("palette", mixed_list(entries));
+    if palette.len() > 1 {
+        let bits = bits_needed(palette.len() as u32 - 1).max(container.kind().min_bits);
+        let words = BitStorage::from_values(bits, indices.into_iter());
+        out.insert("data", Tag::LongArray(words.words().to_vec()));
+    }
+    Ok(out)
+}
+
+fn light_tag(bytes: &[u8]) -> Tag {
+    Tag::ByteArray(bytes.iter().map(|&b| b as i8).collect())
+}
+
+/// Chunk → NBT, starting from `stored` (the chunk's NBT as it was read, if
+/// any). Sections, heightmaps and block entities are replaced. With
+/// `relight`, `isLightOn` is cleared so vanilla recomputes light on load.
+pub fn encode_chunk(
+    chunk: &Chunk,
+    stored: Option<&Tag>,
+    names: &Names,
+    relight: bool,
+) -> Result<Tag, ChunkError> {
+    let mut root = match stored {
+        Some(Tag::Compound(root)) => root.clone(),
+        Some(_) => return Err(bad("stored root is not a compound")),
+        None => {
+            let mut root = Compound::new();
+            root.insert("DataVersion", Tag::Int(names.data_version));
+            root.insert("Status", Tag::String("minecraft:full".into()));
+            root
+        }
+    };
+    let min_section = chunk.min_y.div_euclid(16);
+    root.insert("xPos", Tag::Int(chunk.x));
+    root.insert("zPos", Tag::Int(chunk.z));
+    root.insert("yPos", Tag::Int(min_section));
+
+    // Sections by Y: stored ones outside the world height (light only) stay.
+    let mut by_y: Vec<(i32, Compound)> = match root.get("sections") {
+        Some(Tag::List(list)) => list
+            .iter()
+            .filter_map(|t| match t {
+                Tag::Compound(c) => Some((int(c, "Y").ok()?, c.clone())),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    for (i, section) in chunk.sections.iter().enumerate() {
+        let y = min_section + i as i32;
+        let index = match by_y.iter().position(|(sy, _)| *sy == y) {
+            Some(index) => index,
+            None => {
+                let mut fresh = Compound::new();
+                fresh.insert("Y", Tag::Byte(y as i8));
+                by_y.push((y, fresh));
+                by_y.len() - 1
+            }
+        };
+        let compound = &mut by_y[index].1;
+        compound.insert(
+            "block_states",
+            Tag::Compound(encode_container(&section.blocks, |s| {
+                block_palette_entry(s, names)
+            })?),
+        );
+        compound.insert(
+            "biomes",
+            Tag::Compound(encode_container(&section.biomes, |b| {
+                names
+                    .biomes
+                    .get(b as usize)
+                    .map(|n| Tag::String(n.clone()))
+                    .ok_or_else(|| bad(format!("unknown biome {b}")))
+            })?),
+        );
+        compound.remove("SkyLight");
+        compound.remove("BlockLight");
+        if let Some(light) = chunk.light.get(i) {
+            if let Some(sky) = &light.sky {
+                compound.insert("SkyLight", light_tag(sky));
+            }
+            if let Some(block) = &light.block {
+                compound.insert("BlockLight", light_tag(block));
+            }
+        }
+    }
+    by_y.sort_by_key(|(y, _)| *y);
+    root.insert(
+        "sections",
+        Tag::List(by_y.into_iter().map(|(_, c)| Tag::Compound(c)).collect()),
+    );
+
+    let mut heightmaps = Compound::new();
+    for (name, words) in &chunk.heightmaps {
+        heightmaps.insert(name.as_str(), Tag::LongArray(words.clone()));
+    }
+    root.insert("Heightmaps", Tag::Compound(heightmaps));
+
+    let entities = chunk
+        .block_entities
+        .iter()
+        .map(|be| {
+            let mut c = Compound::new();
+            c.insert("id", Tag::String(be.id.clone()));
+            c.insert("x", Tag::Int(be.x));
+            c.insert("y", Tag::Int(be.y));
+            c.insert("z", Tag::Int(be.z));
+            for (k, v) in be.data.iter() {
+                c.insert(k, v.clone());
+            }
+            Tag::Compound(c)
+        })
+        .collect();
+    root.insert("block_entities", Tag::List(entities));
+    if relight {
+        root.insert("isLightOn", Tag::Byte(0));
+    }
+    Ok(Tag::Compound(root))
 }

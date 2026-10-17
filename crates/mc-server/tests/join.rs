@@ -745,6 +745,99 @@ async fn serves_a_world_saved_by_vanilla() {
     let _ = stop.send(());
 }
 
+#[tokio::test]
+async fn changes_to_a_vanilla_world_are_saved_on_shutdown() {
+    let original =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/vanilla-server/26.3/world-normal");
+    let (Some(data_dir), true) = (data_dir(), original.join("level.dat").is_file()) else {
+        eprintln!("skipped: no extracted data or vanilla test world");
+        return;
+    };
+    // Work on a copy: level.dat and the overworld regions.
+    let world = std::env::temp_dir().join(format!("mc-save-test-{}", std::process::id()));
+    let regions = world.join("dimensions/minecraft/overworld/region");
+    std::fs::create_dir_all(&regions).unwrap();
+    std::fs::copy(original.join("level.dat"), world.join("level.dat")).unwrap();
+    let original_regions = original.join("dimensions/minecraft/overworld/region");
+    for entry in std::fs::read_dir(&original_regions).unwrap() {
+        let path = entry.unwrap().path();
+        std::fs::copy(&path, regions.join(path.file_name().unwrap())).unwrap();
+    }
+
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.world = Some(world.clone());
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let running = tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+
+    let (mut bot, (x, y, z)) = join_offline(addr, ctx.ids.clone(), "Digger").await;
+    let below =
+        mc_protocol::Position::new(x.floor() as i32, y.floor() as i32 - 1, z.floor() as i32);
+    let mut dig = Vec::new();
+    dig.put_varint(0); // start digging: instant in creative
+    dig.put_position(below);
+    dig.put_i8(1);
+    dig.put_varint(1);
+    bot.send("minecraft:player_action", dig).await;
+    let (_, ack) = bot.recv_until("minecraft:block_changed_ack").await;
+    assert_eq!(Reader::new(&ack).varint().unwrap(), 1);
+    drop(bot);
+    let _ = stop.send(());
+    running.await.unwrap().unwrap();
+
+    // Read the region file back, independently of the running server.
+    let mut storage = mc_storage::RegionStorage::new(&regions);
+    let tag = storage
+        .read_chunk(below.x >> 4, below.z >> 4)
+        .unwrap()
+        .unwrap();
+    let Tag::Compound(root) = &tag else {
+        panic!("chunk root is not a compound")
+    };
+    assert_eq!(
+        root.get("isLightOn"),
+        Some(&Tag::Byte(0)),
+        "relight on load"
+    );
+    assert_eq!(
+        root.get("Status"),
+        Some(&Tag::String("minecraft:full".into()))
+    );
+    let biomes: Vec<String> = ctx
+        .data
+        .data_pack()
+        .registry_entries("minecraft:worldgen/biome")
+        .unwrap();
+    let biome = |name: &str| biomes.iter().position(|b| b == name).map(|i| i as u32);
+    let air = ctx.data.blocks.default_state("minecraft:air").unwrap();
+    let palettes = mc_storage::Palettes {
+        blocks: &ctx.data.blocks,
+        biome: &biome,
+        air,
+        fallback_biome: 0,
+        unresolved: Default::default(),
+    };
+    let mc_storage::Decoded::Chunk(chunk) =
+        mc_storage::decode_chunk(&tag, -64, 384, &palettes).unwrap()
+    else {
+        panic!("saved chunk is not full")
+    };
+    assert_eq!(
+        chunk.block((below.x & 15) as usize, below.y, (below.z & 15) as usize),
+        air,
+        "the dug block is air on disk"
+    );
+    assert_eq!(palettes.unresolved.get(), 0);
+    std::fs::remove_dir_all(&world).unwrap();
+}
+
 /// Stands in for sessionserver.mojang.com: answers one HTTP request with
 /// `response` and hands back the request line it received.
 async fn fake_session_server(response: String) -> (String, tokio::task::JoinHandle<String>) {

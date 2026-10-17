@@ -13,7 +13,9 @@ Usage: mc-server [options]
 
 Options:
   --data <dir>           extracted game data (default: cache/mcdata/<version> found upwards)
-  --world <dir>          world folder saved by vanilla 26.3 (default: a superflat test world)
+  --world <dir>          world folder saved by vanilla 26.3 (default: a superflat test world);
+                         changes are saved there every --autosave seconds and on Ctrl-C
+  --autosave <seconds>   how often changed chunks are written (default 300)
   --bind <ip>            address to listen on (default 127.0.0.1)
   --port <port>          port (default 25565)
   --view-distance <n>    server view distance in chunks, 2-32 (default 10)
@@ -58,7 +60,7 @@ async fn run() -> Result<()> {
             "--offline" => offline = true,
             "--data" => data_dir = Some(args.next().context("--data needs a value")?.into()),
             "--world" => world = Some(args.next().context("--world needs a value")?.into()),
-            "--bind" | "--port" | "--view-distance" | "--max-players" | "--motd" => {
+            "--bind" | "--port" | "--view-distance" | "--max-players" | "--motd" | "--autosave" => {
                 let value = args
                     .next()
                     .with_context(|| format!("{arg} needs a value"))?;
@@ -85,6 +87,13 @@ async fn run() -> Result<()> {
             }
             "--max-players" => config.max_players = value.parse().context("--max-players")?,
             "--motd" => config.motd = value,
+            "--autosave" => {
+                let seconds: u64 = value.parse().context("--autosave")?;
+                if seconds == 0 {
+                    bail!("--autosave must be at least 1 second");
+                }
+                config.autosave = std::time::Duration::from_secs(seconds);
+            }
             _ => unreachable!("only known options are collected"),
         }
     }
