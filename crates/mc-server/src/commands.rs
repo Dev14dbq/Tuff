@@ -202,6 +202,7 @@ fn apply(
         let old = ctx.world.block(p, blocks);
         let state = mc_tick::placement_state(&level, level.logic(), crate::level::to_pos(p), state);
         if level.set_block(p, state) {
+            crate::containers::placed(ctx, p, state);
             count += 1;
             if destroy && let Some(old) = old.filter(|&o| !blocks.is_air(o)) {
                 out.events.push(Event::BlockBroken {

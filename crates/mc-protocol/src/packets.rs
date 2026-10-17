@@ -565,6 +565,20 @@ pub mod play {
         },
         /// Left click that hits nothing (the hand swings).
         Punch,
+        /// A click in a window; `changed` is the client's view of the slots
+        /// it changed and `carried` of the cursor after the click.
+        ContainerClick {
+            window: i32,
+            state_id: i32,
+            slot: i16,
+            button: i8,
+            mode: i32,
+            changed: Vec<(i16, Option<HashedStack>)>,
+            carried: Option<HashedStack>,
+        },
+        ContainerClose {
+            window: i32,
+        },
         Other(String),
     }
 
@@ -573,6 +587,37 @@ pub mod play {
         pub const START: i32 = 0;
         pub const CANCEL: i32 = 1;
         pub const FINISH: i32 = 2;
+    }
+
+    /// An item stack in a window click: components only as hashes.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct HashedStack {
+        pub item: i32,
+        pub count: i32,
+        pub has_component_changes: bool,
+    }
+
+    impl HashedStack {
+        pub fn decode(r: &mut Reader) -> Result<Option<Self>> {
+            if !r.bool()? {
+                return Ok(None);
+            }
+            let (item, count) = (r.varint()?, r.varint()?);
+            let added = r.length_prefix()?;
+            for _ in 0..added {
+                r.varint()?;
+                r.i32()?;
+            }
+            let removed = r.length_prefix()?;
+            for _ in 0..removed {
+                r.varint()?;
+            }
+            Ok(Some(Self {
+                item,
+                count,
+                has_component_changes: added + removed > 0,
+            }))
+        }
     }
 
     /// An item stack as the client sends it. Component changes are not
@@ -694,6 +739,32 @@ pub mod play {
                     item: ItemStack::decode(r)?,
                 },
                 "minecraft:punch" => Serverbound::Punch,
+                "minecraft:container_click" => {
+                    let (window, state_id) = (r.varint()?, r.varint()?);
+                    let (slot, button, mode) = (r.i16()?, r.i8()?, r.varint()?);
+                    let count = r.length_prefix()?;
+                    if count > 128 {
+                        return Err(crate::codec::DecodeError::Invalid(
+                            "number of changed slots",
+                        ));
+                    }
+                    let mut changed = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        changed.push((r.i16()?, HashedStack::decode(r)?));
+                    }
+                    Serverbound::ContainerClick {
+                        window,
+                        state_id,
+                        slot,
+                        button,
+                        mode,
+                        changed,
+                        carried: HashedStack::decode(r)?,
+                    }
+                }
+                "minecraft:container_close" => Serverbound::ContainerClose {
+                    window: r.varint()?,
+                },
                 other => Serverbound::Other(other.to_owned()),
             })
         }
@@ -1344,6 +1415,35 @@ pub mod play {
             out.put_varint(self.state_id);
             out.put_i16(self.slot);
             ItemStack::encode(self.item.as_ref(), out);
+        }
+    }
+
+    /// Open Screen: a container window (chest, furnace...).
+    #[derive(Clone, Debug)]
+    pub struct OpenScreen {
+        pub window: i32,
+        /// Id in the `minecraft:menu` registry.
+        pub menu: i32,
+        pub title: Tag,
+    }
+    packet!(OpenScreen, Play, "minecraft:open_screen");
+    impl Encode for OpenScreen {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.window);
+            out.put_varint(self.menu);
+            crate::codec::put_nbt(out, &self.title);
+        }
+    }
+
+    /// Close Container: the server closes a window.
+    #[derive(Clone, Debug)]
+    pub struct ContainerCloseClientbound {
+        pub window: i32,
+    }
+    packet!(ContainerCloseClientbound, Play, "minecraft:container_close");
+    impl Encode for ContainerCloseClientbound {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.window);
         }
     }
 

@@ -11,7 +11,7 @@
 //!   Event "block broken" (particles, sound), then the update.
 
 use mc_protocol::Position;
-use mc_protocol::packets::play::{ItemStack, dig};
+use mc_protocol::packets::play::{HashedStack, ItemStack, dig};
 
 use crate::blocks::{self, Placement, offset};
 use crate::context::{Event, Pose, ServerContext};
@@ -35,6 +35,8 @@ pub struct Hands {
     /// Component data of stacks loaded from the player file, kept until the
     /// slot changes (the network form does not carry it yet).
     pub components: std::collections::HashMap<usize, mc_nbt::Tag>,
+    /// The stack on the mouse cursor while the inventory is open.
+    pub carried: Option<ItemStack>,
 }
 
 impl Default for Hands {
@@ -43,6 +45,7 @@ impl Default for Hands {
             slots: vec![None; 46],
             selected: 0,
             components: std::collections::HashMap::new(),
+            carried: None,
         }
     }
 }
@@ -87,6 +90,60 @@ pub fn max_stack(item_name: &str) -> i32 {
 impl Hands {
     pub fn main_hand(&self) -> Option<&ItemStack> {
         self.slots[36 + self.selected].as_ref()
+    }
+
+    /// A click in the inventory window, as the client reports its result
+    /// (the server takes the client's word for now). Returns stacks thrown
+    /// out of the window: Q over a slot (mode 4) or a click outside it
+    /// (slot −999).
+    pub fn click(
+        &mut self,
+        slot: i16,
+        button: i8,
+        mode: i32,
+        changed: &[(i16, Option<HashedStack>)],
+        carried: Option<HashedStack>,
+    ) -> Vec<ItemStack> {
+        let mut thrown = Vec::new();
+        if mode == 4
+            && let Some(Some(stack)) = usize::try_from(slot).ok().and_then(|s| self.slots.get(s))
+        {
+            let count = if button == 1 { stack.count } else { 1 };
+            thrown.push(ItemStack {
+                count,
+                ..stack.clone()
+            });
+        }
+        if mode == 0
+            && slot == -999
+            && let Some(stack) = &self.carried
+        {
+            let count = if button == 0 { stack.count } else { 1 };
+            thrown.push(ItemStack {
+                count,
+                ..stack.clone()
+            });
+        }
+        let to_stack = |h: HashedStack| ItemStack {
+            count: h.count,
+            item: h.item,
+            has_component_changes: h.has_component_changes,
+        };
+        for (slot, stack) in changed {
+            let Some(index) = usize::try_from(*slot)
+                .ok()
+                .filter(|&i| i < self.slots.len())
+            else {
+                continue;
+            };
+            let new = stack.clone().map(to_stack);
+            if new.as_ref().map(|s| s.item) != self.slots[index].as_ref().map(|s| s.item) {
+                self.components.remove(&index);
+            }
+            self.slots[index] = new;
+        }
+        self.carried = carried.map(to_stack);
+        thrown
     }
 
     /// Container slot of a hand.
@@ -155,6 +212,8 @@ pub struct Outcome {
     pub messages: Vec<String>,
     /// Items to drop into the world, at block positions.
     pub drops: Vec<(Position, crate::loot::Drop)>,
+    /// A container the player opened.
+    pub open: Option<(Position, crate::containers::Kind)>,
 }
 
 /// Who is acting.
@@ -247,6 +306,23 @@ pub fn dig(
         return outcome;
     }
     outcome.updates.push((position, left));
+    if blocks
+        .block_name(state)
+        .and_then(crate::containers::kind_of)
+        .is_some()
+    {
+        let (items, _) = crate::containers::broken(ctx, position);
+        for stack in items {
+            outcome.drops.push((
+                position,
+                crate::loot::Drop {
+                    item: stack.item,
+                    count: stack.count,
+                },
+            ));
+        }
+        outcome.events.push(Event::ContainerGone { position });
+    }
     if actor.game_mode != CREATIVE
         && let Some(name) = blocks.block_name(state)
     {
@@ -298,6 +374,19 @@ pub fn use_item_on(
     let held = held.as_ref();
     let (world, blocks) = (&ctx.world, &ctx.data.blocks);
     let block_at = |p: Position| world.block(p, blocks);
+    // Containers open.
+    if let Some(kind) = block_at(clicked)
+        .and_then(|s| blocks.block_name(s))
+        .and_then(crate::containers::kind_of)
+    {
+        outcome.open = Some((clicked, kind));
+        outcome.events.push(Event::Swing {
+            uuid: actor.uuid,
+            entity_id: actor.entity_id,
+            times: 1,
+        });
+        return outcome;
+    }
     // Levers, doors, repeaters... react to being used instead of having
     // something placed against them.
     let mut level = WorldLevel::new(ctx);
@@ -372,6 +461,10 @@ pub fn use_item_on(
         return refuse(outcome);
     }
     let changes = level.into_changes();
+    // Containers get their (empty) block entity.
+    for &(p, state) in &placed.blocks {
+        crate::containers::placed(ctx, p, state);
+    }
     // The answer: the clicked block, then the placed ones.
     for p in std::iter::once(clicked).chain(placed.blocks.iter().map(|&(p, _)| p)) {
         if let Some(state) = block_at(p)

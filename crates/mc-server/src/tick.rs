@@ -276,6 +276,40 @@ pub fn drop_item(ctx: &ServerContext, at: mc_protocol::Position, drop: crate::lo
     lock(&ctx.entities).push(entity);
 }
 
+/// A player throws a stack: from the eyes, along the view, not to be picked
+/// up again for 40 ticks (minecraft.wiki, "Item (entity)").
+pub fn throw_item(
+    ctx: &ServerContext,
+    pose: crate::context::Pose,
+    stack: mc_protocol::packets::play::ItemStack,
+) {
+    let (yaw, pitch) = (
+        f64::from(pose.yaw).to_radians(),
+        f64::from(pose.pitch).to_radians(),
+    );
+    let speed = 0.3;
+    let entity = mc_entity::Entity {
+        id: ctx.next_entity_id(),
+        uuid: crate::util::random_uuid(),
+        kind: mc_entity::Kind::Item {
+            item: stack.item,
+            count: stack.count,
+            pickup_delay: 40,
+        },
+        pos: [pose.x, pose.y + 1.62 - 0.3, pose.z],
+        vel: [
+            -yaw.sin() * pitch.cos() * speed,
+            -pitch.sin() * speed + 0.1,
+            yaw.cos() * pitch.cos() * speed,
+        ],
+        on_ground: false,
+        age: 0,
+        removed: false,
+    };
+    let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
+    lock(&ctx.entities).push(entity);
+}
+
 /// How far around a player items are picked up: the player's box grown by
 /// one block sideways and half a block up and down.
 fn picks_up(pose: &crate::context::Pose, item: &mc_entity::Entity) -> bool {

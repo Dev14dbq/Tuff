@@ -361,6 +361,33 @@ impl World {
         })
     }
 
+    /// The block entity at `p` (chest contents, sign text...).
+    pub fn block_entity(&self, p: Position, blocks: &Blocks) -> Option<mc_world::BlockEntity> {
+        self.with_slot(p.x >> 4, p.z >> 4, blocks, |slot| {
+            slot.chunk
+                .as_ref()?
+                .block_entities
+                .iter()
+                .find(|be| (be.x, be.y, be.z) == (p.x, p.y, p.z))
+                .cloned()
+        })
+    }
+
+    /// Stores a block entity (replacing the one at its position).
+    pub fn set_block_entity(&self, be: mc_world::BlockEntity, blocks: &Blocks) {
+        self.with_slot(be.x >> 4, be.z >> 4, blocks, |slot| {
+            let Some(chunk) = slot.chunk.as_mut() else {
+                return;
+            };
+            chunk
+                .block_entities
+                .retain(|other| (other.x, other.y, other.z) != (be.x, be.y, be.z));
+            chunk.block_entities.push(be);
+            slot.frame = None;
+            slot.dirty = true;
+        });
+    }
+
     /// Sets one block, keeping heightmaps and block entities consistent.
     /// Returns the previous state, or `None` if the block cannot change there.
     pub fn set_block(

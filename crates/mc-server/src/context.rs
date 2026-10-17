@@ -126,6 +126,16 @@ pub enum Event {
         slot: i16,
         item: Option<ItemStack>,
     },
+    /// Slots of an open container changed (for its other viewers).
+    ContainerSlots {
+        position: Position,
+        viewers: Vec<u128>,
+        slots: Vec<(usize, Option<ItemStack>)>,
+    },
+    /// A container block is gone; windows on it close.
+    ContainerGone {
+        position: Position,
+    },
     /// A player picked up an item entity (the pickup animation).
     ItemTaken {
         item_entity: i32,
@@ -174,6 +184,8 @@ pub struct ServerContext {
     pub entities: Mutex<Vec<mc_entity::Entity>>,
     /// Inventories of the players in play.
     pub inventories: Mutex<HashMap<u128, crate::interact::Hands>>,
+    /// Chests and barrels someone has open.
+    pub containers: Mutex<crate::containers::Containers>,
     /// What broken blocks drop.
     pub loot: crate::loot::BlockLoot,
     /// Player files of the world folder (none for the flat test world).
@@ -332,6 +344,7 @@ impl ServerContext {
             ticks: Mutex::new(mc_tick::ScheduledTicks::default()),
             entities: Mutex::new(Vec::new()),
             inventories: Mutex::new(HashMap::new()),
+            containers: Mutex::new(HashMap::new()),
             loot: crate::loot::BlockLoot::load(&data),
             player_files,
             default_game_mode,

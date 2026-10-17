@@ -1021,6 +1021,132 @@ fn mc_server_uuid(ctx: &mc_server::ServerContext, name: &str) -> u128 {
 }
 
 #[tokio::test]
+async fn chests_keep_what_players_put_in() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Keeper".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let torch = ctx
+        .data
+        .builtin
+        .id("minecraft:item", "minecraft:torch")
+        .unwrap();
+    let (mut keeper, _) = join_offline(addr, ctx.ids.clone(), "Keeper").await;
+    let mut command = Vec::new();
+    command.put_string("setblock 2 -60 0 chest");
+    keeper.send("minecraft:chat_command", command).await;
+    keeper.recv_until("minecraft:block_update").await;
+
+    // Creative: 12 torches into the first hotbar slot, then open the chest.
+    let mut slot = Vec::new();
+    slot.put_i16(36);
+    for v in [12, torch, 0, 0] {
+        slot.put_varint(v);
+    }
+    keeper.send("minecraft:set_creative_mode_slot", slot).await;
+    let mut use_on = Vec::new();
+    use_on.put_varint(0);
+    use_on.put_position(mc_protocol::Position::new(2, -60, 0));
+    use_on.put_varint(1);
+    for c in [0.5f32, 1.0, 0.5] {
+        use_on.put_f32(c);
+    }
+    use_on.put_bool(false);
+    use_on.put_bool(false);
+    use_on.put_varint(1);
+    keeper.send("minecraft:use_item_on", use_on).await;
+    let (_, screen) = keeper.recv_until("minecraft:open_screen").await;
+    let mut r = Reader::new(&screen);
+    let window = r.varint().unwrap();
+    let menu = ctx
+        .data
+        .builtin
+        .id("minecraft:menu", "minecraft:generic_9x3")
+        .unwrap();
+    assert_eq!(r.varint().unwrap(), menu);
+    let (_, content) = keeper.recv_until("minecraft:container_set_content").await;
+    let mut r = Reader::new(&content);
+    assert_eq!(r.varint().unwrap(), window);
+    r.varint().unwrap();
+    assert_eq!(
+        r.length_prefix().unwrap(),
+        27 + 36,
+        "chest, then the inventory"
+    );
+
+    // Shift-click the torches over: hotbar slot 0 is window slot 27 + 27.
+    let hashed = |item: i32, count: i32| {
+        let mut b = Vec::new();
+        b.put_bool(true);
+        b.put_varint(item);
+        b.put_varint(count);
+        b.put_varint(0);
+        b.put_varint(0);
+        b
+    };
+    let mut click = Vec::new();
+    click.put_varint(window);
+    click.put_varint(2);
+    click.put_i16(54);
+    click.put_i8(0);
+    click.put_varint(1); // shift-click
+    click.put_varint(2);
+    click.put_i16(54);
+    click.put_bool(false);
+    click.put_i16(0);
+    click.extend(hashed(torch, 12));
+    click.put_bool(false); // nothing carried
+    keeper.send("minecraft:container_click", click).await;
+    let mut close = Vec::new();
+    close.put_varint(window);
+    keeper.send("minecraft:container_close", close).await;
+    // Wait until the server has it.
+    for _ in 0..50 {
+        if ctx.containers.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let be = ctx
+        .world
+        .block_entity(mc_protocol::Position::new(2, -60, 0), &ctx.data.blocks)
+        .expect("chest block entity");
+    assert_eq!(be.id, "minecraft:chest");
+    let Some(Tag::List(items)) = be.data.get("Items") else {
+        panic!("no Items: {:?}", be.data)
+    };
+    let Tag::Compound(first) = &items[0] else {
+        panic!()
+    };
+    assert_eq!(first.get("Slot"), Some(&Tag::Byte(0)));
+    assert_eq!(
+        first.get("id"),
+        Some(&Tag::String("minecraft:torch".into()))
+    );
+    assert_eq!(first.get("count"), Some(&Tag::Int(12)));
+    assert!(
+        ctx.inventories
+            .lock()
+            .unwrap()
+            .values()
+            .all(|h| h.slots[36].is_none())
+    );
+    let _ = stop.send(());
+}
+
+#[tokio::test]
 async fn serves_a_world_saved_by_vanilla() {
     let world =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/vanilla-server/26.3/world-normal");
