@@ -1,0 +1,50 @@
+# Walls on a frozen superflat world (stone floor at y=-60).
+region -2 -61 -2 22 -54 22
+run fill -2 -60 -2 22 -60 22 stone
+compare
+# A lone wall, a line, a corner, a cross.
+run setblock 0 -59 0 cobblestone_wall
+compare
+run fill 2 -59 0 6 -59 0 cobblestone_wall
+compare
+run fill 8 -59 0 8 -59 3 cobblestone_wall
+run fill 9 -59 3 11 -59 3 cobblestone_wall
+compare
+run fill 14 -59 0 14 -59 4 stone_brick_wall
+run fill 12 -59 2 16 -59 2 stone_brick_wall
+compare
+# Next to full blocks, glass panes, bars, fences, fence gates, slabs, stairs.
+run setblock 0 -59 6 cobblestone_wall
+run setblock 1 -59 6 stone
+run setblock -1 -59 6 glass_pane
+run setblock 0 -59 5 oak_fence
+run setblock 0 -59 7 oak_fence_gate[facing=east]
+compare
+run setblock 3 -59 6 cobblestone_wall
+run setblock 4 -59 6 oak_fence_gate[facing=north]
+run setblock 2 -59 6 stone_slab
+run setblock 3 -59 5 oak_stairs[facing=north]
+run setblock 3 -59 7 oak_stairs[facing=south]
+compare
+# Things on top: a full block, a torch, a slab, a carpet, a wall, a lantern.
+run setblock 2 -58 0 stone
+run setblock 4 -58 0 torch
+run setblock 5 -58 0 stone_slab
+run setblock 6 -58 0 white_carpet
+compare
+run setblock 3 -58 0 cobblestone_wall
+compare
+run setblock 3 -57 0 stone
+compare
+run setblock 0 -58 0 lantern
+run setblock 8 -58 1 stone_slab[type=top]
+run setblock 8 -58 2 oak_pressure_plate
+run setblock 10 -58 3 oak_sign
+compare
+# Taking things away.
+run setblock 4 -59 0 air
+compare
+run setblock 1 -59 6 air
+compare
+run setblock 3 -57 0 air
+compare

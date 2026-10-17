@@ -49,6 +49,8 @@ pub struct Shapes {
     /// Note block instrument each state gives the note block on it (an index
     /// in [`crate::redstone::INSTRUMENTS`]), observed.
     instrument: Vec<u8>,
+    /// Blocks that raise a wall's post under them (`#wall_post_override`).
+    post_override: Vec<bool>,
 }
 
 impl Shapes {
@@ -125,6 +127,14 @@ impl Shapes {
             }
         }
 
+        let mut post_override = vec![false; states];
+        for name in tagged("minecraft:wall_post_override") {
+            if let Some(info) = blocks.get(&name) {
+                for s in info.first_state..=info.last_state {
+                    post_override[s as usize] = true;
+                }
+            }
+        }
         let observed = attach.as_ref().is_some_and(|a| a.len() == states);
         let attach: Vec<u8> = match attach.filter(|a| a.len() == states) {
             Some(table) => table
@@ -174,6 +184,7 @@ impl Shapes {
         }
         Self {
             instrument: vec![0; states],
+            post_override,
             kind,
             attach,
             observed,
@@ -268,6 +279,91 @@ impl Shapes {
         }
     }
 
+    fn wall_connects(&self, neighbor: u32, dir: Dir) -> bool {
+        match self.kind(neighbor) {
+            Kind::Wall | Kind::Pane => true,
+            Kind::FenceGate => self
+                .prop(neighbor, "facing")
+                .and_then(Dir::from_name)
+                .is_some_and(|f| f.axis() != dir.axis()),
+            Kind::Fence { .. } => false,
+            _ => self.face_attaches(neighbor, dir),
+        }
+    }
+
+    /// A fence gate between walls sits lower (`in_wall`).
+    fn gate_in_wall(&self, level: &dyn Level, pos: BlockPos, state: u32) -> u32 {
+        let Some(facing) = self.prop(state, "facing").and_then(Dir::from_name) else {
+            return state;
+        };
+        let wall = [facing.cw(), facing.ccw()]
+            .into_iter()
+            .any(|d| self.kind(level.block(pos.offset(d))) == Kind::Wall);
+        self.with(state, "in_wall", if wall { "true" } else { "false" })
+    }
+
+    /// Whether the block above a wall reaches down over its side `dir`.
+    fn covers_side(&self, above: u32, dir: Dir) -> bool {
+        match self.kind(above) {
+            Kind::Wall => self.prop(above, dir.name()).is_some_and(|v| v != "none"),
+            Kind::Stairs => self.prop(above, "half") == Some("bottom"),
+            _ if self.prop(above, "type") == Some("bottom") => true,
+            _ if self
+                .blocks
+                .block_name(above)
+                .is_some_and(|n| n.ends_with("_carpet") || n == "minecraft:snow") =>
+            {
+                true
+            }
+            _ => self.attach.get(above as usize).copied().unwrap_or(0) == 15,
+        }
+    }
+
+    /// A wall's sides (none, low, tall) and post from its neighbours
+    /// (minecraft.wiki, "Wall").
+    fn wall_shape(&self, level: &dyn Level, pos: BlockPos, state: u32) -> u32 {
+        let above = level.block(pos.offset(Dir::Up));
+        let mut sides = [("none", Dir::North); 4];
+        for (i, d) in Dir::HORIZONTAL.into_iter().enumerate() {
+            let value = if !self.wall_connects(level.block(pos.offset(d)), d) {
+                "none"
+            } else if self.covers_side(above, d) {
+                "tall"
+            } else {
+                "low"
+            };
+            sides[i] = (value, d);
+        }
+        let side = |d: Dir| {
+            sides
+                .iter()
+                .find(|(_, s)| *s == d)
+                .map_or("none", |(v, _)| *v)
+        };
+        let (n, e, so, w) = (
+            side(Dir::North),
+            side(Dir::East),
+            side(Dir::South),
+            side(Dir::West),
+        );
+        // A post unless the wall runs straight through (opposite sides
+        // alike: a line or a cross), or something on top needs one.
+        let alone = [n, e, so, w].iter().all(|v| *v == "none");
+        let post = alone
+            || n != so
+            || e != w
+            || (self.kind(above) == Kind::Wall && self.prop(above, "up") == Some("true"))
+            || self
+                .post_override
+                .get(above as usize)
+                .copied()
+                .unwrap_or(false);
+        let state = sides
+            .into_iter()
+            .fold(state, |st, (v, d)| self.with(st, d.name(), v));
+        self.with(state, "up", if post { "true" } else { "false" })
+    }
+
     /// A stairs' shape from the stairs in front of and behind it.
     fn stairs_shape(&self, level: &dyn Level, pos: BlockPos, state: u32) -> u32 {
         let Some(facing) = self.prop(state, "facing").and_then(Dir::from_name) else {
@@ -358,6 +454,8 @@ impl Shapes {
                 self.with(state, dir.name(), value)
             }
             Kind::Stairs if dir.is_horizontal() => self.stairs_shape(level, pos, state),
+            Kind::Wall if dir != Dir::Down => self.wall_shape(level, pos, state),
+            Kind::FenceGate if dir.is_horizontal() => self.gate_in_wall(level, pos, state),
             Kind::Snowy if dir == Dir::Up => {
                 let snowy = self.kind(neighbor) == Kind::Snow;
                 self.with(state, "snowy", if snowy { "true" } else { "false" })
@@ -407,6 +505,8 @@ impl Shapes {
                 self.update_shape(level, pos, s, d, level.block(pos.offset(d)))
             }),
             Kind::Stairs => self.stairs_shape(level, pos, state),
+            Kind::Wall => self.wall_shape(level, pos, state),
+            Kind::FenceGate => self.gate_in_wall(level, pos, state),
             Kind::Snowy => {
                 self.update_shape(level, pos, state, Dir::Up, level.block(pos.offset(Dir::Up)))
             }
