@@ -4,4 +4,4 @@ pub mod bits;
 pub mod chunk;
 
 pub use bits::{BitStorage, bits_needed};
-pub use chunk::{BIOME_VOLUME, Chunk, SECTION_VOLUME, Section};
+pub use chunk::{BIOME_VOLUME, BlockEntity, Chunk, SECTION_VOLUME, Section, SectionLight};

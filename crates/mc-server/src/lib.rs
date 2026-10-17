@@ -9,6 +9,7 @@ mod auth;
 mod connection;
 mod context;
 mod util;
+mod world;
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -37,6 +38,8 @@ pub struct Config {
     pub online_mode: bool,
     /// Base URL of the session server (Mojang's by default).
     pub session_server: String,
+    /// A world folder saved by vanilla 26.3; `None` for a superflat test world.
+    pub world: Option<PathBuf>,
 }
 
 impl Config {
@@ -52,6 +55,7 @@ impl Config {
             compression_threshold: Some(256),
             online_mode: true,
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
+            world: None,
         }
     }
 }

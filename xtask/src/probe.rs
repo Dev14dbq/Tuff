@@ -20,6 +20,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut version = None;
     let mut dump: Option<std::path::PathBuf> = None;
     let mut mover = false;
+    let mut batches = 1usize;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let mut value = || {
@@ -33,6 +34,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--version" => version = Some(value()?),
             "--dump" => dump = Some(value()?.into()),
             "--mover" => mover = true,
+            "--batches" => batches = value()?.parse().context("--batches")?,
             other => bail!("unknown option `{other}` for probe"),
         }
     }
@@ -167,9 +169,20 @@ pub fn run(args: &[String]) -> Result<()> {
     println!("\n== play (until the first chunk batch is finished)");
     let mut sequence = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(20);
+    let mut saw_batch = false;
+    client.set_read_timeout(Duration::from_secs(3))?;
     loop {
-        ensure!(Instant::now() < deadline, "no chunk batch within 20 s");
-        let (packet, body) = client.recv()?;
+        if Instant::now() >= deadline {
+            ensure!(saw_batch, "no chunk batch within 20 s");
+            break; // the server stopped before --batches was reached
+        }
+        let (packet, body) = match client.recv() {
+            Ok(p) => p,
+            // Quiet for a while after some batches: the server sent what it had.
+            Err(err) if saw_batch && is_timeout(&err) => break,
+            Err(err) if is_timeout(&err) => continue,
+            Err(err) => return Err(err),
+        };
         sequence.push(packet.clone());
         if let Some(dir) = &dump {
             std::fs::create_dir_all(dir)?;
@@ -191,7 +204,17 @@ pub fn run(args: &[String]) -> Result<()> {
                     teleport_confirmation(&body)?,
                 )?;
             }
-            "minecraft:chunk_batch_finished" => break,
+            "minecraft:chunk_batch_finished" => {
+                saw_batch = true;
+                batches -= 1;
+                if batches == 0 {
+                    break;
+                }
+                // Acknowledge, as a client does, so the server sends the next batch.
+                let mut received = Vec::new();
+                received.put_f32(64.0);
+                client.send("minecraft:chunk_batch_received", received)?;
+            }
             _ => {}
         }
     }
@@ -643,7 +666,7 @@ fn check_chunk(r: &mut Reader) -> Result<String> {
         r.u8()?;
         r.i16()?;
         r.varint()?;
-        r.nbt()?;
+        r.nbt_optional()?;
     }
     // Light masks are byte bit sets in 26.3 (bit 0 = section below the world).
     let mut masks = Vec::new();

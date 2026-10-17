@@ -223,8 +223,12 @@ crates/
   mc-client     (появится в ROADMAP Ф10)
 xtask/          задачи разработки: `cargo xtask <задача>`
   extract-data  данные из server.jar пользователя → cache/mcdata/<версия>/
+  probe         клиент-зонд: сверка форматов пакетов с любым сервером (--mover, --dump, --batches)
+  bots          нагрузочный тест
+  registry-diff реестры в NBT: ваниль против нас
+  chunk-info    структура NBT чанка или level.dat
+  chunk-diff    чанки двух серверов, разобранные до блоков, света и блок-сущностей
   parity        (позже) прогон ваниллы и нашей реализации на одном сценарии и сравнение
-  bench         (позже) сценарии замеров
 cache/          извлечённые данные Mojang, в .gitignore
 ```
 

@@ -230,6 +230,8 @@ pub struct BlockInfo {
     pub default_state: u32,
     pub first_state: u32,
     pub last_state: u32,
+    /// Properties of the default state, sorted by name.
+    pub default_properties: Vec<(String, String)>,
 }
 
 /// Block types and their global state ids, from the blocks report. Block
@@ -242,6 +244,35 @@ pub struct Blocks {
     air: Vec<bool>,
     /// Per state id: water, lava, or `waterlogged=true`.
     fluid: Vec<bool>,
+    /// `name[k=v,...]` with properties sorted by name → state id.
+    by_key: HashMap<String, u32>,
+}
+
+/// `minecraft:oak_log[axis=y]`; properties must be sorted by name.
+fn state_key<'a>(name: &str, properties: impl Iterator<Item = (&'a str, &'a str)>) -> String {
+    let mut key = String::from(name);
+    key.push('[');
+    for (i, (k, v)) in properties.enumerate() {
+        if i > 0 {
+            key.push(',');
+        }
+        key.push_str(k);
+        key.push('=');
+        key.push_str(v);
+    }
+    key.push(']');
+    key
+}
+
+fn sorted_properties(properties: &Value) -> Vec<(String, String)> {
+    let mut list: Vec<(String, String)> = properties
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_owned())))
+        .collect();
+    list.sort();
+    list
 }
 
 const AIR_BLOCKS: &[&str] = &["minecraft:air", "minecraft:cave_air", "minecraft:void_air"];
@@ -256,6 +287,7 @@ impl Blocks {
         let mut by_name = HashMap::with_capacity(blocks.len());
         let mut state_count = 0;
         let (mut air, mut fluid) = (Vec::new(), Vec::new());
+        let mut by_key = HashMap::new();
         for (name, block) in blocks {
             let states = block["states"]
                 .as_array()
@@ -288,13 +320,25 @@ impl Blocks {
                 air[id] = is_air;
                 fluid[id] =
                     is_fluid_block || state["properties"]["waterlogged"].as_str() == Some("true");
+                let properties = sorted_properties(&state["properties"]);
+                let key = state_key(
+                    name,
+                    properties.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                );
+                by_key.insert(key, id as u32);
             }
+            let default_properties = states
+                .iter()
+                .find(|s| s["default"].as_bool() == Some(true))
+                .map(|s| sorted_properties(&s["properties"]))
+                .unwrap_or_default();
             by_name.insert(
                 name.clone(),
                 BlockInfo {
                     default_state,
                     first_state: first,
                     last_state: last,
+                    default_properties,
                 },
             );
         }
@@ -303,7 +347,28 @@ impl Blocks {
             state_count,
             air,
             fluid,
+            by_key,
         })
+    }
+
+    /// Global state id of block `name` with `properties`; properties not given
+    /// take their default-state values. `None` for unknown blocks or values.
+    pub fn state_id(&self, name: &str, properties: &[(&str, &str)]) -> Option<u32> {
+        let info = self.by_name.get(name)?;
+        if properties.is_empty() {
+            return Some(info.default_state);
+        }
+        let mut merged: std::collections::BTreeMap<&str, &str> = info
+            .default_properties
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        for &(k, v) in properties {
+            merged.insert(k, v);
+        }
+        self.by_key
+            .get(&state_key(name, merged.into_iter()))
+            .copied()
     }
 
     pub fn is_air(&self, state: u32) -> bool {
@@ -692,6 +757,31 @@ mod tests {
         assert!(!data.blocks.is_air(stone) && !data.blocks.is_fluid(stone));
         let water = data.blocks.default_state("minecraft:water").unwrap();
         assert!(data.blocks.is_fluid(water));
+        // Properties: missing ones default, unknown values fail.
+        let blocks = &data.blocks;
+        assert_eq!(
+            blocks.state_id("minecraft:grass_block", &[]),
+            blocks.default_state("minecraft:grass_block")
+        );
+        let snowy = blocks
+            .state_id("minecraft:grass_block", &[("snowy", "true")])
+            .unwrap();
+        assert_ne!(Some(snowy), blocks.default_state("minecraft:grass_block"));
+        let lichen = blocks
+            .state_id("minecraft:glow_lichen", &[("north", "true")])
+            .unwrap();
+        assert_eq!(
+            blocks.state_id(
+                "minecraft:glow_lichen",
+                &[("north", "true"), ("waterlogged", "false")]
+            ),
+            Some(lichen)
+        );
+        assert_eq!(
+            blocks.state_id("minecraft:grass_block", &[("snowy", "maybe")]),
+            None
+        );
+        assert_eq!(blocks.state_id("minecraft:no_such_block", &[]), None);
         assert!(data.blocks.state_count() > 20_000);
         assert!(
             data.builtin

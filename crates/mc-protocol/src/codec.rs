@@ -219,6 +219,13 @@ impl<'a> Reader<'a> {
         self.pos += used;
         Ok(tag)
     }
+
+    /// NBT that may be a lone TAG_End, meaning "nothing".
+    pub fn nbt_optional(&mut self) -> Result<Option<Tag>> {
+        let (tag, used) = mc_nbt::read_network_optional(&self.buf[self.pos..])?;
+        self.pos += used;
+        Ok(tag)
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -386,6 +386,7 @@ name = "mc-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "flate2",
  "mc-data",
  "mc-entity",
  "mc-light",
@@ -408,6 +409,8 @@ dependencies = [
 name = "mc-storage"
 version = "0.0.0"
 dependencies = [
+ "flate2",
+ "mc-data",
  "mc-nbt",
  "mc-world",
 ]
@@ -426,6 +429,7 @@ name = "mc-world"
 version = "0.0.0"
 dependencies = [
  "mc-data",
+ "mc-nbt",
 ]
 
 [[package]]
@@ -1165,9 +1169,12 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "flate2",
  "mc-data",
  "mc-nbt",
  "mc-protocol",
+ "mc-storage",
+ "mc-world",
  "serde_json",
  "sha1_smol",
  "zip",

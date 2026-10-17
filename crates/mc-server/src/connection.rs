@@ -365,7 +365,7 @@ async fn play(
         x,
         y,
         z,
-        yaw: 0.0,
+        yaw: world.spawn_yaw,
         pitch: 0.0,
         on_ground: true,
     };
@@ -386,7 +386,7 @@ async fn play(
         game_mode: me.game_mode,
         previous_game_mode: None,
         is_debug: false,
-        is_flat: true,
+        is_flat: world.is_flat,
         death_location: None,
         portal_cooldown: 0,
         sea_level: world.sea_level,
@@ -408,7 +408,7 @@ async fn play(
         y,
         z,
         velocity: [0.0; 3],
-        yaw: 0.0,
+        yaw: world.spawn_yaw,
         pitch: 0.0,
         flags: 0,
     })?;
@@ -452,7 +452,10 @@ async fn play(
     view.move_to(writer, chunk_of(x), chunk_of(z))?;
     writer.queue(&play::SystemChat {
         content: text::colored(
-            "Welcome to minecraft-rewrite! This is a superflat test world.",
+            &format!(
+                "Welcome to minecraft-rewrite! You are in {}.",
+                world.description
+            ),
             "gold",
         ),
         overlay: false,
@@ -714,7 +717,7 @@ impl ChunkView {
         }
         writer.queue(&play::ChunkBatchStart)?;
         for &(x, z) in &missing {
-            writer.queue(&ctx.world.chunk_packet(x, z))?;
+            writer.queue(&*ctx.world.chunk_packet(x, z, &ctx.data.blocks))?;
             self.loaded.insert((x, z));
         }
         writer.queue(&play::ChunkBatchFinished {

@@ -25,6 +25,7 @@ md-5 = "0.11.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 rsa = { version = "0.9", features = ["getrandom"] }
 ureq = "3"
+flate2 = "1.1.10"
 
 [lints]
 workspace = true

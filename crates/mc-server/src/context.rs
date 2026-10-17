@@ -9,15 +9,15 @@ use anyhow::{Context as _, Result};
 use mc_data::{McData, SYNCHRONIZED_REGISTRIES, resolve_tags};
 use mc_nbt::Tag;
 use mc_protocol::packets::configuration::{RegistryData, RegistryEntry, TagRegistry, UpdateTags};
-use mc_protocol::packets::play::{LevelChunkWithLight, LightData, PlayerInfoEntry, heightmap};
+use mc_protocol::packets::play::PlayerInfoEntry;
 use mc_protocol::packets::{GameProfile, KnownPack};
 use mc_protocol::{Direction, PacketIds, State};
-use mc_worldgen::{FlatGenerator, FlatLayer};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use crate::Config;
 use crate::auth::ServerKey;
+use crate::world::World;
 
 /// A player who passed login.
 #[derive(Clone, Debug)]
@@ -88,7 +88,7 @@ pub struct ServerContext {
     /// not know the vanilla data pack.
     pub registries_with_data: Vec<RegistryData>,
     pub tags: UpdateTags,
-    pub world: FlatWorld,
+    pub world: World,
     /// `minecraft:player` in `minecraft:entity_type`.
     pub player_entity_type: i32,
     /// RSA key for the online-mode key exchange (`None` in offline mode).
@@ -164,7 +164,10 @@ impl ServerContext {
             None
         };
         let tags = build_tags(&data, &synced_ids)?;
-        let world = FlatWorld::new(&data, &synced_ids)?;
+        let world = match &config.world {
+            Some(dir) => World::open(dir, &data, &synced_ids)?,
+            None => World::flat(&data, &synced_ids)?,
+        };
         let player_entity_type = data
             .builtin
             .id("minecraft:entity_type", "minecraft:player")
@@ -235,117 +238,4 @@ fn build_tags(data: &McData, synced: &HashMap<String, HashMap<String, i32>>) -> 
         });
     }
     Ok(UpdateTags { registries })
-}
-
-/// The superflat overworld everyone plays in for now.
-#[derive(Debug)]
-pub struct FlatWorld {
-    pub dimension: String,
-    pub dimension_type_id: i32,
-    pub min_y: i32,
-    pub height: u32,
-    pub sea_level: i32,
-    pub spawn: (f64, f64, f64),
-    /// Every chunk of a flat world is identical except for its coordinates, so
-    /// the expensive part is encoded once.
-    template: ChunkTemplate,
-}
-
-#[derive(Debug)]
-struct ChunkTemplate {
-    sections: Vec<u8>,
-    heightmaps: Vec<(i32, Vec<i64>)>,
-    light: LightData,
-}
-
-impl FlatWorld {
-    fn new(data: &McData, synced: &HashMap<String, HashMap<String, i32>>) -> Result<Self> {
-        let dimension = "minecraft:overworld".to_owned();
-        let dimension_type = data
-            .data_pack()
-            .read_entry("minecraft:dimension_type", &dimension)?;
-        let min_y = dimension_type["min_y"]
-            .as_i64()
-            .context("dimension type min_y")? as i32;
-        let height = dimension_type["height"]
-            .as_u64()
-            .context("dimension type height")? as u32;
-        let dimension_type_id = synced["minecraft:dimension_type"][&dimension];
-        let biomes = &synced["minecraft:worldgen/biome"];
-        let plains = biomes["minecraft:plains"] as u32;
-
-        let state = |name: &str| {
-            data.blocks
-                .default_state(name)
-                .with_context(|| format!("block {name} not in the blocks report"))
-        };
-        let generator = FlatGenerator {
-            layers: vec![
-                FlatLayer {
-                    state: state("minecraft:bedrock")?,
-                    thickness: 1,
-                },
-                FlatLayer {
-                    state: state("minecraft:dirt")?,
-                    thickness: 2,
-                },
-                FlatLayer {
-                    state: state("minecraft:grass_block")?,
-                    thickness: 1,
-                },
-            ],
-            biome: plains,
-            air: state("minecraft:air")?,
-        };
-        let chunk = generator.generate(0, 0, min_y, height);
-        let blocks = &data.blocks;
-        let solid = |s: u32| !blocks.is_air(s);
-        let surface = chunk.heightmap(solid);
-        let template = ChunkTemplate {
-            sections: chunk.write_sections(blocks, biomes.len() as u32),
-            heightmaps: vec![
-                (heightmap::WORLD_SURFACE, surface.clone()),
-                (heightmap::MOTION_BLOCKING, surface.clone()),
-                (heightmap::MOTION_BLOCKING_NO_LEAVES, surface),
-            ],
-            light: full_sky_light(height),
-        };
-
-        let surface_y = generator.surface_y(min_y);
-        Ok(Self {
-            dimension,
-            dimension_type_id,
-            min_y,
-            height,
-            sea_level: surface_y,
-            spawn: (0.5, f64::from(surface_y), 0.5),
-            template,
-        })
-    }
-
-    pub fn chunk_packet(&self, x: i32, z: i32) -> LevelChunkWithLight {
-        LevelChunkWithLight {
-            x,
-            z,
-            heightmaps: self.template.heightmaps.clone(),
-            data: self.template.sections.clone(),
-            block_entities: Vec::new(),
-            light: self.template.light.clone(),
-        }
-    }
-}
-
-/// Full daylight everywhere, no block light. Light covers one section below and
-/// one above the world in addition to the world's own sections.
-fn full_sky_light(height: u32) -> LightData {
-    let sections = height as usize / 16 + 2;
-    let all = vec![(1u64 << sections) - 1];
-    LightData {
-        sky_mask: all.clone(),
-        block_mask: Vec::new(),
-        empty_sky_mask: Vec::new(),
-        empty_block_mask: all,
-        sky: vec![vec![0xFF; 2048]; sections],
-        block: Vec::new(),
-    }
 }

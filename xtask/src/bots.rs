@@ -27,6 +27,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut count = 100usize;
     let mut seconds = 30u64;
     let mut version = None;
+    let mut view_distance = 2i8;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let mut value = || {
@@ -39,6 +40,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--count" => count = value()?.parse().context("--count")?,
             "--seconds" => seconds = value()?.parse().context("--seconds")?,
             "--version" => version = Some(value()?),
+            "--view-distance" => view_distance = value()?.parse().context("--view-distance")?,
             other => bail!("unknown option `{other}` for bots"),
         }
     }
@@ -54,7 +56,8 @@ pub fn run(args: &[String]) -> Result<()> {
             // Stagger connections a little, like players arriving.
             thread::sleep(Duration::from_millis(10));
             thread::spawn(move || {
-                if let Err(err) = bot(&addr, &format!("Bot{i:03}"), ids, &stats, deadline, i) {
+                let name = format!("Bot{i:03}");
+                if let Err(err) = bot(&addr, &name, ids, &stats, deadline, i, view_distance) {
                     stats.failed.fetch_add(1, Ordering::Relaxed);
                     eprintln!("Bot{i:03}: {err:#}");
                 }
@@ -89,6 +92,7 @@ fn bot(
     stats: &Stats,
     deadline: Instant,
     index: usize,
+    view_distance: i8,
 ) -> Result<()> {
     let begin = Instant::now();
     let mut client = Client::connect(addr, ids)?;
@@ -111,6 +115,17 @@ fn bot(
     }
     client.send("minecraft:login_acknowledged", Vec::new())?;
     client.state = State::Configuration;
+    let mut info = Vec::new();
+    info.put_string("en_us");
+    info.put_i8(view_distance);
+    info.put_varint(0); // chat enabled
+    info.put_bool(true);
+    info.put_u8(0x7f); // all skin parts
+    info.put_varint(1); // right hand
+    info.put_bool(false);
+    info.put_bool(true);
+    info.put_varint(0);
+    client.send("minecraft:client_information", info)?;
     loop {
         let (packet, body) = client.recv()?;
         match packet.as_str() {

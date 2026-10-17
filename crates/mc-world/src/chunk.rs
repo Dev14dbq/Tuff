@@ -27,6 +27,14 @@ impl Section {
         }
     }
 
+    /// From 4096 block state ids and 64 biome ids (same index order as the
+    /// protocol: x fastest, then z, then y).
+    pub fn from_parts(blocks: Vec<u32>, biomes: Vec<u32>) -> Self {
+        assert_eq!(blocks.len(), SECTION_VOLUME, "a section has 4096 blocks");
+        assert_eq!(biomes.len(), BIOME_VOLUME, "a section has 64 biome cells");
+        Self { blocks, biomes }
+    }
+
     /// Index of a block, x fastest, then z, then y.
     pub fn index(x: usize, y: usize, z: usize) -> usize {
         (y << 8) | (z << 4) | x
@@ -104,13 +112,37 @@ fn put_varint(out: &mut Vec<u8>, value: i32) {
     out.push(v as u8);
 }
 
+/// Stored light of one section: 2048 bytes, two 4-bit values per byte.
+/// `None` means not stored (no light data for this section).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SectionLight {
+    pub sky: Option<Vec<u8>>,
+    pub block: Option<Vec<u8>>,
+}
+
+/// A block entity as stored with its chunk (world coordinates).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlockEntity {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub id: String,
+    /// Everything else stored for it (without `id`, `x`, `y`, `z`).
+    pub data: mc_nbt::Compound,
+}
+
 /// A full-height chunk column.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Chunk {
     pub x: i32,
     pub z: i32,
     pub min_y: i32,
     pub sections: Vec<Section>,
+    /// One entry per section; empty when light was not loaded or computed.
+    pub light: Vec<SectionLight>,
+    /// Stored heightmaps by name (`MOTION_BLOCKING`, ...), packed like the protocol.
+    pub heightmaps: Vec<(String, Vec<i64>)>,
+    pub block_entities: Vec<BlockEntity>,
 }
 
 impl Chunk {
@@ -124,6 +156,9 @@ impl Chunk {
             z,
             min_y,
             sections: vec![Section::filled(air, biome); (height / 16) as usize],
+            light: Vec::new(),
+            heightmaps: Vec::new(),
+            block_entities: Vec::new(),
         }
     }
 

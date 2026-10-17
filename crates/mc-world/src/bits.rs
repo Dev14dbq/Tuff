@@ -71,6 +71,15 @@ impl BitStorage {
         &self.words
     }
 
+    /// Wraps stored words (e.g. from a chunk on disk). `None` if `words` has the
+    /// wrong length for `bits` and `len`.
+    pub fn from_words(bits: u32, len: usize, words: Vec<i64>) -> Option<Self> {
+        if !(1..=32).contains(&bits) || words.len() != Self::word_count(bits, len) {
+            return None;
+        }
+        Some(Self { bits, len, words })
+    }
+
     pub fn from_values(bits: u32, values: impl ExactSizeIterator<Item = u32>) -> Self {
         let mut storage = Self::new(bits, values.len());
         for (i, value) in values.enumerate() {

@@ -13,6 +13,7 @@ Usage: mc-server [options]
 
 Options:
   --data <dir>           extracted game data (default: cache/mcdata/<version> found upwards)
+  --world <dir>          world folder saved by vanilla 26.3 (default: a superflat test world)
   --bind <ip>            address to listen on (default 127.0.0.1)
   --port <port>          port (default 25565)
   --view-distance <n>    server view distance in chunks, 2-32 (default 10)
@@ -42,6 +43,7 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<()> {
     let mut data_dir: Option<PathBuf> = None;
+    let mut world: Option<PathBuf> = None;
     let mut overrides: Vec<(String, String)> = Vec::new();
     let mut no_compression = false;
     let mut offline = false;
@@ -55,6 +57,7 @@ async fn run() -> Result<()> {
             "--no-compression" => no_compression = true,
             "--offline" => offline = true,
             "--data" => data_dir = Some(args.next().context("--data needs a value")?.into()),
+            "--world" => world = Some(args.next().context("--world needs a value")?.into()),
             "--bind" | "--port" | "--view-distance" | "--max-players" | "--motd" => {
                 let value = args
                     .next()
@@ -89,6 +92,7 @@ async fn run() -> Result<()> {
         config.compression_threshold = None;
     }
     config.online_mode = !offline;
+    config.world = world;
 
     let server = Server::bind(config).await?;
     server

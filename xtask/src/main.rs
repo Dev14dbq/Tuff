@@ -1,6 +1,8 @@
 //! Development tasks, run as `cargo xtask <task>`.
 
 mod bots;
+mod chunk_diff;
+mod chunk_info;
 mod extract_data;
 mod probe;
 mod registry_diff;
@@ -15,16 +17,21 @@ Tasks:
   extract-data [--version <id>]
       Extract vanilla game data from reference/<id>/server.jar into cache/mcdata/<id>/.
       Without --version, the newest release found in reference/ is used.
-  probe [--addr <host:port>] [--name <player>] [--version <id>] [--dump <dir>]
+  probe [--addr <host:port>] [--name <player>] [--version <id>] [--dump <dir>] [--mover] [--batches <n>]
       Connect to a server as a client (status, login, configuration, spawn) and
       report what it sent, checking our packet layouts against it. --dump writes
       the raw play packets to <dir>.
-  bots [--addr <host:port>] [--count <n>] [--seconds <s>] [--version <id>]
+  bots [--addr <host:port>] [--count <n>] [--seconds <s>] [--view-distance <n>] [--version <id>]
       Load test: n bots (default 100) log in, get their chunks and walk around
       for s seconds (default 30). The server must run with --offline.
   registry-diff --a <host:port> --b <host:port> [--details <n>]
       Log into two offline-mode servers without known packs and compare every
       registry entry they send as NBT (e.g. vanilla vs ours).
+  chunk-info <region dir> <chunk x> <chunk z> [--depth <n>] [--all]
+      Print the NBT structure of one stored chunk.
+  chunk-diff <dump a> <dump b>
+      Compare chunk packets saved by `probe --dump` from two servers, decoded
+      to blocks, biomes, heightmaps, light and block entities.
 ";
 
 fn main() -> ExitCode {
@@ -34,6 +41,8 @@ fn main() -> ExitCode {
         Some("probe") => probe::run(&args[1..]),
         Some("bots") => bots::run(&args[1..]),
         Some("registry-diff") => registry_diff::run(&args[1..]),
+        Some("chunk-info") => chunk_info::run(&args[1..]),
+        Some("chunk-diff") => chunk_diff::run(&args[1..]),
         None | Some("-h" | "--help" | "help") => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;

@@ -703,7 +703,8 @@ pub mod play {
         pub packed_xz: u8,
         pub y: i16,
         pub kind: i32,
-        pub data: Tag,
+        /// What the client needs to render it; `None` is sent as TAG_End.
+        pub data: Option<Tag>,
     }
 
     /// Chunk Data and Update Light.
@@ -741,7 +742,10 @@ pub mod play {
                 out.put_u8(entity.packed_xz);
                 out.put_i16(entity.y);
                 out.put_varint(entity.kind);
-                put_nbt(out, &entity.data);
+                match &entity.data {
+                    Some(data) => put_nbt(out, data),
+                    None => out.put_u8(mc_nbt::tag_type::END),
+                }
             }
             self.light.encode(out);
         }

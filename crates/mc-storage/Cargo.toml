@@ -8,6 +8,8 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+mc-data.workspace = true
+flate2 = "1.1.10"
 mc-nbt.workspace = true
 mc-world.workspace = true
 

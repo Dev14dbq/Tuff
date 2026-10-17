@@ -260,6 +260,15 @@ pub fn read_network(bytes: &[u8]) -> Result<(Tag, usize)> {
     Ok((tag, reader.pos))
 }
 
+/// Like [`read_network`], but a lone TAG_End (one zero byte) is accepted and
+/// means "no data", as the protocol uses it for empty optional NBT.
+pub fn read_network_optional(bytes: &[u8]) -> Result<(Option<Tag>, usize)> {
+    match bytes.first() {
+        Some(&tag_type::END) => Ok((None, 1)),
+        _ => read_network(bytes).map(|(tag, used)| (Some(tag), used)),
+    }
+}
+
 /// Reads a named-form tag. Returns the root name, the tag and the bytes consumed.
 pub fn read_named(bytes: &[u8]) -> Result<(String, Tag, usize)> {
     let mut reader = Reader { bytes, pos: 0 };

@@ -487,6 +487,83 @@ async fn players_see_each_other_spawn_move_and_leave() {
     let _ = stop.send(());
 }
 
+#[tokio::test]
+async fn serves_a_world_saved_by_vanilla() {
+    let world =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/vanilla-server/26.3/world-normal");
+    let (Some(data_dir), true) = (data_dir(), world.join("level.dat").is_file()) else {
+        eprintln!("skipped: no extracted data or vanilla test world");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.world = Some(world);
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ids = server.context().ids.clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+
+    let mut bot = Bot::connect(addr, ids).await;
+    bot.login("Explorer").await;
+    let (_, body) = bot.recv_until("minecraft:login_compression").await;
+    bot.compression = Some(Reader::new(&body).varint().unwrap() as usize);
+    bot.recv_until("minecraft:login_finished").await;
+    bot.send("minecraft:login_acknowledged", Vec::new()).await;
+    bot.state = State::Configuration;
+    let (_, packs) = bot.recv_until("minecraft:select_known_packs").await;
+    bot.send("minecraft:select_known_packs", packs).await;
+    bot.recv_until("minecraft:finish_configuration").await;
+    bot.send("minecraft:finish_configuration", Vec::new()).await;
+    bot.state = State::Play;
+
+    let (_, login) = bot.recv_until("minecraft:login").await;
+    let (_, position) = bot.recv_until("minecraft:player_position").await;
+    let mut r = Reader::new(&position);
+    r.varint().unwrap();
+    let spawn_y = {
+        r.f64().unwrap();
+        r.f64().unwrap()
+    };
+    assert!(
+        spawn_y > 50.0,
+        "spawn on the terrain from level.dat, got y={spawn_y}"
+    );
+    assert!(!login.is_empty());
+
+    // Real terrain: the bottom sections are mostly stone, not a superflat.
+    let mut solid_bottoms = 0;
+    loop {
+        let (name, body) = bot.recv().await;
+        if name == "minecraft:chunk_batch_finished" {
+            break;
+        }
+        if name != "minecraft:level_chunk_with_light" {
+            continue;
+        }
+        let mut r = Reader::new(&body);
+        r.i32().unwrap();
+        r.i32().unwrap();
+        for _ in 0..r.length_prefix().unwrap() {
+            r.varint().unwrap();
+            let longs = r.length_prefix().unwrap();
+            r.bytes(longs * 8).unwrap();
+        }
+        let data = r.byte_array(1 << 21).unwrap().to_vec();
+        let non_air = i16::from_be_bytes([data[0], data[1]]);
+        solid_bottoms += usize::from(non_air > 3000);
+    }
+    assert!(
+        solid_bottoms >= 20,
+        "{solid_bottoms} chunks with a solid bottom section"
+    );
+    let _ = stop.send(());
+}
+
 /// Stands in for sessionserver.mojang.com: answers one HTTP request with
 /// `response` and hands back the request line it received.
 async fn fake_session_server(response: String) -> (String, tokio::task::JoinHandle<String>) {
