@@ -51,7 +51,47 @@ pub struct Shapes {
     instrument: Vec<u8>,
     /// Blocks that raise a wall's post under them (`#wall_post_override`).
     post_override: Vec<bool>,
+    /// What each state's faces hold up ([`crate::support`] bits), observed.
+    support: Vec<u8>,
+    /// Block tags support rules read, by block (index in `blocks_of`).
+    tags: std::collections::HashMap<&'static str, std::collections::HashSet<u32>>,
 }
+
+/// Without observations, every face holds everything.
+const TOP_ALL: u8 = 31;
+
+/// Tags [`crate::support`] asks about.
+const SUPPORT_TAGS: &[&str] = &[
+    "minecraft:cannot_support_snow_layer",
+    "minecraft:support_override_snow_layer",
+    "minecraft:supports_cactus",
+    "minecraft:supports_sugar_cane",
+    "minecraft:supports_sugar_cane_adjacently",
+    "minecraft:supports_bamboo",
+    "minecraft:supports_lily_pad",
+    "minecraft:supports_nether_wart",
+    "minecraft:supports_wither_rose",
+    "minecraft:supports_crimson_fungus",
+    "minecraft:supports_warped_fungus",
+    "minecraft:supports_crimson_roots",
+    "minecraft:supports_warped_roots",
+    "minecraft:supports_nether_sprouts",
+    "minecraft:supports_azalea",
+    "minecraft:supports_small_dripleaf",
+    "minecraft:supports_big_dripleaf",
+    "minecraft:supports_stem_crops",
+    "minecraft:supports_crops",
+    "minecraft:supports_vegetation",
+    "minecraft:supports_dry_vegetation",
+    "minecraft:supports_cocoa",
+    "minecraft:overrides_mushroom_light_requirement",
+    "minecraft:crops",
+    "minecraft:corals",
+    "minecraft:coral_plants",
+    "minecraft:saplings",
+    "minecraft:small_flowers",
+    "minecraft:flowers",
+];
 
 impl Shapes {
     /// `attach` is the observed table (`observed/fence_attach.json`); without
@@ -182,8 +222,20 @@ impl Shapes {
             };
             blocks_of[state as usize] = index as u32;
         }
+        let mut support_tags = std::collections::HashMap::new();
+        for &tag in SUPPORT_TAGS {
+            let mut set = std::collections::HashSet::new();
+            for name in tagged(tag) {
+                if let Some(info) = blocks.get(&name) {
+                    set.insert(blocks_of[info.first_state as usize]);
+                }
+            }
+            support_tags.insert(tag, set);
+        }
         Self {
             instrument: vec![0; states],
+            support: vec![TOP_ALL; states],
+            tags: support_tags,
             post_override,
             kind,
             attach,
@@ -419,6 +471,40 @@ impl Shapes {
             }
         }
         self
+    }
+
+    /// With the observed support table (`observed/support.json`).
+    pub fn with_support(mut self, table: Option<Vec<i32>>) -> Self {
+        if let Some(table) = table.filter(|t| t.len() == self.support.len()) {
+            for (s, v) in self.support.iter_mut().zip(table) {
+                *s = if v < 0 { 0 } else { v as u8 };
+            }
+            // Air holds nothing, whatever was observed.
+            for state in 0..self.support.len() as u32 {
+                if self.blocks.is_air(state) {
+                    self.support[state as usize] = 0;
+                }
+            }
+        }
+        self
+    }
+
+    /// What `state`'s faces hold up ([`crate::support`] bits).
+    pub fn support(&self, state: u32) -> u8 {
+        self.support.get(state as usize).copied().unwrap_or(0)
+    }
+
+    /// Whether `state`'s block is in `tag` (one of the support tags).
+    pub fn in_tag(&self, state: u32, tag: &str) -> bool {
+        let Some(&block) = self.blocks_of.get(state as usize) else {
+            return false;
+        };
+        self.tags.get(tag).is_some_and(|set| set.contains(&block))
+    }
+
+    /// The air state.
+    pub fn air(&self) -> u32 {
+        self.air
     }
 
     /// The instrument a note block on top of `state` plays.

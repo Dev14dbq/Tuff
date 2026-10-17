@@ -1,0 +1,32 @@
+# Blocks placed by commands where nothing holds them (stone floor at y=-60).
+region -2 -61 -2 40 -55 12
+run fill -2 -60 -2 40 -60 12 stone
+compare
+run setblock 0 -58 0 redstone_wire
+run setblock 3 -58 0 rail
+run setblock 6 -58 0 repeater
+run setblock 9 -58 0 comparator
+run setblock 12 -58 0 stone_pressure_plate
+run setblock 15 -58 0 stone_button[face=floor]
+run setblock 18 -58 0 white_carpet
+run setblock 21 -58 0 oak_sign
+run setblock 24 -58 0 lantern
+run setblock 27 -58 0 oak_door[half=lower]
+run setblock 30 -58 0 wall_torch[facing=south]
+run setblock 33 -58 0 ladder[facing=south]
+run setblock 36 -58 0 snow
+run setblock 0 -59 4 wheat
+run setblock 3 -59 4 poppy
+run setblock 6 -59 4 oak_sapling
+run setblock 9 -59 4 brown_mushroom
+run setblock 12 -59 4 dead_bush
+run setblock 15 -59 4 tall_grass[half=lower]
+run setblock 18 -59 4 nether_wart
+run setblock 21 -59 4 lily_pad
+run setblock 24 -59 4 tube_coral
+run setblock 27 -58 4 activator_rail
+run setblock 30 -58 4 lever[face=floor]
+run setblock 33 -58 4 bamboo
+compare
+step 1
+step 1

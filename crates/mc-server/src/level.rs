@@ -124,6 +124,27 @@ impl Level for WorldLevel<'_> {
         p.y >= world.min_y && p.y < world.min_y + world.height as i32
     }
 
+    fn brightness(&self, p: BlockPos) -> u8 {
+        self.ctx.world.brightness(to_position(p))
+    }
+
+    fn destroyed(&mut self, p: BlockPos, state: u32) {
+        let ctx = self.ctx;
+        let blocks = &ctx.data.blocks;
+        let at = to_position(p);
+        if let Some(name) = blocks.block_name(state) {
+            let props = |k: &str| blocks.property(state, k).map(str::to_owned);
+            for drop in ctx.loot.drops(name, &props) {
+                crate::tick::drop_item(ctx, at, drop);
+            }
+        }
+        let _ = ctx.events.send(crate::context::Event::BlockBroken {
+            by: 0,
+            position: at,
+            state,
+        });
+    }
+
     fn container_signal(&self, p: BlockPos) -> Option<u8> {
         crate::containers::signal(self.ctx, to_position(p))
     }

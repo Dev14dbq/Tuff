@@ -29,6 +29,15 @@ pub trait Level {
     /// Turns the block that was at `p` into a falling block entity.
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32);
 
+    /// The light level at `p` (the brighter of sky and block light).
+    fn brightness(&self, _p: BlockPos) -> u8 {
+        15
+    }
+
+    /// The block `state` at `p` broke because nothing holds it any more (it
+    /// drops what it would when broken).
+    fn destroyed(&mut self, _p: BlockPos, _state: u32) {}
+
     /// How full the container at `p` is, as a comparator reads it (`None`
     /// if it is not a container).
     fn container_signal(&self, _p: BlockPos) -> Option<u8> {

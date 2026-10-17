@@ -433,6 +433,14 @@ pub fn use_item_on(
     }
 
     let mut level = WorldLevel::new(ctx);
+    // Nothing to hold it up there: not placed.
+    let unsupported = placed
+        .blocks
+        .iter()
+        .any(|&(p, state)| !mc_tick::support::can_survive(&level, level.logic(), to_pos(p), state));
+    if unsupported {
+        return refuse(outcome);
+    }
     let mut placed_any = false;
     for &(p, state) in &placed.blocks {
         // Connections and shape from the neighbours, as the block is placed.

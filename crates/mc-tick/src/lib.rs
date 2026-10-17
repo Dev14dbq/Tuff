@@ -8,6 +8,7 @@ pub mod gravity;
 pub mod level;
 pub mod redstone;
 pub mod shapes;
+pub mod support;
 pub mod ticks;
 pub mod updates;
 

@@ -163,6 +163,14 @@ pub fn place(
     // Clicking a replaceable block acts as clicking the top of the one below.
     let face = if replacing_clicked { 1 } else { p.face };
 
+    // Torches, signs, banners, coral fans and heads go on a wall as their
+    // wall block (minecraft.wiki: "Torch", "Sign"...).
+    let wall = wall_variant(blocks, block);
+    let on_wall = (2..6).contains(&face);
+    let default = match &wall {
+        Some(w) if on_wall => blocks.default_state(w)?,
+        _ => default,
+    };
     let mut state = default;
     let set = |state: &mut u32, property: &str, value: &str| {
         if let Some(changed) = blocks.with_property(*state, property, value) {
@@ -190,6 +198,40 @@ pub fn place(
             opposite(look)
         };
         set(&mut state, "facing", facing);
+    }
+    let name = blocks.block_name(default).unwrap_or(block);
+    if wall.is_some() && on_wall || matches!(name, "minecraft:ladder" | "minecraft:tripwire_hook") {
+        // Facing away from the wall it is on.
+        if on_wall {
+            set(&mut state, "facing", FACE_NAMES[face]);
+        }
+    }
+    if blocks.property(state, "face").is_some() {
+        // Levers and buttons: on a floor, a ceiling or a wall.
+        match face {
+            0 => set(&mut state, "face", "ceiling"),
+            1 => set(&mut state, "face", "floor"),
+            _ => {
+                set(&mut state, "face", "wall");
+                set(&mut state, "facing", FACE_NAMES[face]);
+            }
+        }
+        if face < 2 {
+            set(&mut state, "facing", look_horizontal(p.yaw));
+        }
+    }
+    if blocks.property(state, "rotation").is_some() {
+        // Signs, banners and heads standing: one of 16 turns towards the
+        // player.
+        let segment = (((p.yaw + 180.0) / 22.5 + 0.5).floor() as i32).rem_euclid(16);
+        set(&mut state, "rotation", &segment.to_string());
+    }
+    if blocks.property(state, "hanging").is_some() {
+        set(
+            &mut state,
+            "hanging",
+            if face == 0 { "true" } else { "false" },
+        );
     }
     let upper_half = match face {
         0 => true,
@@ -232,6 +274,21 @@ pub fn place(
         placed.push((head, blocks.with_property(state, "part", "head")?));
     }
     Some(Placed { blocks: placed })
+}
+
+/// The wall form of a block, if it has one: `torch` → `wall_torch`,
+/// `oak_sign` → `oak_wall_sign`, `oak_hanging_sign` → `oak_wall_hanging_sign`.
+fn wall_variant(blocks: &mc_data::Blocks, block: &str) -> Option<String> {
+    let short = block.trim_start_matches("minecraft:");
+    let candidate = if let Some(wood) = short.strip_suffix("_hanging_sign") {
+        format!("{wood}_wall_hanging_sign")
+    } else if let Some((head, last)) = short.rsplit_once('_') {
+        format!("{head}_wall_{last}")
+    } else {
+        format!("wall_{short}")
+    };
+    let full = format!("minecraft:{candidate}");
+    blocks.get(&full).is_some().then_some(full)
 }
 
 fn is_slab(blocks: &mc_data::Blocks, state: u32) -> bool {
@@ -299,6 +356,51 @@ mod tests {
         assert_eq!(look_horizontal(179.0), "north");
         assert_eq!(look_horizontal(-170.0), "north");
         assert_eq!(look_direction(0.0, 80.0), "down");
+    }
+
+    #[test]
+    fn torches_signs_and_buttons_go_on_walls() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let Ok(data) = McData::load(&dir) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let rules = BlockRules::new(&data).unwrap();
+        let stone = data.blocks.default_state("minecraft:stone").unwrap();
+        let air = data.blocks.default_state("minecraft:air").unwrap();
+        let block_at = |p: Position| {
+            Some(if p == Position::new(0, 0, 0) {
+                stone
+            } else {
+                air
+            })
+        };
+        let place = |block: &str, face: usize, yaw: f32| {
+            let p = Placement {
+                clicked: Position::new(0, 0, 0),
+                face,
+                cursor: [0.5; 3],
+                yaw,
+                pitch: 0.0,
+            };
+            let placed = super::place(&data, &rules, block, p, &block_at).unwrap();
+            data.blocks.describe(placed.blocks[0].1).unwrap().to_owned()
+        };
+        assert!(place("minecraft:torch", 3, 0.0).starts_with("minecraft:wall_torch[facing=south"));
+        assert_eq!(place("minecraft:torch", 1, 0.0), "minecraft:torch[]");
+        assert!(
+            place("minecraft:oak_sign", 4, 0.0).starts_with("minecraft:oak_wall_sign[facing=west")
+        );
+        // Standing, turned to face the player looking north (yaw 180).
+        assert!(place("minecraft:oak_sign", 1, 180.0).contains("rotation=0"));
+        let button = place("minecraft:stone_button", 5, 0.0);
+        assert!(
+            button.contains("face=wall") && button.contains("facing=east"),
+            "{button}"
+        );
+        assert!(place("minecraft:lever", 0, 0.0).contains("face=ceiling"));
+        assert!(place("minecraft:lantern", 0, 0.0).contains("hanging=true"));
+        assert!(place("minecraft:ladder", 2, 0.0).contains("facing=north"));
     }
 
     #[test]

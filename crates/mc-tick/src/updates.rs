@@ -80,6 +80,9 @@ fn set_with_limit(
             update_diagonal_shapes(level, ctx, p, state, limit - 1);
         }
     }
+    if ctx.shapes.block_index(old) != ctx.shapes.block_index(state) {
+        crate::support::placed(level, ctx, p, state);
+    }
     true
 }
 
@@ -131,6 +134,25 @@ pub fn update_neighbor_shapes(
             }
             _ => {}
         }
+        // Something that lost what held it up breaks (or looks again next
+        // tick).
+        let from = dir.opposite();
+        match crate::support::check(ctx, new) {
+            crate::support::Check::From(d) if d != from => {}
+            crate::support::Check::Never => {}
+            crate::support::Check::Tick => {
+                let kind = ctx.shapes.block_index(new);
+                if !level.is_block_tick_scheduled(np, kind) {
+                    level.schedule_block_tick(np, kind, 1, 0);
+                }
+            }
+            _ => {
+                if !crate::support::can_survive(level, ctx, np, new) {
+                    level.destroyed(np, current);
+                    new = ctx.shapes.air();
+                }
+            }
+        }
         // An observer looking at `p` sees it change.
         if redstone::part(ctx, current) == redstone::Part::Observer
             && ctx.shapes.property(current, "facing") == Some(dir.opposite().name())
@@ -151,6 +173,9 @@ pub fn update_neighbor_shapes(
 /// A neighbour-changed update to the block at `p` from `from`: fluids and
 /// redstone components react.
 pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: BlockPos) {
+    if crate::support::neighbor_changed(level, ctx, p) {
+        return;
+    }
     fluids::neighbor_changed(level, ctx, p);
     redstone::neighbor_changed(level, ctx, p);
     let state = level.block(p);
@@ -161,6 +186,14 @@ pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: Blo
 pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     redstone::block_tick(level, ctx, p, kind);
     gravity::block_tick(level, ctx, p, kind);
+    let state = level.block(p);
+    if ctx.shapes.block_index(state) == kind
+        && crate::support::check(ctx, state) == crate::support::Check::Tick
+        && !crate::support::can_survive(level, ctx, p, state)
+    {
+        level.destroyed(p, state);
+        set_block(level, ctx, p, ctx.shapes.air(), Flags::ALL);
+    }
 }
 
 /// The state a block takes when placed at `p` by a player or a command:

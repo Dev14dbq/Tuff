@@ -2,6 +2,10 @@
 //! state from a vanilla server that the data reports do not carry.
 //!
 //! `attach`: which faces fences attach to.
+//! `support`: which faces of each state hold up blocks that need support:
+//! 1 a torch on top (centre), 2 a rail on top (rigid), 4 a floor button on
+//! top (full face), 8 a hanging lantern below (centre of the bottom), 16 a
+//! ceiling button below (full bottom face).
 //! `instrument`: the note block instrument each block gives the note block
 //! on top of it (default states only; the index in the `instrument` values).
 //! `conductor`: whether the block conducts redstone power: a powered lever
@@ -35,6 +39,7 @@ pub fn run(args: &[String]) -> Result<()> {
         Some("conductor") => observe(&args[1..], Fact::Conductor),
         Some("opacity") => observe(&args[1..], Fact::Opacity),
         Some("instrument") => observe(&args[1..], Fact::Instrument),
+        Some("support") => observe(&args[1..], Fact::Support),
         _ => bail!(
             "usage: observe attach|conductor|opacity|instrument [--first <state>] [--count <n>]"
         ),
@@ -51,6 +56,7 @@ enum Fact {
     Conductor,
     Opacity,
     Instrument,
+    Support,
 }
 
 impl Fact {
@@ -60,6 +66,7 @@ impl Fact {
             Fact::Conductor => "conductor.json",
             Fact::Opacity => "opacity.json",
             Fact::Instrument => "instrument.json",
+            Fact::Support => "support.json",
         }
     }
 
@@ -73,6 +80,9 @@ impl Fact {
             }
             Fact::Opacity => {
                 "how much sky light each block state takes away going down into a closed cell below it (0-15); +16 = state changed after placing; -1 = not observed"
+            }
+            Fact::Support => {
+                "faces of each state that hold blocks up: 1 torch on top, 2 rail on top, 4 floor button on top, 8 hanging lantern below, 16 ceiling button below; -1 = not observed"
             }
             Fact::Instrument => {
                 "instrument a note block placed on each block's default state takes: index in the note block's instrument values; -1 = not observed"
@@ -190,6 +200,30 @@ fn observe_batch(
                 vanilla.send(&format!("setblock {x} {} {z} {text}", Y + 9))?;
                 continue;
             }
+            if fact == Fact::Support {
+                // Copies of the block, each with one dependent block. The
+                // dependent block goes first (a command leaves it even
+                // unsupported); the block put next to it updates it, and it
+                // then checks its support.
+                for (dx, dz, on_top) in [
+                    (0, 0, "torch"),
+                    (2, 0, "rail"),
+                    (0, 2, "stone_button[face=floor]"),
+                ] {
+                    let (x, z) = (x + dx, z + dz);
+                    vanilla.send(&format!("setblock {x} {} {z} {on_top}", Y + 1))?;
+                    vanilla.send(&format!("setblock {x} {Y} {z} {text}"))?;
+                }
+                for (dx, dz, hanging) in [
+                    (0, 0, "lantern[hanging=true]"),
+                    (2, 0, "stone_button[face=ceiling]"),
+                ] {
+                    let (x, z) = (x + dx, z + dz);
+                    vanilla.send(&format!("setblock {x} {} {z} {hanging}", Y + 3))?;
+                    vanilla.send(&format!("setblock {x} {} {z} {text}", Y + 4))?;
+                }
+                continue;
+            }
             if fact == Fact::Instrument {
                 vanilla.send(&format!("setblock {x} {Y} {z} {text}"))?;
                 vanilla.send(&format!("setblock {x} {} {z} note_block", Y + 1))?;
@@ -212,7 +246,7 @@ fn observe_batch(
                     vanilla.send(&format!("setblock {} {Y} {z} redstone_lamp", x + 1))?;
                     vanilla.send(&format!("setblock {} {Y} {} redstone_lamp", x + 1, z + 2))?;
                 }
-                Fact::Opacity | Fact::Instrument => {}
+                Fact::Opacity | Fact::Instrument | Fact::Support => {}
             }
         }
         if fact == Fact::Conductor {
@@ -254,6 +288,26 @@ fn observe_batch(
             .map(|(i, &state)| {
                 let (x, z) = cell(i);
                 let mut bits = 0;
+                if fact == Fact::Support {
+                    let name = |x: i32, y: i32, z: i32| {
+                        mirror
+                            .block(x, y, z)
+                            .and_then(|s| data.blocks.block_name(s))
+                    };
+                    let mut bits = 0;
+                    for (bit, (dx, dy, dz), wanted) in [
+                        (1, (0, 1, 0), "minecraft:torch"),
+                        (2, (2, 1, 0), "minecraft:rail"),
+                        (4, (0, 1, 2), "minecraft:stone_button"),
+                        (8, (0, 3, 0), "minecraft:lantern"),
+                        (16, (2, 3, 0), "minecraft:stone_button"),
+                    ] {
+                        if name(x + dx, Y + dy, z + dz) == Some(wanted) {
+                            bits |= bit;
+                        }
+                    }
+                    return (state, bits);
+                }
                 if fact == Fact::Instrument {
                     let values = [
                         "harp",

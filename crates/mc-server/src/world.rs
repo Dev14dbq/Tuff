@@ -390,6 +390,22 @@ impl World {
         view.touched
     }
 
+    /// The brighter of sky and block light at `p` (15 where nothing is
+    /// loaded).
+    pub fn brightness(&self, p: Position) -> u8 {
+        use mc_light::LightWorld as _;
+        let mut chunks = self.chunks.lock().expect("chunks lock");
+        let view = LightView {
+            chunks: &mut chunks,
+            min_y: self.min_y,
+            top: self.min_y + self.height as i32,
+            touched: Vec::new(),
+        };
+        let at = (p.x, p.y, p.z);
+        view.light(mc_light::Kind::Sky, at)
+            .max(view.light(mc_light::Kind::Block, at))
+    }
+
     /// Light Data of a chunk as it is now (for Update Light).
     pub fn light_data(&self, x: i32, z: i32) -> Option<LightData> {
         let chunks = self.chunks.lock().expect("chunks lock");

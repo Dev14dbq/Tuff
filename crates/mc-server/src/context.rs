@@ -349,7 +349,8 @@ impl ServerContext {
             observed("fence_attach.json"),
             observed("conductor.json"),
         )
-        .with_instruments(observed("instrument.json"));
+        .with_instruments(observed("instrument.json"))
+        .with_support(observed("support.json"));
         let world = match &config.world {
             Some(dir) => World::open(dir, &data, &synced_ids, light)?,
             None => World::flat(&data, &synced_ids, &rules, light)?,
