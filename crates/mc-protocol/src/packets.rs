@@ -918,6 +918,22 @@ pub mod play {
         }
     }
 
+    /// Set Container Property: a window's number (furnace progress...).
+    #[derive(Clone, Debug)]
+    pub struct ContainerSetData {
+        pub window: i32,
+        pub property: i16,
+        pub value: i16,
+    }
+    packet!(ContainerSetData, Play, "minecraft:container_set_data");
+    impl Encode for ContainerSetData {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.window);
+            out.put_i16(self.property);
+            out.put_i16(self.value);
+        }
+    }
+
     /// Entity Event: a status for an entity's client-side logic (9: done
     /// using an item).
     #[derive(Clone, Debug)]

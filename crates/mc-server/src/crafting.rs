@@ -29,9 +29,22 @@ struct Recipe {
     result: ItemStack,
 }
 
+/// A furnace, blast furnace, smoker or campfire recipe.
+#[derive(Debug)]
+pub struct Cooking {
+    /// `minecraft:smelting`, `minecraft:blasting`, `minecraft:smoking`,
+    /// `minecraft:campfire_cooking`.
+    pub kind: String,
+    pub input: HashSet<i32>,
+    pub result: ItemStack,
+    /// Ticks at normal speed.
+    pub time: i32,
+}
+
 #[derive(Debug, Default)]
 pub struct Recipes {
     recipes: Vec<Recipe>,
+    pub cooking: Vec<Cooking>,
 }
 
 impl Recipes {
@@ -63,6 +76,7 @@ impl Recipes {
             (!set.is_empty()).then_some(set)
         };
         let mut recipes = Vec::new();
+        let mut cooking = Vec::new();
         for name in pack
             .registry_entries("minecraft:recipe")
             .unwrap_or_default()
@@ -78,6 +92,24 @@ impl Recipes {
                 item: *result,
                 has_component_changes: false,
             };
+            let kind = json["type"].as_str().unwrap_or("");
+            if matches!(
+                kind,
+                "minecraft:smelting"
+                    | "minecraft:blasting"
+                    | "minecraft:smoking"
+                    | "minecraft:campfire_cooking"
+            ) {
+                if let Some(input) = ingredient(&json["ingredient"]) {
+                    cooking.push(Cooking {
+                        kind: kind.to_owned(),
+                        input,
+                        result,
+                        time: json["cookingtime"].as_i64().unwrap_or(200) as i32,
+                    });
+                }
+                continue;
+            }
             let shape = match json["type"].as_str() {
                 Some("minecraft:crafting_shaped") => {
                     let rows: Vec<&str> = json["pattern"]
@@ -125,7 +157,7 @@ impl Recipes {
             };
             recipes.push(Recipe { shape, result });
         }
-        Self { recipes }
+        Self { recipes, cooking }
     }
 
     pub fn len(&self) -> usize {

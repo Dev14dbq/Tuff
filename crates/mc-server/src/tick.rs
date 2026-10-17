@@ -164,6 +164,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             run_scheduled_ticks(&ctx);
             crate::vitals::tick(&ctx);
             crate::vitals::tick_using(&ctx);
+            crate::furnaces::tick(&ctx);
         }
 
         while let Ok(request) = requests.try_recv() {
@@ -246,6 +247,9 @@ fn containers_changed(ctx: &ServerContext) {
     let changed = std::mem::take(&mut *lock(&ctx.container_updates));
     if changed.is_empty() {
         return;
+    }
+    for &p in &changed {
+        crate::furnaces::wake(ctx, p);
     }
     let mut level = crate::level::WorldLevel::new(ctx);
     let logic = level.logic();

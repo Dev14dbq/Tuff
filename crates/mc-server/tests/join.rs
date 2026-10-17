@@ -1941,3 +1941,58 @@ async fn hungry_players_eat_food() {
     assert_eq!(left, Some(1));
     let _ = stop.send(());
 }
+
+#[tokio::test]
+async fn furnaces_smelt_with_fuel() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Cook".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut cook, _) = join_offline(addr, ctx.ids.clone(), "Cook").await;
+    for line in [
+        "tick rate 400",
+        r#"setblock 2 -60 2 furnace{Items:[{Slot:0b,id:"minecraft:raw_iron",count:2},{Slot:1b,id:"minecraft:coal",count:1}]}"#,
+    ] {
+        let mut command = Vec::new();
+        command.put_string(line);
+        cook.send("minecraft:chat_command", command).await;
+    }
+    // The furnace lights up.
+    let lit = loop {
+        let (_, update) = cook.recv_until("minecraft:block_update").await;
+        let mut r = Reader::new(&update);
+        let p = r.position().unwrap();
+        let state = r.varint().unwrap() as u32;
+        if p == mc_protocol::Position::new(2, -60, 2)
+            && ctx.data.blocks.property(state, "lit") == Some("true")
+        {
+            break state;
+        }
+    };
+    assert_eq!(ctx.data.blocks.block_name(lit), Some("minecraft:furnace"));
+    // 400 ticks at 400 a second: both ores smelt, a coal lasts 1600 ticks.
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+    let be = ctx
+        .world
+        .block_entity(mc_protocol::Position::new(2, -60, 2), &ctx.data.blocks)
+        .unwrap();
+    let text = format!("{:?}", be.data.get("Items"));
+    assert!(
+        text.contains("iron_ingot") && text.contains("Int(2)"),
+        "{text}"
+    );
+    assert!(!text.contains("raw_iron"), "{text}");
+    let _ = stop.send(());
+}

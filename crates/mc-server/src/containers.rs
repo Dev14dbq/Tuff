@@ -30,10 +30,48 @@ pub fn kind_of(block: &str) -> Option<Kind> {
         menu: "minecraft:generic_9x3",
         title,
     };
+    let other = |entity, slots, menu, title| Kind {
+        entity,
+        slots,
+        menu,
+        title,
+    };
     match block {
         "minecraft:chest" => Some(kind("minecraft:chest", "Chest")),
         "minecraft:trapped_chest" => Some(kind("minecraft:trapped_chest", "Chest")),
         "minecraft:barrel" => Some(kind("minecraft:barrel", "Barrel")),
+        "minecraft:furnace" => Some(other(
+            "minecraft:furnace",
+            3,
+            "minecraft:furnace",
+            "Furnace",
+        )),
+        "minecraft:blast_furnace" => Some(other(
+            "minecraft:blast_furnace",
+            3,
+            "minecraft:blast_furnace",
+            "Blast Furnace",
+        )),
+        "minecraft:smoker" => Some(other("minecraft:smoker", 3, "minecraft:smoker", "Smoker")),
+        "minecraft:dispenser" => Some(other(
+            "minecraft:dispenser",
+            9,
+            "minecraft:generic_3x3",
+            "Dispenser",
+        )),
+        "minecraft:dropper" => Some(other(
+            "minecraft:dropper",
+            9,
+            "minecraft:generic_3x3",
+            "Dropper",
+        )),
+        "minecraft:hopper" => Some(other("minecraft:hopper", 5, "minecraft:hopper", "Hopper")),
+        b if b.ends_with("shulker_box") => Some(other(
+            "minecraft:shulker_box",
+            27,
+            "minecraft:shulker_box",
+            "Shulker Box",
+        )),
         _ => None,
     }
 }
@@ -161,6 +199,17 @@ pub fn signal(ctx: &ServerContext, p: Position) -> Option<u8> {
     })
 }
 
+/// The slots of the container at `p` as they are now.
+pub fn slots(ctx: &ServerContext, p: Position, kind: Kind) -> Vec<Option<ItemStack>> {
+    if let Some(open) = ctx.containers.lock().expect("containers lock").get(&key(p)) {
+        return open.slots.clone();
+    }
+    match ctx.world.block_entity(p, &ctx.data.blocks) {
+        Some(be) => read_items(ctx, &be.data, kind.slots).0,
+        None => vec![None; kind.slots],
+    }
+}
+
 /// Puts a stack in one slot of the container at `p` (`/item replace`).
 pub fn set_slot(
     ctx: &ServerContext,
@@ -169,6 +218,12 @@ pub fn set_slot(
     slot: usize,
     stack: Option<ItemStack>,
 ) {
+    put(ctx, p, kind, &[(slot, stack)]);
+}
+
+/// Changes slots of the container at `p` (commands, furnaces): stored, seen
+/// by whoever has it open, and comparators are told.
+pub fn put(ctx: &ServerContext, p: Position, kind: Kind, changes: &[(usize, Option<ItemStack>)]) {
     let mut all = ctx.containers.lock().expect("containers lock");
     let open = all.entry(key(p)).or_insert_with(|| {
         let (slots, components) = match ctx.world.block_entity(p, &ctx.data.blocks) {
@@ -182,8 +237,14 @@ pub fn set_slot(
             viewers: Vec::new(),
         }
     });
-    open.slots[slot] = stack.clone();
-    open.components.remove(&slot);
+    for (slot, stack) in changes {
+        if *slot < open.slots.len() {
+            if open.slots[*slot].as_ref().map(|s| s.item) != stack.as_ref().map(|s| s.item) {
+                open.components.remove(slot);
+            }
+            open.slots[*slot] = stack.clone();
+        }
+    }
     store(ctx, p, open);
     let viewers = open.viewers.clone();
     if open.viewers.is_empty() {
@@ -198,7 +259,7 @@ pub fn set_slot(
         let _ = ctx.events.send(crate::context::Event::ContainerSlots {
             position: p,
             viewers,
-            slots: vec![(slot, stack)],
+            slots: changes.to_vec(),
         });
     }
 }

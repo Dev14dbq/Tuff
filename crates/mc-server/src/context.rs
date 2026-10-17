@@ -120,6 +120,11 @@ pub enum Event {
         entity_id: i32,
         hand: Option<i32>,
     },
+    /// A furnace's progress changed (its window's four properties).
+    FurnaceProgress {
+        position: mc_protocol::Position,
+        values: [i16; 4],
+    },
     /// A player finished eating or drinking.
     UsedItem {
         uuid: u128,
@@ -225,6 +230,10 @@ pub struct ServerContext {
     pub vitals: Mutex<crate::vitals::AllVitals>,
     /// Stack sizes, food and more of every item.
     pub items: crate::items::Items,
+    /// Burn times of fuels.
+    pub fuels: crate::furnaces::Fuels,
+    /// Furnaces burning or cooking (tick thread).
+    pub furnaces: Mutex<crate::furnaces::Active>,
     /// Containers whose contents changed, for comparators (tick thread).
     pub container_updates: Mutex<Vec<mc_protocol::Position>>,
     /// Players eating or drinking (tick thread counts down).
@@ -330,6 +339,10 @@ impl ServerContext {
             Some(ids) => crate::items::Items::load(&config.data_dir, ids)?,
             None => crate::items::Items::default(),
         };
+        let fuels = match data.builtin.get("minecraft:item") {
+            Some(ids) => crate::furnaces::Fuels::load(&data, &items, ids),
+            None => crate::furnaces::Fuels::default(),
+        };
         let observed = |file: &str| {
             let path = config.data_dir.join("observed").join(file);
             let table = std::fs::read_to_string(&path)
@@ -409,6 +422,8 @@ impl ServerContext {
             items,
             using: Mutex::new(HashMap::new()),
             container_updates: Mutex::new(Vec::new()),
+            fuels,
+            furnaces: Mutex::new(HashMap::new()),
             difficulty,
             damage_types,
             player_files,

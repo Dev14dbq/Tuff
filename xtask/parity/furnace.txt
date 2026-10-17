@@ -1,0 +1,26 @@
+# Furnaces burning and cooking (stone floor at y=-60).
+region -2 -61 -2 12 -55 8
+run fill -2 -60 -2 12 -60 8 stone
+compare
+# A stick burns 100 ticks, raw iron needs 200: the fire goes out halfway.
+run setblock 2 -59 2 furnace{Items:[{Slot:0b,id:"minecraft:raw_iron",count:1},{Slot:1b,id:"minecraft:stick",count:1}]}
+run setblock 1 -59 2 comparator[facing=east]
+run fill 0 -59 2 -2 -59 2 redstone_wire
+step 1
+step 2
+step 96
+step 2
+step 2
+step 20
+# Coal in a blast furnace: twice as fast, half the burn time.
+run setblock 8 -59 2 blast_furnace{Items:[{Slot:0b,id:"minecraft:raw_gold",count:2},{Slot:1b,id:"minecraft:coal",count:1}]}
+run setblock 7 -59 2 comparator[facing=east]
+run fill 6 -59 2 4 -59 2 redstone_wire
+step 1
+step 99
+step 2
+step 100
+step 2
+# A smoker with nothing to burn stays dark.
+run setblock 8 -59 6 smoker{Items:[{Slot:0b,id:"minecraft:beef",count:1}]}
+step 5

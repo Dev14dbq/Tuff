@@ -150,7 +150,13 @@ impl Windows {
                 position,
                 size: kind.slots,
             },
-        )
+        )?;
+        // A furnace window shows its fire and progress.
+        if kind.slots == 3 {
+            let values = crate::furnaces::progress(ctx, position).values();
+            self.container_data(writer, position, &values)?;
+        }
+        Ok(())
     }
 
     pub fn open_crafting(&mut self, writer: &mut PacketWriter, who: Who) -> anyhow::Result<()> {
@@ -412,6 +418,29 @@ impl Windows {
         };
         for (slot, item) in slots {
             self.set_slot(writer, id, slot, item)?;
+        }
+        Ok(())
+    }
+
+    /// Numbers of the container at `position` changed (furnace progress).
+    pub fn container_data(
+        &mut self,
+        writer: &mut PacketWriter,
+        position: Position,
+        values: &[i16],
+    ) -> anyhow::Result<()> {
+        let Some(id) = self.open.as_ref().and_then(|o| match o.kind {
+            Kind::Container { position: p, .. } if p == position => Some(o.id),
+            _ => None,
+        }) else {
+            return Ok(());
+        };
+        for (property, &value) in values.iter().enumerate() {
+            writer.queue(&play::ContainerSetData {
+                window: id,
+                property: property as i16,
+                value,
+            })?;
         }
         Ok(())
     }

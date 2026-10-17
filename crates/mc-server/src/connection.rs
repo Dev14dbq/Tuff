@@ -879,6 +879,9 @@ async fn play(
                         windows.container_slots(writer, position, slots)?;
                     }
                     Ok(Event::ContainerGone { position }) => windows.container_gone(writer, position)?,
+                    Ok(Event::FurnaceProgress { position, values }) => {
+                        windows.container_data(writer, position, &values)?;
+                    }
                     Ok(Event::InventorySlot { uuid: who, slot, item }) if who == uuid => {
                         windows.inventory_slot(writer, slot, item)?;
                     }

@@ -29,6 +29,8 @@ pub struct Item {
     pub remainder: Option<String>,
     /// Extra main-hand attack damage.
     pub attack_damage: f32,
+    /// As fuel: the burn time and speed providers (`cooking_fuel`).
+    pub fuel: Option<(String, String)>,
 }
 
 #[derive(Debug, Default)]
@@ -100,5 +102,14 @@ fn parse(name: &str, c: &Value) -> Item {
             .as_str()
             .map(str::to_owned),
         attack_damage,
+        fuel: c.get("minecraft:cooking_fuel").and_then(|f| {
+            Some((
+                f["burn_time"].as_str()?.to_owned(),
+                f["speed_multiplier"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            ))
+        }),
     }
 }
