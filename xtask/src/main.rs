@@ -4,6 +4,7 @@ mod blocks;
 mod bots;
 mod chunk_diff;
 mod chunk_info;
+mod chunk_speed;
 mod extract_data;
 mod probe;
 mod registry_diff;
@@ -33,6 +34,8 @@ Tasks:
       registry entry they send as NBT (e.g. vanilla vs ours).
   chunk-info <region dir> <chunk x> <chunk z> [--depth <n>] [--all]
       Print the NBT structure of one stored chunk.
+  chunk-speed [--addr <host:port>] [--view-distance <n>] [--runs <n>] [--version <id>]
+      Time how fast a joining player gets all chunks in view (offline mode).
   chunk-diff <dump a> <dump b>
       Compare chunk packets saved by `probe --dump` from two servers, decoded
       to blocks, biomes, heightmaps, light and block entities.
@@ -48,6 +51,7 @@ fn main() -> ExitCode {
         Some("registry-diff") => registry_diff::run(&args[1..]),
         Some("chunk-info") => chunk_info::run(&args[1..]),
         Some("chunk-diff") => chunk_diff::run(&args[1..]),
+        Some("chunk-speed") => chunk_speed::run(&args[1..]),
         None | Some("-h" | "--help" | "help") => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;

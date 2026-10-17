@@ -4,4 +4,4 @@ pub mod chunk;
 pub mod region;
 
 pub use chunk::{ChunkError, Decoded, Names, Palettes, decode_chunk, encode_chunk};
-pub use region::{RegionFile, RegionStorage, StorageError};
+pub use region::{RawChunk, RegionFile, RegionStorage, StorageError};

@@ -1,9 +1,10 @@
 //! The overworld players are in: a superflat generator, or a world folder saved
 //! by vanilla (Anvil region files). One dimension for now.
 //!
-//! Chunks are loaded on first use and kept in memory with their encoded
-//! packet; a change to a chunk drops the packet, the next request encodes it
-//! again. Nothing is unloaded yet.
+//! Chunks are loaded on first use and kept in memory with their packet,
+//! framed and compressed once for every player; a change to a chunk drops the
+//! frame, the next request encodes it again. Each chunk counts the players who have it; chunks nobody has and
+//! that have no unsaved changes are dropped by [`World::unload_unused`].
 
 use std::collections::HashMap;
 use std::io::Read as _;
@@ -77,9 +78,12 @@ struct Slot {
     /// `None`: the world has no finished chunk here. It is sent empty and
     /// cannot be changed (that would write a chunk vanilla never generated).
     chunk: Option<Box<Chunk>>,
-    packet: Option<Arc<LevelChunkWithLight>>,
+    /// The Chunk Data packet as it goes on the wire (id, compression).
+    frame: Option<Arc<[u8]>>,
     /// Changed since it was loaded or saved.
     dirty: bool,
+    /// Players whose client has this chunk.
+    viewers: u32,
 }
 
 /// The stored heightmaps and the blocks each one counts.
@@ -267,8 +271,9 @@ impl World {
         // Someone else may have loaded it meanwhile; theirs wins.
         let slot = chunks.entry((x, z)).or_insert(Slot {
             chunk,
-            packet: None,
+            frame: None,
             dirty: false,
+            viewers: 0,
         });
         f(slot)
     }
@@ -290,22 +295,54 @@ impl World {
         }
     }
 
-    pub fn chunk_packet(&self, x: i32, z: i32, blocks: &Blocks) -> Arc<LevelChunkWithLight> {
+    /// The framed Chunk Data packet for a player who now has the chunk (pair
+    /// with [`World::unwatch`]). `frame` turns a packet into wire bytes; it
+    /// runs once per change of the chunk, not once per player.
+    pub fn watch(
+        &self,
+        x: i32,
+        z: i32,
+        blocks: &Blocks,
+        frame: &dyn Fn(&LevelChunkWithLight) -> Vec<u8>,
+    ) -> Arc<[u8]> {
         self.with_slot(x, z, blocks, |slot| {
-            if let Some(packet) = &slot.packet {
-                return packet.clone();
+            slot.viewers += 1;
+            if let Some(frame) = &slot.frame {
+                return frame.clone();
             }
-            let packet = Arc::new(match &slot.chunk {
+            let packet = match &slot.chunk {
                 Some(chunk) => self.encode(chunk, blocks),
                 None => {
                     let mut empty = self.empty.clone();
                     (empty.x, empty.z) = (x, z);
                     self.encode(&empty, blocks)
                 }
-            });
-            slot.packet = Some(packet.clone());
-            packet
+            };
+            let bytes: Arc<[u8]> = frame(&packet).into();
+            slot.frame = Some(bytes.clone());
+            bytes
         })
+    }
+
+    /// A player's client no longer has the chunk.
+    pub fn unwatch(&self, x: i32, z: i32) {
+        if let Some(slot) = self.chunks.lock().expect("chunks lock").get_mut(&(x, z)) {
+            slot.viewers = slot.viewers.saturating_sub(1);
+        }
+    }
+
+    /// Drops chunks no player has and that have nothing to save. Returns how
+    /// many were dropped.
+    pub fn unload_unused(&self) -> usize {
+        let mut chunks = self.chunks.lock().expect("chunks lock");
+        let before = chunks.len();
+        chunks.retain(|_, slot| slot.viewers > 0 || slot.dirty);
+        before - chunks.len()
+    }
+
+    /// Chunks in memory.
+    pub fn loaded_chunks(&self) -> usize {
+        self.chunks.lock().expect("chunks lock").len()
     }
 
     /// The block at `p`; `None` outside the world's height or where the world
@@ -348,7 +385,7 @@ impl World {
                     .block_entities
                     .retain(|be| (be.x, be.y, be.z) != (p.x, p.y, p.z));
             }
-            slot.packet = None;
+            slot.frame = None;
             slot.dirty = true;
             Some(old)
         })
@@ -467,14 +504,16 @@ impl Anvil {
         min_y: i32,
         height: u32,
     ) -> Result<Option<Box<Chunk>>> {
-        let Some(tag) = self
+        // Only the file read holds the lock; decompression and decoding do not.
+        let raw = self
             .storage
             .lock()
             .expect("region storage")
-            .read_chunk(x, z)?
-        else {
+            .read_raw(x, z)?;
+        let Some(raw) = raw else {
             return Ok(None);
         };
+        let tag = raw.parse()?;
         let biome = |name: &str| self.biome_ids.get(name).copied();
         let palettes = Palettes {
             blocks,

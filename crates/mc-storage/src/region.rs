@@ -109,6 +109,15 @@ impl RegionFile {
 
     /// Uncompressed NBT bytes of chunk (`x`, `z`) (0..32 inside the region).
     pub fn chunk_bytes(&self, x: usize, z: usize) -> Result<Option<Vec<u8>>> {
+        match self.raw_chunk(x, z)? {
+            Some(raw) => raw.decompress().map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Chunk (`x`, `z`) as stored, still compressed: cheap, so it can be done
+    /// under a lock and the decompression outside it.
+    pub fn raw_chunk(&self, x: usize, z: usize) -> Result<Option<RawChunk>> {
         assert!(x < 32 && z < 32, "local chunk coordinates are 0..32");
         let (offset, sectors) = self.location(x, z);
         if offset == 0 || sectors == 0 {
@@ -135,7 +144,11 @@ impl RegionFile {
                 .ok_or_else(|| self.corrupt(format!("chunk {x},{z} is truncated")))?
                 .to_vec()
         };
-        decompress(&self.path, compression & 0x7F, &payload).map(Some)
+        Ok(Some(RawChunk {
+            path: self.path.clone(),
+            compression: compression & 0x7F,
+            payload,
+        }))
     }
 
     /// An empty region (just the two header sectors) that will live at `path`.
@@ -258,6 +271,29 @@ impl RegionFile {
     }
 }
 
+/// A stored chunk before decompression.
+#[derive(Debug)]
+pub struct RawChunk {
+    path: PathBuf,
+    compression: u8,
+    payload: Vec<u8>,
+}
+
+impl RawChunk {
+    /// Uncompressed NBT bytes.
+    pub fn decompress(&self) -> Result<Vec<u8>> {
+        decompress(&self.path, self.compression, &self.payload)
+    }
+
+    /// The parsed NBT root.
+    pub fn parse(&self) -> Result<mc_nbt::Tag> {
+        let bytes = self.decompress()?;
+        let (_, tag, _) =
+            mc_nbt::read_named(&bytes).map_err(|e| StorageError::Nbt(self.path.clone(), e))?;
+        Ok(tag)
+    }
+}
+
 fn region_coords(path: &Path) -> Option<(i32, i32)> {
     let name = path.file_name()?.to_str()?;
     let mut parts = name.strip_prefix("r.")?.strip_suffix(".mca")?.split('.');
@@ -332,18 +368,19 @@ impl RegionStorage {
 
     /// The parsed NBT root of chunk (`x`, `z`) in world chunk coordinates.
     pub fn read_chunk(&mut self, x: i32, z: i32) -> Result<Option<mc_nbt::Tag>> {
+        match self.read_raw(x, z)? {
+            Some(raw) => raw.parse().map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Chunk (`x`, `z`) in world chunk coordinates, still compressed.
+    pub fn read_raw(&mut self, x: i32, z: i32) -> Result<Option<RawChunk>> {
         let (rx, rz) = (x.div_euclid(32), z.div_euclid(32));
         let Some(region) = self.region(rx, rz)? else {
             return Ok(None);
         };
-        let Some(bytes) =
-            region.chunk_bytes(x.rem_euclid(32) as usize, z.rem_euclid(32) as usize)?
-        else {
-            return Ok(None);
-        };
-        let (_, tag, _) =
-            mc_nbt::read_named(&bytes).map_err(|e| StorageError::Nbt(region.path.clone(), e))?;
-        Ok(Some(tag))
+        region.raw_chunk(x.rem_euclid(32) as usize, z.rem_euclid(32) as usize)
     }
 }
 

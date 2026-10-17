@@ -24,6 +24,9 @@ use tracing::{debug, info};
 
 pub use context::ServerContext;
 
+/// How often chunks nobody has are dropped from memory.
+const UNLOAD_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub bind: IpAddr,
@@ -143,8 +146,16 @@ impl Server {
         tokio::pin!(shutdown);
         let mut autosave = tokio::time::interval(self.ctx.config.autosave);
         autosave.tick().await; // the first tick is immediate
+        let mut unload = tokio::time::interval(UNLOAD_INTERVAL);
+        unload.tick().await;
         loop {
             tokio::select! {
+                _ = unload.tick() => {
+                    let dropped = self.ctx.world.unload_unused();
+                    if dropped > 0 {
+                        debug!("unloaded {dropped} chunks, {} in memory", self.ctx.world.loaded_chunks());
+                    }
+                }
                 _ = autosave.tick(), if self.ctx.world.is_saved() => {
                     let ctx = self.ctx.clone();
                     tokio::task::spawn_blocking(move || save(&ctx));

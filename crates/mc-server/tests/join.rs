@@ -202,7 +202,7 @@ async fn ping_login_spawn_and_chat() {
 
     // --- play: spawn and chunks
     let mut teleport = None;
-    let mut chunks = 0;
+    let (mut chunks, mut batched) = (0, 0);
     let mut started_waiting = false;
     let mut listed_self = false;
     let mut skin_layers = None;
@@ -231,9 +231,13 @@ async fn ping_login_spawn_and_chat() {
                 check_flat_chunk(&body);
                 chunks += 1;
             }
+            // Nearest chunks come first, in growing batches.
             "minecraft:chunk_batch_finished" => {
-                assert_eq!(Reader::new(&body).varint().unwrap(), chunks);
-                break;
+                assert_eq!(Reader::new(&body).varint().unwrap(), chunks - batched);
+                batched = chunks;
+                if chunks == 7 * 7 {
+                    break;
+                }
             }
             _ => {}
         }
@@ -666,6 +670,41 @@ fn block_in_flat_chunk(body: &[u8], x: usize, y: i32, z: usize) -> i32 {
     let word = longs[index / per_long];
     let value = (word >> ((index % per_long) * bits as usize)) & ((1 << bits) - 1);
     palette[value as usize]
+}
+
+#[tokio::test]
+async fn chunks_nobody_has_are_unloaded() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+
+    let (alice, _) = join_offline(addr, ctx.ids.clone(), "Alice").await;
+    assert_eq!(ctx.world.loaded_chunks(), 25, "a 5×5 view");
+    assert_eq!(ctx.world.unload_unused(), 0, "Alice still has them");
+    drop(alice);
+    // The server notices the closed connection and forgets her chunks.
+    let mut dropped = 0;
+    for _ in 0..50 {
+        dropped += ctx.world.unload_unused();
+        if ctx.world.loaded_chunks() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!((dropped, ctx.world.loaded_chunks()), (25, 0));
+    let _ = stop.send(());
 }
 
 #[tokio::test]

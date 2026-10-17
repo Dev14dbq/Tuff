@@ -450,8 +450,10 @@ async fn play(
     // Which skin layers to draw comes back from the server as entity metadata;
     // without it the client shows only the base layer.
     writer.queue(&skin_parts_metadata(entity_id, session.skin_parts))?;
-    let mut view = ChunkView::new(session.view_distance);
-    view.move_to(writer, chunk_of(x), chunk_of(z))?;
+    // Out before the chunks, which take a while.
+    writer.flush().await?;
+    let mut view = ChunkView::new(session.view_distance, ctx.clone());
+    view.move_to(writer, chunk_of(x), chunk_of(z)).await?;
     writer.queue(&play::SystemChat {
         content: text::colored(
             &format!(
@@ -572,7 +574,7 @@ async fn play(
                     other => trace!("play: {other:?}"),
                 }
                 if moved {
-                    view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z))?;
+                    view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
                     update_player(&ctx, uuid, |p| p.pose = Some(pose));
                     let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
                 }
@@ -782,31 +784,41 @@ fn chunk_of(coordinate: f64) -> i32 {
 }
 
 /// Chunks the client has, kept to a square of `radius` around its chunk.
+/// The world counts this client as a viewer of each of them.
 struct ChunkView {
     radius: i32,
     center: Option<(i32, i32)>,
     loaded: HashSet<(i32, i32)>,
+    ctx: Arc<ServerContext>,
+}
+
+impl Drop for ChunkView {
+    fn drop(&mut self) {
+        for &(x, z) in &self.loaded {
+            self.ctx.world.unwatch(x, z);
+        }
+    }
 }
 
 impl ChunkView {
+    fn new(radius: i32, ctx: Arc<ServerContext>) -> Self {
+        Self {
+            radius,
+            center: None,
+            loaded: HashSet::new(),
+            ctx,
+        }
+    }
+
     /// Whether the client has the chunk with this block.
     fn has_block(&self, p: Position) -> bool {
         self.loaded.contains(&(p.x >> 4, p.z >> 4))
     }
 
-    fn new(radius: i32) -> Self {
-        Self {
-            radius,
-            center: None,
-            loaded: HashSet::new(),
-        }
-    }
-
-    fn move_to(&mut self, writer: &mut PacketWriter, cx: i32, cz: i32) -> Result<()> {
+    async fn move_to(&mut self, writer: &mut PacketWriter, cx: i32, cz: i32) -> Result<()> {
         if self.center == Some((cx, cz)) {
             return Ok(());
         }
-        let ctx = writer.ctx.clone();
         self.center = Some((cx, cz));
         let r = self.radius;
         let in_range = |(x, z): (i32, i32)| (x - cx).abs() <= r && (z - cz).abs() <= r;
@@ -819,6 +831,7 @@ impl ChunkView {
             .collect();
         for (x, z) in stale {
             self.loaded.remove(&(x, z));
+            self.ctx.world.unwatch(x, z);
             writer.queue(&play::ForgetLevelChunk { x, z })?;
         }
 
@@ -829,19 +842,75 @@ impl ChunkView {
         missing.sort_by_key(|&(x, z)| (x - cx).pow(2) + (z - cz).pow(2));
 
         writer.queue(&play::SetChunkCacheCenter { x: cx, z: cz })?;
-        if missing.is_empty() {
-            return Ok(());
+        // Nearest first, in batches that grow, each sent as soon as it is
+        // loaded: the player sees the ground at once.
+        let mut rest = &missing[..];
+        let mut size = FIRST_BATCH;
+        while !rest.is_empty() {
+            let (batch, later) = rest.split_at(size.min(rest.len()));
+            let frames = load_chunks(&self.ctx, batch).await?;
+            writer.queue(&play::ChunkBatchStart)?;
+            for (&(x, z), frame) in batch.iter().zip(&frames) {
+                writer.queue_frame(frame);
+                self.loaded.insert((x, z));
+            }
+            writer.queue(&play::ChunkBatchFinished {
+                batch_size: batch.len() as i32,
+            })?;
+            writer.flush().await?;
+            rest = later;
+            size = (size * 2).min(MAX_BATCH);
         }
-        writer.queue(&play::ChunkBatchStart)?;
-        for &(x, z) in &missing {
-            writer.queue(&*ctx.world.chunk_packet(x, z, &ctx.data.blocks))?;
-            self.loaded.insert((x, z));
-        }
-        writer.queue(&play::ChunkBatchFinished {
-            batch_size: missing.len() as i32,
-        })?;
         Ok(())
     }
+}
+
+/// Chunks in the first batch a player gets after moving (a 5×5 square).
+const FIRST_BATCH: usize = 25;
+const MAX_BATCH: usize = 256;
+
+/// Loads (or takes from memory) the framed packets of `coords`, in order, on
+/// the blocking pool: up to one task per core, so a joining player's chunks
+/// are read, decoded and compressed in parallel and connection tasks never
+/// block.
+async fn load_chunks(ctx: &Arc<ServerContext>, coords: &[(i32, i32)]) -> Result<Vec<Arc<[u8]>>> {
+    const PER_TASK: usize = 8;
+    let tasks = std::thread::available_parallelism()
+        .map_or(4, usize::from)
+        .min(coords.len().div_ceil(PER_TASK))
+        .max(1);
+    // Task i takes every tasks-th chunk, so all of them start near the player.
+    let handles: Vec<_> = (0..tasks)
+        .map(|i| {
+            let ctx = ctx.clone();
+            let mine: Vec<(i32, i32)> = coords.iter().copied().skip(i).step_by(tasks).collect();
+            tokio::task::spawn_blocking(move || {
+                let compression = ctx.config.compression_threshold;
+                let frame = |packet: &play::LevelChunkWithLight| {
+                    let mut out = Vec::new();
+                    ctx.ids
+                        .write(packet, &mut out, compression)
+                        .expect("chunk data is a known packet");
+                    out
+                };
+                mine.into_iter()
+                    .map(|(x, z)| ctx.world.watch(x, z, &ctx.data.blocks, &frame))
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect();
+    let mut parts = Vec::with_capacity(tasks);
+    for handle in handles {
+        parts.push(
+            handle
+                .await
+                .context("chunk loading task failed")?
+                .into_iter(),
+        );
+    }
+    Ok((0..coords.len())
+        .map(|i| parts[i % tasks].next().expect("one packet per chunk"))
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -963,6 +1032,11 @@ impl PacketWriter {
             .ids
             .write(packet, &mut self.out, self.compression)?;
         Ok(())
+    }
+
+    /// A packet already framed with this connection's compression setting.
+    fn queue_frame(&mut self, frame: &[u8]) {
+        self.out.extend_from_slice(frame);
     }
 
     async fn flush(&mut self) -> Result<()> {

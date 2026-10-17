@@ -291,6 +291,16 @@ pub(crate) fn join_player(
     ids: PacketIds,
     name: &str,
 ) -> Result<(Client, (f64, f64, f64))> {
+    join_player_with(addr, ids, name, 4)
+}
+
+/// [`join_player`] asking for `view_distance` chunks.
+pub(crate) fn join_player_with(
+    addr: &str,
+    ids: PacketIds,
+    name: &str,
+    view_distance: i8,
+) -> Result<(Client, (f64, f64, f64))> {
     let mut client = Client::connect(addr, ids)?;
     client.handshake(2)?;
     let mut hello = Vec::new();
@@ -315,7 +325,7 @@ pub(crate) fn join_player(
     // Vanilla sends no chunks to a client that never sent its settings.
     let mut info = Vec::new();
     info.put_string("en_us");
-    info.put_i8(4); // view distance
+    info.put_i8(view_distance);
     info.put_varint(0);
     info.put_bool(true);
     info.put_u8(0x7f);
