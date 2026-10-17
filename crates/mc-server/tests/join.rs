@@ -1321,6 +1321,66 @@ async fn falls_hurt_and_kill_and_players_respawn() {
 }
 
 #[tokio::test]
+async fn players_hurt_each_other_and_give_works() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Hitter".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut hitter, _) = join_offline(addr, ctx.ids.clone(), "Hitter").await;
+    let (mut target, _) = join_offline(addr, ctx.ids.clone(), "Target").await;
+    let command = |text: &str| {
+        let mut b = Vec::new();
+        b.put_string(text);
+        b
+    };
+    hitter
+        .send(
+            "minecraft:chat_command",
+            command("gamemode survival Target"),
+        )
+        .await;
+    target.recv_until("minecraft:game_event").await;
+    hitter
+        .send("minecraft:chat_command", command("give Hitter stone_sword"))
+        .await;
+    let (_, slot) = hitter.recv_until("minecraft:container_set_slot").await;
+    let mut r = Reader::new(&slot);
+    r.varint().unwrap();
+    r.varint().unwrap();
+    assert_eq!(r.i16().unwrap(), 36, "the sword lands in the hotbar");
+    let target_entity = ctx
+        .players
+        .lock()
+        .unwrap()
+        .values()
+        .find(|p| p.profile.name == "Target")
+        .unwrap()
+        .entity_id;
+    let mut attack = Vec::new();
+    attack.put_varint(target_entity);
+    hitter.send("minecraft:attack", attack).await;
+    let (_, health) = target.recv_until("minecraft:set_health").await;
+    assert_eq!(
+        Reader::new(&health).f32().unwrap(),
+        15.0,
+        "a stone sword does 5"
+    );
+    let _ = stop.send(());
+}
+
+#[tokio::test]
 async fn serves_a_world_saved_by_vanilla() {
     let world =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/vanilla-server/26.3/world-normal");

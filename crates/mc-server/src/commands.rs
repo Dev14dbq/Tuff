@@ -81,6 +81,9 @@ pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, lin
         "tp" | "teleport" => teleport(ctx, source, args, &mut out),
         "kick" => kick(ctx, args, &mut out),
         "gamemode" => gamemode(ctx, source, args, &mut out),
+        "give" => give(ctx, args, &mut out),
+        "kill" => kill(ctx, source, args),
+        "clear" => clear(ctx, source, args, &mut out),
         other => Err(format!("Unknown command: {other}")),
     };
     match result {
@@ -544,6 +547,83 @@ fn gamemode(
     }
     out.events.push(Event::GameMode { uuid, mode });
     Ok(format!("Set {name}'s game mode to {mode_name}"))
+}
+
+fn give(ctx: &ServerContext, args: &[&str], out: &mut Output) -> Result<String> {
+    let help = || usage("give <player> <item> [<count>]");
+    let (Some(who), Some(item)) = (args.first(), args.get(1)) else {
+        return Err(help());
+    };
+    let count: i32 = match args.get(2) {
+        Some(c) => c.parse().map_err(|_| format!("Invalid count: {c}"))?,
+        None => 1,
+    };
+    let name = if item.contains(':') {
+        (*item).to_owned()
+    } else {
+        format!("minecraft:{item}")
+    };
+    let id = ctx
+        .data
+        .builtin
+        .id("minecraft:item", &name)
+        .ok_or_else(|| format!("Unknown item '{name}'"))?;
+    let (uuid, _) = find_player(ctx, who)?;
+    let max = crate::interact::max_stack(&name);
+    let mut inventories = lock(&ctx.inventories);
+    let hands = inventories
+        .get_mut(&uuid)
+        .ok_or("That player has no inventory")?;
+    let (given, changed) = hands.insert(id, count, max);
+    for slot in changed {
+        out.events.push(Event::InventorySlot {
+            uuid,
+            slot: slot as i16,
+            item: hands.slots[slot].clone(),
+        });
+    }
+    Ok(format!("Gave {given} [{name}] to {who}"))
+}
+
+fn kill(ctx: &ServerContext, source: &Source, args: &[&str]) -> Result<String> {
+    let (uuid, name) = match (args.first(), source) {
+        (Some(who), _) => (find_player(ctx, who)?.0, (*who).to_owned()),
+        (None, Source::Player { uuid, name, .. }) => (*uuid, name.clone()),
+        (None, Source::Console) => return Err(usage("kill <player>")),
+    };
+    // Bypasses game mode and immunity, like vanilla's /kill.
+    crate::vitals::kill(
+        ctx,
+        uuid,
+        "minecraft:generic_kill",
+        "death.attack.genericKill",
+    );
+    Ok(format!("Killed {name}"))
+}
+
+fn clear(ctx: &ServerContext, source: &Source, args: &[&str], out: &mut Output) -> Result<String> {
+    let (uuid, name) = match (args.first(), source) {
+        (Some(who), _) => (find_player(ctx, who)?.0, (*who).to_owned()),
+        (None, Source::Player { uuid, name, .. }) => (*uuid, name.clone()),
+        (None, Source::Console) => return Err(usage("clear <player>")),
+    };
+    let mut inventories = lock(&ctx.inventories);
+    let hands = inventories
+        .get_mut(&uuid)
+        .ok_or("That player has no inventory")?;
+    let mut removed = 0;
+    for slot in 0..hands.slots.len() {
+        if let Some(stack) = hands.slots[slot].take() {
+            removed += stack.count;
+            out.events.push(Event::InventorySlot {
+                uuid,
+                slot: slot as i16,
+                item: None,
+            });
+        }
+    }
+    hands.components.clear();
+    Ok(format!("Removed {removed} item(s) from player {name}"))
 }
 
 fn kick(ctx: &ServerContext, args: &[&str], out: &mut Output) -> Result<String> {

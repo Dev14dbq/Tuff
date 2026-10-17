@@ -579,6 +579,10 @@ pub mod play {
         ContainerClose {
             window: i32,
         },
+        /// Left click on an entity.
+        Attack {
+            entity_id: i32,
+        },
         /// 0 respawn, 1 statistics, 2 game rules.
         ClientCommand {
             action: i32,
@@ -772,6 +776,9 @@ pub mod play {
                 }
                 "minecraft:container_close" => Serverbound::ContainerClose {
                     window: r.varint()?,
+                },
+                "minecraft:attack" => Serverbound::Attack {
+                    entity_id: r.varint()?,
                 },
                 "minecraft:client_command" => Serverbound::ClientCommand {
                     action: r.varint()?,

@@ -81,14 +81,54 @@ fn takes_damage(game_mode: i32) -> bool {
     game_mode == 0 || game_mode == 2
 }
 
-/// A translated chat component: `{"translate": key, "with": [name]}`.
-fn death_message(key: &str, name: &str) -> Tag {
-    let mut player = Compound::new();
-    player.insert("text", Tag::String(name.to_owned()));
+/// A translated chat component: `{"translate": key, "with": [names...]}`.
+fn death_message(key: &str, names: &[&str]) -> Tag {
+    let with = names
+        .iter()
+        .map(|n| {
+            let mut c = Compound::new();
+            c.insert("text", Tag::String((*n).to_owned()));
+            Tag::Compound(c)
+        })
+        .collect();
     let mut message = Compound::new();
     message.insert("translate", Tag::String(key.to_owned()));
-    message.insert("with", Tag::List(vec![Tag::Compound(player)]));
+    message.insert("with", Tag::List(with));
     Tag::Compound(message)
+}
+
+/// Melee damage of what is in the hand (minecraft.wiki, "Damage"; items'
+/// attack attributes are not loaded yet).
+pub fn melee_damage(item_name: Option<&str>) -> f32 {
+    let Some(name) = item_name else { return 1.0 };
+    let tier = |prefix: &str| match prefix {
+        "wooden" | "golden" => 0,
+        "stone" | "copper" => 1,
+        "iron" => 2,
+        "diamond" => 3,
+        "netherite" => 4,
+        _ => 0,
+    };
+    let material = name
+        .trim_start_matches("minecraft:")
+        .split('_')
+        .next()
+        .unwrap_or("");
+    if name.ends_with("_sword") {
+        [4.0, 5.0, 6.0, 7.0, 8.0][tier(material)]
+    } else if name.ends_with("_axe") {
+        [7.0, 9.0, 9.0, 9.0, 10.0][tier(material)]
+    } else if name.ends_with("_pickaxe") {
+        [2.0, 3.0, 4.0, 5.0, 6.0][tier(material)]
+    } else if name.ends_with("_shovel") {
+        [2.5, 3.5, 4.5, 5.5, 6.5][tier(material)]
+    } else if name == "minecraft:trident" {
+        9.0
+    } else if name == "minecraft:mace" {
+        6.0
+    } else {
+        1.0
+    }
 }
 
 /// Hurts a player; returns whether they died. Sends what clients need.
@@ -98,6 +138,18 @@ pub fn hurt(
     amount: f32,
     damage_type: &str,
     death_key: &str,
+) -> bool {
+    hurt_by(ctx, uuid, amount, damage_type, death_key, None)
+}
+
+/// [`hurt`], naming who did it in the death message.
+pub fn hurt_by(
+    ctx: &ServerContext,
+    uuid: u128,
+    amount: f32,
+    damage_type: &str,
+    death_key: &str,
+    attacker: Option<&str>,
 ) -> bool {
     let Some((name, entity_id, game_mode)) = lock(&ctx.players)
         .get(&uuid)
@@ -136,7 +188,10 @@ pub fn hurt(
         let _ = ctx.events.send(Event::Died {
             uuid,
             entity_id,
-            message: death_message(death_key, &name),
+            message: match attacker {
+                Some(by) => death_message(death_key, &[&name, by]),
+                None => death_message(death_key, &[&name]),
+            },
         });
     }
     died
@@ -252,6 +307,22 @@ pub fn tick(ctx: &ServerContext) {
         if let Some((amount, kind, key)) = hurt_by {
             hurt(ctx, uuid, amount, kind, key);
         }
+    }
+}
+
+/// Kills a player whatever their game mode or immunity (`/kill`).
+pub fn kill(ctx: &ServerContext, uuid: u128, damage_type: &str, death_key: &str) {
+    if let Some(v) = lock(&ctx.vitals).get_mut(&uuid) {
+        v.immune = 0;
+        v.health = f32::MIN_POSITIVE;
+    }
+    let mode = lock(&ctx.players).get(&uuid).map(|p| p.game_mode);
+    if let Some(p) = lock(&ctx.players).get_mut(&uuid) {
+        p.game_mode = 0;
+    }
+    hurt(ctx, uuid, f32::MAX, damage_type, death_key);
+    if let (Some(mode), Some(p)) = (mode, lock(&ctx.players).get_mut(&uuid)) {
+        p.game_mode = mode;
     }
 }
 

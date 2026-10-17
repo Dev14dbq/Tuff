@@ -716,6 +716,22 @@ async fn play(
                         }
                     }
                     play::Serverbound::PlayerInput { flags } => sneaking = flags & 0x20 != 0,
+                    play::Serverbound::Attack { entity_id: target } if game_mode != 3 => {
+                        let victim = ctx.players.lock().expect("players lock").values()
+                            .find(|p| p.entity_id == target)
+                            .and_then(|p| p.pose.map(|at| (p.profile.uuid, at)));
+                        if let Some((victim, at)) = victim {
+                            let (dx, dy, dz) = (at.x - pose.x, at.y - pose.y, at.z - pose.z);
+                            // Reach 3 from the docs, with some room for lag.
+                            if dx * dx + dy * dy + dz * dz <= 36.0 {
+                                let held = ctx.inventories.lock().expect("inventories lock").get(&uuid)
+                                    .and_then(|h| h.main_hand().map(|s| s.item));
+                                let name = held.and_then(|i| crate::containers::item_name(&ctx, i));
+                                let damage = crate::vitals::melee_damage(name.as_deref());
+                                crate::vitals::hurt_by(&ctx, victim, damage, "minecraft:player_attack", "death.attack.player", Some(&me.profile.name));
+                            }
+                        }
+                    }
                     play::Serverbound::Punch => {
                         let _ = ctx.events.send(Event::Swing { uuid, entity_id, times: 1 });
                     }
