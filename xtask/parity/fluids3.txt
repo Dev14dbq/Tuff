@@ -1,0 +1,22 @@
+# Water falling onto a lava source, on a clean floor.
+region -10 -61 -10 10 -55 10
+run fill -10 -60 -10 10 -60 10 stone
+run setblock 0 -59 0 lava
+run setblock 0 -57 0 water
+step 5
+step 5
+step 5
+step 5
+step 10
+step 30
+
+# A pond drains after its source is replaced.
+region -10 -61 -30 10 -55 -12
+run fill -10 -60 -30 10 -60 -12 stone
+run setblock 0 -59 -21 water
+step 40
+run setblock 0 -59 -21 stone
+step 5
+step 5
+step 10
+step 20

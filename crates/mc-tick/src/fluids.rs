@@ -197,9 +197,12 @@ fn new_state(level: &dyn Level, ctx: Ctx, p: BlockPos, fluid: Fluid) -> u32 {
     }
 }
 
-/// Whether fluid at `p` could fall into the block below it.
+/// Whether fluid at `p` could fall into the block below it. Lava can fall
+/// into water too (turning it to stone).
 fn hole_below(level: &dyn Level, ctx: Ctx, fluid: Fluid, p: BlockPos) -> bool {
-    can_replace(ctx, fluid, level.block(p.offset(Dir::Down)))
+    let below = level.block(p.offset(Dir::Down));
+    can_replace(ctx, fluid, below)
+        || (fluid == Fluid::Lava && matches!(fluid_of(ctx, below), Some((Fluid::Water, _))))
 }
 
 fn spread(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, fluid: Fluid) {
@@ -210,18 +213,18 @@ fn spread(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, fluid: Fluid
     let below = p.offset(Dir::Down);
     let below_state = level.block(below);
     let below_same = matches!(fluid_of(ctx, below_state), Some((f, _)) if f == fluid);
+    // Lava flowing down into water turns it to stone.
+    if fluid == Fluid::Lava && matches!(fluid_of(ctx, below_state), Some((Fluid::Water, _))) {
+        let stone = ctx
+            .shapes
+            .state("minecraft:stone", &[])
+            .unwrap_or(ctx.facts.air);
+        set_block(level, ctx, below, stone, Flags::ALL);
+        return;
+    }
     // Down first, into anything the fluid can replace that is not already
     // this fluid; sideways only on a later tick.
     if can_replace(ctx, fluid, below_state) && !below_same {
-        // Lava falling into water turns it to stone.
-        if fluid == Fluid::Lava && matches!(fluid_of(ctx, below_state), Some((Fluid::Water, _))) {
-            let stone = ctx
-                .shapes
-                .state("minecraft:stone", &[])
-                .unwrap_or(ctx.facts.air);
-            set_block(level, ctx, below, stone, Flags::ALL);
-            return;
-        }
         set_block(level, ctx, below, flowing(ctx, fluid, 8), Flags::ALL);
         return;
     }
@@ -241,15 +244,19 @@ fn spread(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, fluid: Fluid
     let new = flowing(ctx, fluid, left);
     for d in spread_directions(level, ctx, p, fluid) {
         let np = p.offset(d);
-        let current = level.block(np);
-        let weaker = match fluid_of(ctx, current) {
-            Some((f, l)) if f == fluid => l != 0 && amount(l) < left,
-            Some(_) => false,
-            None => can_replace(ctx, fluid, current),
-        };
-        if weaker {
+        if takes_flow(ctx, fluid, level.block(np), left) {
             set_block(level, ctx, np, new, Flags::ALL);
         }
+    }
+}
+
+/// Whether flowing in with `left` would change the block `target`: it is
+/// replaceable, or the same fluid holding less.
+fn takes_flow(ctx: Ctx, fluid: Fluid, target: u32, left: i32) -> bool {
+    match fluid_of(ctx, target) {
+        Some((f, l)) if f == fluid => l != 0 && amount(l) < left,
+        Some(_) => false,
+        None => can_replace(ctx, fluid, target),
     }
 }
 

@@ -1,0 +1,41 @@
+# Harder fluid cases on a frozen superflat world (stone floor at y=-60).
+region -12 -63 -12 28 -55 28
+run fill -12 -60 -12 28 -60 28 stone
+
+# Infinite water: two sources with a gap between them on solid ground.
+run setblock 0 -59 0 water
+run setblock 2 -59 0 water
+step 10
+
+# Slope finding: a pit 3 blocks to the east pulls the flow towards it.
+run fill 6 -61 -2 6 -61 -2 air
+run setblock 6 -60 -2 air
+run setblock 3 -59 -6 water
+step 20
+step 40
+
+# A dam: water behind a wall, then the wall is removed.
+run fill 10 -59 10 10 -58 14 stone
+run setblock 9 -59 12 water
+step 20
+run setblock 10 -59 12 air
+step 10
+step 40
+
+# Water washes away flowers and torches, stops at fences and glass.
+run setblock 14 -59 0 poppy
+run setblock 15 -59 0 torch
+run setblock 14 -59 2 oak_fence
+run setblock 16 -59 2 glass
+run setblock 13 -59 1 water
+step 10
+step 30
+
+# Lava flowing onto water and water onto a lava source.
+run setblock 20 -59 20 water
+run setblock 22 -57 20 lava
+step 60
+step 120
+run setblock 20 -59 24 lava
+run setblock 20 -57 24 water
+step 20

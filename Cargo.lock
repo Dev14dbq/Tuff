@@ -429,6 +429,7 @@ dependencies = [
  "mc-data",
  "mc-entity",
  "mc-world",
+ "serde_json",
 ]
 
 [[package]]
