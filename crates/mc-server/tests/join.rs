@@ -715,11 +715,13 @@ async fn serves_a_world_saved_by_vanilla() {
         eprintln!("skipped: no extracted data or vanilla test world");
         return;
     };
+    // The server saves when it stops: serve a copy, never the reference world.
+    let world = copy_world(&world, "serve");
     let mut config = Config::new(data_dir);
     config.port = 0;
     config.view_distance = 2;
     config.online_mode = false;
-    config.world = Some(world);
+    config.world = Some(world.clone());
     let server = Server::bind(config).await.unwrap();
     let addr = server.local_addr();
     let ids = server.context().ids.clone();
@@ -792,16 +794,8 @@ async fn changes_to_a_vanilla_world_are_saved_on_shutdown() {
         eprintln!("skipped: no extracted data or vanilla test world");
         return;
     };
-    // Work on a copy: level.dat and the overworld regions.
-    let world = std::env::temp_dir().join(format!("mc-save-test-{}", std::process::id()));
+    let world = copy_world(&original, "save");
     let regions = world.join("dimensions/minecraft/overworld/region");
-    std::fs::create_dir_all(&regions).unwrap();
-    std::fs::copy(original.join("level.dat"), world.join("level.dat")).unwrap();
-    let original_regions = original.join("dimensions/minecraft/overworld/region");
-    for entry in std::fs::read_dir(&original_regions).unwrap() {
-        let path = entry.unwrap().path();
-        std::fs::copy(&path, regions.join(path.file_name().unwrap())).unwrap();
-    }
 
     let mut config = Config::new(data_dir);
     config.port = 0;
@@ -874,7 +868,48 @@ async fn changes_to_a_vanilla_world_are_saved_on_shutdown() {
         "the dug block is air on disk"
     );
     assert_eq!(palettes.unresolved.get(), 0);
+
+    // The time went on and was written back, the old level.dat kept.
+    let level_time = |path: &Path| {
+        let raw = std::fs::read(path).unwrap();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&raw[..]), &mut bytes)
+            .unwrap();
+        let (_, Tag::Compound(root), _) = mc_nbt::read_named(&bytes).unwrap() else {
+            panic!("level.dat root")
+        };
+        let Some(Tag::Compound(data)) = root.get("Data") else {
+            panic!("level.dat Data")
+        };
+        match data.get("Time") {
+            Some(Tag::Long(t)) => *t,
+            other => panic!("Time is {other:?}"),
+        }
+    };
+    let before = level_time(&original.join("level.dat"));
+    let after = level_time(&world.join("level.dat"));
+    assert!(after > before, "time advanced: {before} -> {after}");
+    assert_eq!(level_time(&world.join("level.dat_old")), before);
     std::fs::remove_dir_all(&world).unwrap();
+}
+
+/// Copies what the server reads and writes of a world folder (level.dat, data/
+/// and the overworld regions) into a fresh temporary folder.
+fn copy_world(original: &Path, tag: &str) -> std::path::PathBuf {
+    let world = std::env::temp_dir().join(format!("mc-test-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&world);
+    for sub in ["dimensions/minecraft/overworld/region", "data/minecraft"] {
+        let (from, to) = (original.join(sub), world.join(sub));
+        std::fs::create_dir_all(&to).unwrap();
+        for entry in std::fs::read_dir(&from).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                std::fs::copy(&path, to.join(path.file_name().unwrap())).unwrap();
+            }
+        }
+    }
+    std::fs::copy(original.join("level.dat"), world.join("level.dat")).unwrap();
+    world
 }
 
 /// Stands in for sessionserver.mojang.com: answers one HTTP request with

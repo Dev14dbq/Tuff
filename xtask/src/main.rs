@@ -8,6 +8,7 @@ mod chunk_speed;
 mod extract_data;
 mod probe;
 mod registry_diff;
+mod watch;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -32,6 +33,9 @@ Tasks:
   registry-diff --a <host:port> --b <host:port> [--details <n>]
       Log into two offline-mode servers without known packs and compare every
       registry entry they send as NBT (e.g. vanilla vs ours).
+  watch [--addr <host:port>] [--seconds <s>] [--packets <a,b,...>] [--name <player>]
+      Join and print the chosen packets (hex) as they arrive, e.g. while
+      running commands on a vanilla console.
   chunk-info <region dir> <chunk x> <chunk z> [--depth <n>] [--all]
       Print the NBT structure of one stored chunk.
   chunk-speed [--addr <host:port>] [--view-distance <n>] [--runs <n>] [--version <id>]
@@ -52,6 +56,7 @@ fn main() -> ExitCode {
         Some("chunk-info") => chunk_info::run(&args[1..]),
         Some("chunk-diff") => chunk_diff::run(&args[1..]),
         Some("chunk-speed") => chunk_speed::run(&args[1..]),
+        Some("watch") => watch::run(&args[1..]),
         None | Some("-h" | "--help" | "help") => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;

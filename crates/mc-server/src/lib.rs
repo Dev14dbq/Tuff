@@ -10,6 +10,7 @@ mod blocks;
 mod connection;
 mod context;
 mod interact;
+mod tick;
 mod util;
 mod world;
 
@@ -23,9 +24,6 @@ use tokio::net::TcpListener;
 use tracing::{debug, info};
 
 pub use context::ServerContext;
-
-/// How often chunks nobody has are dropped from memory.
-const UNLOAD_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -144,22 +142,22 @@ impl Server {
             }
         );
         tokio::pin!(shutdown);
-        let mut autosave = tokio::time::interval(self.ctx.config.autosave);
-        autosave.tick().await; // the first tick is immediate
-        let mut unload = tokio::time::interval(UNLOAD_INTERVAL);
-        unload.tick().await;
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ticking = {
+            let requests = self
+                .ctx
+                .action_queue
+                .lock()
+                .expect("action queue lock")
+                .take()
+                .context("server already ran")?;
+            let (ctx, stop) = (self.ctx.clone(), stop.clone());
+            std::thread::Builder::new()
+                .name("tick".into())
+                .spawn(move || tick::run(ctx, requests, stop))?
+        };
         loop {
             tokio::select! {
-                _ = unload.tick() => {
-                    let dropped = self.ctx.world.unload_unused();
-                    if dropped > 0 {
-                        debug!("unloaded {dropped} chunks, {} in memory", self.ctx.world.loaded_chunks());
-                    }
-                }
-                _ = autosave.tick(), if self.ctx.world.is_saved() => {
-                    let ctx = self.ctx.clone();
-                    tokio::task::spawn_blocking(move || save(&ctx));
-                }
                 accepted = self.listener.accept() => {
                     let (stream, peer) = accepted?;
                     stream.set_nodelay(true)?;
@@ -172,8 +170,13 @@ impl Server {
                 }
                 () = &mut shutdown => {
                     info!("stopping");
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
                     let ctx = self.ctx.clone();
-                    tokio::task::spawn_blocking(move || save(&ctx)).await?;
+                    tokio::task::spawn_blocking(move || {
+                        let _ = ticking.join();
+                        save(&ctx);
+                    })
+                    .await?;
                     return Ok(());
                 }
             }
@@ -181,12 +184,16 @@ impl Server {
     }
 }
 
-/// Writes changed chunks and reports it.
+/// Writes changed chunks and the time, and reports it.
 fn save(ctx: &ServerContext) {
     if !ctx.world.is_saved() {
         return;
     }
     let started = std::time::Instant::now();
+    let time = ctx.time.lock().expect("time lock").clone();
+    if let Err(err) = ctx.world.save_time(&time) {
+        tracing::warn!("saving the time: {err:#}");
+    }
     let saved = ctx.world.save(&ctx.data.blocks);
     if saved.chunks > 0 || saved.failed > 0 {
         info!(

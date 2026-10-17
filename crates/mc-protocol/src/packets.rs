@@ -778,6 +778,38 @@ pub mod play {
         }
     }
 
+    /// Update Time (26.x): world age and the world clocks. The client advances
+    /// each clock by its rate on its own; vanilla sends every clock on join and
+    /// when one is set or stopped, and only the age every second otherwise.
+    #[derive(Clone, Debug)]
+    pub struct SetTime {
+        pub world_age: i64,
+        pub clocks: Vec<ClockState>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct ClockState {
+        /// Id in the `minecraft:world_clock` registry.
+        pub clock: i32,
+        pub ticks: i64,
+        pub fraction: f32,
+        /// Clock ticks per game tick (1 normally, 0 when time is stopped).
+        pub rate: f32,
+    }
+    packet!(SetTime, Play, "minecraft:set_time");
+    impl Encode for SetTime {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_i64(self.world_age);
+            out.put_len(self.clocks.len());
+            for clock in &self.clocks {
+                out.put_varint(clock.clock);
+                out.put_varlong(clock.ticks);
+                out.put_f32(clock.fraction);
+                out.put_f32(clock.rate);
+            }
+        }
+    }
+
     pub mod heightmap {
         pub const WORLD_SURFACE: i32 = 1;
         pub const MOTION_BLOCKING: i32 = 4;
@@ -1527,5 +1559,36 @@ mod tests {
                 sequence: 3,
             }
         );
+    }
+
+    #[test]
+    fn set_time_matches_vanilla_bytes() {
+        // Vanilla 26.3 on join (`cargo xtask watch --packets set_time`): age
+        // 5462, overworld clock 1014 and end clock 4992, both running.
+        let mut out = Vec::new();
+        play::SetTime {
+            world_age: 0x1556,
+            clocks: vec![
+                play::ClockState {
+                    clock: 0,
+                    ticks: 1014,
+                    fraction: 0.0,
+                    rate: 1.0,
+                },
+                play::ClockState {
+                    clock: 1,
+                    ticks: 4992,
+                    fraction: 0.0,
+                    rate: 1.0,
+                },
+            ],
+        }
+        .encode(&mut out);
+        let expected = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x15, 0x56, 0x02, 0x00, 0xf6, 0x07, 0x00, 0x00,
+            0x00, 0x00, 0x3f, 0x80, 0x00, 0x00, 0x01, 0x80, 0x27, 0x00, 0x00, 0x00, 0x00, 0x3f,
+            0x80, 0x00, 0x00,
+        ];
+        assert_eq!(out, expected);
     }
 }

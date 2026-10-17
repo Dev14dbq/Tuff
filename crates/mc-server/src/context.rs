@@ -10,7 +10,7 @@ use mc_data::{McData, SYNCHRONIZED_REGISTRIES, resolve_tags};
 use mc_nbt::Tag;
 use mc_protocol::Position;
 use mc_protocol::packets::configuration::{RegistryData, RegistryEntry, TagRegistry, UpdateTags};
-use mc_protocol::packets::play::{ItemStack, PlayerInfoEntry};
+use mc_protocol::packets::play::{ItemStack, PlayerInfoEntry, SetTime};
 use mc_protocol::packets::{GameProfile, KnownPack};
 use mc_protocol::{Direction, PacketIds, State};
 use tokio::sync::broadcast;
@@ -19,6 +19,7 @@ use tracing::{debug, info, warn};
 use crate::Config;
 use crate::auth::ServerKey;
 use crate::blocks::BlockRules;
+use crate::tick::{Request, WorldTime};
 use crate::world::World;
 
 /// A player who passed login.
@@ -90,6 +91,8 @@ pub enum Event {
         position: Position,
         state: u32,
     },
+    /// The time every 20 ticks (world age only; the client runs the clocks).
+    Time(SetTime),
     /// A player's arm swings (`times` in a row, as vanilla does on placing).
     Swing {
         uuid: u128,
@@ -126,6 +129,12 @@ pub struct ServerContext {
     /// Logged-in players by UUID.
     pub players: Mutex<HashMap<u128, OnlinePlayer>>,
     pub events: broadcast::Sender<Event>,
+    /// The world's age and clocks, advanced by the tick thread.
+    pub time: Mutex<WorldTime>,
+    /// Player actions for the tick thread.
+    pub actions: std::sync::mpsc::Sender<Request>,
+    /// Taken by the tick thread when the server starts.
+    pub(crate) action_queue: Mutex<Option<std::sync::mpsc::Receiver<Request>>>,
     next_entity_id: AtomicI32,
 }
 
@@ -199,6 +208,8 @@ impl ServerContext {
             Some(dir) => World::open(dir, &data, &synced_ids)?,
             None => World::flat(&data, &synced_ids, &rules)?,
         };
+        let time = world.load_time(&synced_ids)?;
+        let (actions, action_queue) = std::sync::mpsc::channel();
         let player_entity_type = data
             .builtin
             .id("minecraft:entity_type", "minecraft:player")
@@ -228,6 +239,9 @@ impl ServerContext {
             players: Mutex::new(HashMap::new()),
             // Every movement is an event; leave room for many moving players.
             events: broadcast::channel(4096).0,
+            time: Mutex::new(time),
+            actions,
+            action_queue: Mutex::new(Some(action_queue)),
             next_entity_id: AtomicI32::new(1),
             data,
         })

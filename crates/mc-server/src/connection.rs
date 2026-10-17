@@ -20,7 +20,8 @@ use tracing::{debug, info, trace, warn};
 use crate::ServerContext;
 use crate::auth;
 use crate::context::{Event, OnlinePlayer, Pose};
-use crate::interact::{self, Actor, Hands, Outcome};
+use crate::interact::{Actor, Hands, Outcome};
+use crate::tick::{Action, Request};
 use crate::util::{offline_uuid, random_u64, random_uuid, uuid_string, valid_player_name};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
@@ -437,6 +438,8 @@ async fn play(
         }
     }
 
+    let time = ctx.time.lock().expect("time lock").packet(true);
+    writer.queue(&time)?;
     writer.queue(&play::SetDefaultSpawnPosition {
         dimension: world.dimension.clone(),
         position: Position::new(x.floor() as i32, y as i32, z.floor() as i32),
@@ -482,8 +485,12 @@ async fn play(
     let mut keep_alive = tokio::time::interval(KEEP_ALIVE_INTERVAL);
     let mut pending_keep_alive: Option<(i64, Instant)> = None;
     let mut hands = Hands::default();
+    let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
     loop {
         tokio::select! {
+            Some(outcome) = replies.recv() => {
+                answer(writer, &ctx, outcome)?;
+            }
             packet = reader.next(State::Play) => {
                 let Packet::Play(packet) = packet? else {
                     unreachable!("play state decodes play packets")
@@ -547,17 +554,18 @@ async fn play(
                     play::Serverbound::Punch => {
                         let _ = ctx.events.send(Event::Swing { uuid, entity_id, times: 1 });
                     }
+                    // Block changes happen on the tick thread; the answer comes back
+                    // through `replies`.
                     play::Serverbound::PlayerAction { status, position, sequence, .. } => {
                         let actor = Actor { uuid, entity_id, game_mode: me.game_mode, pose };
-                        let outcome = interact::dig(&ctx, actor, status, position, sequence);
-                        answer(writer, &ctx, outcome)?;
+                        let action = Action::Dig { status, position, sequence };
+                        let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::UseItemOn { hand, position, face, cursor, sequence, .. } => {
                         let actor = Actor { uuid, entity_id, game_mode: me.game_mode, pose };
-                        let outcome = interact::use_item_on(
-                            &ctx, actor, &hands, hand, position, face, cursor, sequence,
-                        );
-                        answer(writer, &ctx, outcome)?;
+                        let held = hands.held(hand).cloned();
+                        let action = Action::UseItemOn { held, position, face, cursor, sequence };
+                        let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::UseItem { sequence, .. } => {
                         writer.queue(&play::BlockChangedAck { sequence })?;
@@ -597,6 +605,7 @@ async fn play(
                     Ok(Event::Chat(content)) => {
                         writer.queue(&play::SystemChat { content, overlay: false })?;
                     }
+                    Ok(Event::Time(packet)) => writer.queue(&packet)?,
                     Ok(Event::PlayerJoined(other)) if other.profile.uuid != uuid => {
                         writer.queue(&play::PlayerInfoUpdate {
                             actions: play::player_info::ALL,

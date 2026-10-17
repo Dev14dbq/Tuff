@@ -23,6 +23,7 @@ use mc_worldgen::{FlatGenerator, FlatLayer};
 use tracing::{info, warn};
 
 use crate::blocks::BlockRules;
+use crate::tick::{Clock, WorldTime};
 
 type SyncedIds = HashMap<String, HashMap<String, i32>>;
 
@@ -47,6 +48,8 @@ pub struct World {
     biome_names: Vec<String>,
     data_version: i32,
     block_entity_types: HashMap<String, i32>,
+    /// The world folder (`None` for the flat test world).
+    folder: Option<PathBuf>,
 }
 
 /// What one save did.
@@ -200,6 +203,7 @@ impl World {
             biome_names: biome_names(synced),
             data_version: data.version.world_version,
             block_entity_types: block_entity_types(data)?,
+            folder: None,
             dimension: dim.name,
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
@@ -248,6 +252,7 @@ impl World {
             biome_names: biome_names(synced),
             data_version: data.version.world_version,
             block_entity_types: block_entity_types(data)?,
+            folder: Some(dir.to_owned()),
             dimension: dim.name,
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
@@ -448,6 +453,101 @@ impl World {
         saved
     }
 
+    /// The world's age (`Time` in level.dat) and clocks
+    /// (`data/minecraft/world_clocks.dat`, 26.x). Clocks stop when the
+    /// `minecraft:advance_time` game rule is off. A flat world starts at 0.
+    pub fn load_time(&self, synced: &SyncedIds) -> Result<WorldTime> {
+        let registry = synced
+            .get("minecraft:world_clock")
+            .context("no minecraft:world_clock registry")?;
+        let mut clocks: Vec<Clock> = registry
+            .iter()
+            .map(|(name, &id)| Clock {
+                name: name.clone(),
+                id,
+                ticks: 0,
+                running: true,
+            })
+            .collect();
+        clocks.sort_by_key(|c| c.id);
+        let Some(dir) = &self.folder else {
+            return Ok(WorldTime { age: 0, clocks });
+        };
+        let level = read_gz(&dir.join("level.dat"))?;
+        let age = match level.get("Data") {
+            Some(Tag::Compound(data)) => match data.get("Time") {
+                Some(Tag::Long(t)) => *t,
+                _ => 0,
+            },
+            _ => 0,
+        };
+        let stored = read_gz(&dir.join(CLOCKS_FILE)).ok();
+        let rules = read_gz(&dir.join(GAME_RULES_FILE)).ok();
+        let advance = match rules.as_ref().and_then(|r| r.get("data")) {
+            Some(Tag::Compound(data)) => {
+                !matches!(data.get("minecraft:advance_time"), Some(Tag::Byte(0)))
+            }
+            _ => true,
+        };
+        for clock in &mut clocks {
+            clock.running = advance;
+            clock.ticks = match stored.as_ref().and_then(|s| s.get("data")) {
+                Some(Tag::Compound(data)) => match data.get(&clock.name) {
+                    Some(Tag::Compound(c)) => match c.get("total_ticks") {
+                        Some(Tag::Long(t)) => *t,
+                        _ => age,
+                    },
+                    _ => age,
+                },
+                _ => age,
+            };
+        }
+        Ok(WorldTime { age, clocks })
+    }
+
+    /// Writes the age into level.dat (keeping the previous file as
+    /// level.dat_old, as vanilla does) and the clocks into world_clocks.dat.
+    pub fn save_time(&self, time: &WorldTime) -> Result<()> {
+        let Some(dir) = &self.folder else {
+            return Ok(());
+        };
+        let level_path = dir.join("level.dat");
+        let mut level = read_gz(&level_path)?;
+        if let Some(Tag::Compound(data)) = level.get_mut("Data") {
+            data.insert("Time", Tag::Long(time.age));
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as i64);
+            data.insert("LastPlayed", Tag::Long(now));
+        }
+        std::fs::copy(&level_path, dir.join("level.dat_old"))?;
+        write_gz(&level_path, &level)?;
+
+        let clocks_path = dir.join(CLOCKS_FILE);
+        let mut stored = read_gz(&clocks_path).unwrap_or_else(|_| {
+            let mut root = mc_nbt::Compound::new();
+            root.insert("DataVersion", Tag::Int(self.data_version));
+            root
+        });
+        let mut data = match stored.remove("data") {
+            Some(Tag::Compound(data)) => data,
+            _ => mc_nbt::Compound::new(),
+        };
+        for clock in &time.clocks {
+            let mut entry = match data.remove(&clock.name) {
+                Some(Tag::Compound(entry)) => entry,
+                _ => mc_nbt::Compound::new(),
+            };
+            entry.insert("total_ticks", Tag::Long(clock.ticks));
+            data.insert(clock.name.as_str(), Tag::Compound(entry));
+        }
+        stored.insert("data", Tag::Compound(data));
+        if let Some(parent) = clocks_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        write_gz(&clocks_path, &stored)
+    }
+
     /// Whether changes are written anywhere.
     pub fn is_saved(&self) -> bool {
         matches!(self.source, Source::Anvil(_))
@@ -594,15 +694,38 @@ fn stored_light(chunk: &Chunk) -> LightData {
     light
 }
 
-/// Spawn point from level.dat: `Data.spawn` (26.x) or `Data.SpawnX/Y/Z` (older).
-fn read_spawn(path: &PathBuf) -> Result<((f64, f64, f64), f32)> {
-    let raw = std::fs::read(path)?;
+const CLOCKS_FILE: &str = "data/minecraft/world_clocks.dat";
+const GAME_RULES_FILE: &str = "data/minecraft/game_rules.dat";
+
+/// A gzip-compressed NBT file (level.dat, data/*.dat).
+fn read_gz(path: &Path) -> Result<mc_nbt::Compound> {
+    let raw = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let mut bytes = Vec::new();
     flate2::read::GzDecoder::new(&raw[..]).read_to_end(&mut bytes)?;
-    let (_, root, _) = mc_nbt::read_named(&bytes)?;
-    let Tag::Compound(root) = root else {
-        bail!("level.dat root is not a compound");
-    };
+    match mc_nbt::read_named(&bytes)? {
+        (_, Tag::Compound(root), _) => Ok(root),
+        _ => bail!("{}: root is not a compound", path.display()),
+    }
+}
+
+/// Writes next to `path` and renames over it, so a crash leaves either the
+/// old or the new file.
+fn write_gz(path: &Path, root: &mc_nbt::Compound) -> Result<()> {
+    use std::io::Write as _;
+    let mut bytes = Vec::new();
+    mc_nbt::write_named("", &Tag::Compound(root.clone()), &mut bytes)?;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&bytes)?;
+    let compressed = encoder.finish()?;
+    let tmp = path.with_extension("dat_tmp");
+    std::fs::write(&tmp, compressed)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Spawn point from level.dat: `Data.spawn` (26.x) or `Data.SpawnX/Y/Z` (older).
+fn read_spawn(path: &Path) -> Result<((f64, f64, f64), f32)> {
+    let root = read_gz(path)?;
     let Some(Tag::Compound(data)) = root.get("Data") else {
         bail!("level.dat has no Data");
     };

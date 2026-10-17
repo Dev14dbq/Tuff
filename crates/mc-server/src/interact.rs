@@ -145,12 +145,10 @@ pub fn dig(
 }
 
 /// Use Item On: places the held block item, if it fits.
-#[allow(clippy::too_many_arguments)]
 pub fn use_item_on(
     ctx: &ServerContext,
     actor: Actor,
-    hands: &Hands,
-    hand: i32,
+    held: Option<&ItemStack>,
     clicked: Position,
     face: i32,
     cursor: [f32; 3],
@@ -177,10 +175,7 @@ pub fn use_item_on(
         }
         outcome
     };
-    let Some(block) = hands
-        .held(hand)
-        .and_then(|item| ctx.rules.block_for_item(item.item))
-    else {
+    let Some(block) = held.and_then(|item| ctx.rules.block_for_item(item.item)) else {
         return refuse(outcome);
     };
     let placement = Placement {
