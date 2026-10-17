@@ -6,6 +6,7 @@ mod chunk_diff;
 mod chunk_info;
 mod chunk_speed;
 mod extract_data;
+mod parity;
 mod probe;
 mod registry_diff;
 mod watch;
@@ -36,6 +37,10 @@ Tasks:
   watch [--addr <host:port>] [--seconds <s>] [--packets <a,b,...>] [--name <player>]
       Join and print the chosen packets (hex) as they arrive, e.g. while
       running commands on a vanilla console.
+  parity <scenario file> [--verbose]
+      Run the same commands on a vanilla server and on ours (fresh superflat
+      worlds, game frozen) and compare a region after every step. Scenarios
+      live in xtask/parity/.
   chunk-info <region dir> <chunk x> <chunk z> [--depth <n>] [--all]
       Print the NBT structure of one stored chunk.
   chunk-speed [--addr <host:port>] [--view-distance <n>] [--runs <n>] [--version <id>]
@@ -57,6 +62,7 @@ fn main() -> ExitCode {
         Some("chunk-diff") => chunk_diff::run(&args[1..]),
         Some("chunk-speed") => chunk_speed::run(&args[1..]),
         Some("watch") => watch::run(&args[1..]),
+        Some("parity") => parity::run(&args[1..]),
         None | Some("-h" | "--help" | "help") => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;

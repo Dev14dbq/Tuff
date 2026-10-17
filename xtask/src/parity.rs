@@ -1,0 +1,441 @@
+//! `cargo xtask parity <scenario>`: runs the same commands on a vanilla
+//! server and on ours, both on a fresh superflat world with the game frozen,
+//! and compares a region block by block after every `step`.
+//!
+//! Each server gets a bot that mirrors the blocks it is sent (chunks, block
+//! updates, section updates), so what is compared is exactly what a client
+//! would see. Scenario lines (`#` starts a comment):
+//!
+//! ```text
+//! region <x1> <y1> <z1> <x2> <y2> <z2>   the blocks to compare
+//! run <command>                          sent to both consoles
+//! step [<ticks>]                         /tick step, wait, compare
+//! compare                                compare without stepping
+//! ```
+
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{Receiver, channel};
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, bail, ensure};
+use mc_data::McData;
+use mc_protocol::{Reader, Write as _};
+
+use crate::probe::{
+    Client, is_timeout, join_player_with, load_data, packet_ids, teleport_confirmation,
+};
+
+const VANILLA_PORT: u16 = 25571;
+const OURS_PORT: u16 = 25572;
+const BOT: &str = "Parity";
+/// Where the bot waits: away from the test area, inside view distance.
+const BOT_SPOT: &str = "0 -40 -24";
+
+pub fn run(args: &[String]) -> Result<()> {
+    let mut scenario: Option<PathBuf> = None;
+    let mut verbose = false;
+    for arg in args {
+        match arg.as_str() {
+            "--verbose" | "-v" => verbose = true,
+            other if scenario.is_none() => scenario = Some(other.into()),
+            other => bail!("unexpected argument `{other}` for parity"),
+        }
+    }
+    let scenario = scenario.context("usage: parity <scenario file> [--verbose]")?;
+    let script = std::fs::read_to_string(&scenario)
+        .with_context(|| format!("reading {}", scenario.display()))?;
+    let data = load_data(None)?;
+    let root = crate::workspace_root();
+
+    let mut vanilla = Server::vanilla(&root)?;
+    let mut ours = Server::ours(&root)?;
+    let result = (|| -> Result<usize> {
+        let ids = packet_ids(&data);
+        let mut mirrors = [
+            Mirror::join(&format!("127.0.0.1:{VANILLA_PORT}"), ids.clone())?,
+            Mirror::join(&format!("127.0.0.1:{OURS_PORT}"), ids)?,
+        ];
+        let mut servers = [&mut vanilla, &mut ours];
+        for setup in [
+            "gamerule random_tick_speed 0",
+            "gamerule spawn_mobs false",
+            "gamerule advance_time false",
+            "gamerule advance_weather false",
+            "kill @e[type=!player]",
+            &format!("tp {BOT} {BOT_SPOT}"),
+            "tick freeze",
+        ] {
+            for server in servers.iter_mut() {
+                server.command(setup, false)?;
+            }
+        }
+        settle(&mut mirrors, Duration::from_millis(1500))?;
+
+        let mut region: Option<[i32; 6]> = None;
+        let mut failures = 0;
+        for (number, line) in script.lines().enumerate() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            let (word, rest) = line.split_once(' ').unwrap_or((line, ""));
+            match word {
+                "region" => {
+                    let v: Vec<i32> = rest
+                        .split_whitespace()
+                        .map(str::parse)
+                        .collect::<Result<_, _>>()
+                        .with_context(|| format!("line {}: region needs 6 numbers", number + 1))?;
+                    let [x1, y1, z1, x2, y2, z2] = v[..] else {
+                        bail!("line {}: region needs 6 numbers", number + 1);
+                    };
+                    region = Some([
+                        x1.min(x2),
+                        y1.min(y2),
+                        z1.min(z2),
+                        x1.max(x2),
+                        y1.max(y2),
+                        z1.max(z2),
+                    ]);
+                }
+                "run" => {
+                    for server in servers.iter_mut() {
+                        server.command(rest, verbose)?;
+                    }
+                    settle(&mut mirrors, Duration::from_millis(300))?;
+                }
+                "step" | "compare" => {
+                    let ticks: u32 = if word == "step" && !rest.is_empty() {
+                        rest.parse().context("step <ticks>")?
+                    } else {
+                        u32::from(word == "step")
+                    };
+                    if ticks > 0 {
+                        for server in servers.iter_mut() {
+                            server.command(&format!("tick step {ticks}"), verbose)?;
+                        }
+                    }
+                    let wait = Duration::from_millis(400 + 60 * u64::from(ticks));
+                    settle(&mut mirrors, wait)?;
+                    let region = region.context("`region` must come before the first step")?;
+                    let diffs = compare(&mirrors, region, &data);
+                    let label = format!("line {:>3}: {line}", number + 1);
+                    if diffs.is_empty() {
+                        println!("  same  {label}");
+                    } else {
+                        failures += 1;
+                        println!("  DIFF  {label}: {} blocks", diffs.len());
+                        for diff in diffs.iter().take(8) {
+                            println!("        {diff}");
+                        }
+                    }
+                }
+                other => bail!("line {}: unknown scenario word `{other}`", number + 1),
+            }
+        }
+        Ok(failures)
+    })();
+    vanilla.stop();
+    ours.stop();
+    let failures = result?;
+    ensure!(failures == 0, "{failures} comparisons differ");
+    println!("all comparisons match");
+    Ok(())
+}
+
+struct Server {
+    name: &'static str,
+    child: Child,
+    stdin: ChildStdin,
+    lines: Receiver<String>,
+}
+
+impl Server {
+    fn vanilla(root: &Path) -> Result<Self> {
+        let dir = root.join("cache/vanilla-server/26.3-parity");
+        let source = root.join("cache/vanilla-server/26.3");
+        std::fs::create_dir_all(&dir)?;
+        let eula = source.join("eula.txt");
+        ensure!(
+            eula.is_file(),
+            "no {} (accept the EULA for the local test server first)",
+            eula.display()
+        );
+        std::fs::copy(&eula, dir.join("eula.txt"))?;
+        let _ = std::fs::remove_dir_all(dir.join("parity"));
+        std::fs::write(
+            dir.join("server.properties"),
+            format!(
+                "online-mode=false\nserver-ip=127.0.0.1\nserver-port={VANILLA_PORT}\n\
+                 level-name=parity\nlevel-type=minecraft\\:flat\ngamemode=creative\n\
+                 spawn-protection=0\nview-distance=6\nsimulation-distance=6\nwhite-list=false\n\
+                 generate-structures=false\npause-when-empty-seconds=0\nmotd=parity\n\
+                 enable-status=true\nsync-chunk-writes=false\n"
+            ),
+        )?;
+        let jar = root.join("reference/26.3/server.jar");
+        let child = Command::new("java")
+            .arg("-Xmx2G")
+            .arg("-jar")
+            .arg(&jar)
+            .arg("nogui")
+            .current_dir(&dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("starting java")?;
+        Self::started("vanilla", child, "Done (", Duration::from_secs(120))
+    }
+
+    fn ours(root: &Path) -> Result<Self> {
+        let status = Command::new("cargo")
+            .args(["build", "--release", "-q", "-p", "mc-server"])
+            .current_dir(root)
+            .status()?;
+        ensure!(status.success(), "building mc-server failed");
+        let child = Command::new(root.join("target/release/mc-server"))
+            .args([
+                "--offline",
+                "--port",
+                &OURS_PORT.to_string(),
+                "--view-distance",
+                "6",
+            ])
+            .env("NO_COLOR", "1")
+            .current_dir(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("starting mc-server")?;
+        Self::started("ours", child, "server on", Duration::from_secs(60))
+    }
+
+    fn started(
+        name: &'static str,
+        mut child: Child,
+        ready: &str,
+        within: Duration,
+    ) -> Result<Self> {
+        let stdin = child.stdin.take().context("no stdin")?;
+        let stdout = child.stdout.take().context("no stdout")?;
+        let (send, lines) = channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if send.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let deadline = Instant::now() + within;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match lines.recv_timeout(left) {
+                Ok(line) if line.contains(ready) => break,
+                Ok(_) => {}
+                Err(_) => bail!("{name} server did not start"),
+            }
+        }
+        Ok(Self {
+            name,
+            child,
+            stdin,
+            lines,
+        })
+    }
+
+    /// Sends a console command and, with `echo`, prints what the server said
+    /// about it.
+    fn command(&mut self, command: &str, echo: bool) -> Result<()> {
+        writeln!(self.stdin, "{command}")?;
+        self.stdin.flush()?;
+        std::thread::sleep(Duration::from_millis(100));
+        while let Ok(line) = self.lines.try_recv() {
+            if echo {
+                println!("        [{}] {}", self.name, strip_log_prefix(&line));
+            }
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) {
+        let _ = writeln!(self.stdin, "stop");
+        let _ = self.stdin.flush();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _ = self.child.kill();
+    }
+}
+
+fn strip_log_prefix(line: &str) -> &str {
+    // "[06:12:23] [Server thread/INFO]: text" or "...Z  INFO target: text".
+    line.rsplit_once("]: ")
+        .map(|(_, t)| t)
+        .or_else(|| line.split_once(": ").map(|(_, t)| t))
+        .unwrap_or(line)
+}
+
+/// The blocks one client has been sent.
+struct Mirror {
+    client: Client,
+    chunks: HashMap<(i32, i32), Vec<Vec<u32>>>,
+}
+
+impl Mirror {
+    fn join(addr: &str, ids: mc_protocol::PacketIds) -> Result<Self> {
+        let (client, _) = join_player_with(addr, ids, BOT, 6)?;
+        client.set_read_timeout(Duration::from_millis(20))?;
+        let mut mirror = Self {
+            client,
+            chunks: HashMap::new(),
+        };
+        mirror.pump()?;
+        Ok(mirror)
+    }
+
+    /// Reads what has arrived; returns whether anything changed blocks.
+    fn pump(&mut self) -> Result<bool> {
+        let mut changed = false;
+        loop {
+            let (packet, body) = match self.client.recv() {
+                Ok(p) => p,
+                Err(err) if is_timeout(&err) => return Ok(changed),
+                Err(err) => return Err(err),
+            };
+            let mut r = Reader::new(&body);
+            match packet.as_str() {
+                "minecraft:keep_alive" => self.client.send("minecraft:keep_alive", body.clone())?,
+                "minecraft:player_position" => self.client.send(
+                    "minecraft:accept_teleportation",
+                    teleport_confirmation(&body)?,
+                )?,
+                "minecraft:chunk_batch_finished" => {
+                    let mut received = Vec::new();
+                    received.put_f32(64.0);
+                    self.client
+                        .send("minecraft:chunk_batch_received", received)?;
+                }
+                "minecraft:level_chunk_with_light" => {
+                    let (key, content) = crate::chunk_diff::decode(&body)?;
+                    self.chunks.insert(key, content.blocks);
+                    changed = true;
+                }
+                "minecraft:forget_level_chunk" => {
+                    let (z, x) = (r.i32()?, r.i32()?);
+                    self.chunks.remove(&(x, z));
+                }
+                "minecraft:block_update" => {
+                    let p = r.position()?;
+                    let state = r.varint()? as u32;
+                    self.set(p.x, p.y, p.z, state);
+                    changed = true;
+                }
+                "minecraft:section_blocks_update" => {
+                    let packed = r.i64()?;
+                    let (sx, sy, sz) = (
+                        (packed >> 42) as i32,
+                        (packed << 44 >> 44) as i32,
+                        (packed << 22 >> 42) as i32,
+                    );
+                    for _ in 0..r.length_prefix()? {
+                        let entry = r.varlong()?;
+                        let state = (entry >> 12) as u32;
+                        let (lx, lz, ly) = ((entry >> 8) & 15, (entry >> 4) & 15, entry & 15);
+                        self.set(
+                            sx * 16 + lx as i32,
+                            sy * 16 + ly as i32,
+                            sz * 16 + lz as i32,
+                            state,
+                        );
+                    }
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn index(x: i32, y: i32, z: i32) -> (usize, usize) {
+        let local = (y + 64) as usize;
+        (
+            local / 16,
+            ((local % 16) << 8) | (((z & 15) as usize) << 4) | (x & 15) as usize,
+        )
+    }
+
+    fn set(&mut self, x: i32, y: i32, z: i32, state: u32) {
+        if let Some(sections) = self.chunks.get_mut(&(x >> 4, z >> 4)) {
+            let (section, i) = Self::index(x, y, z);
+            if let Some(s) = sections.get_mut(section) {
+                s[i] = state;
+            }
+        }
+    }
+
+    fn block(&self, x: i32, y: i32, z: i32) -> Option<u32> {
+        let sections = self.chunks.get(&(x >> 4, z >> 4))?;
+        let (section, i) = Self::index(x, y, z);
+        sections.get(section).map(|s| s[i])
+    }
+}
+
+/// Reads from both mirrors until neither has changed for a while (at least `min`).
+fn settle(mirrors: &mut [Mirror; 2], min: Duration) -> Result<()> {
+    let start = Instant::now();
+    let mut quiet_since = Instant::now();
+    loop {
+        let mut changed = false;
+        for mirror in mirrors.iter_mut() {
+            changed |= mirror.pump()?;
+        }
+        if changed {
+            quiet_since = Instant::now();
+        }
+        if start.elapsed() >= min && quiet_since.elapsed() >= Duration::from_millis(250) {
+            return Ok(());
+        }
+        if start.elapsed() > Duration::from_secs(30) {
+            bail!("servers kept changing blocks for 30 s");
+        }
+    }
+}
+
+fn compare(
+    mirrors: &[Mirror; 2],
+    [x1, y1, z1, x2, y2, z2]: [i32; 6],
+    data: &McData,
+) -> Vec<String> {
+    let name = |s: Option<u32>| match s {
+        Some(s) => data.blocks.describe(s).map_or_else(
+            || format!("state {s}"),
+            |d| d.trim_start_matches("minecraft:").replace("[]", ""),
+        ),
+        None => "not loaded".into(),
+    };
+    let mut diffs = Vec::new();
+    for y in y1..=y2 {
+        for z in z1..=z2 {
+            for x in x1..=x2 {
+                let (a, b) = (mirrors[0].block(x, y, z), mirrors[1].block(x, y, z));
+                if a != b {
+                    diffs.push(format!(
+                        "{x} {y} {z}: vanilla {} | ours {}",
+                        name(a),
+                        name(b)
+                    ));
+                }
+            }
+        }
+    }
+    diffs
+}

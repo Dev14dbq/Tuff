@@ -12,8 +12,8 @@ use mc_protocol::Reader;
 use mc_world::BitStorage;
 
 #[derive(Debug, PartialEq)]
-struct ChunkContent {
-    blocks: Vec<Vec<u32>>,
+pub(crate) struct ChunkContent {
+    pub(crate) blocks: Vec<Vec<u32>>,
     biomes: Vec<Vec<u32>>,
     heightmaps: BTreeMap<i32, Vec<i64>>,
     sky: BTreeMap<usize, Vec<u8>>,
@@ -155,7 +155,7 @@ fn container(
         .collect()
 }
 
-fn decode(body: &[u8]) -> Result<((i32, i32), ChunkContent)> {
+pub(crate) fn decode(body: &[u8]) -> Result<((i32, i32), ChunkContent)> {
     let mut r = Reader::new(body);
     let key = (r.i32()?, r.i32()?);
     let mut heightmaps = BTreeMap::new();
