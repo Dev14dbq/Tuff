@@ -5,10 +5,12 @@
 //! 2. every 20 ticks, send the time to players;
 //! 3. tick each dimension (for now: advance its clocks; scheduled ticks,
 //!    block events and entities come with ROADMAP Ф3 and Ф5);
-//! 4. handle what players asked for (digging, placing);
+//! 4. handle what players asked for (digging, placing, commands);
 //! 5. autosave every 6000 ticks.
 //!
 //! If the server falls more than 2 s behind, it stops trying to catch up.
+//! `/tick freeze` stops step 3 (time stands still) until `/tick step` or
+//! `/tick unfreeze`; requests are still handled, as in vanilla.
 //! Movement and chat still go straight between connections; they move here
 //! with entities (Ф5).
 
@@ -76,9 +78,33 @@ impl WorldTime {
     }
 }
 
-/// Something a player asked for, done during the tick.
+/// `/tick` state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TickControl {
+    /// Target ticks per second.
+    pub rate: f32,
+    pub frozen: bool,
+    /// Ticks still to run while frozen.
+    pub steps: u32,
+}
+
+impl Default for TickControl {
+    fn default() -> Self {
+        Self {
+            rate: 20.0,
+            frozen: false,
+            steps: 0,
+        }
+    }
+}
+
+/// Something a player (or the console) asked for, done during the tick.
 #[derive(Debug)]
 pub enum Action {
+    Command {
+        line: String,
+        source: crate::commands::Source,
+    },
     Dig {
         status: i32,
         position: Position,
@@ -108,7 +134,9 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
     let mut next = Instant::now();
     let mut count: u64 = 0;
     let mut slow_ticks = 0u64;
+    let mut control = TickControl::default();
     while !stop.load(Ordering::Relaxed) {
+        let interval = Duration::from_secs_f64(1.0 / f64::from(control.rate));
         let now = Instant::now();
         if now < next {
             std::thread::sleep(next - now);
@@ -119,7 +147,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             );
             next = now;
         }
-        next += TICK;
+        next += interval;
         let started = Instant::now();
         count += 1;
 
@@ -127,10 +155,16 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             let packet = lock(&ctx.time).packet(false);
             let _ = ctx.events.send(Event::Time(packet));
         }
-        lock(&ctx.time).advance();
+        let runs = !control.frozen || control.steps > 0;
+        if control.frozen && control.steps > 0 {
+            control.steps -= 1;
+        }
+        if runs {
+            lock(&ctx.time).advance();
+        }
 
         while let Ok(request) = requests.try_recv() {
-            let mut outcome = handle(&ctx, request.actor, request.action);
+            let mut outcome = handle(&ctx, &mut control, request.actor, request.action);
             for event in std::mem::take(&mut outcome.events) {
                 let _ = ctx.events.send(event);
             }
@@ -149,8 +183,12 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         if count.is_multiple_of(autosave) {
             crate::save(&ctx);
         }
+        *lock(&ctx.ticking) = mc_protocol::packets::play::TickingState {
+            tick_rate: control.rate,
+            frozen: control.frozen,
+        };
         let took = started.elapsed();
-        if took > TICK {
+        if took > interval {
             slow_ticks += 1;
             if slow_ticks.is_power_of_two() {
                 info!(
@@ -162,8 +200,16 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
     }
 }
 
-fn handle(ctx: &ServerContext, actor: Actor, action: Action) -> Outcome {
+fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: Action) -> Outcome {
     match action {
+        Action::Command { line, source } => {
+            let output = crate::commands::execute(ctx, control, &source, &line);
+            Outcome {
+                events: output.events,
+                messages: output.lines,
+                ..Outcome::default()
+            }
+        }
         Action::Dig {
             status,
             position,

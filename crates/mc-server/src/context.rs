@@ -10,7 +10,7 @@ use mc_data::{McData, SYNCHRONIZED_REGISTRIES, resolve_tags};
 use mc_nbt::Tag;
 use mc_protocol::Position;
 use mc_protocol::packets::configuration::{RegistryData, RegistryEntry, TagRegistry, UpdateTags};
-use mc_protocol::packets::play::{ItemStack, PlayerInfoEntry, SetTime};
+use mc_protocol::packets::play::{ItemStack, PlayerInfoEntry, SetTime, TickingState, TickingStep};
 use mc_protocol::packets::{GameProfile, KnownPack};
 use mc_protocol::{Direction, PacketIds, State};
 use tokio::sync::broadcast;
@@ -91,8 +91,23 @@ pub enum Event {
         position: Position,
         state: u32,
     },
-    /// The time every 20 ticks (world age only; the client runs the clocks).
+    /// The time every 20 ticks (world age only; the client runs the clocks),
+    /// or clocks that were set or stopped.
     Time(SetTime),
+    /// The tick rate changed or the game was frozen or unfrozen.
+    TickingState(TickingState),
+    /// A frozen game runs this many ticks.
+    TickingStep(TickingStep),
+    /// Move a player (a command).
+    Teleport {
+        uuid: u128,
+        pose: Pose,
+    },
+    /// Disconnect a player with a reason.
+    Kick {
+        uuid: u128,
+        reason: String,
+    },
     /// A player's arm swings (`times` in a row, as vanilla does on placing).
     Swing {
         uuid: u128,
@@ -135,6 +150,10 @@ pub struct ServerContext {
     pub actions: std::sync::mpsc::Sender<Request>,
     /// Taken by the tick thread when the server starts.
     pub(crate) action_queue: Mutex<Option<std::sync::mpsc::Receiver<Request>>>,
+    /// Tick rate and whether the game is frozen, for players who join.
+    pub ticking: Mutex<TickingState>,
+    /// Notified by `/stop`.
+    pub shutdown: tokio::sync::Notify,
     next_entity_id: AtomicI32,
 }
 
@@ -242,6 +261,11 @@ impl ServerContext {
             time: Mutex::new(time),
             actions,
             action_queue: Mutex::new(Some(action_queue)),
+            ticking: Mutex::new(TickingState {
+                tick_rate: 20.0,
+                frozen: false,
+            }),
+            shutdown: tokio::sync::Notify::new(),
             next_entity_id: AtomicI32::new(1),
             data,
         })

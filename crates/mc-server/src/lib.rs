@@ -7,6 +7,7 @@
 
 mod auth;
 mod blocks;
+mod commands;
 mod connection;
 mod context;
 mod interact;
@@ -45,6 +46,10 @@ pub struct Config {
     pub world: Option<PathBuf>,
     /// How often changed chunks are written (vanilla: every 5 minutes).
     pub autosave: std::time::Duration,
+    /// Read commands from standard input.
+    pub console: bool,
+    /// Players allowed to run commands.
+    pub ops: Vec<String>,
 }
 
 impl Config {
@@ -62,6 +67,8 @@ impl Config {
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
             world: None,
             autosave: std::time::Duration::from_secs(300),
+            console: false,
+            ops: Vec::new(),
         }
     }
 }
@@ -156,6 +163,12 @@ impl Server {
                 .name("tick".into())
                 .spawn(move || tick::run(ctx, requests, stop))?
         };
+        if self.ctx.config.console {
+            let ctx = self.ctx.clone();
+            std::thread::Builder::new()
+                .name("console".into())
+                .spawn(move || console(&ctx))?;
+        }
         loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
@@ -168,17 +181,46 @@ impl Server {
                         }
                     });
                 }
-                () = &mut shutdown => {
-                    info!("stopping");
-                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                    let ctx = self.ctx.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let _ = ticking.join();
-                        save(&ctx);
-                    })
-                    .await?;
-                    return Ok(());
-                }
+                () = self.ctx.shutdown.notified() => break,
+                () = &mut shutdown => break,
+            }
+        }
+        info!("stopping");
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let ctx = self.ctx.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = ticking.join();
+            save(&ctx);
+        })
+        .await?;
+        Ok(())
+    }
+}
+
+/// Reads commands from standard input until it closes; each runs on the
+/// tick thread and its feedback is printed.
+fn console(ctx: &Arc<ServerContext>) {
+    use std::io::BufRead as _;
+    let (reply, mut replies) = tokio::sync::mpsc::unbounded_channel();
+    for line in std::io::stdin().lock().lines() {
+        let Ok(line) = line else { break };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let request = tick::Request {
+            actor: interact::Actor::console(),
+            action: tick::Action::Command {
+                line,
+                source: commands::Source::Console,
+            },
+            reply: reply.clone(),
+        };
+        if ctx.actions.send(request).is_err() {
+            break;
+        }
+        if let Some(outcome) = replies.blocking_recv() {
+            for line in outcome.messages {
+                info!("{line}");
             }
         }
     }

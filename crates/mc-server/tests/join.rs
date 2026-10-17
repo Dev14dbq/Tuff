@@ -708,6 +708,81 @@ async fn chunks_nobody_has_are_unloaded() {
 }
 
 #[tokio::test]
+async fn operators_run_commands_from_chat() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Admin".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut admin, _) = join_offline(addr, ctx.ids.clone(), "Admin").await;
+    let (mut guest, _) = join_offline(addr, ctx.ids.clone(), "Guest").await;
+    let command = |text: &str| {
+        let mut body = Vec::new();
+        body.put_string(text);
+        body
+    };
+    let chat_text = |body: &[u8]| format!("{:?}", Reader::new(body).nbt().unwrap());
+
+    guest
+        .send("minecraft:chat_command", command("setblock 1 -60 1 stone"))
+        .await;
+    loop {
+        let (_, message) = guest.recv_until("minecraft:system_chat").await;
+        if chat_text(&message).contains("permission") {
+            break;
+        }
+    }
+
+    // Several blocks in one section arrive as one Update Section Blocks.
+    admin
+        .send(
+            "minecraft:chat_command",
+            command("fill 0 -60 0 2 -60 0 oak_planks"),
+        )
+        .await;
+    let (_, update) = guest.recv_until("minecraft:section_blocks_update").await;
+    let mut r = Reader::new(&update);
+    assert_eq!(r.i64().unwrap(), (-4i64) & 0xFFFFF, "section (0, -4, 0)");
+    assert_eq!(r.length_prefix().unwrap(), 3);
+    let planks = ctx
+        .data
+        .blocks
+        .default_state("minecraft:oak_planks")
+        .unwrap() as i64;
+    let entry = r.varlong().unwrap();
+    assert_eq!(
+        (entry >> 12, entry & 0xFFF),
+        (planks, 0x004),
+        "x 0, z 0, y 4"
+    );
+    loop {
+        let (_, feedback) = admin.recv_until("minecraft:system_chat").await;
+        if chat_text(&feedback).contains("Successfully filled 3") {
+            break;
+        }
+    }
+
+    admin
+        .send("minecraft:chat_command", command("tick freeze"))
+        .await;
+    let (_, state) = guest.recv_until("minecraft:ticking_state").await;
+    let mut r = Reader::new(&state);
+    assert_eq!((r.f32().unwrap(), r.bool().unwrap()), (20.0, true));
+    let _ = stop.send(());
+}
+
+#[tokio::test]
 async fn serves_a_world_saved_by_vanilla() {
     let world =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/vanilla-server/26.3/world-normal");

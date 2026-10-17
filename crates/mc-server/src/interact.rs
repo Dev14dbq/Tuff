@@ -61,6 +61,8 @@ pub struct Outcome {
     pub updates: Vec<(Position, u32)>,
     pub ack: Option<i32>,
     pub events: Vec<Event>,
+    /// Lines of text for the player (command feedback).
+    pub messages: Vec<String>,
 }
 
 /// Who is acting.
@@ -70,6 +72,25 @@ pub struct Actor {
     pub entity_id: i32,
     pub game_mode: i32,
     pub pose: Pose,
+}
+
+impl Actor {
+    /// The server console: nobody in the world.
+    pub fn console() -> Self {
+        Self {
+            uuid: 0,
+            entity_id: 0,
+            game_mode: CREATIVE,
+            pose: Pose {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                yaw: 0.0,
+                pitch: 0.0,
+                on_ground: true,
+            },
+        }
+    }
 }
 
 fn in_reach(pose: &Pose, p: Position) -> bool {

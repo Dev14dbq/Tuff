@@ -19,6 +19,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::ServerContext;
 use crate::auth;
+use crate::commands::Source;
 use crate::context::{Event, OnlinePlayer, Pose};
 use crate::interact::{Actor, Hands, Outcome};
 use crate::tick::{Action, Request};
@@ -405,6 +406,7 @@ async fn play(
         })?;
     }
     let mut awaiting_teleport = Some(1);
+    let mut next_teleport = 1;
     writer.queue(&play::PlayerPosition {
         teleport_id: 1,
         x,
@@ -440,6 +442,9 @@ async fn play(
 
     let time = ctx.time.lock().expect("time lock").packet(true);
     writer.queue(&time)?;
+    let ticking = ctx.ticking.lock().expect("ticking lock").clone();
+    writer.queue(&ticking)?;
+    writer.queue(&play::TickingStep { steps: 0 })?;
     writer.queue(&play::SetDefaultSpawnPosition {
         dimension: world.dimension.clone(),
         position: Position::new(x.floor() as i32, y as i32, z.floor() as i32),
@@ -530,10 +535,19 @@ async fn play(
                         let _ = ctx.events.send(Event::Chat(text::plain(&line)));
                     }
                     play::Serverbound::ChatCommand { command } => {
-                        writer.queue(&play::SystemChat {
-                            content: text::colored(&format!("Unknown command: /{command}"), "red"),
-                            overlay: false,
-                        })?;
+                        let op = ctx.config.ops.iter().any(|o| o.eq_ignore_ascii_case(&me.profile.name));
+                        if op {
+                            info!("{} issued server command: /{command}", me.profile.name);
+                            let actor = Actor { uuid, entity_id, game_mode: me.game_mode, pose };
+                            let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
+                            let action = Action::Command { line: command, source };
+                            let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                        } else {
+                            writer.queue(&play::SystemChat {
+                                content: text::colored("You do not have permission to use commands", "red"),
+                                overlay: false,
+                            })?;
+                        }
                     }
                     play::Serverbound::SetCreativeModeSlot { slot, item } if me.game_mode == CREATIVE => {
                         if let Ok(slot) = usize::try_from(slot)
@@ -606,6 +620,30 @@ async fn play(
                         writer.queue(&play::SystemChat { content, overlay: false })?;
                     }
                     Ok(Event::Time(packet)) => writer.queue(&packet)?,
+                    Ok(Event::TickingState(packet)) => writer.queue(&packet)?,
+                    Ok(Event::TickingStep(packet)) => writer.queue(&packet)?,
+                    Ok(Event::Kick { uuid: who, reason }) if who == uuid => {
+                        writer.send(&play::Disconnect { reason: text::plain(&reason) }).await?;
+                        bail!("kicked: {reason}");
+                    }
+                    Ok(Event::Teleport { uuid: who, pose: to }) if who == uuid => {
+                        next_teleport += 1;
+                        awaiting_teleport = Some(next_teleport);
+                        pose = Pose { on_ground: false, ..to };
+                        writer.queue(&play::PlayerPosition {
+                            teleport_id: next_teleport,
+                            x: pose.x,
+                            y: pose.y,
+                            z: pose.z,
+                            velocity: [0.0; 3],
+                            yaw: pose.yaw,
+                            pitch: pose.pitch,
+                            flags: 0,
+                        })?;
+                        view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                        update_player(&ctx, uuid, |p| p.pose = Some(pose));
+                        let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
+                    }
                     Ok(Event::PlayerJoined(other)) if other.profile.uuid != uuid => {
                         writer.queue(&play::PlayerInfoUpdate {
                             actions: play::player_info::ALL,
@@ -643,11 +681,7 @@ async fn play(
                         writer.queue(&skin_parts_metadata(other_entity, parts))?;
                     }
                     Ok(Event::BlocksChanged { by, changes }) if by != uuid => {
-                        for (position, state) in changes {
-                            if view.has_block(position) {
-                                writer.queue(&play::BlockUpdate { position, state })?;
-                            }
-                        }
+                        send_block_changes(writer, &view, changes)?;
                     }
                     Ok(Event::BlockBroken { by, position, state }) if by != uuid && view.has_block(position) => {
                         writer.queue(&play::LevelEvent {
@@ -712,8 +746,54 @@ fn answer(writer: &mut PacketWriter, ctx: &ServerContext, outcome: Outcome) -> R
     if let Some(sequence) = outcome.ack {
         writer.queue(&play::BlockChangedAck { sequence })?;
     }
+    for line in outcome.messages {
+        writer.queue(&play::SystemChat {
+            content: text::plain(&line),
+            overlay: false,
+        })?;
+    }
     for event in outcome.events {
         let _ = ctx.events.send(event);
+    }
+    Ok(())
+}
+
+/// Block changes the client has chunks for: one Block Update for a lone change
+/// in a section, one Update Section Blocks for several.
+fn send_block_changes(
+    writer: &mut PacketWriter,
+    view: &ChunkView,
+    changes: Vec<(Position, u32)>,
+) -> Result<()> {
+    type Section = ((i32, i32, i32), Vec<(Position, u32)>);
+    let mut sections: Vec<Section> = Vec::new();
+    for (position, state) in changes {
+        if !view.has_block(position) {
+            continue;
+        }
+        let key = (position.x >> 4, position.y >> 4, position.z >> 4);
+        match sections.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, list)) => list.push((position, state)),
+            None => sections.push((key, vec![(position, state)])),
+        }
+    }
+    for (section, list) in sections {
+        if let [(position, state)] = list[..] {
+            writer.queue(&play::BlockUpdate { position, state })?;
+        } else {
+            writer.queue(&play::SectionBlocksUpdate {
+                section,
+                blocks: list
+                    .into_iter()
+                    .map(|(p, state)| {
+                        (
+                            ((p.x & 15) as u8, (p.y & 15) as u8, (p.z & 15) as u8),
+                            state,
+                        )
+                    })
+                    .collect(),
+            })?;
+        }
     }
     Ok(())
 }

@@ -1179,6 +1179,56 @@ pub mod play {
         }
     }
 
+    /// Update Section Blocks: several blocks of one 16³ section changed.
+    #[derive(Clone, Debug)]
+    pub struct SectionBlocksUpdate {
+        /// Section coordinates (block coordinates >> 4).
+        pub section: (i32, i32, i32),
+        /// Position inside the section (x, y, z each 0..16) and new state.
+        pub blocks: Vec<((u8, u8, u8), u32)>,
+    }
+    packet!(SectionBlocksUpdate, Play, "minecraft:section_blocks_update");
+    impl Encode for SectionBlocksUpdate {
+        fn encode(&self, out: &mut Vec<u8>) {
+            let (x, y, z) = self.section;
+            let packed = ((i64::from(x) & 0x3F_FFFF) << 42)
+                | (i64::from(y) & 0xF_FFFF)
+                | ((i64::from(z) & 0x3F_FFFF) << 20);
+            out.put_i64(packed);
+            out.put_len(self.blocks.len());
+            for &((bx, by, bz), state) in &self.blocks {
+                let local = (i64::from(bx) << 8) | (i64::from(bz) << 4) | i64::from(by);
+                out.put_varlong((i64::from(state) << 12) | local);
+            }
+        }
+    }
+
+    /// Set Ticking State: the client's tick rate and whether it is frozen.
+    #[derive(Clone, Debug)]
+    pub struct TickingState {
+        pub tick_rate: f32,
+        pub frozen: bool,
+    }
+    packet!(TickingState, Play, "minecraft:ticking_state");
+    impl Encode for TickingState {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_f32(self.tick_rate);
+            out.put_bool(self.frozen);
+        }
+    }
+
+    /// Step Tick: a frozen client runs this many ticks.
+    #[derive(Clone, Debug)]
+    pub struct TickingStep {
+        pub steps: i32,
+    }
+    packet!(TickingStep, Play, "minecraft:ticking_step");
+    impl Encode for TickingStep {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.steps);
+        }
+    }
+
     /// Acknowledge Block Change: the client may stop predicting changes up to
     /// this sequence and show what the server sent.
     #[derive(Clone, Debug)]

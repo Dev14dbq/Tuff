@@ -23,6 +23,11 @@ Options:
   --motd <text>          server list description
   --no-compression       disable packet compression
   --offline              offline mode: no account check, no encryption (any name can join)
+  --op <name>            let this player run commands (repeatable)
+  --no-console           do not read commands from standard input
+
+Commands (console, or chat for operators): help, setblock, fill, time, gamerule
+advance_time, tick, tp, list, say, kick, save-all, stop.
 
 Logging: RUST_LOG=debug mc-server
 ";
@@ -49,6 +54,8 @@ async fn run() -> Result<()> {
     let mut overrides: Vec<(String, String)> = Vec::new();
     let mut no_compression = false;
     let mut offline = false;
+    let mut console = true;
+    let mut ops = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -58,6 +65,8 @@ async fn run() -> Result<()> {
             }
             "--no-compression" => no_compression = true,
             "--offline" => offline = true,
+            "--no-console" => console = false,
+            "--op" => ops.push(args.next().context("--op needs a name")?),
             "--data" => data_dir = Some(args.next().context("--data needs a value")?.into()),
             "--world" => world = Some(args.next().context("--world needs a value")?.into()),
             "--bind" | "--port" | "--view-distance" | "--max-players" | "--motd" | "--autosave" => {
@@ -102,6 +111,8 @@ async fn run() -> Result<()> {
     }
     config.online_mode = !offline;
     config.world = world;
+    config.console = console;
+    config.ops = ops;
 
     let server = Server::bind(config).await?;
     server
