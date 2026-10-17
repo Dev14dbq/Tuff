@@ -162,6 +162,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         if runs {
             lock(&ctx.time).advance();
             run_scheduled_ticks(&ctx);
+            crate::vitals::tick(&ctx);
         }
 
         while let Ok(request) = requests.try_recv() {
@@ -302,6 +303,33 @@ pub fn throw_item(
             -pitch.sin() * speed + 0.1,
             yaw.cos() * pitch.cos() * speed,
         ],
+        on_ground: false,
+        age: 0,
+        removed: false,
+    };
+    let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
+    lock(&ctx.entities).push(entity);
+}
+
+/// Drops a stack around a player in a random direction (a death scatters the
+/// inventory like this).
+pub fn scatter_item(
+    ctx: &ServerContext,
+    pose: crate::context::Pose,
+    stack: mc_protocol::packets::play::ItemStack,
+) {
+    let r = || (crate::util::random_u64() >> 11) as f64 / (1u64 << 53) as f64;
+    let (angle, speed) = (r() * std::f64::consts::TAU, r() * 0.5);
+    let entity = mc_entity::Entity {
+        id: ctx.next_entity_id(),
+        uuid: crate::util::random_uuid(),
+        kind: mc_entity::Kind::Item {
+            item: stack.item,
+            count: stack.count,
+            pickup_delay: 40,
+        },
+        pos: [pose.x, pose.y + 1.32, pose.z],
+        vel: [angle.sin() * speed, 0.2, angle.cos() * speed],
         on_ground: false,
         age: 0,
         removed: false,

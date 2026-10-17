@@ -531,7 +531,15 @@ async fn play(
         .insert(uuid, hands);
     update_player(&ctx, uuid, |p| p.main_hand = main_hand);
     let mut game_mode = me.game_mode;
+    let mut sneaking = false;
     let mut windows = windows::Windows::new();
+    let vitals = session
+        .saved
+        .as_ref()
+        .map(|s| s.vitals.clone())
+        .unwrap_or_default();
+    writer.queue(&vitals.packet())?;
+    ctx.vitals.lock().expect("vitals lock").insert(uuid, vitals);
     let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
     // Non-player entities this client has been told about.
     let mut seen_entities: HashSet<i32> = HashSet::new();
@@ -561,6 +569,7 @@ async fn play(
                 // Movement sent before the client saw our teleport is stale.
                 let settled = awaiting_teleport.is_none();
                 let mut moved = false;
+                let before = pose;
                 match packet {
                     play::Serverbound::AcceptTeleportation { teleport_id, .. } => {
                         if awaiting_teleport == Some(teleport_id) {
@@ -596,7 +605,7 @@ async fn play(
                         let op = ctx.config.ops.iter().any(|o| o.eq_ignore_ascii_case(&me.profile.name));
                         if op {
                             info!("{} issued server command: /{command}", me.profile.name);
-                            let actor = Actor { uuid, entity_id, game_mode, pose };
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                             let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
                             let action = Action::Command { line: command, source };
                             let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
@@ -652,18 +661,73 @@ async fn play(
                             windows.inventory_slot(writer, slot as i16, item)?;
                         }
                     }
+                    play::Serverbound::ClientCommand { action: 0 } => {
+                        let dead = ctx.vitals.lock().expect("vitals lock").get(&uuid).is_some_and(|v| v.dead);
+                        if dead {
+                            let health = crate::vitals::respawn(&ctx, uuid);
+                            writer.queue(&play::Respawn {
+                                dimension_type: world.dimension_type_id,
+                                dimension: world.dimension.clone(),
+                                hashed_seed: 0,
+                                game_mode,
+                                previous_game_mode: None,
+                                is_debug: false,
+                                is_flat: world.is_flat,
+                                death_location: None,
+                                portal_cooldown: 0,
+                                sea_level: world.sea_level,
+                                data_kept: 0,
+                            })?;
+                            writer.queue(&abilities(game_mode))?;
+                            writer.queue(&health)?;
+                            let (sx, sy, sz) = world.spawn;
+                            pose = Pose { x: sx, y: sy, z: sz, yaw: world.spawn_yaw, pitch: 0.0, on_ground: true };
+                            next_teleport += 1;
+                            awaiting_teleport = Some(next_teleport);
+                            writer.queue(&play::PlayerPosition {
+                                teleport_id: next_teleport,
+                                x: pose.x,
+                                y: pose.y,
+                                z: pose.z,
+                                velocity: [0.0; 3],
+                                yaw: pose.yaw,
+                                pitch: pose.pitch,
+                                flags: 0,
+                            })?;
+                            writer.queue(&play::GameEvent {
+                                event: play::game_event::START_WAITING_FOR_CHUNKS,
+                                value: 0.0,
+                            })?;
+                            // The client starts a fresh world: everything again.
+                            view = ChunkView::new(session.view_distance, ctx.clone());
+                            seen_entities.clear();
+                            view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                            let hands = ctx.inventories.lock().expect("inventories lock").get(&uuid).cloned().unwrap_or_default();
+                            windows.state_id += 1;
+                            writer.queue(&play::ContainerSetContent {
+                                window: 0,
+                                state_id: windows.state_id,
+                                slots: hands.slots.clone(),
+                                carried: None,
+                            })?;
+                            writer.queue(&skin_parts_metadata(entity_id, session.skin_parts))?;
+                            update_player(&ctx, uuid, |p| p.pose = Some(pose));
+                            let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
+                        }
+                    }
+                    play::Serverbound::PlayerInput { flags } => sneaking = flags & 0x20 != 0,
                     play::Serverbound::Punch => {
                         let _ = ctx.events.send(Event::Swing { uuid, entity_id, times: 1 });
                     }
                     // Block changes happen on the tick thread; the answer comes back
                     // through `replies`.
                     play::Serverbound::PlayerAction { status, position, sequence, .. } => {
-                        let actor = Actor { uuid, entity_id, game_mode, pose };
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                         let action = Action::Dig { status, position, sequence };
                         let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::UseItemOn { hand, position, face, cursor, sequence, .. } => {
-                        let actor = Actor { uuid, entity_id, game_mode, pose };
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                         let action = Action::UseItemOn { hand, position, face, cursor, sequence };
                         let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                     }
@@ -682,6 +746,12 @@ async fn play(
                     other => trace!("play: {other:?}"),
                 }
                 if moved {
+                    let feet = Position::new(pose.x.floor() as i32, pose.y.floor() as i32, pose.z.floor() as i32);
+                    let in_water = ctx
+                        .world
+                        .block(feet, &ctx.data.blocks)
+                        .is_some_and(|s| ctx.data.blocks.is_fluid(s));
+                    crate::vitals::moved(&ctx, uuid, before, pose, in_water);
                     view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
                     update_player(&ctx, uuid, |p| p.pose = Some(pose));
                     let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
@@ -735,6 +805,32 @@ async fn play(
                         }
                     }
                     Ok(Event::TickingState(packet)) => writer.queue(&packet)?,
+                    Ok(Event::Health { uuid: who, health }) if who == uuid => writer.queue(&health)?,
+                    Ok(Event::Hurt { uuid: who, entity_id: hurt, damage_type }) if who == uuid || visible.contains(&who) => {
+                        writer.queue(&play::DamageEvent { entity_id: hurt, damage_type })?;
+                    }
+                    Ok(Event::Died { uuid: who, entity_id: dead, message }) => {
+                        if who == uuid {
+                            writer.queue(&play::PlayerCombatKill { player: entity_id, message: message.clone() })?;
+                            // Everything carried falls out where the player died.
+                            let lost: Vec<play::ItemStack> = {
+                                let mut inventories = ctx.inventories.lock().expect("inventories lock");
+                                inventories.get_mut(&uuid).map_or_else(Vec::new, |hands| {
+                                    hands.components.clear();
+                                    let mut all: Vec<play::ItemStack> = hands.slots.iter_mut().filter_map(Option::take).collect();
+                                    all.extend(hands.carried.take());
+                                    all
+                                })
+                            };
+                            for stack in lost {
+                                crate::tick::scatter_item(&ctx, pose, stack);
+                            }
+                            update_player(&ctx, uuid, |p| p.main_hand = None);
+                            let _ = ctx.events.send(Event::Chat(message));
+                        } else if visible.remove(&who) {
+                            writer.queue(&play::RemoveEntities { entity_ids: vec![dead] })?;
+                        }
+                    }
                     Ok(Event::GameMode { uuid: who, mode }) => {
                         if who == uuid {
                             game_mode = mode;

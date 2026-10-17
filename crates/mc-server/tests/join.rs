@@ -1246,6 +1246,81 @@ async fn the_inventory_grid_crafts() {
 }
 
 #[tokio::test]
+async fn falls_hurt_and_kill_and_players_respawn() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Jumper".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut jumper, spawn) = join_offline(addr, ctx.ids.clone(), "Jumper").await;
+    let mut command = Vec::new();
+    command.put_string("gamemode survival");
+    jumper.send("minecraft:chat_command", command).await;
+    jumper.recv_until("minecraft:game_event").await;
+    let fall = |from: f64, to: f64| {
+        let mut packets = Vec::new();
+        let mut y = from;
+        while y > to {
+            let mut b = Vec::new();
+            b.put_f64(spawn.0);
+            b.put_f64(y);
+            b.put_f64(spawn.2);
+            b.put_u8(0);
+            packets.push(b);
+            y -= 1.0;
+        }
+        let mut landed = Vec::new();
+        landed.put_f64(spawn.0);
+        landed.put_f64(to);
+        landed.put_f64(spawn.2);
+        landed.put_u8(1);
+        packets.push(landed);
+        packets
+    };
+    let health_after = |body: &[u8]| Reader::new(body).f32().unwrap();
+    // 20 blocks: 17 damage.
+    for b in fall(spawn.1 + 20.0, spawn.1) {
+        jumper.send("minecraft:move_player_pos", b).await;
+    }
+    let (_, health) = jumper.recv_until("minecraft:set_health").await;
+    assert_eq!(health_after(&health), 3.0);
+    let (_, hurt) = jumper.recv_until("minecraft:damage_event").await;
+    let fall_type = ctx.damage_type("minecraft:fall");
+    let mut r = Reader::new(&hurt);
+    r.varint().unwrap();
+    assert_eq!(r.varint().unwrap(), fall_type);
+    // Wait out the 10 immune ticks, then fall again and die.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    for b in fall(spawn.1 + 10.0, spawn.1) {
+        jumper.send("minecraft:move_player_pos", b).await;
+    }
+    let (_, death) = jumper.recv_until("minecraft:player_combat_kill").await;
+    let mut r = Reader::new(&death);
+    r.varint().unwrap();
+    let message = format!("{:?}", r.nbt().unwrap());
+    assert!(message.contains("death.attack.fall"), "{message}");
+    // Respawn.
+    let mut respawn = Vec::new();
+    respawn.put_varint(0);
+    jumper.send("minecraft:client_command", respawn).await;
+    jumper.recv_until("minecraft:respawn").await;
+    let (_, health) = jumper.recv_until("minecraft:set_health").await;
+    assert_eq!(health_after(&health), 20.0);
+    let _ = stop.send(());
+}
+
+#[tokio::test]
 async fn serves_a_world_saved_by_vanilla() {
     let world =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/vanilla-server/26.3/world-normal");

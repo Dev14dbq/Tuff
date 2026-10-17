@@ -579,6 +579,14 @@ pub mod play {
         ContainerClose {
             window: i32,
         },
+        /// 0 respawn, 1 statistics, 2 game rules.
+        ClientCommand {
+            action: i32,
+        },
+        /// Keys held: 0x10 jump, 0x20 sneak, 0x40 sprint.
+        PlayerInput {
+            flags: u8,
+        },
         Other(String),
     }
 
@@ -765,6 +773,10 @@ pub mod play {
                 "minecraft:container_close" => Serverbound::ContainerClose {
                     window: r.varint()?,
                 },
+                "minecraft:client_command" => Serverbound::ClientCommand {
+                    action: r.varint()?,
+                },
+                "minecraft:player_input" => Serverbound::PlayerInput { flags: r.u8()? },
                 other => Serverbound::Other(other.to_owned()),
             })
         }
@@ -829,6 +841,91 @@ pub mod play {
             out.put_varint(self.sea_level);
             out.put_bool(self.online_mode);
             out.put_bool(self.enforces_secure_chat);
+        }
+    }
+
+    /// Respawn: back into a world (after death, or another dimension).
+    #[derive(Clone, Debug)]
+    pub struct Respawn {
+        pub dimension_type: i32,
+        pub dimension: String,
+        pub hashed_seed: i64,
+        pub game_mode: i32,
+        pub previous_game_mode: Option<i32>,
+        pub is_debug: bool,
+        pub is_flat: bool,
+        pub death_location: Option<(String, Position)>,
+        pub portal_cooldown: i32,
+        pub sea_level: i32,
+        /// 0x01 keep attributes, 0x02 keep metadata (0 after death).
+        pub data_kept: u8,
+    }
+    packet!(Respawn, Play, "minecraft:respawn");
+    impl Encode for Respawn {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.dimension_type);
+            out.put_string(&self.dimension);
+            out.put_i64(self.hashed_seed);
+            out.put_varint(self.game_mode);
+            out.put_varint(self.previous_game_mode.map_or(0, |mode| mode + 1));
+            out.put_bool(self.is_debug);
+            out.put_bool(self.is_flat);
+            out.put_bool(self.death_location.is_some());
+            if let Some((dimension, position)) = &self.death_location {
+                out.put_string(dimension);
+                out.put_position(*position);
+            }
+            out.put_varint(self.portal_cooldown);
+            out.put_varint(self.sea_level);
+            out.put_u8(self.data_kept);
+        }
+    }
+
+    /// Set Health: the player's health and food.
+    #[derive(Clone, Debug)]
+    pub struct SetHealth {
+        pub health: f32,
+        pub food: i32,
+        pub saturation: f32,
+    }
+    packet!(SetHealth, Play, "minecraft:set_health");
+    impl Encode for SetHealth {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_f32(self.health);
+            out.put_varint(self.food);
+            out.put_f32(self.saturation);
+        }
+    }
+
+    /// Combat Death: the death screen.
+    #[derive(Clone, Debug)]
+    pub struct PlayerCombatKill {
+        pub player: i32,
+        pub message: Tag,
+    }
+    packet!(PlayerCombatKill, Play, "minecraft:player_combat_kill");
+    impl Encode for PlayerCombatKill {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.player);
+            crate::codec::put_nbt(out, &self.message);
+        }
+    }
+
+    /// Damage Event: an entity was hurt (red flash, sound).
+    #[derive(Clone, Debug)]
+    pub struct DamageEvent {
+        pub entity_id: i32,
+        /// Id in the `minecraft:damage_type` registry.
+        pub damage_type: i32,
+    }
+    packet!(DamageEvent, Play, "minecraft:damage_event");
+    impl Encode for DamageEvent {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            out.put_varint(self.damage_type);
+            out.put_varint(0); // no causing entity
+            out.put_varint(0); // no direct entity
+            out.put_bool(false); // no source position
         }
     }
 

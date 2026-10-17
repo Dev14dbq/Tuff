@@ -225,6 +225,9 @@ pub struct Actor {
     pub entity_id: i32,
     pub game_mode: i32,
     pub pose: Pose,
+    /// Sneaking players place blocks against containers and levers instead
+    /// of using them.
+    pub sneaking: bool,
 }
 
 impl Actor {
@@ -234,6 +237,7 @@ impl Actor {
             uuid: 0,
             entity_id: 0,
             game_mode: CREATIVE,
+            sneaking: false,
             pose: Pose {
                 x: 0.0,
                 y: 0.0,
@@ -376,8 +380,11 @@ pub fn use_item_on(
     let held = held.as_ref();
     let (world, blocks) = (&ctx.world, &ctx.data.blocks);
     let block_at = |p: Position| world.block(p, blocks);
+    let use_blocks = !(actor.sneaking && held.is_some());
     // Crafting tables open their grid.
-    if block_at(clicked).and_then(|s| blocks.block_name(s)) == Some("minecraft:crafting_table") {
+    if use_blocks
+        && block_at(clicked).and_then(|s| blocks.block_name(s)) == Some("minecraft:crafting_table")
+    {
         outcome.open_crafting = true;
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,
@@ -387,9 +394,10 @@ pub fn use_item_on(
         return outcome;
     }
     // Containers open.
-    if let Some(kind) = block_at(clicked)
-        .and_then(|s| blocks.block_name(s))
-        .and_then(crate::containers::kind_of)
+    if use_blocks
+        && let Some(kind) = block_at(clicked)
+            .and_then(|s| blocks.block_name(s))
+            .and_then(crate::containers::kind_of)
     {
         outcome.open = Some((clicked, kind));
         outcome.events.push(Event::Swing {
@@ -403,7 +411,7 @@ pub fn use_item_on(
     // something placed against them.
     let mut level = WorldLevel::new(ctx);
     let logic = level.logic();
-    if mc_tick::use_block(&mut level, logic, to_pos(clicked)) {
+    if use_blocks && mc_tick::use_block(&mut level, logic, to_pos(clicked)) {
         if let Some(state) = block_at(clicked) {
             outcome.updates.push((clicked, state));
         }

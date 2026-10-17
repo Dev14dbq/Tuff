@@ -142,6 +142,23 @@ pub enum Event {
         collector: i32,
         count: i32,
     },
+    /// A player's health or food changed (for them).
+    Health {
+        uuid: u128,
+        health: mc_protocol::packets::play::SetHealth,
+    },
+    /// A player was hurt (everyone who sees them).
+    Hurt {
+        uuid: u128,
+        entity_id: i32,
+        damage_type: i32,
+    },
+    /// A player died.
+    Died {
+        uuid: u128,
+        entity_id: i32,
+        message: Tag,
+    },
     /// Disconnect a player with a reason.
     Kick {
         uuid: u128,
@@ -190,6 +207,12 @@ pub struct ServerContext {
     pub loot: crate::loot::BlockLoot,
     /// Crafting recipes.
     pub recipes: crate::crafting::Recipes,
+    /// Health and food of players in play.
+    pub vitals: Mutex<crate::vitals::AllVitals>,
+    /// 0 peaceful, 1 easy, 2 normal, 3 hard (level.dat).
+    pub difficulty: i32,
+    /// `minecraft:damage_type` entries in Registry Data order.
+    damage_types: Vec<String>,
     /// Player files of the world folder (none for the flat test world).
     pub player_files: Option<crate::players::Store>,
     /// Game mode of players who never played here (level.dat `GameType`).
@@ -315,6 +338,12 @@ impl ServerContext {
             )
         });
         let default_game_mode = world.default_game_mode();
+        let difficulty = world.difficulty();
+        let damage_types = registries
+            .iter()
+            .find(|r| r.registry == "minecraft:damage_type")
+            .map(|r| r.entries.iter().map(|e| e.id.clone()).collect())
+            .unwrap_or_default();
         let (actions, action_queue) = std::sync::mpsc::channel();
         let entity_type = |name: &str| {
             data.builtin
@@ -349,6 +378,9 @@ impl ServerContext {
             containers: Mutex::new(HashMap::new()),
             loot: crate::loot::BlockLoot::load(&data),
             recipes: crate::crafting::Recipes::load(&data),
+            vitals: Mutex::new(HashMap::new()),
+            difficulty,
+            damage_types,
             player_files,
             default_game_mode,
             entity_types: EntityTypes {
@@ -371,6 +403,14 @@ impl ServerContext {
             next_entity_id: AtomicI32::new(1),
             data,
         })
+    }
+
+    /// Network id of a damage type.
+    pub fn damage_type(&self, name: &str) -> i32 {
+        self.damage_types
+            .iter()
+            .position(|d| d == name)
+            .unwrap_or(0) as i32
     }
 
     pub fn next_entity_id(&self) -> i32 {

@@ -25,6 +25,7 @@ pub struct Saved {
     pub pose: Pose,
     pub game_mode: i32,
     pub hands: Hands,
+    pub vitals: crate::vitals::Vitals,
 }
 
 /// Container slot of each equipment key.
@@ -166,10 +167,25 @@ impl Store {
                 }
             }
         }
+        let mut vitals = crate::vitals::Vitals::default();
+        if let Some(Tag::Float(h)) = root.get("Health") {
+            vitals.health = *h;
+        }
+        if let Some(Tag::Int(f)) = root.get("foodLevel") {
+            vitals.food = *f;
+        }
+        if let Some(Tag::Float(s)) = root.get("foodSaturationLevel") {
+            vitals.saturation = *s;
+        }
+        if let Some(Tag::Float(e)) = root.get("foodExhaustionLevel") {
+            vitals.exhaustion = *e;
+        }
+        vitals.dead = vitals.health <= 0.0;
         Ok(Some(Saved {
             pose,
             game_mode,
             hands,
+            vitals,
         }))
     }
 
@@ -210,6 +226,10 @@ impl Store {
         );
         root.insert("OnGround", Tag::Byte(i8::from(p.on_ground)));
         root.insert("playerGameType", Tag::Int(saved.game_mode));
+        root.insert("Health", Tag::Float(saved.vitals.health));
+        root.insert("foodLevel", Tag::Int(saved.vitals.food));
+        root.insert("foodSaturationLevel", Tag::Float(saved.vitals.saturation));
+        root.insert("foodExhaustionLevel", Tag::Float(saved.vitals.exhaustion));
         root.insert("SelectedItemSlot", Tag::Int(saved.hands.selected as i32));
         let mut inventory = Vec::new();
         for index in 0..36 {

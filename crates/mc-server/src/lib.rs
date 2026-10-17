@@ -18,6 +18,7 @@ mod loot;
 mod players;
 mod tick;
 mod util;
+mod vitals;
 mod world;
 
 use std::future::Future;
@@ -225,10 +226,18 @@ pub(crate) fn save_player(ctx: &ServerContext, uuid: u128) {
     let Some(pose) = player.pose else {
         return;
     };
+    let vitals = ctx
+        .vitals
+        .lock()
+        .expect("vitals lock")
+        .get(&uuid)
+        .cloned()
+        .unwrap_or_default();
     let saved = players::Saved {
         pose,
         game_mode: player.game_mode,
         hands,
+        vitals,
     };
     if let Err(err) = store.save(uuid, &saved, ctx.data.version.world_version) {
         tracing::warn!("saving {}: {err:#}", player.profile.name);

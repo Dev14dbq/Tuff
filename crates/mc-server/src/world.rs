@@ -592,6 +592,32 @@ impl World {
         }
     }
 
+    /// 0 peaceful, 1 easy, 2 normal, 3 hard (level.dat
+    /// `difficulty_settings.difficulty`); easy for the flat test world.
+    pub fn difficulty(&self) -> i32 {
+        let Some(dir) = &self.folder else {
+            return 1;
+        };
+        let name = read_gz(&dir.join("level.dat"))
+            .ok()
+            .and_then(|root| match root.get("Data") {
+                Some(Tag::Compound(data)) => match data.get("difficulty_settings") {
+                    Some(Tag::Compound(d)) => match d.get("difficulty") {
+                        Some(Tag::String(s)) => Some(s.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            });
+        match name.as_deref() {
+            Some("peaceful") => 0,
+            Some("normal") => 2,
+            Some("hard") => 3,
+            _ => 1,
+        }
+    }
+
     /// Whether changes are written anywhere.
     pub fn is_saved(&self) -> bool {
         matches!(self.source, Source::Anvil(_))
