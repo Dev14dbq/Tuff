@@ -5,7 +5,7 @@
 //! (minecraft.wiki, "Commands/<name>"); feedback is plain English for now.
 
 use mc_protocol::Position;
-use mc_protocol::packets::play::{TickingState, TickingStep};
+use mc_protocol::packets::play::{ItemStack, TickingState, TickingStep};
 
 use crate::context::{Event, Pose, ServerContext};
 use crate::level::WorldLevel;
@@ -50,13 +50,45 @@ pub struct Output {
 const FILL_LIMIT: i64 = 32768;
 
 pub const COMMANDS: &[&str] = &[
-    "fill", "gamemode", "gamerule", "help", "kick", "list", "save-all", "say", "setblock", "stop",
-    "tick", "time", "tp", "teleport",
+    "clear", "fill", "gamemode", "gamerule", "give", "help", "item", "kick", "kill", "list",
+    "save-all", "say", "setblock", "stop", "summon", "tick", "time", "tp", "teleport",
 ];
+
+/// Splits a command line at spaces, but not inside `{}`/`[]` or quotes, so
+/// SNBT and block states with spaces stay one argument.
+fn tokens(line: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut quote, mut start) = (0i32, None::<char>, None::<usize>);
+    for (i, c) in line.char_indices() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                '{' | '[' => depth += 1,
+                '}' | ']' => depth -= 1,
+                c if c.is_whitespace() && depth <= 0 => {
+                    if let Some(s) = start.take() {
+                        out.push(&line[s..i]);
+                    }
+                    continue;
+                }
+                _ => {}
+            },
+        }
+        if start.is_none() {
+            start = Some(i);
+        }
+    }
+    if let Some(s) = start {
+        out.push(&line[s..]);
+    }
+    out
+}
 
 pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, line: &str) -> Output {
     let line = line.trim().trim_start_matches('/');
-    let args: Vec<&str> = line.split_whitespace().collect();
+    let args: Vec<&str> = tokens(line);
     let mut out = Output::default();
     let Some((&name, args)) = args.split_first() else {
         return out;
@@ -84,6 +116,8 @@ pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, lin
         "give" => give(ctx, args, &mut out),
         "kill" => kill(ctx, source, args),
         "clear" => clear(ctx, source, args, &mut out),
+        "summon" => summon(ctx, source, args, &mut out),
+        "item" => item_command(ctx, source, args, &mut out),
         other => Err(format!("Unknown command: {other}")),
     };
     match result {
@@ -151,6 +185,77 @@ fn block_position(tokens: &[&str], origin: (f64, f64, f64)) -> Result<Position> 
         y.floor() as i32,
         z.floor() as i32,
     ))
+}
+
+/// A block with optional block entity data: `chest[facing=east]{Items:[...]}`.
+fn parse_block(ctx: &ServerContext, text: &str) -> Result<(u32, Option<mc_nbt::Compound>)> {
+    // Properties come before the data: `name[...]{...}`.
+    let first_brace = text.find('{').unwrap_or(text.len());
+    let close = match text.find('[') {
+        Some(open) if open < first_brace => text[open..].find(']').map_or(0, |i| open + i + 1),
+        _ => 0,
+    };
+    let brace = text[close..].find('{').map(|i| i + close);
+    match brace {
+        Some(b) => {
+            let state = parse_state(ctx, &text[..b])?;
+            match mc_nbt::parse_snbt(&text[b..]) {
+                Ok(mc_nbt::Tag::Compound(c)) => Ok((state, Some(c))),
+                Ok(_) => Err("Expected a compound".into()),
+                Err(e) => Err(format!("Invalid NBT: {e}")),
+            }
+        }
+        None => Ok((parse_state(ctx, text)?, None)),
+    }
+}
+
+/// Block entity id of a block (most are named like the block).
+fn block_entity_id(name: &str) -> String {
+    let short = name.trim_start_matches("minecraft:");
+    let id = if short.ends_with("_hanging_sign") {
+        "hanging_sign"
+    } else if short.ends_with("_sign") {
+        "sign"
+    } else if short.ends_with("_bed") {
+        "bed"
+    } else if short.ends_with("_banner") {
+        "banner"
+    } else if short.ends_with("shulker_box") {
+        "shulker_box"
+    } else if short.ends_with("_skull") || short.ends_with("_head") {
+        "skull"
+    } else {
+        short
+    };
+    format!("minecraft:{id}")
+}
+
+/// Merges command data into the block entity at `p`.
+fn put_block_data(ctx: &ServerContext, p: Position, state: u32, data: mc_nbt::Compound) {
+    let blocks = &ctx.data.blocks;
+    let name = blocks.block_name(state).unwrap_or("");
+    let mut be = ctx
+        .world
+        .block_entity(p, blocks)
+        .unwrap_or(mc_world::BlockEntity {
+            x: p.x,
+            y: p.y,
+            z: p.z,
+            id: block_entity_id(name),
+            data: mc_nbt::Compound::new(),
+        });
+    for (key, value) in data.iter() {
+        be.data.insert(key, value.clone());
+    }
+    ctx.world.set_block_entity(be, blocks);
+    ctx.containers
+        .lock()
+        .expect("containers lock")
+        .remove(&(p.x, p.y, p.z));
+    ctx.container_updates
+        .lock()
+        .expect("container updates lock")
+        .push(p);
 }
 
 /// `stone`, `minecraft:oak_stairs[facing=east,half=top]`.
@@ -237,7 +342,7 @@ fn setblock(
         return Err(help());
     }
     let p = block_position(&args[..3], source.origin(ctx))?;
-    let state = parse_state(ctx, args[3])?;
+    let (state, data) = parse_block(ctx, args[3])?;
     let mode = args.get(4).copied().unwrap_or("replace");
     if !in_world(ctx, p) {
         return Err("That position is out of the world".into());
@@ -247,12 +352,18 @@ fn setblock(
         .block(p, &ctx.data.blocks)
         .ok_or("That position is not loaded")?;
     let allowed = match mode {
-        "replace" | "destroy" => current != state,
+        "replace" | "destroy" => current != state || data.is_some(),
         "keep" => ctx.data.blocks.is_air(current),
         _ => return Err(help()),
     };
-    if !allowed || apply(ctx, vec![(p, state)], mode == "destroy", out) == 0 {
+    if !allowed {
         return Err("Could not set the block".into());
+    }
+    if current != state && apply(ctx, vec![(p, state)], mode == "destroy", out) == 0 {
+        return Err("Could not set the block".into());
+    }
+    if let Some(data) = data {
+        put_block_data(ctx, p, state, data);
     }
     Ok(format!("Changed the block at {}, {}, {}", p.x, p.y, p.z))
 }
@@ -268,7 +379,7 @@ fn fill(ctx: &ServerContext, source: &Source, args: &[&str], out: &mut Output) -
         block_position(&args[..3], origin)?,
         block_position(&args[3..6], origin)?,
     );
-    let state = parse_state(ctx, args[6])?;
+    let (state, data) = parse_block(ctx, args[6])?;
     let mode = args.get(7).copied().unwrap_or("replace");
     let filter = match (mode, args.get(8)) {
         ("replace", Some(filter)) => Some(parse_state(ctx, filter)?),
@@ -325,9 +436,19 @@ fn fill(ctx: &ServerContext, source: &Source, args: &[&str], out: &mut Output) -
             }
         }
     }
+    let placed: Vec<Position> = changes
+        .iter()
+        .filter(|(_, s)| *s == state)
+        .map(|(p, _)| *p)
+        .collect();
     let count = apply(ctx, changes, mode == "destroy", out);
     if count == 0 {
         return Err("No blocks were filled".into());
+    }
+    if let Some(data) = data {
+        for p in placed {
+            put_block_data(ctx, p, state, data.clone());
+        }
     }
     Ok(format!("Successfully filled {count} block(s)"))
 }
@@ -641,6 +762,226 @@ fn kick(ctx: &ServerContext, args: &[&str], out: &mut Output) -> Result<String> 
         reason: reason.clone(),
     });
     Ok(format!("Kicked {who}: {reason}"))
+}
+
+fn tag_f64(tag: Option<&mc_nbt::Tag>) -> Option<f64> {
+    match tag? {
+        mc_nbt::Tag::Double(v) => Some(*v),
+        mc_nbt::Tag::Float(v) => Some(f64::from(*v)),
+        mc_nbt::Tag::Int(v) => Some(f64::from(*v)),
+        _ => None,
+    }
+}
+
+fn tag_i32(tag: Option<&mc_nbt::Tag>) -> Option<i32> {
+    match tag? {
+        mc_nbt::Tag::Byte(v) => Some(i32::from(*v)),
+        mc_nbt::Tag::Short(v) => Some(i32::from(*v)),
+        mc_nbt::Tag::Int(v) => Some(*v),
+        _ => None,
+    }
+}
+
+/// `summon <entity> [<x> <y> <z>] [<nbt>]`: dropped items (`Item:{id,
+/// count}`, `Motion`, `PickupDelay`) and falling blocks (`BlockState:{Name,
+/// Properties}`) for now.
+fn summon(ctx: &ServerContext, source: &Source, args: &[&str], out: &mut Output) -> Result<String> {
+    let help = || usage("summon <entity> [<x> <y> <z>] [<nbt>]");
+    let Some(kind) = args.first() else {
+        return Err(help());
+    };
+    let kind = kind.trim_start_matches("minecraft:");
+    let origin = source.origin(ctx);
+    let at = if args.len() >= 4 {
+        position(&args[1..4], origin)?
+    } else {
+        origin
+    };
+    let nbt = match args.get(4) {
+        Some(text) => match mc_nbt::parse_snbt(text) {
+            Ok(mc_nbt::Tag::Compound(c)) => c,
+            Ok(_) => return Err("Expected a compound".into()),
+            Err(e) => return Err(format!("Invalid NBT: {e}")),
+        },
+        None => mc_nbt::Compound::new(),
+    };
+    let vel = match nbt.get("Motion") {
+        Some(mc_nbt::Tag::List(m)) if m.len() == 3 => [
+            tag_f64(m.first()).unwrap_or(0.0),
+            tag_f64(m.get(1)).unwrap_or(0.0),
+            tag_f64(m.get(2)).unwrap_or(0.0),
+        ],
+        _ => [0.0; 3],
+    };
+    let entity_kind = match kind {
+        "item" => {
+            let Some(mc_nbt::Tag::Compound(item)) = nbt.get("Item") else {
+                return Err("Unable to summon entity: an item needs Item:{id,count}".into());
+            };
+            let Some(mc_nbt::Tag::String(id)) = item.get("id") else {
+                return Err("Item needs an id".into());
+            };
+            let name = if id.contains(':') {
+                id.clone()
+            } else {
+                format!("minecraft:{id}")
+            };
+            let item_id = ctx
+                .items
+                .id(&name)
+                .ok_or_else(|| format!("Unknown item '{name}'"))?;
+            mc_entity::Kind::Item {
+                item: item_id,
+                count: tag_i32(item.get("count")).unwrap_or(1),
+                pickup_delay: tag_i32(nbt.get("PickupDelay")).unwrap_or(0),
+            }
+        }
+        "falling_block" => {
+            let state = match nbt.get("BlockState") {
+                Some(mc_nbt::Tag::Compound(bs)) => {
+                    let Some(mc_nbt::Tag::String(name)) = bs.get("Name") else {
+                        return Err("BlockState needs a Name".into());
+                    };
+                    let props = match bs.get("Properties") {
+                        Some(mc_nbt::Tag::Compound(p)) => p
+                            .iter()
+                            .filter_map(|(k, v)| match v {
+                                mc_nbt::Tag::String(v) => Some(format!("{k}={v}")),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join(","),
+                        _ => String::new(),
+                    };
+                    parse_state(ctx, &format!("{name}[{props}]"))?
+                }
+                _ => ctx.data.blocks.default_state("minecraft:sand").unwrap_or(0),
+            };
+            mc_entity::Kind::FallingBlock { state }
+        }
+        other => {
+            return Err(format!(
+                "Unable to summon entity: {other} is not supported yet"
+            ));
+        }
+    };
+    let entity = mc_entity::Entity {
+        id: ctx.next_entity_id(),
+        uuid: crate::util::random_uuid(),
+        kind: entity_kind,
+        pos: [at.0, at.1, at.2],
+        vel,
+        on_ground: false,
+        age: 0,
+        removed: false,
+    };
+    out.events.push(Event::EntitySpawned(entity.clone()));
+    lock(&ctx.entities).push(entity);
+    Ok(format!("Summoned new {kind}"))
+}
+
+/// `item replace block <x> <y> <z> container.<n> with <item> [<count>]`
+/// and `item replace entity <player> <slot> with <item> [<count>]` (slots
+/// `hotbar.<n>`, `inventory.<n>`, `weapon.mainhand`, `weapon.offhand`,
+/// `armor.head|chest|legs|feet`).
+fn item_command(
+    ctx: &ServerContext,
+    source: &Source,
+    args: &[&str],
+    out: &mut Output,
+) -> Result<String> {
+    let help = || usage("item replace (block <pos>|entity <player>) <slot> with <item> [<count>]");
+    if args.first() != Some(&"replace") {
+        return Err(help());
+    }
+    let (target, rest) = match args.get(1) {
+        Some(&"block") if args.len() >= 5 => (None, &args[5..]),
+        Some(&"entity") if args.len() >= 3 => (Some(args[2]), &args[3..]),
+        _ => return Err(help()),
+    };
+    let [slot, with, item, more @ ..] = rest else {
+        return Err(help());
+    };
+    if *with != "with" {
+        return Err(help());
+    }
+    let name = if item.contains(':') {
+        (*item).to_owned()
+    } else {
+        format!("minecraft:{item}")
+    };
+    let id = ctx
+        .items
+        .id(&name)
+        .ok_or_else(|| format!("Unknown item '{name}'"))?;
+    let count: i32 = match more.first() {
+        Some(c) => c.parse().map_err(|_| format!("Invalid count: {c}"))?,
+        None => 1,
+    };
+    let stack = (count > 0 && name != "minecraft:air").then_some(ItemStack {
+        count,
+        item: id,
+        has_component_changes: false,
+    });
+    match target {
+        None => {
+            let p = block_position(&args[2..5], source.origin(ctx))?;
+            let index: usize = slot
+                .strip_prefix("container.")
+                .and_then(|n| n.parse().ok())
+                .ok_or_else(|| format!("Unknown slot '{slot}'"))?;
+            let state = ctx
+                .world
+                .block(p, &ctx.data.blocks)
+                .ok_or("That position is not loaded")?;
+            let block = ctx.data.blocks.block_name(state).unwrap_or("");
+            let kind =
+                crate::containers::kind_of(block).ok_or("Target block is not a container")?;
+            if index >= kind.slots {
+                return Err(format!("Unknown slot '{slot}'"));
+            }
+            crate::containers::set_slot(ctx, p, kind, index, stack);
+            Ok(format!(
+                "Replaced a slot at {}, {}, {} with {count} [{name}]",
+                p.x, p.y, p.z
+            ))
+        }
+        Some(who) => {
+            let (uuid, _) = find_player(ctx, who)?;
+            let index = match *slot {
+                "weapon.mainhand" | "weapon" => lock(&ctx.inventories)
+                    .get(&uuid)
+                    .map_or(36, |h| h.hand_slot(0)),
+                "weapon.offhand" => 45,
+                "armor.head" => 5,
+                "armor.chest" => 6,
+                "armor.legs" => 7,
+                "armor.feet" => 8,
+                s => match s.split_once('.') {
+                    Some(("hotbar", n)) => {
+                        n.parse::<usize>().ok().filter(|&n| n < 9).map(|n| 36 + n)
+                    }
+                    Some(("inventory", n)) => {
+                        n.parse::<usize>().ok().filter(|&n| n < 27).map(|n| 9 + n)
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| format!("Unknown slot '{slot}'"))?,
+            };
+            let mut inventories = lock(&ctx.inventories);
+            let hands = inventories
+                .get_mut(&uuid)
+                .ok_or("That player has no inventory")?;
+            hands.slots[index] = stack.clone();
+            hands.components.remove(&index);
+            out.events.push(Event::InventorySlot {
+                uuid,
+                slot: index as i16,
+                item: stack,
+            });
+            Ok(format!("Replaced a slot on {who} with {count} [{name}]"))
+        }
+    }
 }
 
 #[cfg(test)]

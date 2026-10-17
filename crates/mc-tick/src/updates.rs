@@ -124,8 +124,18 @@ pub fn update_neighbor_shapes(
         let mut new = ctx
             .shapes
             .update_shape(level, np, current, dir.opposite(), state);
-        if redstone::part(ctx, new) == redstone::Part::Wire {
-            new = redstone::wire_shape(level, ctx, np, new);
+        match redstone::part(ctx, new) {
+            redstone::Part::Wire => new = redstone::wire_shape(level, ctx, np, new),
+            redstone::Part::NoteBlock if !dir.is_horizontal() => {
+                new = redstone::note_instrument(level, ctx, np, new);
+            }
+            _ => {}
+        }
+        // An observer looking at `p` sees it change.
+        if redstone::part(ctx, current) == redstone::Part::Observer
+            && ctx.shapes.property(current, "facing") == Some(dir.opposite().name())
+        {
+            redstone::observed_change(level, ctx, np);
         }
         if new != current {
             let flags = if ctx.shapes.is_air(new) {
@@ -157,10 +167,10 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
 /// connections and shapes from its neighbours.
 pub fn placement_state(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> u32 {
     let state = ctx.shapes.placement_shape(level, p, state);
-    if redstone::part(ctx, state) == redstone::Part::Wire {
-        redstone::wire_shape(level, ctx, p, state)
-    } else {
-        state
+    match redstone::part(ctx, state) {
+        redstone::Part::Wire => redstone::wire_shape(level, ctx, p, state),
+        redstone::Part::NoteBlock => redstone::note_instrument(level, ctx, p, state),
+        _ => state,
     }
 }
 
@@ -171,6 +181,7 @@ pub fn use_block(level: &mut dyn Level, ctx: Ctx, p: BlockPos) -> bool {
     if redstone::use_block(level, ctx, p) {
         return true;
     }
+    // Iron doors and trapdoors open only by redstone.
     let state = level.block(p);
     let name = ctx.shapes.block_name(state).unwrap_or("");
     let opens =

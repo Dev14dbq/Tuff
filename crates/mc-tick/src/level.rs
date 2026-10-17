@@ -28,4 +28,23 @@ pub trait Level {
 
     /// Turns the block that was at `p` into a falling block entity.
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32);
+
+    /// How full the container at `p` is, as a comparator reads it (`None`
+    /// if it is not a container).
+    fn container_signal(&self, _p: BlockPos) -> Option<u8> {
+        None
+    }
+
+    /// The signal a comparator at `p` holds (kept in its block entity).
+    fn comparator_output(&self, _p: BlockPos) -> u8 {
+        0
+    }
+
+    fn set_comparator_output(&mut self, _p: BlockPos, _signal: u8) {}
+
+    /// Entities whose boxes touch the box from `min` to `max`: all of them,
+    /// and only players and mobs.
+    fn entities_in(&self, _min: [f64; 3], _max: [f64; 3]) -> (u32, u32) {
+        (0, 0)
+    }
 }

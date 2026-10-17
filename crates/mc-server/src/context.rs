@@ -225,6 +225,8 @@ pub struct ServerContext {
     pub vitals: Mutex<crate::vitals::AllVitals>,
     /// Stack sizes, food and more of every item.
     pub items: crate::items::Items,
+    /// Containers whose contents changed, for comparators (tick thread).
+    pub container_updates: Mutex<Vec<mc_protocol::Position>>,
     /// Players eating or drinking (tick thread counts down).
     pub using: Mutex<HashMap<u128, crate::vitals::Using>>,
     /// 0 peaceful, 1 easy, 2 normal, 3 hard (level.dat).
@@ -346,7 +348,8 @@ impl ServerContext {
             &data,
             observed("fence_attach.json"),
             observed("conductor.json"),
-        );
+        )
+        .with_instruments(observed("instrument.json"));
         let world = match &config.world {
             Some(dir) => World::open(dir, &data, &synced_ids, light)?,
             None => World::flat(&data, &synced_ids, &rules, light)?,
@@ -404,6 +407,7 @@ impl ServerContext {
             vitals: Mutex::new(HashMap::new()),
             items,
             using: Mutex::new(HashMap::new()),
+            container_updates: Mutex::new(Vec::new()),
             difficulty,
             damage_types,
             player_files,

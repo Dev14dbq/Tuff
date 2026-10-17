@@ -10,8 +10,10 @@
 use std::fmt;
 
 mod mutf8;
+mod snbt;
 
 pub use mutf8::{decode_mutf8, encode_mutf8};
+pub use snbt::{parse_snbt, parse_snbt_prefix};
 
 /// Maximum nesting depth accepted when decoding, same as the vanilla limit.
 pub const MAX_DEPTH: usize = 512;

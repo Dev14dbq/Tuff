@@ -2,6 +2,8 @@
 //! state from a vanilla server that the data reports do not carry.
 //!
 //! `attach`: which faces fences attach to.
+//! `instrument`: the note block instrument each block gives the note block
+//! on top of it (default states only; the index in the `instrument` values).
 //! `conductor`: whether the block conducts redstone power: a powered lever
 //! on its west face, a redstone lamp on its east face; the lamp lights only
 //! through a conductor. A copy without the lever two blocks south tells power
@@ -32,7 +34,10 @@ pub fn run(args: &[String]) -> Result<()> {
         Some("attach") => observe(&args[1..], Fact::Attach),
         Some("conductor") => observe(&args[1..], Fact::Conductor),
         Some("opacity") => observe(&args[1..], Fact::Opacity),
-        _ => bail!("usage: observe attach|conductor [--first <state>] [--count <n>]"),
+        Some("instrument") => observe(&args[1..], Fact::Instrument),
+        _ => bail!(
+            "usage: observe attach|conductor|opacity|instrument [--first <state>] [--count <n>]"
+        ),
     }
 }
 
@@ -45,6 +50,7 @@ enum Fact {
     Attach,
     Conductor,
     Opacity,
+    Instrument,
 }
 
 impl Fact {
@@ -53,6 +59,7 @@ impl Fact {
             Fact::Attach => "fence_attach.json",
             Fact::Conductor => "conductor.json",
             Fact::Opacity => "opacity.json",
+            Fact::Instrument => "instrument.json",
         }
     }
 
@@ -66,6 +73,9 @@ impl Fact {
             }
             Fact::Opacity => {
                 "how much sky light each block state takes away going down into a closed cell below it (0-15); +16 = state changed after placing; -1 = not observed"
+            }
+            Fact::Instrument => {
+                "instrument a note block placed on each block's default state takes: index in the note block's instrument values; -1 = not observed"
             }
         }
     }
@@ -106,9 +116,16 @@ fn observe(args: &[String], fact: Fact) -> Result<()> {
     let end = (first + count).min(total);
     let mut start = first;
     while start < end {
+        let is_default = |s: u32| {
+            data.blocks
+                .block_name(s)
+                .and_then(|n| data.blocks.default_state(n))
+                == Some(s)
+        };
         let batch: Vec<u32> = (start..(start + PER_RUN).min(end))
             .map(|s| s as u32)
             .filter(|&s| data.blocks.block_name(s) != Some("minecraft:moving_piston"))
+            .filter(|&s| fact != Fact::Instrument || is_default(s))
             .collect();
         let began = Instant::now();
         let observed = observe_batch(&root, &data, &batch, fact)?;
@@ -173,6 +190,11 @@ fn observe_batch(
                 vanilla.send(&format!("setblock {x} {} {z} {text}", Y + 9))?;
                 continue;
             }
+            if fact == Fact::Instrument {
+                vanilla.send(&format!("setblock {x} {Y} {z} {text}"))?;
+                vanilla.send(&format!("setblock {x} {} {z} note_block", Y + 1))?;
+                continue;
+            }
             vanilla.send(&format!("setblock {x} {Y} {z} {text}"))?;
             if fact == Fact::Conductor {
                 vanilla.send(&format!("setblock {x} {Y} {} {text}", z + 2))?;
@@ -190,7 +212,7 @@ fn observe_batch(
                     vanilla.send(&format!("setblock {} {Y} {z} redstone_lamp", x + 1))?;
                     vanilla.send(&format!("setblock {} {Y} {} redstone_lamp", x + 1, z + 2))?;
                 }
-                Fact::Opacity => {}
+                Fact::Opacity | Fact::Instrument => {}
             }
         }
         if fact == Fact::Conductor {
@@ -232,6 +254,42 @@ fn observe_batch(
             .map(|(i, &state)| {
                 let (x, z) = cell(i);
                 let mut bits = 0;
+                if fact == Fact::Instrument {
+                    let values = [
+                        "harp",
+                        "basedrum",
+                        "snare",
+                        "hat",
+                        "bass",
+                        "flute",
+                        "bell",
+                        "guitar",
+                        "chime",
+                        "xylophone",
+                        "iron_xylophone",
+                        "cow_bell",
+                        "didgeridoo",
+                        "bit",
+                        "banjo",
+                        "pling",
+                        "trumpet",
+                        "trumpet_exposed",
+                        "trumpet_oxidized",
+                        "trumpet_weathered",
+                        "zombie",
+                        "skeleton",
+                        "creeper",
+                        "dragon",
+                        "wither_skeleton",
+                        "piglin",
+                        "custom_head",
+                    ];
+                    let found = mirror
+                        .block(x, Y + 1, z)
+                        .and_then(|s| data.blocks.property(s, "instrument"))
+                        .and_then(|v| values.iter().position(|n| *n == v));
+                    return (state, found.map_or(-1, |i| i as i32));
+                }
                 if fact == Fact::Opacity {
                     let changed = mirror.block(x, Y + 9, z) != Some(state);
                     let bits = match mirror.light(0, x, Y + 8, z) {

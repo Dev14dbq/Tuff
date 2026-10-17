@@ -25,6 +25,8 @@ pub struct WorldLevel<'a> {
     pub spawned: Vec<mc_entity::Entity>,
     /// Chunks whose light changed.
     lit: Vec<(i32, i32)>,
+    /// While entities move: their boxes as they are so far this tick.
+    pub entity_boxes: Option<Vec<mc_entity::Aabb>>,
 }
 
 impl<'a> WorldLevel<'a> {
@@ -35,6 +37,7 @@ impl<'a> WorldLevel<'a> {
             index: HashMap::new(),
             spawned: Vec::new(),
             lit: Vec::new(),
+            entity_boxes: None,
         }
     }
 
@@ -119,6 +122,73 @@ impl Level for WorldLevel<'_> {
     fn in_world(&self, p: BlockPos) -> bool {
         let world = &self.ctx.world;
         p.y >= world.min_y && p.y < world.min_y + world.height as i32
+    }
+
+    fn container_signal(&self, p: BlockPos) -> Option<u8> {
+        crate::containers::signal(self.ctx, to_position(p))
+    }
+
+    fn comparator_output(&self, p: BlockPos) -> u8 {
+        let be = self
+            .ctx
+            .world
+            .block_entity(to_position(p), &self.ctx.data.blocks);
+        match be.and_then(|be| be.data.get("OutputSignal").cloned()) {
+            Some(mc_nbt::Tag::Int(v)) => v.clamp(0, 15) as u8,
+            _ => 0,
+        }
+    }
+
+    fn set_comparator_output(&mut self, p: BlockPos, signal: u8) {
+        let blocks = &self.ctx.data.blocks;
+        let at = to_position(p);
+        let mut be = self
+            .ctx
+            .world
+            .block_entity(at, blocks)
+            .unwrap_or(mc_world::BlockEntity {
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                id: "minecraft:comparator".into(),
+                data: mc_nbt::Compound::new(),
+            });
+        be.data
+            .insert("OutputSignal", mc_nbt::Tag::Int(i32::from(signal)));
+        self.ctx.world.set_block_entity(be, blocks);
+    }
+
+    fn entities_in(&self, min: [f64; 3], max: [f64; 3]) -> (u32, u32) {
+        let touches = |lo: [f64; 3], hi: [f64; 3]| (0..3).all(|i| lo[i] < max[i] && hi[i] > min[i]);
+        let mut living = 0;
+        for player in self.ctx.players.lock().expect("players lock").values() {
+            let Some(pose) = player.pose else { continue };
+            if player.game_mode == 3 {
+                continue;
+            }
+            if touches(
+                [pose.x - 0.3, pose.y, pose.z - 0.3],
+                [pose.x + 0.3, pose.y + 1.8, pose.z + 0.3],
+            ) {
+                living += 1;
+            }
+        }
+        let mut all = living;
+        match &self.entity_boxes {
+            Some(boxes) => all += boxes.iter().filter(|b| touches(b.min, b.max)).count() as u32,
+            None => {
+                if let Ok(entities) = self.ctx.entities.try_lock() {
+                    all += entities
+                        .iter()
+                        .filter(|e| {
+                            let b = e.aabb();
+                            touches(b.min, b.max)
+                        })
+                        .count() as u32;
+                }
+            }
+        }
+        (all, living)
     }
 
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32) {

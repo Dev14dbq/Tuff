@@ -1,0 +1,52 @@
+# Comparators reading containers; pressure plates (stone floor at y=-60).
+region -2 -61 -2 22 -55 22
+run fill -2 -60 -2 22 -60 22 stone
+compare
+
+# A comparator reading a chest behind it, dust in front.
+run setblock 2 -59 0 chest
+run setblock 1 -59 0 comparator[facing=east]
+run fill 0 -59 0 -2 -59 0 redstone_wire
+step 2
+run item replace block 2 -59 0 container.0 with stone 64
+step 2
+step 2
+run item replace block 2 -59 0 container.1 with stone 64
+step 2
+step 2
+run item replace block 2 -59 0 container.2 with diamond_sword 1
+step 2
+step 2
+
+# Through a conductor: chest, stone, comparator.
+run setblock 2 -59 3 chest{Items:[{Slot:0b,id:"minecraft:stone",count:64},{Slot:1b,id:"minecraft:stone",count:64},{Slot:2b,id:"minecraft:stone",count:64},{Slot:3b,id:"minecraft:stone",count:64}]}
+run setblock 1 -59 3 stone
+run setblock 0 -59 3 comparator[facing=east]
+run fill -1 -59 3 -2 -59 3 redstone_wire
+step 2
+step 2
+# A barrel and a cake.
+run setblock 2 -59 6 barrel{Items:[{Slot:0b,id:"minecraft:ender_pearl",count:16}]}
+run setblock 1 -59 6 comparator[facing=east]
+run fill 0 -59 6 -2 -59 6 redstone_wire
+run setblock 2 -59 8 cake[bites=3]
+run setblock 1 -59 8 comparator[facing=east]
+run fill 0 -59 8 -2 -59 8 redstone_wire
+step 2
+step 2
+
+# Plates pressed by items dropped on them.
+run setblock 10 -59 0 oak_pressure_plate
+run fill 11 -59 0 14 -59 0 redstone_wire
+run setblock 10 -59 3 stone_pressure_plate
+run fill 11 -59 3 14 -59 3 redstone_wire
+run setblock 10 -59 6 light_weighted_pressure_plate
+run fill 11 -59 6 14 -59 6 redstone_wire
+run summon item 10.5 -58.5 0.5 {Item:{id:"minecraft:stone",count:1},PickupDelay:32767}
+run summon item 10.5 -58.5 3.5 {Item:{id:"minecraft:stone",count:1},PickupDelay:32767}
+run summon item 10.5 -58.5 6.5 {Item:{id:"minecraft:stone",count:1},PickupDelay:32767}
+run summon item 10.6 -58.5 6.4 {Item:{id:"minecraft:dirt",count:1},PickupDelay:32767}
+step 5
+step 5
+step 10
+step 20

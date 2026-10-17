@@ -46,6 +46,9 @@ pub struct Shapes {
     blocks_of: Vec<u32>,
     blocks: mc_data::Blocks,
     air: u32,
+    /// Note block instrument each state gives the note block on it (an index
+    /// in [`crate::redstone::INSTRUMENTS`]), observed.
+    instrument: Vec<u8>,
 }
 
 impl Shapes {
@@ -170,6 +173,7 @@ impl Shapes {
             blocks_of[state as usize] = index as u32;
         }
         Self {
+            instrument: vec![0; states],
             kind,
             attach,
             observed,
@@ -300,6 +304,30 @@ impl Shapes {
             "straight"
         };
         self.with(state, "shape", shape)
+    }
+
+    /// With the observed note block instruments (`observed/instrument.json`:
+    /// per state, filled for default states). Every state of a block gives
+    /// what its default state gives.
+    pub fn with_instruments(mut self, table: Option<Vec<i32>>) -> Self {
+        let Some(table) = table.filter(|t| t.len() == self.instrument.len()) else {
+            return self;
+        };
+        for state in 0..self.instrument.len() as u32 {
+            let default = self
+                .blocks
+                .block_name(state)
+                .and_then(|n| self.blocks.default_state(n));
+            if let Some(&v) = default.and_then(|d| table.get(d as usize)) {
+                self.instrument[state as usize] = v.max(0) as u8;
+            }
+        }
+        self
+    }
+
+    /// The instrument a note block on top of `state` plays.
+    pub fn instrument_below(&self, state: u32) -> u8 {
+        self.instrument.get(state as usize).copied().unwrap_or(0)
     }
 
     /// The new state of the block at `pos` after its neighbour in direction

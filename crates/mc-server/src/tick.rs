@@ -176,6 +176,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             }
             let _ = request.reply.send(outcome);
         }
+        containers_changed(&ctx);
 
         if count.is_multiple_of(UNLOAD_EVERY) {
             let dropped = ctx.world.unload_unused();
@@ -225,6 +226,7 @@ fn run_scheduled_ticks(ctx: &ServerContext) {
         mc_tick::fluids::tick(&mut level, logic, pos, fluid);
     }
     tick_entities(ctx, &mut level);
+    press_plates(ctx, &mut level);
     let (changes, spawned) = level.finish();
     if !changes.is_empty() {
         let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
@@ -234,6 +236,49 @@ fn run_scheduled_ticks(ctx: &ServerContext) {
         for entity in spawned {
             let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
             entities.push(entity);
+        }
+    }
+}
+
+/// Comparators look at containers whose contents changed (even while the
+/// game is frozen: they only schedule their ticks).
+fn containers_changed(ctx: &ServerContext) {
+    let changed = std::mem::take(&mut *lock(&ctx.container_updates));
+    if changed.is_empty() {
+        return;
+    }
+    let mut level = crate::level::WorldLevel::new(ctx);
+    let logic = level.logic();
+    for p in changed {
+        mc_tick::redstone::container_changed(&mut level, logic, crate::level::to_pos(p));
+    }
+    let changes = level.into_changes();
+    if !changes.is_empty() {
+        let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
+    }
+}
+
+/// Players standing in pressure plates press them (other entities do as
+/// they move).
+fn press_plates(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
+    use mc_tick::Level as _;
+    let at: Vec<mc_tick::BlockPos> = lock(&ctx.players)
+        .values()
+        .filter(|p| p.game_mode != 3)
+        .filter_map(|p| p.pose)
+        .map(|pose| {
+            mc_tick::BlockPos::new(
+                pose.x.floor() as i32,
+                pose.y.floor() as i32,
+                pose.z.floor() as i32,
+            )
+        })
+        .collect();
+    let logic = level.logic();
+    for p in at {
+        let name = ctx.shapes.block_name(level.block(p)).unwrap_or("");
+        if name.ends_with("_pressure_plate") {
+            mc_tick::redstone::entity_inside(level, logic, p);
         }
     }
 }
@@ -366,7 +411,9 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         })
         .collect();
     let (mut moved, mut removed) = (Vec::new(), Vec::new());
-    for entity in &mut entities {
+    // Plates see entities where they are at that moment of the tick.
+    level.entity_boxes = Some(entities.iter().map(|e| e.aabb()).collect());
+    for (i, entity) in entities.iter_mut().enumerate() {
         let before = (entity.pos, entity.on_ground);
         match entity.kind.clone() {
             mc_entity::Kind::FallingBlock { state } => {
@@ -414,12 +461,28 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                 }
             }
         }
+        if let Some(boxes) = level.entity_boxes.as_mut() {
+            boxes[i] = entity.aabb();
+        }
+        if !entity.removed {
+            let (x, y, z) = entity.block_pos();
+            let at = mc_tick::BlockPos::new(x, y, z);
+            use mc_tick::Level as _;
+            if ctx
+                .shapes
+                .block_name(level.block(at))
+                .is_some_and(|n| n.ends_with("_pressure_plate"))
+            {
+                mc_tick::redstone::entity_inside(level, logic, at);
+            }
+        }
         if entity.removed {
             removed.push(entity.id);
         } else if (entity.pos, entity.on_ground) != before {
             moved.push((entity.id, entity.pos, entity.on_ground));
         }
     }
+    level.entity_boxes = None;
     entities.retain(|e| !e.removed);
     let mut stored = lock(&ctx.entities);
     entities.append(&mut stored);

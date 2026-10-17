@@ -134,6 +134,75 @@ fn store(ctx: &ServerContext, p: Position, open: &Open) {
     ctx.world.set_block_entity(be, blocks);
 }
 
+/// How full the container at `p` is, as a comparator reads it
+/// (minecraft.wiki, "Redstone Comparator"): 0 when empty, else 1 plus 14
+/// times the fullness (each stack's share of its stack size, averaged over
+/// the slots), rounded down. `None` if there is no container there.
+pub fn signal(ctx: &ServerContext, p: Position) -> Option<u8> {
+    let state = ctx.world.block(p, &ctx.data.blocks)?;
+    let kind = kind_of(ctx.data.blocks.block_name(state)?)?;
+    let slots = match ctx.containers.lock().expect("containers lock").get(&key(p)) {
+        Some(open) => open.slots.clone(),
+        None => match ctx.world.block_entity(p, &ctx.data.blocks) {
+            Some(be) => read_items(ctx, &be.data, kind.slots).0,
+            None => vec![None; kind.slots],
+        },
+    };
+    let fullness: f64 = slots
+        .iter()
+        .flatten()
+        .map(|s| f64::from(s.count) / f64::from(ctx.items.max_stack(s.item).max(1)))
+        .sum::<f64>()
+        / kind.slots as f64;
+    Some(if slots.iter().all(Option::is_none) {
+        0
+    } else {
+        (1.0 + fullness * 14.0).floor() as u8
+    })
+}
+
+/// Puts a stack in one slot of the container at `p` (`/item replace`).
+pub fn set_slot(
+    ctx: &ServerContext,
+    p: Position,
+    kind: Kind,
+    slot: usize,
+    stack: Option<ItemStack>,
+) {
+    let mut all = ctx.containers.lock().expect("containers lock");
+    let open = all.entry(key(p)).or_insert_with(|| {
+        let (slots, components) = match ctx.world.block_entity(p, &ctx.data.blocks) {
+            Some(be) => read_items(ctx, &be.data, kind.slots),
+            None => (vec![None; kind.slots], HashMap::new()),
+        };
+        Open {
+            kind,
+            slots,
+            components,
+            viewers: Vec::new(),
+        }
+    });
+    open.slots[slot] = stack.clone();
+    open.components.remove(&slot);
+    store(ctx, p, open);
+    let viewers = open.viewers.clone();
+    if open.viewers.is_empty() {
+        all.remove(&key(p));
+    }
+    drop(all);
+    ctx.container_updates
+        .lock()
+        .expect("container updates lock")
+        .push(p);
+    if !viewers.is_empty() {
+        let _ = ctx.events.send(crate::context::Event::ContainerSlots {
+            position: p,
+            viewers,
+            slots: vec![(slot, stack)],
+        });
+    }
+}
+
 /// A player opens the container at `p`: its kind and current slots.
 pub fn open(ctx: &ServerContext, uuid: u128, p: Position, kind: Kind) -> Vec<Option<ItemStack>> {
     let mut all = ctx.containers.lock().expect("containers lock");
@@ -186,6 +255,10 @@ pub fn change(
         done.push((*slot, new));
     }
     store(ctx, p, open);
+    ctx.container_updates
+        .lock()
+        .expect("container updates lock")
+        .push(p);
     let others = open
         .viewers
         .iter()

@@ -1,6 +1,7 @@
 //! Redstone, from the public descriptions (minecraft.wiki: "Redstone
 //! mechanics", "Redstone Dust", "Redstone Torch", "Redstone Repeater",
-//! "Lever", "Redstone Lamp") and checked on the parity bench.
+//! "Lever", "Redstone Lamp", "Button", "Pressure Plate", "Observer",
+//! "Redstone Comparator", "Door") and checked on the parity bench.
 //!
 //! Power: a component *emits* power towards its neighbours, and some send
 //! *strong* power into one block (a lever into the block it is on, a torch
@@ -25,6 +26,14 @@ pub enum Part {
     Block,
     Lamp,
     Repeater,
+    Button,
+    Plate,
+    WeightedPlate,
+    Observer,
+    Comparator,
+    /// Doors, trapdoors and fence gates: open while powered.
+    Opens,
+    NoteBlock,
 }
 
 pub fn part(ctx: Ctx, state: u32) -> Part {
@@ -36,12 +45,87 @@ pub fn part(ctx: Ctx, state: u32) -> Part {
         Some("minecraft:redstone_block") => Part::Block,
         Some("minecraft:redstone_lamp") => Part::Lamp,
         Some("minecraft:repeater") => Part::Repeater,
+        Some("minecraft:observer") => Part::Observer,
+        Some("minecraft:comparator") => Part::Comparator,
+        Some("minecraft:note_block") => Part::NoteBlock,
+        Some(
+            "minecraft:light_weighted_pressure_plate" | "minecraft:heavy_weighted_pressure_plate",
+        ) => Part::WeightedPlate,
+        Some(name) if name.ends_with("_button") => Part::Button,
+        Some(name) if name.ends_with("_pressure_plate") => Part::Plate,
+        Some(name)
+            if name.ends_with("_door")
+                || name.ends_with("_trapdoor")
+                || name.ends_with("_fence_gate") =>
+        {
+            Part::Opens
+        }
         _ => Part::None,
     }
 }
 
+/// Note block instruments, in the order of the `instrument` property.
+pub const INSTRUMENTS: [&str; 27] = [
+    "harp",
+    "basedrum",
+    "snare",
+    "hat",
+    "bass",
+    "flute",
+    "bell",
+    "guitar",
+    "chime",
+    "xylophone",
+    "iron_xylophone",
+    "cow_bell",
+    "didgeridoo",
+    "bit",
+    "banjo",
+    "pling",
+    "trumpet",
+    "trumpet_exposed",
+    "trumpet_oxidized",
+    "trumpet_weathered",
+    "zombie",
+    "skeleton",
+    "creeper",
+    "dragon",
+    "wither_skeleton",
+    "piglin",
+    "custom_head",
+];
+
+/// The instrument of a note block at `p`: a mob head on top sets it, else
+/// the block below (minecraft.wiki, "Note Block").
+pub fn note_instrument(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> u32 {
+    let above = ctx.shapes.block_name(level.block(p.offset(Dir::Up)));
+    let head = match above {
+        Some("minecraft:zombie_head") => Some("zombie"),
+        Some("minecraft:skeleton_skull") => Some("skeleton"),
+        Some("minecraft:creeper_head") => Some("creeper"),
+        Some("minecraft:dragon_head") => Some("dragon"),
+        Some("minecraft:wither_skeleton_skull") => Some("wither_skeleton"),
+        Some("minecraft:piglin_head") => Some("piglin"),
+        Some("minecraft:player_head") => Some("custom_head"),
+        _ => None,
+    };
+    let name = head.unwrap_or_else(|| {
+        let below = level.block(p.offset(Dir::Down));
+        INSTRUMENTS[usize::from(ctx.shapes.instrument_below(below)).min(INSTRUMENTS.len() - 1)]
+    });
+    with(ctx, state, "instrument", name)
+}
+
 const TORCH_DELAY: i64 = 2;
 const LAMP_OFF_DELAY: i64 = 4;
+const OBSERVER_DELAY: i64 = 2;
+const COMPARATOR_DELAY: i64 = 2;
+/// Stone buttons stay pressed for a second, wooden ones for 1.5 s.
+const STONE_BUTTON_TICKS: i64 = 20;
+const WOODEN_BUTTON_TICKS: i64 = 30;
+/// Pressure plates look again for entities this often while pressed.
+const PLATE_TICKS: i64 = 20;
+const WEIGHTED_PLATE_TICKS: i64 = 10;
 
 fn is(ctx: Ctx, state: u32, property: &str) -> bool {
     ctx.shapes.property(state, property) == Some("true")
@@ -61,6 +145,13 @@ fn facing(ctx: Ctx, state: u32) -> Option<Dir> {
         .and_then(Dir::from_name)
 }
 
+fn level_of(ctx: Ctx, state: u32, property: &str) -> u8 {
+    ctx.shapes
+        .property(state, property)
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(0)
+}
+
 fn wire_power(ctx: Ctx, state: u32) -> u8 {
     if part(ctx, state) == Part::Wire {
         ctx.shapes
@@ -77,7 +168,8 @@ fn attached(ctx: Ctx, state: u32) -> Option<Dir> {
     match part(ctx, state) {
         Part::Torch => Some(Dir::Down),
         Part::WallTorch => facing(ctx, state).map(Dir::opposite),
-        Part::Lever => match ctx.shapes.property(state, "face") {
+        Part::Plate | Part::WeightedPlate => Some(Dir::Down),
+        Part::Lever | Part::Button => match ctx.shapes.property(state, "face") {
             Some("floor") => Some(Dir::Down),
             Some("ceiling") => Some(Dir::Up),
             _ => facing(ctx, state).map(Dir::opposite),
@@ -86,9 +178,20 @@ fn attached(ctx: Ctx, state: u32) -> Option<Dir> {
     }
 }
 
-/// A repeater takes power from the `facing` side and gives it to the other.
+/// Repeaters and comparators take power from the `facing` side and give it
+/// to the other; an observer watches its `facing` side and gives power out
+/// of its back.
 fn repeater_output(ctx: Ctx, state: u32) -> Option<Dir> {
     facing(ctx, state).map(Dir::opposite)
+}
+
+/// Power of a pressed plate.
+fn plate_power(ctx: Ctx, state: u32) -> u8 {
+    match part(ctx, state) {
+        Part::Plate if is(ctx, state, "powered") => 15,
+        Part::WeightedPlate => level_of(ctx, state, "power"),
+        _ => 0,
+    }
 }
 
 fn wire_points(ctx: Ctx, state: u32, toward: Dir) -> bool {
@@ -102,35 +205,54 @@ fn wire_points(ctx: Ctx, state: u32, toward: Dir) -> bool {
     }
 }
 
-/// Power the block `state` at a position sends to its neighbour `toward`.
-fn emitted(ctx: Ctx, state: u32, toward: Dir, wires: bool) -> u8 {
+/// Power the block `state` at `at` sends to its neighbour `toward`.
+fn emitted(level: &dyn Level, ctx: Ctx, at: BlockPos, state: u32, toward: Dir, wires: bool) -> u8 {
     match part(ctx, state) {
         Part::Block => 15,
-        Part::Lever if is(ctx, state, "powered") => 15,
+        Part::Lever | Part::Button if is(ctx, state, "powered") => 15,
+        Part::Plate | Part::WeightedPlate => plate_power(ctx, state),
         Part::Torch | Part::WallTorch
             if is(ctx, state, "lit") && Some(toward) != attached(ctx, state) =>
         {
             15
         }
-        Part::Repeater
+        Part::Repeater | Part::Observer
             if is(ctx, state, "powered") && Some(toward) == repeater_output(ctx, state) =>
         {
             15
+        }
+        Part::Comparator if Some(toward) == repeater_output(ctx, state) => {
+            level.comparator_output(at)
         }
         Part::Wire if wires && wire_points(ctx, state, toward) => wire_power(ctx, state),
         _ => 0,
     }
 }
 
-/// Strong power the block `state` sends into its neighbour `toward`.
-fn emitted_strong(ctx: Ctx, state: u32, toward: Dir, wires: bool) -> u8 {
+/// Strong power the block `state` at `at` sends into its neighbour `toward`.
+fn emitted_strong(
+    level: &dyn Level,
+    ctx: Ctx,
+    at: BlockPos,
+    state: u32,
+    toward: Dir,
+    wires: bool,
+) -> u8 {
     match part(ctx, state) {
-        Part::Lever if is(ctx, state, "powered") && Some(toward) == attached(ctx, state) => 15,
+        Part::Lever | Part::Button
+            if is(ctx, state, "powered") && Some(toward) == attached(ctx, state) =>
+        {
+            15
+        }
+        Part::Plate | Part::WeightedPlate if toward == Dir::Down => plate_power(ctx, state),
         Part::Torch | Part::WallTorch if is(ctx, state, "lit") && toward == Dir::Up => 15,
-        Part::Repeater
+        Part::Repeater | Part::Observer
             if is(ctx, state, "powered") && Some(toward) == repeater_output(ctx, state) =>
         {
             15
+        }
+        Part::Comparator if Some(toward) == repeater_output(ctx, state) => {
+            level.comparator_output(at)
         }
         Part::Wire if wires && wire_points(ctx, state, toward) => wire_power(ctx, state),
         _ => 0,
@@ -141,7 +263,10 @@ fn emitted_strong(ctx: Ctx, state: u32, toward: Dir, wires: bool) -> u8 {
 fn conductor_power(level: &dyn Level, ctx: Ctx, p: BlockPos, wires: bool) -> u8 {
     Dir::ALL
         .into_iter()
-        .map(|d| emitted_strong(ctx, level.block(p.offset(d)), d.opposite(), wires))
+        .map(|d| {
+            let n = p.offset(d);
+            emitted_strong(level, ctx, n, level.block(n), d.opposite(), wires)
+        })
         .max()
         .unwrap_or(0)
 }
@@ -153,7 +278,7 @@ pub fn power_from(level: &dyn Level, ctx: Ctx, p: BlockPos, from: Dir, wires: bo
     if ctx.shapes.conducts(state) {
         conductor_power(level, ctx, n, wires)
     } else {
-        emitted(ctx, state, from.opposite(), wires)
+        emitted(level, ctx, n, state, from.opposite(), wires)
     }
 }
 
@@ -192,9 +317,18 @@ fn wire_target(level: &dyn Level, ctx: Ctx, p: BlockPos) -> u8 {
 /// Whether dust next to `state` (in direction `d` from the dust) points at it.
 fn dust_connects_to(ctx: Ctx, state: u32, d: Dir) -> bool {
     match part(ctx, state) {
-        Part::Wire | Part::Torch | Part::WallTorch | Part::Lever | Part::Block => true,
+        Part::Wire
+        | Part::Torch
+        | Part::WallTorch
+        | Part::Lever
+        | Part::Block
+        | Part::Button
+        | Part::Plate
+        | Part::WeightedPlate
+        | Part::Comparator => true,
         Part::Repeater => facing(ctx, state).is_some_and(|f| f.axis() == d.axis()),
-        Part::Lamp | Part::None => {
+        Part::Observer => facing(ctx, state) == Some(d),
+        Part::Lamp | Part::Opens | Part::NoteBlock | Part::None => {
             let name = ctx.shapes.block_name(state).unwrap_or("");
             name.ends_with("_button")
                 || name.ends_with("_pressure_plate")
@@ -338,6 +472,224 @@ fn update_in_front(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
     }
 }
 
+/// Signal a comparator reads from a block by its state (minecraft.wiki,
+/// "Redstone Comparator": cake, cauldrons, composter, portal frame...), or
+/// from a container.
+fn analog_signal(level: &dyn Level, ctx: Ctx, p: BlockPos) -> Option<u8> {
+    let state = level.block(p);
+    let name = ctx.shapes.block_name(state)?;
+    let signal = match name {
+        "minecraft:cake" => 14 - 2 * level_of(ctx, state, "bites"),
+        "minecraft:water_cauldron" | "minecraft:powder_snow_cauldron" => {
+            level_of(ctx, state, "level")
+        }
+        "minecraft:lava_cauldron" => 3,
+        "minecraft:cauldron" => 0,
+        "minecraft:composter" => level_of(ctx, state, "level"),
+        "minecraft:end_portal_frame" => {
+            if is(ctx, state, "eye") {
+                15
+            } else {
+                0
+            }
+        }
+        "minecraft:respawn_anchor" => level_of(ctx, state, "charges") * 15 / 4,
+        "minecraft:beehive" | "minecraft:bee_nest" => level_of(ctx, state, "honey_level"),
+        _ => return level.container_signal(p),
+    };
+    Some(signal)
+}
+
+/// What a comparator gets from behind: power, or what the block behind
+/// (or the block behind a conductor behind it) holds.
+fn comparator_rear(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> u8 {
+    let Some(back) = facing(ctx, state) else {
+        return 0;
+    };
+    let n = p.offset(back);
+    let power = repeater_input(level, ctx, p, state);
+    if let Some(signal) = analog_signal(level, ctx, n) {
+        return signal;
+    }
+    if power < 15
+        && ctx.shapes.conducts(level.block(n))
+        && let Some(signal) = analog_signal(level, ctx, n.offset(back))
+    {
+        return signal.max(power);
+    }
+    power
+}
+
+/// Side input of a comparator: only dust, redstone blocks, repeaters and
+/// comparators count.
+fn comparator_side(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> u8 {
+    let Some(back) = facing(ctx, state) else {
+        return 0;
+    };
+    [back.cw(), back.ccw()]
+        .into_iter()
+        .map(|side| {
+            let n = p.offset(side);
+            let s = level.block(n);
+            match part(ctx, s) {
+                Part::Wire => wire_power(ctx, s),
+                Part::Block => 15,
+                Part::Repeater | Part::Comparator => {
+                    emitted(level, ctx, n, s, side.opposite(), true)
+                }
+                _ => 0,
+            }
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+fn comparator_signal(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> u8 {
+    let rear = comparator_rear(level, ctx, p, state);
+    let side = comparator_side(level, ctx, p, state);
+    if ctx.shapes.property(state, "mode") == Some("subtract") {
+        rear.saturating_sub(side)
+    } else if side > rear {
+        0
+    } else {
+        rear
+    }
+}
+
+/// Works out a comparator's signal now; updates what is in front if it
+/// changed.
+fn refresh_comparator(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
+    let signal = comparator_signal(level, ctx, p, state);
+    let old = level.comparator_output(p);
+    let powered = is(ctx, state, "powered");
+    if signal == old && (signal > 0) == powered {
+        return;
+    }
+    level.set_comparator_output(p, signal);
+    let mut new = state;
+    if (signal > 0) != powered {
+        new = with_bool(ctx, state, "powered", signal > 0);
+        set_quietly(level, ctx, p, new);
+    }
+    update_in_front(level, ctx, p, new);
+}
+
+/// How hard entities press the plate at `p`.
+fn plate_target(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> u8 {
+    let (x, y, z) = (f64::from(p.x), f64::from(p.y), f64::from(p.z));
+    let (all, living) = level.entities_in(
+        [x + 0.0625, y, z + 0.0625],
+        [x + 0.9375, y + 0.25, z + 0.9375],
+    );
+    let name = ctx.shapes.block_name(state).unwrap_or("");
+    match name {
+        "minecraft:light_weighted_pressure_plate" => all.min(15) as u8,
+        "minecraft:heavy_weighted_pressure_plate" => all.div_ceil(10).min(15) as u8,
+        "minecraft:stone_pressure_plate" | "minecraft:polished_blackstone_pressure_plate" => {
+            if living > 0 {
+                15
+            } else {
+                0
+            }
+        }
+        _ => {
+            if all > 0 {
+                15
+            } else {
+                0
+            }
+        }
+    }
+}
+
+/// Sets a plate's power and tells the blocks around and below.
+fn press_plate(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
+    let target = plate_target(level, ctx, p, state);
+    let weighted = part(ctx, state) == Part::WeightedPlate;
+    if target != plate_power(ctx, state) {
+        let new = if weighted {
+            with(ctx, state, "power", &target.to_string())
+        } else {
+            with_bool(ctx, state, "powered", target > 0)
+        };
+        set_quietly(level, ctx, p, new);
+        update_neighbors_at(level, ctx, p);
+        update_neighbors_at(level, ctx, p.offset(Dir::Down));
+    }
+    if target > 0 {
+        let delay = if weighted {
+            WEIGHTED_PLATE_TICKS
+        } else {
+            PLATE_TICKS
+        };
+        let kind = ctx.shapes.block_index(state);
+        level.schedule_block_tick(p, kind, delay, 0);
+    }
+}
+
+/// An entity is in the block at `p`: an unpressed plate there checks
+/// whether it is pressed now.
+pub fn entity_inside(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+    let state = level.block(p);
+    if matches!(part(ctx, state), Part::Plate | Part::WeightedPlate) && plate_power(ctx, state) == 0
+    {
+        press_plate(level, ctx, p, state);
+    }
+}
+
+/// The block in front of the observer at `p` changed.
+pub fn observed_change(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+    let state = level.block(p);
+    if part(ctx, state) != Part::Observer || is(ctx, state, "powered") {
+        return;
+    }
+    let kind = ctx.shapes.block_index(state);
+    if !level.is_block_tick_scheduled(p, kind) {
+        level.schedule_block_tick(p, kind, OBSERVER_DELAY, 0);
+    }
+}
+
+/// What a container at `p` holds changed: comparators reading it look again.
+pub fn container_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+    for d in Dir::HORIZONTAL {
+        let n = p.offset(d);
+        let s = level.block(n);
+        if part(ctx, s) == Part::Comparator {
+            neighbor_changed(level, ctx, n);
+        } else if ctx.shapes.conducts(s) {
+            let beyond = n.offset(d);
+            if part(ctx, level.block(beyond)) == Part::Comparator {
+                neighbor_changed(level, ctx, beyond);
+            }
+        }
+    }
+}
+
+fn button_ticks(ctx: Ctx, state: u32) -> i64 {
+    match ctx.shapes.block_name(state) {
+        Some("minecraft:stone_button" | "minecraft:polished_blackstone_button") => {
+            STONE_BUTTON_TICKS
+        }
+        _ => WOODEN_BUTTON_TICKS,
+    }
+}
+
+/// Power a door, trapdoor or gate gets: a door from either half.
+fn opens_power(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> bool {
+    if received(level, ctx, p, true) > 0 {
+        return true;
+    }
+    let name = ctx.shapes.block_name(state).unwrap_or("");
+    if !name.ends_with("_door") {
+        return false;
+    }
+    let other = match ctx.shapes.property(state, "half") {
+        Some("lower") => p.offset(Dir::Up),
+        _ => p.offset(Dir::Down),
+    };
+    received(level, ctx, other, true) > 0
+}
+
 /// A neighbour of the component at `p` changed.
 pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
     let state = level.block(p);
@@ -357,6 +709,35 @@ pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
                 level.schedule_block_tick(p, kind, LAMP_OFF_DELAY, 0);
             } else if !lit && powered {
                 set_quietly(level, ctx, p, with_bool(ctx, state, "lit", true));
+            }
+        }
+        Part::Comparator => {
+            let kind = ctx.shapes.block_index(state);
+            if level.is_block_tick_scheduled(p, kind) {
+                return;
+            }
+            let signal = comparator_signal(level, ctx, p, state);
+            if signal != level.comparator_output(p) || (signal > 0) != is(ctx, state, "powered") {
+                // Sooner when it feeds a repeater or comparator not facing it.
+                let front = level.block(p.offset(repeater_output(ctx, state).unwrap_or(Dir::Up)));
+                let feeds_diode = matches!(part(ctx, front), Part::Repeater | Part::Comparator)
+                    && facing(ctx, front) != facing(ctx, state).map(Dir::opposite);
+                let priority = if feeds_diode { -1 } else { 0 };
+                level.schedule_block_tick(p, kind, COMPARATOR_DELAY, priority);
+            }
+        }
+        Part::Opens => {
+            let powered = opens_power(level, ctx, p, state);
+            if powered != is(ctx, state, "powered") {
+                let new = with_bool(ctx, state, "powered", powered);
+                let new = with_bool(ctx, new, "open", powered);
+                set_quietly(level, ctx, p, new);
+            }
+        }
+        Part::NoteBlock => {
+            let powered = received(level, ctx, p, true) > 0;
+            if powered != is(ctx, state, "powered") {
+                set_quietly(level, ctx, p, with_bool(ctx, state, "powered", powered));
             }
         }
         Part::Repeater => {
@@ -394,6 +775,24 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
                 set_quietly(level, ctx, p, with_bool(ctx, state, "lit", false));
             }
         }
+        Part::Comparator => refresh_comparator(level, ctx, p, state),
+        Part::Observer => {
+            let powered = !is(ctx, state, "powered");
+            let new = with_bool(ctx, state, "powered", powered);
+            set_quietly(level, ctx, p, new);
+            if powered {
+                level.schedule_block_tick(p, kind, OBSERVER_DELAY, 0);
+            }
+            update_in_front(level, ctx, p, new);
+        }
+        Part::Button if is(ctx, state, "powered") => {
+            let new = with_bool(ctx, state, "powered", false);
+            set_block(level, ctx, p, new, Flags::ALL);
+            if let Some(a) = attached(ctx, new) {
+                update_neighbors_at(level, ctx, p.offset(a));
+            }
+        }
+        Part::Plate | Part::WeightedPlate => press_plate(level, ctx, p, state),
         Part::Repeater => {
             if repeater_locked(level, ctx, p, state) {
                 return;
@@ -428,10 +827,25 @@ pub fn on_place(level: &mut dyn Level, ctx: Ctx, p: BlockPos, old: u32, state: u
                 update_around(level, ctx, p);
             }
             Part::Torch | Part::WallTorch => update_around(level, ctx, p),
-            Part::Lever if is(ctx, s, "powered") && !placed => {
+            Part::Lever | Part::Button if is(ctx, s, "powered") && !placed => {
                 if let Some(a) = attached(ctx, s) {
                     update_neighbors_at(level, ctx, p.offset(a));
                 }
+            }
+            Part::Plate | Part::WeightedPlate if plate_power(ctx, s) > 0 && !placed => {
+                update_neighbors_at(level, ctx, p.offset(Dir::Down));
+            }
+            Part::Observer if is(ctx, s, "powered") && !placed => {
+                update_in_front(level, ctx, p, s);
+            }
+            // Only when a comparator comes or goes, not when it changes state.
+            Part::Comparator if part(ctx, old) != part(ctx, state) => {
+                if placed {
+                    neighbor_changed(level, ctx, p);
+                } else {
+                    level.set_comparator_output(p, 0);
+                }
+                update_in_front(level, ctx, p, s);
             }
             Part::Repeater if is(ctx, s, "powered") || placed => {
                 update_in_front(level, ctx, p, s);
@@ -463,6 +877,40 @@ pub fn use_block(level: &mut dyn Level, ctx: Ctx, p: BlockPos) -> bool {
             if let Some(a) = attached(ctx, new) {
                 update_neighbors_at(level, ctx, p.offset(a));
             }
+            true
+        }
+        Part::Button => {
+            if !is(ctx, state, "powered") {
+                let new = with_bool(ctx, state, "powered", true);
+                set_block(level, ctx, p, new, Flags::ALL);
+                if let Some(a) = attached(ctx, new) {
+                    update_neighbors_at(level, ctx, p.offset(a));
+                }
+                let kind = ctx.shapes.block_index(new);
+                level.schedule_block_tick(p, kind, button_ticks(ctx, new), 0);
+            }
+            true
+        }
+        Part::NoteBlock => {
+            let note = (level_of(ctx, state, "note") + 1) % 25;
+            set_block(
+                level,
+                ctx,
+                p,
+                with(ctx, state, "note", &note.to_string()),
+                Flags::ALL,
+            );
+            true
+        }
+        Part::Comparator => {
+            let mode = if ctx.shapes.property(state, "mode") == Some("subtract") {
+                "compare"
+            } else {
+                "subtract"
+            };
+            let new = with(ctx, state, "mode", mode);
+            set_block(level, ctx, p, new, Flags::SHAPES_ONLY);
+            refresh_comparator(level, ctx, p, new);
             true
         }
         Part::Repeater => {
