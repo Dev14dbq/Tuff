@@ -70,6 +70,102 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut wrong: HashMap<(String, String), usize> = HashMap::new();
     let started = std::time::Instant::now();
     let mut per_chunk: Vec<(i32, i32, usize)> = Vec::new();
+    let terrain = std::env::var_os("WORLDGEN_TERRAIN").is_some();
+    let full = std::env::var_os("WORLDGEN_BLOCKS").is_some();
+    struct GameNames<'a> {
+        blocks: &'a mc_data::Blocks,
+        biomes: &'a HashMap<String, u32>,
+    }
+    impl mc_worldgen::materials::Names for GameNames<'_> {
+        fn state(&self, v: &serde_json::Value) -> Option<u32> {
+            match v {
+                serde_json::Value::String(n) => {
+                    self.blocks.default_state(&mc_worldgen::density::full_id(n))
+                }
+                serde_json::Value::Object(o) => {
+                    let name = mc_worldgen::density::full_id(o.get("Name")?.as_str()?);
+                    let mut state = self.blocks.default_state(&name)?;
+                    if let Some(serde_json::Value::Object(props)) = o.get("Properties") {
+                        for (k, val) in props {
+                            state = self.blocks.with_property(state, k, val.as_str()?)?;
+                        }
+                    }
+                    Some(state)
+                }
+                _ => None,
+            }
+        }
+        fn biome(&self, name: &str) -> Option<u32> {
+            self.biomes
+                .get(&mc_worldgen::density::full_id(name))
+                .copied()
+        }
+    }
+    let game_names = GameNames {
+        blocks: &data.blocks,
+        biomes: &index,
+    };
+    let generator = if full {
+        let state = |n: &str| data.blocks.default_state(n).unwrap_or(0);
+        Some(
+            mc_worldgen::generator::NoiseGenerator::new(
+                &source,
+                seed,
+                &settings,
+                &serde_json::from_str(&std::fs::read_to_string(
+                    data_dir.join("reports/biome_parameters/minecraft/overworld.json"),
+                )?)?,
+                &game_names,
+                index.clone(),
+                mc_worldgen::generator::Blocks {
+                    air: state("minecraft:air"),
+                    stone: state("minecraft:stone"),
+                    water: state("minecraft:water"),
+                    lava: state("minecraft:lava"),
+                },
+            )
+            .map_err(anyhow::Error::msg)?,
+        )
+    } else {
+        None
+    };
+    let mut block_pairs: HashMap<(String, String), usize> = HashMap::new();
+    let (mut blocks_same, mut blocks_total) = (0usize, 0usize);
+    let final_density = builder
+        .build(&settings["noise_router"]["final_density"])
+        .map_err(anyhow::Error::msg)?;
+    let aq = &settings["aquifers"];
+    let functions = mc_worldgen::aquifer::Functions {
+        barrier: builder.build(&aq["barrier"]).map_err(anyhow::Error::msg)?,
+        floodedness: builder
+            .build(&aq["fluid_level_floodedness"])
+            .map_err(anyhow::Error::msg)?,
+        spread: builder
+            .build(&aq["fluid_level_spread"])
+            .map_err(anyhow::Error::msg)?,
+        lava: builder.build(&aq["lava"]).map_err(anyhow::Error::msg)?,
+        exclusion: builder
+            .build(&aq["exclusion"])
+            .map_err(anyhow::Error::msg)?,
+        surface: builder
+            .build(&aq["surface_level"])
+            .map_err(anyhow::Error::msg)?,
+    };
+    let aquifer_random = {
+        use mc_worldgen::random::RandomSource as _;
+        builder
+            .factory()
+            .from_hash_of("minecraft:aquifer")
+            .fork_positional()
+    };
+    let global = mc_worldgen::aquifer::Global {
+        sea_level: 63,
+        sea: mc_worldgen::aquifer::Fluid::Water,
+        lava_level: -54,
+    };
+    let mut kinds: HashMap<(char, char), usize> = HashMap::new();
+    let (mut solid_same, mut solid_total, mut too_much, mut too_little) =
+        (0usize, 0usize, 0usize, 0usize);
     for cx in -radius..=radius {
         for cz in -radius..=radius {
             let Some(tag) = storage.read_chunk(cx, cz)? else {
@@ -81,6 +177,79 @@ pub fn run(args: &[String]) -> Result<()> {
                 continue;
             };
             let before = total - same;
+            if let Some(generator) = &generator {
+                let ours = generator.generate(cx, cz);
+                for y in -64..320 {
+                    for lz in 0..16 {
+                        for lx in 0..16 {
+                            let theirs = chunk.block(lx, y, lz);
+                            let mine = ours.blocks
+                                [(((y + 64) * 16 + lz as i32) * 16 + lx as i32) as usize];
+                            blocks_total += 1;
+                            if theirs == mine {
+                                blocks_same += 1;
+                            } else {
+                                let name = |s: u32| {
+                                    data.blocks
+                                        .describe(s)
+                                        .unwrap_or("?")
+                                        .trim_start_matches("minecraft:")
+                                        .replace("[]", "")
+                                };
+                                *block_pairs.entry((name(theirs), name(mine))).or_default() += 1;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            if terrain {
+                let mut ctx = mc_worldgen::density::Ctx::new(cx * 16, cz * 16, -64, 384);
+                let mut aquifer = mc_worldgen::aquifer::Aquifer::new(
+                    &functions,
+                    global,
+                    aquifer_random,
+                    cx,
+                    cz,
+                    -64,
+                    384,
+                );
+                for y in -64..320 {
+                    for lz in 0..16 {
+                        for lx in 0..16 {
+                            let (x, z) = (cx * 16 + lx, cz * 16 + lz);
+                            let density = final_density.eval_in(x, y, z, &mut ctx);
+                            let ours = match aquifer.substance(x, y, z, density, &mut ctx) {
+                                None => 's',
+                                Some(mc_worldgen::aquifer::Fluid::Air) => 'a',
+                                Some(mc_worldgen::aquifer::Fluid::Water) => 'w',
+                                Some(mc_worldgen::aquifer::Fluid::Lava) => 'l',
+                            };
+                            let s = chunk.block(lx as usize, y, lz as usize);
+                            let name = data.blocks.block_name(s).unwrap_or("");
+                            let theirs = match name {
+                                "minecraft:air" | "minecraft:cave_air" => 'a',
+                                "minecraft:water" => 'w',
+                                "minecraft:lava" => 'l',
+                                _ if data.blocks.property(s, "waterlogged") == Some("true") => 'w',
+                                _ => 's',
+                            };
+                            solid_total += 1;
+                            if ours == theirs {
+                                solid_same += 1;
+                            } else {
+                                if ours == 's' {
+                                    too_much += 1;
+                                } else if theirs == 's' {
+                                    too_little += 1;
+                                }
+                                *kinds.entry((theirs, ours)).or_default() += 1;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             if std::env::var_os("WORLDGEN_SURFACE").is_some() {
                 // Our surface where depth crosses 0, against vanilla's top
                 // solid block, at the chunk's corner column.
@@ -146,6 +315,32 @@ pub fn run(args: &[String]) -> Result<()> {
                 .collect();
             println!("{row}");
         }
+    }
+    if full {
+        println!(
+            "blocks: {blocks_same}/{blocks_total} the same ({:.3}%), {:.1} s",
+            100.0 * blocks_same as f64 / blocks_total.max(1) as f64,
+            started.elapsed().as_secs_f64()
+        );
+        let mut pairs: Vec<_> = block_pairs.into_iter().collect();
+        pairs.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        for ((theirs, ours), n) in pairs.into_iter().take(25) {
+            println!("  {n:8}  vanilla {theirs} | ours {ours}");
+        }
+        return Ok(());
+    }
+    if terrain {
+        println!(
+            "terrain: {solid_same}/{solid_total} blocks solid alike ({:.3}%), {too_much} solid only in ours, {too_little} only in vanilla, {:.1} s",
+            100.0 * solid_same as f64 / solid_total.max(1) as f64,
+            started.elapsed().as_secs_f64()
+        );
+        let mut kinds: Vec<_> = kinds.into_iter().collect();
+        kinds.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        for ((theirs, ours), n) in kinds {
+            println!("  {n:8}  vanilla {theirs} | ours {ours}");
+        }
+        return Ok(());
     }
     println!(
         "biomes: {same}/{total} cells match ({:.1}%) in {:.1} s",

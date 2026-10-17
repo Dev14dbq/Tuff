@@ -3,11 +3,15 @@
 //! For now only the superflat generator exists (ROADMAP Ф1); the noise
 //! generator with vanilla parity is ROADMAP Ф4.
 
+pub mod aquifer;
 pub mod climate;
 pub mod density;
+pub mod generator;
+pub mod materials;
 mod md5;
 pub mod noise;
 pub mod random;
+mod sha256;
 
 use mc_world::Chunk;
 
