@@ -397,14 +397,7 @@ async fn play(
         online_mode: ctx.config.online_mode,
         enforces_secure_chat: false,
     })?;
-    {
-        use play::abilities::*;
-        writer.queue(&play::PlayerAbilities {
-            flags: INVULNERABLE | ALLOW_FLYING | INSTANT_BREAK,
-            flying_speed: 0.05,
-            fov_modifier: 0.1,
-        })?;
-    }
+    writer.queue(&abilities(me.game_mode))?;
     let mut awaiting_teleport = Some(1);
     let mut next_teleport = 1;
     writer.queue(&play::PlayerPosition {
@@ -489,8 +482,22 @@ async fn play(
 
     let mut keep_alive = tokio::time::interval(KEEP_ALIVE_INTERVAL);
     let mut pending_keep_alive: Option<(i64, Instant)> = None;
-    let mut hands = Hands::default();
+    ctx.inventories
+        .lock()
+        .expect("inventories lock")
+        .insert(uuid, Hands::default());
+    let mut game_mode = me.game_mode;
     let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
+    // Non-player entities this client has been told about.
+    let mut seen_entities: HashSet<i32> = HashSet::new();
+    let existing: Vec<mc_entity::Entity> = ctx.entities.lock().expect("entities lock").clone();
+    for entity in existing {
+        let (x, _, z) = entity.block_pos();
+        if view.has_block(Position::new(x, 0, z)) {
+            spawn_entity(writer, &ctx, &entity)?;
+            seen_entities.insert(entity.id);
+        }
+    }
     loop {
         tokio::select! {
             Some(outcome) = replies.recv() => {
@@ -538,7 +545,7 @@ async fn play(
                         let op = ctx.config.ops.iter().any(|o| o.eq_ignore_ascii_case(&me.profile.name));
                         if op {
                             info!("{} issued server command: /{command}", me.profile.name);
-                            let actor = Actor { uuid, entity_id, game_mode: me.game_mode, pose };
+                            let actor = Actor { uuid, entity_id, game_mode, pose };
                             let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
                             let action = Action::Command { line: command, source };
                             let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
@@ -549,20 +556,18 @@ async fn play(
                             })?;
                         }
                     }
-                    play::Serverbound::SetCreativeModeSlot { slot, item } if me.game_mode == CREATIVE => {
-                        if let Ok(slot) = usize::try_from(slot)
-                            && slot < hands.slots.len()
-                        {
-                            let before = hands.main_hand().cloned();
-                            hands.slots[slot] = item;
-                            announce_main_hand(&ctx, uuid, entity_id, before, &hands);
+                    play::Serverbound::SetCreativeModeSlot { slot, item } if game_mode == CREATIVE => {
+                        if let Ok(slot) = usize::try_from(slot) {
+                            change_hands(&ctx, uuid, entity_id, |hands| {
+                                if let Some(s) = hands.slots.get_mut(slot) {
+                                    *s = item;
+                                }
+                            });
                         }
                     }
                     play::Serverbound::SetCarriedItem { slot } => {
                         if let Ok(slot @ 0..=8) = usize::try_from(slot) {
-                            let before = hands.main_hand().cloned();
-                            hands.selected = slot;
-                            announce_main_hand(&ctx, uuid, entity_id, before, &hands);
+                            change_hands(&ctx, uuid, entity_id, |hands| hands.selected = slot);
                         }
                     }
                     play::Serverbound::Punch => {
@@ -571,14 +576,13 @@ async fn play(
                     // Block changes happen on the tick thread; the answer comes back
                     // through `replies`.
                     play::Serverbound::PlayerAction { status, position, sequence, .. } => {
-                        let actor = Actor { uuid, entity_id, game_mode: me.game_mode, pose };
+                        let actor = Actor { uuid, entity_id, game_mode, pose };
                         let action = Action::Dig { status, position, sequence };
                         let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::UseItemOn { hand, position, face, cursor, sequence, .. } => {
-                        let actor = Actor { uuid, entity_id, game_mode: me.game_mode, pose };
-                        let held = hands.held(hand).cloned();
-                        let action = Action::UseItemOn { held, position, face, cursor, sequence };
+                        let actor = Actor { uuid, entity_id, game_mode, pose };
+                        let action = Action::UseItemOn { hand, position, face, cursor, sequence };
                         let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::UseItem { sequence, .. } => {
@@ -620,7 +624,64 @@ async fn play(
                         writer.queue(&play::SystemChat { content, overlay: false })?;
                     }
                     Ok(Event::Time(packet)) => writer.queue(&packet)?,
+                    Ok(Event::EntitySpawned(entity)) => {
+                        let (x, _, z) = entity.block_pos();
+                        if view.has_block(Position::new(x, 0, z)) {
+                            spawn_entity(writer, &ctx, &entity)?;
+                            seen_entities.insert(entity.id);
+                        }
+                    }
+                    Ok(Event::EntitiesMoved(moves)) => {
+                        for (id, pos, on_ground) in moves {
+                            if seen_entities.contains(&id) {
+                                writer.queue(&play::EntityPositionSync {
+                                    entity_id: id,
+                                    x: pos[0],
+                                    y: pos[1],
+                                    z: pos[2],
+                                    yaw: 0.0,
+                                    pitch: 0.0,
+                                    on_ground,
+                                })?;
+                            }
+                        }
+                    }
+                    Ok(Event::EntitiesRemoved(ids)) => {
+                        let gone: Vec<i32> = ids.into_iter().filter(|id| seen_entities.remove(id)).collect();
+                        if !gone.is_empty() {
+                            writer.queue(&play::RemoveEntities { entity_ids: gone })?;
+                        }
+                    }
                     Ok(Event::TickingState(packet)) => writer.queue(&packet)?,
+                    Ok(Event::GameMode { uuid: who, mode }) => {
+                        if who == uuid {
+                            game_mode = mode;
+                            writer.queue(&play::GameEvent {
+                                event: play::game_event::CHANGE_GAME_MODE,
+                                value: mode as f32,
+                            })?;
+                            writer.queue(&abilities(mode))?;
+                        }
+                        let known = ctx.players.lock().expect("players lock").get(&who).cloned();
+                        if let Some(player) = known {
+                            writer.queue(&play::PlayerInfoUpdate {
+                                actions: play::player_info::UPDATE_GAME_MODE,
+                                players: vec![player.info_entry()],
+                            })?;
+                        }
+                    }
+                    Ok(Event::InventorySlot { uuid: who, slot, item }) if who == uuid => {
+                        writer.queue(&play::SetPlayerInventory { slot, item })?;
+                    }
+                    Ok(Event::ItemTaken { item_entity, collector, count }) => {
+                        if seen_entities.contains(&item_entity) {
+                            writer.queue(&play::TakeItemEntity {
+                                collected: item_entity,
+                                collector,
+                                count,
+                            })?;
+                        }
+                    }
                     Ok(Event::TickingStep(packet)) => writer.queue(&packet)?,
                     Ok(Event::Kick { uuid: who, reason }) if who == uuid => {
                         writer.send(&play::Disconnect { reason: text::plain(&reason) }).await?;
@@ -798,24 +859,41 @@ fn send_block_changes(
     Ok(())
 }
 
-/// Tells others when the item in the main hand changes.
-fn announce_main_hand(
-    ctx: &ServerContext,
-    uuid: u128,
-    entity_id: i32,
-    before: Option<play::ItemStack>,
-    hands: &Hands,
-) {
-    let now = hands.main_hand().cloned();
-    if now == before {
-        return;
+/// What a game mode lets the player do (survival 0, creative 1, adventure 2,
+/// spectator 3).
+fn abilities(mode: i32) -> play::PlayerAbilities {
+    use play::abilities::*;
+    let flags = match mode {
+        1 => INVULNERABLE | ALLOW_FLYING | INSTANT_BREAK,
+        3 => INVULNERABLE | FLYING | ALLOW_FLYING,
+        _ => 0,
+    };
+    play::PlayerAbilities {
+        flags,
+        flying_speed: 0.05,
+        fov_modifier: 0.1,
     }
-    update_player(ctx, uuid, |p| p.main_hand.clone_from(&now));
-    let _ = ctx.events.send(Event::Equipment {
-        uuid,
-        entity_id,
-        main_hand: now,
-    });
+}
+
+/// Changes a player's inventory and tells others if the main hand changed.
+fn change_hands(ctx: &ServerContext, uuid: u128, entity_id: i32, change: impl FnOnce(&mut Hands)) {
+    let (before, now) = {
+        let mut inventories = ctx.inventories.lock().expect("inventories lock");
+        let Some(hands) = inventories.get_mut(&uuid) else {
+            return;
+        };
+        let before = hands.main_hand().cloned();
+        change(hands);
+        (before, hands.main_hand().cloned())
+    };
+    if now != before {
+        update_player(ctx, uuid, |p| p.main_hand.clone_from(&now));
+        let _ = ctx.events.send(Event::Equipment {
+            uuid,
+            entity_id,
+            main_hand: now,
+        });
+    }
 }
 
 fn update_player(ctx: &ServerContext, uuid: u128, change: impl FnOnce(&mut OnlinePlayer)) {
@@ -853,6 +931,44 @@ fn spawn_player(
         writer.queue(&play::SetEquipment {
             entity_id: player.entity_id,
             slots: vec![(0, player.main_hand.clone())],
+        })?;
+    }
+    Ok(())
+}
+
+/// Add Entity for a non-player entity.
+fn spawn_entity(
+    writer: &mut PacketWriter,
+    ctx: &ServerContext,
+    entity: &mc_entity::Entity,
+) -> Result<()> {
+    let (kind, data) = match entity.kind {
+        mc_entity::Kind::FallingBlock { state } => (ctx.entity_types.falling_block, state as i32),
+        mc_entity::Kind::Item { .. } => (ctx.entity_types.item, 0),
+    };
+    writer.queue(&play::AddEntity {
+        entity_id: entity.id,
+        uuid: entity.uuid,
+        kind,
+        x: entity.pos[0],
+        y: entity.pos[1],
+        z: entity.pos[2],
+        pitch: 0.0,
+        yaw: 0.0,
+        head_yaw: 0.0,
+        data,
+    })?;
+    if let mc_entity::Kind::Item { item, count, .. } = entity.kind {
+        writer.queue(&play::SetEntityData {
+            entity_id: entity.id,
+            entries: vec![(
+                play::metadata::ITEM,
+                play::MetadataValue::Item(Some(play::ItemStack {
+                    count,
+                    item,
+                    has_component_changes: false,
+                })),
+            )],
         })?;
     }
     Ok(())

@@ -783,6 +783,127 @@ async fn operators_run_commands_from_chat() {
 }
 
 #[tokio::test]
+async fn survival_breaking_drops_items_that_get_picked_up() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Miner".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let cobblestone = ctx
+        .data
+        .builtin
+        .id("minecraft:item", "minecraft:cobblestone")
+        .unwrap();
+    let item_type = ctx
+        .data
+        .builtin
+        .id("minecraft:entity_type", "minecraft:item")
+        .unwrap();
+    let (mut miner, _) = join_offline(addr, ctx.ids.clone(), "Miner").await;
+    let command = |text: &str| {
+        let mut body = Vec::new();
+        body.put_string(text);
+        body
+    };
+    miner
+        .send("minecraft:chat_command", command("gamemode survival"))
+        .await;
+    let (_, event) = miner.recv_until("minecraft:game_event").await;
+    let mut r = Reader::new(&event);
+    assert_eq!(
+        (r.u8().unwrap(), r.f32().unwrap()),
+        (3, 0.0),
+        "now survival"
+    );
+
+    miner
+        .send("minecraft:chat_command", command("setblock 1 -60 0 stone"))
+        .await;
+    miner.recv_until("minecraft:block_update").await;
+
+    let mut dig = Vec::new();
+    dig.put_varint(2); // finished digging
+    dig.put_position(mc_protocol::Position::new(1, -60, 0));
+    dig.put_i8(1);
+    dig.put_varint(1);
+    miner.send("minecraft:player_action", dig).await;
+
+    let (_, spawned) = miner.recv_until("minecraft:add_entity").await;
+
+    let mut r = Reader::new(&spawned);
+    let item_entity = r.varint().unwrap();
+    r.uuid().unwrap();
+    assert_eq!(r.varint().unwrap(), item_type);
+    let (_, metadata) = miner.recv_until("minecraft:set_entity_data").await;
+    let mut r = Reader::new(&metadata);
+    assert_eq!(r.varint().unwrap(), item_entity);
+    assert_eq!(
+        (r.u8().unwrap(), r.varint().unwrap()),
+        (8, 7),
+        "index 8, Slot"
+    );
+    assert_eq!((r.varint().unwrap(), r.varint().unwrap()), (1, cobblestone));
+
+    // The miner walks onto it and picks it up once its 10-tick delay is over.
+    let mut slot_seen = None;
+    let mut taken_seen = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !(taken_seen && slot_seen.is_some()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no pickup within 10 s"
+        );
+        let (name, body) = miner.recv().await;
+        match name.as_str() {
+            "minecraft:keep_alive" => miner.send("minecraft:keep_alive", body).await,
+            "minecraft:entity_position_sync" => {
+                let mut r = Reader::new(&body);
+                if r.varint().unwrap() == item_entity {
+                    r.varint().unwrap();
+                    let (x, _, z) = (r.f64().unwrap(), r.f64().unwrap(), r.f64().unwrap());
+                    let mut moved = Vec::new();
+                    moved.put_f64(x);
+                    moved.put_f64(-60.0);
+                    moved.put_f64(z);
+                    moved.put_u8(0x01);
+                    miner.send("minecraft:move_player_pos", moved).await;
+                }
+            }
+            "minecraft:take_item_entity" => {
+                assert_eq!(Reader::new(&body).varint().unwrap(), item_entity);
+                taken_seen = true;
+            }
+            "minecraft:set_player_inventory" => {
+                let mut r = Reader::new(&body);
+                slot_seen = Some((
+                    r.varint().unwrap(),
+                    r.varint().unwrap(),
+                    r.varint().unwrap(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        slot_seen,
+        Some((0, 1, cobblestone)),
+        "one cobblestone in the first hotbar slot"
+    );
+    let _ = stop.send(());
+}
+
+#[tokio::test]
 async fn serves_a_world_saved_by_vanilla() {
     let world =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/vanilla-server/26.3/world-normal");

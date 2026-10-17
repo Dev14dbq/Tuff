@@ -50,8 +50,8 @@ pub struct Output {
 const FILL_LIMIT: i64 = 32768;
 
 pub const COMMANDS: &[&str] = &[
-    "fill", "gamerule", "help", "kick", "list", "save-all", "say", "setblock", "stop", "tick",
-    "time", "tp", "teleport",
+    "fill", "gamemode", "gamerule", "help", "kick", "list", "save-all", "say", "setblock", "stop",
+    "tick", "time", "tp", "teleport",
 ];
 
 pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, line: &str) -> Output {
@@ -80,6 +80,7 @@ pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, lin
         "tick" => tick_command(tick, args, &mut out),
         "tp" | "teleport" => teleport(ctx, source, args, &mut out),
         "kick" => kick(ctx, args, &mut out),
+        "gamemode" => gamemode(ctx, source, args, &mut out),
         other => Err(format!("Unknown command: {other}")),
     };
     match result {
@@ -199,9 +200,7 @@ fn apply(
     let mut count = 0;
     for (p, state) in changes {
         let old = ctx.world.block(p, blocks);
-        let state = ctx
-            .shapes
-            .command_shape(&level, crate::level::to_pos(p), state);
+        let state = mc_tick::placement_state(&level, level.logic(), crate::level::to_pos(p), state);
         if level.set_block(p, state) {
             count += 1;
             if destroy && let Some(old) = old.filter(|&o| !blocks.is_air(o)) {
@@ -515,6 +514,35 @@ fn teleport(
         "Teleported {name} to {:.2}, {:.2}, {:.2}",
         pose.x, pose.y, pose.z
     ))
+}
+
+fn gamemode(
+    ctx: &ServerContext,
+    source: &Source,
+    args: &[&str],
+    out: &mut Output,
+) -> Result<String> {
+    let help = || usage("gamemode (survival|creative|adventure|spectator) [<player>]");
+    let Some(mode_name) = args.first() else {
+        return Err(help());
+    };
+    let mode = match *mode_name {
+        "survival" => 0,
+        "creative" => 1,
+        "adventure" => 2,
+        "spectator" => 3,
+        _ => return Err(help()),
+    };
+    let (uuid, name) = match (args.get(1), source) {
+        (Some(who), _) => (find_player(ctx, who)?.0, (*who).to_owned()),
+        (None, Source::Player { uuid, name, .. }) => (*uuid, name.clone()),
+        (None, Source::Console) => return Err(help()),
+    };
+    if let Some(player) = lock(&ctx.players).get_mut(&uuid) {
+        player.game_mode = mode;
+    }
+    out.events.push(Event::GameMode { uuid, mode });
+    Ok(format!("Set {name}'s game mode to {mode_name}"))
 }
 
 fn kick(ctx: &ServerContext, args: &[&str], out: &mut Output) -> Result<String> {

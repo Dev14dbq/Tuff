@@ -4,7 +4,9 @@
 pub mod dir;
 pub mod facts;
 pub mod fluids;
+pub mod gravity;
 pub mod level;
+pub mod redstone;
 pub mod shapes;
 pub mod ticks;
 pub mod updates;
@@ -14,4 +16,4 @@ pub use facts::BlockRules;
 pub use level::Level;
 pub use shapes::{Kind, Shapes};
 pub use ticks::{ScheduledTicks, TickQueue};
-pub use updates::{Ctx, Flags, set_block};
+pub use updates::{Ctx, Flags, block_tick, placement_state, set_block, use_block};

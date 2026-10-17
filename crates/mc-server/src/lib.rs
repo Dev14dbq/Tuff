@@ -12,6 +12,7 @@ mod connection;
 mod context;
 mod interact;
 mod level;
+mod loot;
 mod tick;
 mod util;
 mod world;

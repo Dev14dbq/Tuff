@@ -21,6 +21,8 @@ pub struct WorldLevel<'a> {
     /// Changed blocks in the order they first changed, with their last state.
     changes: Vec<(Position, u32)>,
     index: HashMap<BlockPos, usize>,
+    /// Entities created by block logic, for the tick to add.
+    pub spawned: Vec<mc_entity::Entity>,
 }
 
 impl<'a> WorldLevel<'a> {
@@ -29,6 +31,7 @@ impl<'a> WorldLevel<'a> {
             ctx,
             changes: Vec::new(),
             index: HashMap::new(),
+            spawned: Vec::new(),
         }
     }
 
@@ -48,6 +51,11 @@ impl<'a> WorldLevel<'a> {
     /// What changed, each block once with its final state.
     pub fn into_changes(self) -> Vec<(Position, u32)> {
         self.changes
+    }
+
+    /// What changed and the entities block logic created.
+    pub fn finish(self) -> (Vec<(Position, u32)>, Vec<mc_entity::Entity>) {
+        (self.changes, self.spawned)
     }
 }
 
@@ -86,6 +94,34 @@ impl Level for WorldLevel<'_> {
         let at = self.game_time() + delay;
         let mut ticks = self.ctx.ticks.lock().expect("ticks lock");
         ticks.fluids.schedule(p, fluid, at, 0);
+    }
+
+    fn in_world(&self, p: BlockPos) -> bool {
+        let world = &self.ctx.world;
+        p.y >= world.min_y && p.y < world.min_y + world.height as i32
+    }
+
+    fn spawn_falling_block(&mut self, p: BlockPos, state: u32) {
+        let entity = mc_entity::Entity {
+            id: self.ctx.next_entity_id(),
+            uuid: crate::util::random_uuid(),
+            kind: mc_entity::Kind::FallingBlock { state },
+            pos: [f64::from(p.x) + 0.5, f64::from(p.y), f64::from(p.z) + 0.5],
+            vel: [0.0; 3],
+            on_ground: false,
+            age: 0,
+            removed: false,
+        };
+        self.spawned.push(entity);
+    }
+
+    fn is_block_tick_scheduled(&self, p: BlockPos, block: u32) -> bool {
+        self.ctx
+            .ticks
+            .lock()
+            .expect("ticks lock")
+            .blocks
+            .is_scheduled(p, block)
     }
 
     fn schedule_block_tick(&mut self, p: BlockPos, block: u32, delay: i64, priority: i32) {

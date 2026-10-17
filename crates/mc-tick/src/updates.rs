@@ -10,7 +10,9 @@
 use crate::dir::{BlockPos, Dir};
 use crate::facts::BlockRules;
 use crate::fluids;
+use crate::gravity;
 use crate::level::Level;
+use crate::redstone;
 use crate::shapes::Shapes;
 
 /// How deep shape updates may chain from one change.
@@ -59,11 +61,14 @@ fn set_with_limit(
     flags: Flags,
     limit: u32,
 ) -> bool {
-    if level.block(p) == state || !level.set(p, state) {
+    let old = level.block(p);
+    if old == state || !level.set(p, state) {
         return false;
     }
     // The new block reacts to being placed before its neighbours hear of it.
     fluids::on_place(level, ctx, p, state);
+    redstone::on_place(level, ctx, p, old, state);
+    gravity::wake(level, ctx, p, state);
     if flags.neighbors {
         for dir in Dir::NC_ORDER {
             neighbor_changed(level, ctx, p.offset(dir), p);
@@ -71,8 +76,37 @@ fn set_with_limit(
     }
     if flags.shapes && limit > 0 {
         update_neighbor_shapes(level, ctx, p, state, limit - 1);
+        if redstone::part(ctx, state) == redstone::Part::Wire {
+            update_diagonal_shapes(level, ctx, p, state, limit - 1);
+        }
     }
     true
+}
+
+/// Dust pointing sideways at a block that is not dust also updates the shapes
+/// of the blocks above and below that block (minecraft.wiki, "Block
+/// update"), so dust one level up or down notices it.
+fn update_diagonal_shapes(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, limit: u32) {
+    for dir in Dir::HORIZONTAL {
+        if matches!(ctx.shapes.property(state, dir.name()), Some("none") | None) {
+            continue;
+        }
+        let side = p.offset(dir);
+        let side_state = level.block(side);
+        if redstone::part(ctx, side_state) == redstone::Part::Wire {
+            continue;
+        }
+        for target in [side.offset(Dir::Up), side.offset(Dir::Down)] {
+            let current = level.block(target);
+            if redstone::part(ctx, current) != redstone::Part::Wire {
+                continue;
+            }
+            let new = redstone::wire_shape(level, ctx, target, current);
+            if new != current {
+                set_with_limit(level, ctx, target, new, Flags::SHAPES_ONLY, limit);
+            }
+        }
+    }
 }
 
 /// Shape updates from the block at `p` (now `state`) to its neighbours.
@@ -87,9 +121,12 @@ pub fn update_neighbor_shapes(
         let np = p.offset(dir);
         let current = level.block(np);
         fluids::shape_updated(level, ctx, np, current, state);
-        let new = ctx
+        let mut new = ctx
             .shapes
             .update_shape(level, np, current, dir.opposite(), state);
+        if redstone::part(ctx, new) == redstone::Part::Wire {
+            new = redstone::wire_shape(level, ctx, np, new);
+        }
         if new != current {
             let flags = if ctx.shapes.is_air(new) {
                 Flags::ALL
@@ -101,8 +138,50 @@ pub fn update_neighbor_shapes(
     }
 }
 
-/// A neighbour-changed update to the block at `p` from `from`. Fluids react;
-/// redstone components will (ROADMAP Ф3).
-fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: BlockPos) {
+/// A neighbour-changed update to the block at `p` from `from`: fluids and
+/// redstone components react.
+pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: BlockPos) {
     fluids::neighbor_changed(level, ctx, p);
+    redstone::neighbor_changed(level, ctx, p);
+    let state = level.block(p);
+    gravity::wake(level, ctx, p, state);
+}
+
+/// A due block tick.
+pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
+    redstone::block_tick(level, ctx, p, kind);
+    gravity::block_tick(level, ctx, p, kind);
+}
+
+/// The state a block takes when placed at `p` by a player or a command:
+/// connections and shapes from its neighbours.
+pub fn placement_state(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> u32 {
+    let state = ctx.shapes.placement_shape(level, p, state);
+    if redstone::part(ctx, state) == redstone::Part::Wire {
+        redstone::wire_shape(level, ctx, p, state)
+    } else {
+        state
+    }
+}
+
+/// A player right-clicked the block at `p`: levers flip, doors, trapdoors and
+/// fence gates (not iron ones) open or close, repeaters change delay.
+/// Returns whether the block reacted.
+pub fn use_block(level: &mut dyn Level, ctx: Ctx, p: BlockPos) -> bool {
+    if redstone::use_block(level, ctx, p) {
+        return true;
+    }
+    let state = level.block(p);
+    let name = ctx.shapes.block_name(state).unwrap_or("");
+    let opens =
+        (name.ends_with("_door") || name.ends_with("_trapdoor") || name.ends_with("_fence_gate"))
+            && !name.starts_with("minecraft:iron_");
+    if !opens {
+        return false;
+    }
+    let open = ctx.shapes.property(state, "open") == Some("true");
+    let new = ctx
+        .shapes
+        .with(state, "open", if open { "false" } else { "true" });
+    set_block(level, ctx, p, new, Flags::ALL)
 }

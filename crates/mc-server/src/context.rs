@@ -60,6 +60,12 @@ impl OnlinePlayer {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct EntityTypes {
+    pub falling_block: i32,
+    pub item: i32,
+}
+
 /// Things every connection in play needs to hear about.
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -103,6 +109,29 @@ pub enum Event {
         uuid: u128,
         pose: Pose,
     },
+    /// An entity appeared (players see it if they have its chunk).
+    EntitySpawned(mc_entity::Entity),
+    /// Entities moved this tick.
+    EntitiesMoved(Vec<(i32, [f64; 3], bool)>),
+    EntitiesRemoved(Vec<i32>),
+    /// A player's game mode changed (0 survival, 1 creative, 2 adventure,
+    /// 3 spectator).
+    GameMode {
+        uuid: u128,
+        mode: i32,
+    },
+    /// One slot of a player's inventory (player inventory index) changed.
+    InventorySlot {
+        uuid: u128,
+        slot: i32,
+        item: Option<ItemStack>,
+    },
+    /// A player picked up an item entity (the pickup animation).
+    ItemTaken {
+        item_entity: i32,
+        collector: i32,
+        count: i32,
+    },
     /// Disconnect a player with a reason.
     Kick {
         uuid: u128,
@@ -141,6 +170,14 @@ pub struct ServerContext {
     pub shapes: mc_tick::Shapes,
     /// Block and fluid ticks waiting to run (tick thread only).
     pub ticks: Mutex<mc_tick::ScheduledTicks>,
+    /// Entities other than players (tick thread only, read by joining players).
+    pub entities: Mutex<Vec<mc_entity::Entity>>,
+    /// Inventories of the players in play.
+    pub inventories: Mutex<HashMap<u128, crate::interact::Hands>>,
+    /// What broken blocks drop.
+    pub loot: crate::loot::BlockLoot,
+    /// `minecraft:entity_type` ids of the entities we have.
+    pub entity_types: EntityTypes,
     /// `minecraft:player` in `minecraft:entity_type`.
     pub player_entity_type: i32,
     /// RSA key for the online-mode key exchange (`None` in offline mode).
@@ -227,28 +264,37 @@ impl ServerContext {
         };
         let tags = build_tags(&data, &synced_ids)?;
         let rules = BlockRules::new(&data).map_err(anyhow::Error::msg)?;
-        let observed = config.data_dir.join("observed/fence_attach.json");
-        let attach = std::fs::read_to_string(&observed)
-            .ok()
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .and_then(|v| serde_json::from_value::<Vec<i32>>(v["states"].clone()).ok());
-        if attach.is_none() {
-            warn!(
-                "no {} (cargo xtask observe attach): fences guess which blocks they attach to",
-                observed.display()
-            );
-        }
-        let shapes = mc_tick::Shapes::new(&data, attach);
+        let observed = |file: &str| {
+            let path = config.data_dir.join("observed").join(file);
+            let table = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                .and_then(|v| serde_json::from_value::<Vec<i32>>(v["states"].clone()).ok());
+            if table.is_none() {
+                warn!(
+                    "no {} (cargo xtask observe): block facts are guessed",
+                    path.display()
+                );
+            }
+            table
+        };
+        let shapes = mc_tick::Shapes::new(
+            &data,
+            observed("fence_attach.json"),
+            observed("conductor.json"),
+        );
         let world = match &config.world {
             Some(dir) => World::open(dir, &data, &synced_ids)?,
             None => World::flat(&data, &synced_ids, &rules)?,
         };
         let time = world.load_time(&synced_ids)?;
         let (actions, action_queue) = std::sync::mpsc::channel();
-        let player_entity_type = data
-            .builtin
-            .id("minecraft:entity_type", "minecraft:player")
-            .context("minecraft:player missing from the registries report")?;
+        let entity_type = |name: &str| {
+            data.builtin
+                .id("minecraft:entity_type", name)
+                .with_context(|| format!("{name} missing from the registries report"))
+        };
+        let player_entity_type = entity_type("minecraft:player")?;
         info!(
             "loaded {} packets, {} synchronized registries, tags for {} registries",
             ids.len(),
@@ -271,6 +317,13 @@ impl ServerContext {
             rules,
             shapes,
             ticks: Mutex::new(mc_tick::ScheduledTicks::default()),
+            entities: Mutex::new(Vec::new()),
+            inventories: Mutex::new(HashMap::new()),
+            loot: crate::loot::BlockLoot::load(&data),
+            entity_types: EntityTypes {
+                falling_block: entity_type("minecraft:falling_block")?,
+                item: entity_type("minecraft:item")?,
+            },
             player_entity_type,
             key,
             players: Mutex::new(HashMap::new()),

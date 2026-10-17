@@ -27,6 +27,43 @@ pub fn offset(p: Position, face: usize) -> Position {
     Position::new(p.x + dx, p.y + dy, p.z + dz)
 }
 
+/// Blocks a survival player breaks with one hit (hardness 0, minecraft.wiki
+/// "Breaking"): plants, torches, redstone parts, TNT, slime, scaffolding...
+pub fn breaks_instantly(data: &McData, rules: &BlockRules, state: u32) -> bool {
+    let name = data.blocks.block_name(state).unwrap_or("");
+    let plant = !rules.blocks_motion(state)
+        && !matches!(
+            name,
+            "minecraft:cobweb"
+                | "minecraft:ladder"
+                | "minecraft:vine"
+                | "minecraft:snow"
+                | "minecraft:lever"
+                | "minecraft:water"
+                | "minecraft:lava"
+                | "minecraft:bubble_column"
+        )
+        && !name.ends_with("_carpet")
+        && !name.ends_with("_rail")
+        && name != "minecraft:rail"
+        && !name.ends_with("_button")
+        && !name.ends_with("_pressure_plate")
+        && !name.ends_with("_sign")
+        && !name.ends_with("_banner");
+    plant
+        || matches!(
+            name,
+            "minecraft:tnt"
+                | "minecraft:slime_block"
+                | "minecraft:scaffolding"
+                | "minecraft:repeater"
+                | "minecraft:comparator"
+                | "minecraft:flower_pot"
+                | "minecraft:frogspawn"
+                | "minecraft:honey_block"
+        )
+}
+
 /// Everything about one Use Item On that decides the placed state.
 #[derive(Clone, Copy, Debug)]
 pub struct Placement {

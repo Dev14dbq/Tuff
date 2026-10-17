@@ -27,6 +27,13 @@ impl Level for World {
     fn schedule_fluid_tick(&mut self, p: BlockPos, fluid: u32, delay: i64) {
         self.ticks.fluids.schedule(p, fluid, self.time + delay, 0);
     }
+    fn in_world(&self, p: BlockPos) -> bool {
+        (-64..320).contains(&p.y)
+    }
+    fn spawn_falling_block(&mut self, _p: BlockPos, _state: u32) {}
+    fn is_block_tick_scheduled(&self, p: BlockPos, block: u32) -> bool {
+        self.ticks.blocks.is_scheduled(p, block)
+    }
     fn schedule_block_tick(&mut self, p: BlockPos, block: u32, delay: i64, priority: i32) {
         self.ticks
             .blocks
@@ -41,7 +48,11 @@ fn setup() -> Option<(mc_data::McData, Shapes, BlockRules)> {
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         .and_then(|v| serde_json::from_value(v["states"].clone()).ok());
-    let shapes = Shapes::new(&data, attach);
+    let conductor = std::fs::read_to_string(dir.join("observed/conductor.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| serde_json::from_value(v["states"].clone()).ok());
+    let shapes = Shapes::new(&data, attach, conductor);
     let rules = BlockRules::new(&data).ok()?;
     Some((data, shapes, rules))
 }
@@ -187,5 +198,121 @@ fn lava_and_water_placed_together() {
                 row.iter().map(|c| format!("{c:>3}")).collect::<String>()
             );
         }
+    }
+}
+
+#[test]
+fn dust_line_connects_and_carries_power() {
+    let Some((data, shapes, rules)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |name: &str| data.blocks.default_state(name).unwrap();
+    let mut world = World {
+        blocks: HashMap::new(),
+        air: state("minecraft:air"),
+        time: 0,
+        ticks: ScheduledTicks::default(),
+    };
+    for x in -2..=20 {
+        world
+            .blocks
+            .insert(BlockPos::new(x, -60, 0), state("minecraft:stone"));
+    }
+    for x in 1..=5 {
+        let p = BlockPos::new(x, -59, 0);
+        let s = mc_tick::placement_state(&world, ctx, p, state("minecraft:redstone_wire"));
+        mc_tick::set_block(&mut world, ctx, p, s, Flags::ALL);
+        eprintln!(
+            "after {x}: wire1 {} shape-of-1 {}",
+            data.blocks
+                .describe(world.block(BlockPos::new(1, -59, 0)))
+                .unwrap(),
+            data.blocks
+                .describe(mc_tick::redstone::wire_shape(
+                    &world,
+                    ctx,
+                    BlockPos::new(1, -59, 0),
+                    world.block(BlockPos::new(1, -59, 0))
+                ))
+                .unwrap()
+        );
+    }
+    let p0 = BlockPos::new(0, -59, 0);
+    mc_tick::set_block(
+        &mut world,
+        ctx,
+        p0,
+        state("minecraft:redstone_block"),
+        Flags::ALL,
+    );
+    for x in 1..=5 {
+        eprintln!(
+            "{x}: {}",
+            data.blocks
+                .describe(world.block(BlockPos::new(x, -59, 0)))
+                .unwrap()
+        );
+    }
+    eprintln!(
+        "default wire {}",
+        data.blocks
+            .describe(state("minecraft:redstone_wire"))
+            .unwrap()
+    );
+}
+
+#[test]
+fn lamp_set_beside_powered_dust_stays_off() {
+    let Some((data, shapes, rules)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |text: &str| -> u32 {
+        let (name, props) = text.split_once('[').unwrap_or((text, ""));
+        let props: Vec<(&str, &str)> = props
+            .trim_end_matches(']')
+            .split(',')
+            .filter_map(|kv| kv.split_once('='))
+            .collect();
+        data.blocks.state_id(name, &props).unwrap()
+    };
+    let mut world = World {
+        blocks: HashMap::new(),
+        air: state("minecraft:air"),
+        time: 0,
+        ticks: ScheduledTicks::default(),
+    };
+    for x in 0..=8 {
+        world
+            .blocks
+            .insert(BlockPos::new(x, -60, 6), state("minecraft:stone"));
+    }
+    for (x, s) in [
+        (2, "minecraft:stone"),
+        (3, "minecraft:redstone_wall_torch[facing=east]"),
+        (4, "minecraft:redstone_wire"),
+        (5, "minecraft:redstone_lamp"),
+    ] {
+        let p = BlockPos::new(x, -59, 6);
+        let placed = mc_tick::placement_state(&world, ctx, p, state(s));
+        mc_tick::set_block(&mut world, ctx, p, placed, Flags::ALL);
+        for x in 3..=5 {
+            eprint!(
+                "{}  ",
+                data.blocks
+                    .describe(world.block(BlockPos::new(x, -59, 6)))
+                    .unwrap()
+            );
+        }
+        eprintln!();
     }
 }

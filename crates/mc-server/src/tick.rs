@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mc_protocol::Position;
-use mc_protocol::packets::play::{ClockState, ItemStack, SetTime};
+use mc_protocol::packets::play::{ClockState, SetTime};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, info, warn};
 
@@ -111,8 +111,8 @@ pub enum Action {
         sequence: i32,
     },
     UseItemOn {
-        /// What is in the hand used, as the connection knows it.
-        held: Option<ItemStack>,
+        /// 0 main hand, 1 off hand.
+        hand: i32,
         position: Position,
         face: i32,
         cursor: [f32; 3],
@@ -169,6 +169,9 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             for event in std::mem::take(&mut outcome.events) {
                 let _ = ctx.events.send(event);
             }
+            for (at, drop) in std::mem::take(&mut outcome.drops) {
+                drop_item(&ctx, at, drop);
+            }
             let _ = request.reply.send(outcome);
         }
 
@@ -201,26 +204,228 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
     }
 }
 
-/// Due block ticks, then due fluid ticks; what they change goes to everyone.
+/// Due block ticks, then due fluid ticks, then entities; what they change
+/// goes to everyone.
 fn run_scheduled_ticks(ctx: &ServerContext) {
     let now = lock(&ctx.time).age;
     let due = {
         let mut ticks = lock(&ctx.ticks);
-        let fluids = ticks.fluids.take_due(now);
         let blocks = ticks.blocks.take_due(now);
+        let fluids = ticks.fluids.take_due(now);
         (blocks, fluids)
     };
-    if due.0.is_empty() && due.1.is_empty() {
-        return;
-    }
     let mut level = crate::level::WorldLevel::new(ctx);
     let logic = level.logic();
+    for (pos, block) in due.0 {
+        mc_tick::block_tick(&mut level, logic, pos, block);
+    }
     for (pos, fluid) in due.1 {
         mc_tick::fluids::tick(&mut level, logic, pos, fluid);
     }
-    let changes = level.into_changes();
+    tick_entities(ctx, &mut level);
+    let (changes, spawned) = level.finish();
     if !changes.is_empty() {
         let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
+    }
+    if !spawned.is_empty() {
+        let mut entities = lock(&ctx.entities);
+        for entity in spawned {
+            let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
+            entities.push(entity);
+        }
+    }
+}
+
+/// Blocks as entities bump into them.
+struct Solid<'a, 'b>(&'a crate::level::WorldLevel<'b>);
+
+impl mc_entity::Collide for Solid<'_, '_> {
+    fn solid(&self, x: i32, y: i32, z: i32) -> bool {
+        use mc_tick::Level as _;
+        let state = self.0.block(mc_tick::BlockPos::new(x, y, z));
+        !mc_tick::gravity::free(self.0.logic(), state)
+    }
+}
+
+/// Drops an item stack from a block: near its centre, with a little random
+/// velocity, not to be picked up for 10 ticks (minecraft.wiki, "Item
+/// (entity)").
+pub fn drop_item(ctx: &ServerContext, at: mc_protocol::Position, drop: crate::loot::Drop) {
+    let r = |spread: f64| {
+        (crate::util::random_u64() >> 11) as f64 / (1u64 << 53) as f64 * spread - spread / 2.0
+    };
+    let entity = mc_entity::Entity {
+        id: ctx.next_entity_id(),
+        uuid: crate::util::random_uuid(),
+        kind: mc_entity::Kind::Item {
+            item: drop.item,
+            count: drop.count,
+            pickup_delay: 10,
+        },
+        pos: [
+            f64::from(at.x) + 0.5 + r(0.5),
+            f64::from(at.y) + 0.25 + r(0.5),
+            f64::from(at.z) + 0.5 + r(0.5),
+        ],
+        vel: [r(0.2), 0.2, r(0.2)],
+        on_ground: false,
+        age: 0,
+        removed: false,
+    };
+    let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
+    lock(&ctx.entities).push(entity);
+}
+
+/// How far around a player items are picked up: the player's box grown by
+/// one block sideways and half a block up and down.
+fn picks_up(pose: &crate::context::Pose, item: &mc_entity::Entity) -> bool {
+    let b = item.aabb();
+    pose.x - 1.3 < b.max[0]
+        && pose.x + 1.3 > b.min[0]
+        && pose.y - 0.5 < b.max[1]
+        && pose.y + 2.3 > b.min[1]
+        && pose.z - 1.3 < b.max[2]
+        && pose.z + 1.3 > b.min[2]
+}
+
+/// Falling blocks fall and land; items fall, slide, despawn and are picked up.
+fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
+    let mut entities = std::mem::take(&mut *lock(&ctx.entities));
+    if entities.is_empty() {
+        return;
+    }
+    let logic = level.logic();
+    let players: Vec<(u128, i32, i32, crate::context::Pose)> = lock(&ctx.players)
+        .values()
+        .filter_map(|p| {
+            p.pose
+                .map(|pose| (p.profile.uuid, p.entity_id, p.game_mode, pose))
+        })
+        .collect();
+    let (mut moved, mut removed) = (Vec::new(), Vec::new());
+    for entity in &mut entities {
+        let before = (entity.pos, entity.on_ground);
+        match entity.kind.clone() {
+            mc_entity::Kind::FallingBlock { state } => {
+                mc_entity::fall(entity, &Solid(level));
+                if entity.on_ground || entity.age > 600 {
+                    let (x, y, z) = entity.block_pos();
+                    let at = mc_tick::BlockPos::new(x, y, z);
+                    use mc_tick::Level as _;
+                    if entity.on_ground && mc_tick::gravity::free(logic, level.block(at)) {
+                        mc_tick::set_block(level, logic, at, state, mc_tick::Flags::ALL);
+                    }
+                    entity.removed = true;
+                }
+            }
+            mc_entity::Kind::Item {
+                item,
+                count,
+                pickup_delay,
+            } => {
+                mc_entity::fall(entity, &Solid(level));
+                if entity.on_ground {
+                    // Ground friction (slipperiness 0.6) and a small bounce.
+                    entity.vel[0] *= 0.6;
+                    entity.vel[2] *= 0.6;
+                    if entity.vel[1] < 0.0 {
+                        entity.vel[1] *= -0.5;
+                    }
+                    // Come to rest instead of creeping forever.
+                    for v in &mut entity.vel {
+                        if v.abs() < 0.003 {
+                            *v = 0.0;
+                        }
+                    }
+                }
+                let delay = (pickup_delay - 1).max(0);
+                entity.kind = mc_entity::Kind::Item {
+                    item,
+                    count,
+                    pickup_delay: delay,
+                };
+                if entity.age >= 6000 {
+                    entity.removed = true;
+                } else if delay == 0 {
+                    pick_up(ctx, entity, &players);
+                }
+            }
+        }
+        if entity.removed {
+            removed.push(entity.id);
+        } else if (entity.pos, entity.on_ground) != before {
+            moved.push((entity.id, entity.pos, entity.on_ground));
+        }
+    }
+    entities.retain(|e| !e.removed);
+    let mut stored = lock(&ctx.entities);
+    entities.append(&mut stored);
+    *stored = entities;
+    drop(stored);
+    if !moved.is_empty() {
+        let _ = ctx.events.send(Event::EntitiesMoved(moved));
+    }
+    if !removed.is_empty() {
+        let _ = ctx.events.send(Event::EntitiesRemoved(removed));
+    }
+}
+
+/// The first nearby player with room takes the item (all of it, or what fits).
+fn pick_up(
+    ctx: &ServerContext,
+    entity: &mut mc_entity::Entity,
+    players: &[(u128, i32, i32, crate::context::Pose)],
+) {
+    let mc_entity::Kind::Item { item, count, .. } = entity.kind else {
+        return;
+    };
+    for (uuid, player_entity, mode, pose) in players {
+        if *mode == 3 || !picks_up(pose, entity) {
+            continue;
+        }
+        let name = ctx
+            .data
+            .builtin
+            .get("minecraft:item")
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|(_, id)| **id == item)
+                    .map(|(n, _)| n.clone())
+            })
+            .unwrap_or_default();
+        let max = crate::interact::max_stack(&name);
+        let mut inventories = lock(&ctx.inventories);
+        let Some(hands) = inventories.get_mut(uuid) else {
+            continue;
+        };
+        let (taken, changed) = hands.insert(item, count, max);
+        if taken == 0 {
+            continue;
+        }
+        for slot in changed {
+            let _ = ctx.events.send(Event::InventorySlot {
+                uuid: *uuid,
+                slot: crate::interact::inventory_index(slot),
+                item: hands.slots[slot].clone(),
+            });
+        }
+        drop(inventories);
+        let _ = ctx.events.send(Event::ItemTaken {
+            item_entity: entity.id,
+            collector: *player_entity,
+            count: taken,
+        });
+        if taken >= count {
+            entity.removed = true;
+        } else {
+            entity.kind = mc_entity::Kind::Item {
+                item,
+                count: count - taken,
+                pickup_delay: 0,
+            };
+        }
+        return;
     }
 }
 
@@ -240,12 +445,12 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             sequence,
         } => interact::dig(ctx, actor, status, position, sequence),
         Action::UseItemOn {
-            held,
+            hand,
             position,
             face,
             cursor,
             sequence,
-        } => interact::use_item_on(ctx, actor, held.as_ref(), position, face, cursor, sequence),
+        } => interact::use_item_on(ctx, actor, hand, position, face, cursor, sequence),
     }
 }
 

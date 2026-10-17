@@ -1,0 +1,74 @@
+# Redstone basics on a frozen superflat world (stone floor at y=-60).
+region -2 -61 -2 22 -55 22
+run fill -2 -60 -2 22 -60 22 stone
+compare
+
+# A line of dust from a redstone block: power drops by one per block.
+run fill 1 -59 0 18 -59 0 redstone_wire
+compare
+run setblock 0 -59 0 redstone_block
+compare
+step 1
+# A lamp at the far end lights; taking the block away turns it off 4 ticks later.
+run setblock 19 -59 0 redstone_lamp
+run setblock 20 -59 0 stone
+run setblock 20 -59 0 air
+compare
+run fill 14 -59 0 17 -59 0 redstone_wire
+run setblock 18 -59 0 redstone_lamp
+compare
+run setblock 0 -59 0 air
+compare
+step 2
+step 2
+step 1
+
+# A lever beside dust.
+run setblock 0 -59 3 lever[face=floor,facing=east]
+run fill 1 -59 3 4 -59 3 redstone_wire
+run setblock 5 -59 3 redstone_lamp
+compare
+run setblock 0 -59 3 lever[face=floor,facing=east,powered=true]
+compare
+step 4
+
+# A torch on the side of a block turns off when the block is powered.
+run setblock 2 -59 6 stone
+run setblock 3 -59 6 redstone_wall_torch[facing=east]
+run setblock 4 -59 6 redstone_wire
+run setblock 5 -59 6 redstone_lamp
+compare
+step 2
+run setblock 1 -59 6 redstone_block
+compare
+step 1
+step 1
+step 2
+step 4
+
+# Repeaters: delays and a chain.
+run setblock 0 -59 9 redstone_block
+run setblock 1 -59 9 repeater[facing=west,delay=1]
+run setblock 2 -59 9 repeater[facing=west,delay=3]
+run setblock 3 -59 9 redstone_wire
+run setblock 4 -59 9 redstone_lamp
+compare
+step 1
+step 1
+step 2
+step 2
+step 4
+
+# Dust up and down blocks, cut by a conductor, not by glass.
+run setblock 0 -59 12 redstone_block
+run setblock 1 -59 12 redstone_wire
+run setblock 2 -59 12 stone
+run setblock 2 -58 12 redstone_wire
+run setblock 3 -59 12 redstone_wire
+run setblock 5 -59 14 glass
+run setblock 5 -58 14 redstone_wire
+run setblock 4 -59 14 redstone_block
+run setblock 6 -59 14 redstone_wire
+compare
+run setblock 1 -58 12 stone
+compare

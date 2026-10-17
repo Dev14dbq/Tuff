@@ -762,6 +762,8 @@ pub mod play {
     }
 
     pub mod game_event {
+        /// Value: 0 survival, 1 creative, 2 adventure, 3 spectator.
+        pub const CHANGE_GAME_MODE: u8 = 3;
         pub const START_WAITING_FOR_CHUNKS: u8 = 13;
     }
 
@@ -1022,6 +1024,8 @@ pub mod play {
 
     /// Entity metadata field indices, observed from a vanilla 26.3 server.
     pub mod metadata {
+        /// Dropped item entity: the stack (Slot).
+        pub const ITEM: u8 = 8;
         /// Living entity health (Float).
         pub const HEALTH: u8 = 9;
         /// Player: displayed skin parts (Byte), the bit mask from Client Information.
@@ -1034,6 +1038,7 @@ pub mod play {
         Byte(i8),
         VarInt(i32),
         Float(f32),
+        Item(Option<ItemStack>),
         Boolean(bool),
     }
 
@@ -1051,6 +1056,10 @@ pub mod play {
                 MetadataValue::Float(v) => {
                     out.put_varint(3);
                     out.put_f32(*v);
+                }
+                MetadataValue::Item(stack) => {
+                    out.put_varint(7);
+                    ItemStack::encode(stack.as_ref(), out);
                 }
                 MetadataValue::Boolean(v) => {
                     out.put_varint(8);
@@ -1284,6 +1293,59 @@ pub mod play {
             out.put_varint(self.hand);
             out.put_varint(self.kind);
             out.put_varint(self.duration);
+        }
+    }
+
+    /// Pickup Item: the item flies to whoever picked it up (the entity is
+    /// removed separately).
+    #[derive(Clone, Debug)]
+    pub struct TakeItemEntity {
+        pub collected: i32,
+        pub collector: i32,
+        pub count: i32,
+    }
+    packet!(TakeItemEntity, Play, "minecraft:take_item_entity");
+    impl Encode for TakeItemEntity {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.collected);
+            out.put_varint(self.collector);
+            out.put_varint(self.count);
+        }
+    }
+
+    /// Set Player Inventory Slot: one slot by player inventory index (0–8
+    /// hotbar, 9–35 main, 36–39 armour, 40 off hand).
+    #[derive(Clone, Debug)]
+    pub struct SetPlayerInventory {
+        pub slot: i32,
+        pub item: Option<ItemStack>,
+    }
+    packet!(SetPlayerInventory, Play, "minecraft:set_player_inventory");
+    impl Encode for SetPlayerInventory {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.slot);
+            ItemStack::encode(self.item.as_ref(), out);
+        }
+    }
+
+    /// Set Container Content: every slot of a window (0 = the inventory).
+    #[derive(Clone, Debug)]
+    pub struct ContainerSetContent {
+        pub window: i32,
+        pub state_id: i32,
+        pub slots: Vec<Option<ItemStack>>,
+        pub carried: Option<ItemStack>,
+    }
+    packet!(ContainerSetContent, Play, "minecraft:container_set_content");
+    impl Encode for ContainerSetContent {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.window);
+            out.put_varint(self.state_id);
+            out.put_len(self.slots.len());
+            for slot in &self.slots {
+                ItemStack::encode(slot.as_ref(), out);
+            }
+            ItemStack::encode(self.carried.as_ref(), out);
         }
     }
 

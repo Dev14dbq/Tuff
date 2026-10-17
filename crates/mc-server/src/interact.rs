@@ -24,8 +24,10 @@ const EYE_HEIGHT: f64 = 1.62;
 const PLAYER_WIDTH: f64 = 0.6;
 const PLAYER_HEIGHT: f64 = 1.8;
 const CREATIVE: i32 = 1;
+const SPECTATOR: i32 = 3;
 
 /// Inventory slots as the client numbers them: 36..45 hotbar, 45 off hand.
+#[derive(Clone, Debug)]
 pub struct Hands {
     pub slots: Vec<Option<ItemStack>>,
     /// Selected hotbar slot, 0..9.
@@ -41,9 +43,103 @@ impl Default for Hands {
     }
 }
 
+/// Container slot (window 0) → player inventory index (Set Player Inventory
+/// Slot): hotbar 36..45 → 0..9, main 9..36 stays, off hand 45 → 40, armour
+/// 5..9 → 39..35.
+pub fn inventory_index(container_slot: usize) -> i32 {
+    match container_slot {
+        36..=44 => container_slot as i32 - 36,
+        45 => 40,
+        5..=8 => 44 - container_slot as i32,
+        other => other as i32,
+    }
+}
+
+/// Most items stack to 64; tools, armour and a few others do not stack, and
+/// some stack to 16. (Item components are not loaded yet.)
+pub fn max_stack(item_name: &str) -> i32 {
+    let single = [
+        "_sword",
+        "_pickaxe",
+        "_axe",
+        "_shovel",
+        "_hoe",
+        "_helmet",
+        "_chestplate",
+        "_leggings",
+        "_boots",
+        "_bucket",
+        "_boat",
+        "_raft",
+        "_minecart",
+        "_bed",
+        "_horse_armor",
+    ];
+    let sixteen = [
+        "ender_pearl",
+        "snowball",
+        "egg",
+        "_sign",
+        "_banner",
+        "honey_bottle",
+    ];
+    if single.iter().any(|s| item_name.ends_with(s)) || item_name == "minecraft:bucket" {
+        1
+    } else if sixteen.iter().any(|s| item_name.ends_with(s)) {
+        16
+    } else {
+        64
+    }
+}
+
 impl Hands {
     pub fn main_hand(&self) -> Option<&ItemStack> {
         self.slots[36 + self.selected].as_ref()
+    }
+
+    /// Container slot of a hand.
+    pub fn hand_slot(&self, hand: i32) -> usize {
+        if hand == 1 { 45 } else { 36 + self.selected }
+    }
+
+    /// Puts items in: first onto matching stacks, then into empty slots
+    /// (hotbar first, then the main inventory). Returns how many went in and
+    /// the container slots that changed.
+    pub fn insert(&mut self, item: i32, mut count: i32, max: i32) -> (i32, Vec<usize>) {
+        let order: Vec<usize> = (36..45).chain(9..36).collect();
+        let mut changed = Vec::new();
+        let start = count;
+        for &slot in &order {
+            if count == 0 {
+                break;
+            }
+            if let Some(stack) = &mut self.slots[slot]
+                && stack.item == item
+                && !stack.has_component_changes
+                && stack.count < max
+            {
+                let n = (max - stack.count).min(count);
+                stack.count += n;
+                count -= n;
+                changed.push(slot);
+            }
+        }
+        for &slot in &order {
+            if count == 0 {
+                break;
+            }
+            if self.slots[slot].is_none() {
+                let n = max.min(count);
+                self.slots[slot] = Some(ItemStack {
+                    count: n,
+                    item,
+                    has_component_changes: false,
+                });
+                count -= n;
+                changed.push(slot);
+            }
+        }
+        (start - count, changed)
     }
 
     /// 0 main hand, 1 off hand.
@@ -64,6 +160,8 @@ pub struct Outcome {
     pub events: Vec<Event>,
     /// Lines of text for the player (command feedback).
     pub messages: Vec<String>,
+    /// Items to drop into the world, at block positions.
+    pub drops: Vec<(Position, crate::loot::Drop)>,
 }
 
 /// Who is acting.
@@ -123,22 +221,27 @@ pub fn dig(
     position: Position,
     sequence: i32,
 ) -> Outcome {
-    let breaks = match status {
-        dig::START => actor.game_mode == CREATIVE,
-        dig::FINISH => true,
-        _ => return Outcome::default(),
-    };
     let mut outcome = Outcome {
         ack: Some(sequence),
         ..Outcome::default()
     };
-    if !breaks || !in_reach(&actor.pose, position) {
-        return outcome;
-    }
     let (world, blocks) = (&ctx.world, &ctx.data.blocks);
     let Some(state) = world.block(position, blocks) else {
         return outcome;
     };
+    // Spectators do not dig; creative breaks at once; survival breaks when
+    // the client says it finished, or at once for blocks that break
+    // instantly (dig times are not checked yet).
+    let breaks = match (status, actor.game_mode) {
+        (_, SPECTATOR) => false,
+        (dig::START, CREATIVE) => true,
+        (dig::START, _) => blocks::breaks_instantly(&ctx.data, &ctx.rules, state),
+        (dig::FINISH, mode) => mode != CREATIVE,
+        _ => return Outcome::default(),
+    };
+    if !breaks || !in_reach(&actor.pose, position) {
+        return outcome;
+    }
     if blocks.is_air(state) {
         return outcome;
     }
@@ -151,6 +254,14 @@ pub fn dig(
         return outcome;
     }
     outcome.updates.push((position, left));
+    if actor.game_mode != CREATIVE
+        && let Some(name) = blocks.block_name(state)
+    {
+        let props = |k: &str| blocks.property(state, k).map(str::to_owned);
+        for drop in ctx.loot.drops(name, &props) {
+            outcome.drops.push((position, drop));
+        }
+    }
     outcome.events.push(Event::BlockBroken {
         by: actor.uuid,
         position,
@@ -169,7 +280,7 @@ pub fn dig(
 pub fn use_item_on(
     ctx: &ServerContext,
     actor: Actor,
-    held: Option<&ItemStack>,
+    hand: i32,
     clicked: Position,
     face: i32,
     cursor: [f32; 3],
@@ -182,11 +293,38 @@ pub fn use_item_on(
     let Ok(face) = usize::try_from(face) else {
         return outcome;
     };
-    if face >= 6 || !in_reach(&actor.pose, clicked) {
+    if face >= 6 || !in_reach(&actor.pose, clicked) || actor.game_mode == SPECTATOR {
         return outcome;
     }
+    let held: Option<ItemStack> = ctx
+        .inventories
+        .lock()
+        .expect("inventories lock")
+        .get(&actor.uuid)
+        .and_then(|h| h.held(hand).cloned());
+    let held = held.as_ref();
     let (world, blocks) = (&ctx.world, &ctx.data.blocks);
     let block_at = |p: Position| world.block(p, blocks);
+    // Levers, doors, repeaters... react to being used instead of having
+    // something placed against them.
+    let mut level = WorldLevel::new(ctx);
+    let logic = level.logic();
+    if mc_tick::use_block(&mut level, logic, to_pos(clicked)) {
+        if let Some(state) = block_at(clicked) {
+            outcome.updates.push((clicked, state));
+        }
+        outcome.events.push(Event::BlocksChanged {
+            by: 0,
+            changes: level.into_changes(),
+        });
+        outcome.events.push(Event::Swing {
+            uuid: actor.uuid,
+            entity_id: actor.entity_id,
+            times: 1,
+        });
+        return outcome;
+    }
+    drop(level);
     // The client predicted something at both; tell it what is really there.
     let refuse = |mut outcome: Outcome| {
         for p in [clicked, offset(clicked, face)] {
@@ -233,7 +371,8 @@ pub fn use_item_on(
     let mut placed_any = false;
     for &(p, state) in &placed.blocks {
         // Connections and shape from the neighbours, as the block is placed.
-        let state = ctx.shapes.placement_shape(&level, to_pos(p), state);
+        let state = mc_tick::placement_state(&level, level.logic(), to_pos(p), state);
+        let state = mc_tick::redstone::player_placement(&level, level.logic(), to_pos(p), state);
         placed_any |= level.set_block(p, state);
     }
     if !placed_any {
@@ -249,6 +388,24 @@ pub fn use_item_on(
         }
     }
     outcome.events.push(Event::BlocksChanged { by: 0, changes });
+    // Survival and adventure use up the block.
+    if actor.game_mode != CREATIVE {
+        let mut inventories = ctx.inventories.lock().expect("inventories lock");
+        if let Some(hands) = inventories.get_mut(&actor.uuid) {
+            let slot = hands.hand_slot(hand);
+            if let Some(stack) = &mut hands.slots[slot] {
+                stack.count -= 1;
+                if stack.count <= 0 {
+                    hands.slots[slot] = None;
+                }
+            }
+            outcome.events.push(Event::InventorySlot {
+                uuid: actor.uuid,
+                slot: inventory_index(slot),
+                item: hands.slots[slot].clone(),
+            });
+        }
+    }
     outcome.events.push(Event::Swing {
         uuid: actor.uuid,
         entity_id: actor.entity_id,

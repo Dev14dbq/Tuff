@@ -42,6 +42,7 @@ pub struct Shapes {
     /// Faces fences attach to (north 1, east 2, south 4, west 8), observed.
     attach: Vec<u8>,
     observed: bool,
+    conductor: Vec<bool>,
     blocks_of: Vec<u32>,
     blocks: mc_data::Blocks,
     air: u32,
@@ -51,7 +52,7 @@ impl Shapes {
     /// `attach` is the observed table (`observed/fence_attach.json`); without
     /// it, every face of a block that is not air, a fluid or a known partial
     /// shape counts as attachable.
-    pub fn new(data: &McData, attach: Option<Vec<i32>>) -> Self {
+    pub fn new(data: &McData, attach: Option<Vec<i32>>, conductor: Option<Vec<i32>>) -> Self {
         let blocks = &data.blocks;
         let states = blocks.state_count() as usize;
         let registry = data
@@ -122,7 +123,7 @@ impl Shapes {
         }
 
         let observed = attach.as_ref().is_some_and(|a| a.len() == states);
-        let attach = match attach.filter(|a| a.len() == states) {
+        let attach: Vec<u8> = match attach.filter(|a| a.len() == states) {
             Some(table) => table
                 .iter()
                 .map(|&b| if b < 0 { 0 } else { (b & 15) as u8 })
@@ -134,6 +135,24 @@ impl Shapes {
                         || kind[s as usize] != Kind::Other
                         || blocks.property(s, "waterlogged").is_some();
                     if partial { 0 } else { 15 }
+                })
+                .collect(),
+        };
+        let conductor = match conductor.filter(|c| c.len() == states) {
+            Some(table) => table.iter().map(|&c| c >= 0 && c & 1 == 1).collect(),
+            None => (0..states)
+                .map(|s| {
+                    attach[s] == 15
+                        && !matches!(
+                            blocks.block_name(s as u32),
+                            Some(
+                                "minecraft:redstone_block"
+                                    | "minecraft:observer"
+                                    | "minecraft:piston"
+                                    | "minecraft:sticky_piston"
+                                    | "minecraft:glass"
+                            )
+                        )
                 })
                 .collect(),
         };
@@ -154,6 +173,7 @@ impl Shapes {
             kind,
             attach,
             observed,
+            conductor,
             blocks_of,
             blocks: blocks.clone(),
             air: blocks.default_state("minecraft:air").unwrap_or(0),
@@ -177,6 +197,20 @@ impl Shapes {
         self.blocks.state_id(name, properties)
     }
 
+    /// Conducts redstone power (observed; without the table, full faces on
+    /// every side count).
+    pub fn conducts(&self, state: u32) -> bool {
+        self.conductor.get(state as usize).copied().unwrap_or(false)
+    }
+
+    /// A number for the block a state belongs to (for scheduled block ticks).
+    pub fn block_index(&self, state: u32) -> u32 {
+        self.blocks_of
+            .get(state as usize)
+            .copied()
+            .unwrap_or(u32::MAX)
+    }
+
     /// Whether the fence table came from observation.
     pub fn observed(&self) -> bool {
         self.observed
@@ -197,7 +231,7 @@ impl Shapes {
         self.blocks.property(state, name)
     }
 
-    fn with(&self, state: u32, name: &str, value: &str) -> u32 {
+    pub fn with(&self, state: u32, name: &str, value: &str) -> u32 {
         self.blocks
             .with_property(state, name, value)
             .unwrap_or(state)
@@ -205,7 +239,7 @@ impl Shapes {
 
     /// Whether the face of `neighbor` that looks along `towards` (from the
     /// connecting block) can be attached to.
-    fn face_attaches(&self, neighbor: u32, towards: Dir) -> bool {
+    pub fn face_attaches(&self, neighbor: u32, towards: Dir) -> bool {
         let face = towards.opposite();
         self.attach.get(neighbor as usize).copied().unwrap_or(0) & face.face_bit() != 0
     }
@@ -335,14 +369,6 @@ impl Shapes {
             }
             _ => state,
         }
-    }
-
-    /// The state `/setblock` and `/fill` store: connections and shapes from
-    /// the horizontal neighbours (fences, panes, stairs) and snow on top.
-    /// Halves of two-block blocks are left as given (observed: a lone door
-    /// half placed by a command stays).
-    pub fn command_shape(&self, level: &dyn Level, pos: BlockPos, state: u32) -> u32 {
-        self.placement_shape(level, pos, state)
     }
 
     /// The state a block takes when placed at `pos`: connections and shape
