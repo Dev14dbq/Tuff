@@ -11,9 +11,15 @@
 //! run <command>                          sent to both consoles
 //! step [<ticks>]                         /tick step, wait, compare
 //! compare                                compare without stepping
+//! light                                  let light settle, compare it
 //! ```
+//!
+//! Vanilla works out light only while the game runs, so `light` unfreezes
+//! both servers for a moment, sends the bot away and back so it is sent the
+//! chunks again, freezes them and compares sky and block light as a client
+//! reads it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -129,6 +135,33 @@ pub fn run(args: &[String]) -> Result<()> {
                         failures += 1;
                         println!("  DIFF  {label}: {} blocks", diffs.len());
                         for diff in diffs.iter().take(8) {
+                            println!("        {diff}");
+                        }
+                    }
+                }
+                "light" => {
+                    for server in servers.iter_mut() {
+                        server.command("tick unfreeze", verbose)?;
+                    }
+                    settle(&mut mirrors, Duration::from_millis(1500))?;
+                    for spot in ["2000 -40 2000", BOT_SPOT] {
+                        for server in servers.iter_mut() {
+                            server.command(&format!("tp {BOT} {spot}"), verbose)?;
+                        }
+                        settle(&mut mirrors, Duration::from_millis(2500))?;
+                    }
+                    for server in servers.iter_mut() {
+                        server.command("tick freeze", verbose)?;
+                    }
+                    let region = region.context("`region` must come before `light`")?;
+                    let diffs = compare_light(&mirrors, region);
+                    let label = format!("line {:>3}: {line}", number + 1);
+                    if diffs.is_empty() {
+                        println!("  same  {label}");
+                    } else {
+                        failures += 1;
+                        println!("  DIFF  {label}: {} light values", diffs.len());
+                        for diff in diffs.iter().take(12) {
                             println!("        {diff}");
                         }
                     }
@@ -300,10 +333,15 @@ fn strip_log_prefix(line: &str) -> &str {
         .unwrap_or(line)
 }
 
+/// Light arrays of a chunk by section bit.
+type Arrays = BTreeMap<usize, Vec<u8>>;
+
 /// The blocks one client has been sent.
 pub(crate) struct Mirror {
     client: Client,
     chunks: HashMap<(i32, i32), Vec<Vec<u32>>>,
+    /// Sky and block light arrays by section bit.
+    light: HashMap<(i32, i32), [Arrays; 2]>,
 }
 
 impl Mirror {
@@ -313,6 +351,7 @@ impl Mirror {
         let mut mirror = Self {
             client,
             chunks: HashMap::new(),
+            light: HashMap::new(),
         };
         mirror.pump()?;
         Ok(mirror)
@@ -343,6 +382,25 @@ impl Mirror {
                 "minecraft:level_chunk_with_light" => {
                     let (key, content) = crate::chunk_diff::decode(&body)?;
                     self.chunks.insert(key, content.blocks);
+                    self.light.insert(key, [content.sky, content.block_light]);
+                    changed = true;
+                }
+                "minecraft:light_update" => {
+                    let key = (r.varint()?, r.varint()?);
+                    let update = crate::chunk_diff::decode_light(&mut r)?;
+                    let light = self.light.entry(key).or_default();
+                    for (i, (arrays, empty)) in [
+                        (update.sky, update.empty_sky),
+                        (update.block, update.empty_block),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        for section in empty {
+                            light[i].insert(section, vec![0; 2048]);
+                        }
+                        light[i].extend(arrays);
+                    }
                     changed = true;
                 }
                 "minecraft:forget_level_chunk" => {
@@ -397,6 +455,49 @@ impl Mirror {
         }
     }
 
+    /// Sky (`kind` 0) or block (1) light at a position, if the client was
+    /// sent it.
+    pub(crate) fn light(&self, kind: usize, x: i32, y: i32, z: i32) -> Option<u8> {
+        let arrays = &self.light.get(&(x >> 4, z >> 4))?[kind];
+        let section = ((y + 64) >> 4) as usize + 1;
+        let array = arrays.get(&section)?;
+        let i = (((y & 15) as usize) << 8) | (((z & 15) as usize) << 4) | (x & 15) as usize;
+        let byte = array[i / 2];
+        Some(if i.is_multiple_of(2) {
+            byte & 15
+        } else {
+            byte >> 4
+        })
+    }
+
+    /// Light as a client reads it: no block light array is dark, no sky
+    /// array takes the bottom of the nearest array above (open sky if none).
+    fn light_seen(&self, kind: usize, x: i32, y: i32, z: i32) -> Option<u8> {
+        let arrays = &self.light.get(&(x >> 4, z >> 4))?[kind];
+        let section = ((y + 64) >> 4) as usize + 1;
+        let i = (((y & 15) as usize) << 8) | (((z & 15) as usize) << 4) | (x & 15) as usize;
+        let value = |a: &Vec<u8>, i: usize| {
+            let byte = a[i / 2];
+            if i.is_multiple_of(2) {
+                byte & 15
+            } else {
+                byte >> 4
+            }
+        };
+        if let Some(array) = arrays.get(&section) {
+            return Some(value(array, i));
+        }
+        if kind == 1 {
+            return Some(0);
+        }
+        Some(
+            arrays
+                .range(section + 1..)
+                .next()
+                .map_or(15, |(_, a)| value(a, i & 0xFF)),
+        )
+    }
+
     pub(crate) fn block(&self, x: i32, y: i32, z: i32) -> Option<u32> {
         let sections = self.chunks.get(&(x >> 4, z >> 4))?;
         let (section, i) = Self::index(x, y, z);
@@ -423,6 +524,26 @@ fn settle(mirrors: &mut [Mirror; 2], min: Duration) -> Result<()> {
             bail!("servers kept changing blocks for 30 s");
         }
     }
+}
+
+fn compare_light(mirrors: &[Mirror; 2], [x1, y1, z1, x2, y2, z2]: [i32; 6]) -> Vec<String> {
+    let mut diffs = Vec::new();
+    for (kind, what) in [(0, "sky"), (1, "block")] {
+        for y in y1..=y2 {
+            for z in z1..=z2 {
+                for x in x1..=x2 {
+                    let (a, b) = (
+                        mirrors[0].light_seen(kind, x, y, z),
+                        mirrors[1].light_seen(kind, x, y, z),
+                    );
+                    if a != b {
+                        diffs.push(format!("{x} {y} {z} {what}: vanilla {a:?} | ours {b:?}"));
+                    }
+                }
+            }
+        }
+    }
+    diffs
 }
 
 fn compare(

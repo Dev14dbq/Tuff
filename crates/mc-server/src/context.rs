@@ -111,6 +111,8 @@ pub enum Event {
     },
     /// An entity appeared (players see it if they have its chunk).
     EntitySpawned(mc_entity::Entity),
+    /// Light changed in these chunks.
+    LightChanged(Vec<(i32, i32)>),
     /// Entities moved this tick.
     EntitiesMoved(Vec<(i32, [f64; 3], bool)>),
     EntitiesRemoved(Vec<i32>),
@@ -305,6 +307,7 @@ impl ServerContext {
         };
         let tags = build_tags(&data, &synced_ids)?;
         let rules = BlockRules::new(&data).map_err(anyhow::Error::msg)?;
+        let light = light_tables(&data, &config);
         let observed = |file: &str| {
             let path = config.data_dir.join("observed").join(file);
             let table = std::fs::read_to_string(&path)
@@ -325,8 +328,8 @@ impl ServerContext {
             observed("conductor.json"),
         );
         let world = match &config.world {
-            Some(dir) => World::open(dir, &data, &synced_ids)?,
-            None => World::flat(&data, &synced_ids, &rules)?,
+            Some(dir) => World::open(dir, &data, &synced_ids, light)?,
+            None => World::flat(&data, &synced_ids, &rules, light)?,
         };
         let time = world.load_time(&synced_ids)?;
         let player_files = config.world.as_ref().map(|dir| {
@@ -419,6 +422,147 @@ impl ServerContext {
 
     pub fn online_count(&self) -> usize {
         self.players.lock().expect("players lock").len()
+    }
+}
+
+/// Opacity and emission per state. Opacity comes from
+/// `observed/opacity.json`: how much sky light a block takes away going down
+/// into a closed cell under it. Light at 15 passes a clear block unchanged,
+/// any other block takes `max(1, opacity)` and the cell one more, so a value
+/// `m` means opacity `m - 1` (0 stays 0, 15 stays 15). A state that did not
+/// stay as placed (sand falls, water flows) takes the value most other states
+/// of its block show; without the file, blocks a fence attaches to all round
+/// are opaque.
+fn light_tables(data: &McData, config: &Config) -> mc_light::Tables {
+    let read = |file: &str| -> Option<Vec<i32>> {
+        let text = std::fs::read_to_string(config.data_dir.join("observed").join(file)).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+        serde_json::from_value(v["states"].clone()).ok()
+    };
+    let (observed, attach) = (read("opacity.json"), read("fence_attach.json"));
+    let blocks = &data.blocks;
+    let states = blocks.state_count() as usize;
+    let opacity_of = |m: i32| match m {
+        0 => 0u8,
+        1..=14 => (m - 1) as u8,
+        _ => 15,
+    };
+    // The usual value of each block's states that stayed as placed (apart
+    // for waterlogged ones, which dim light).
+    let wet = |state: u32| blocks.property(state, "waterlogged") == Some("true");
+    let mut usual: HashMap<(&str, bool), HashMap<i32, usize>> = HashMap::new();
+    if let Some(observed) = &observed {
+        for (state, &m) in observed.iter().enumerate() {
+            if (0..16).contains(&m)
+                && let Some(name) = blocks.block_name(state as u32)
+            {
+                *usual
+                    .entry((name, wet(state as u32)))
+                    .or_default()
+                    .entry(m)
+                    .or_default() += 1;
+            }
+        }
+    }
+    let mut opacity = Vec::with_capacity(states);
+    let mut emission = Vec::with_capacity(states);
+    let mut faces = Vec::with_capacity(states);
+    for state in 0..states as u32 {
+        let name = blocks.block_name(state).unwrap_or("");
+        let m = observed
+            .as_ref()
+            .and_then(|t| t.get(state as usize).copied());
+        let solid = || {
+            attach
+                .as_ref()
+                .and_then(|t| t.get(state as usize))
+                .is_some_and(|&a| a >= 0 && a & 15 == 15)
+        };
+        let shaped = light_faces(name, &|p| blocks.property(state, p));
+        faces.push(shaped.unwrap_or(0));
+        if shaped.is_some() {
+            // Observed: these pass light like air, waterlogged ones take 2.
+            opacity.push(if wet(state) { 2 } else { 0 });
+        } else {
+            opacity.push(match m {
+                Some(m) if (0..16).contains(&m) => opacity_of(m),
+                Some(m) if m >= 16 => {
+                    let key = (name, wet(state));
+                    match usual.get(&key).and_then(|c| c.iter().max_by_key(|e| e.1)) {
+                        Some((&m, _)) => opacity_of(m),
+                        None => opacity_of(m - 16),
+                    }
+                }
+                _ if blocks.is_air(state) => 0,
+                _ => {
+                    if solid() {
+                        15
+                    } else {
+                        0
+                    }
+                }
+            });
+        }
+        emission.push(mc_light::emission(name, &|p| {
+            blocks.property(state, p).map(str::to_owned)
+        }));
+    }
+    mc_light::Tables::new(opacity, emission).with_faces(faces)
+}
+
+/// Full faces of the blocks that stop light by their shape (minecraft.wiki,
+/// "Opacity"), as [`mc_light::FACES`] bits; `None` for every other block.
+fn light_faces<'a>(name: &str, property: &dyn Fn(&str) -> Option<&'a str>) -> Option<u8> {
+    let face = |f: &str| {
+        mc_light::FACES
+            .iter()
+            .position(|n| *n == f)
+            .map_or(0, |i| 1u8 << i)
+    };
+    let half = |p: Option<&str>| {
+        if p == Some("top") {
+            face("up")
+        } else {
+            face("down")
+        }
+    };
+    let name = name.trim_start_matches("minecraft:");
+    if name.ends_with("_slab") {
+        return Some(match property("type") {
+            Some("double") => 63,
+            p => half(p),
+        });
+    }
+    if name.ends_with("_stairs") {
+        let facing = property("facing").unwrap_or("north");
+        let turn = |clockwise: bool| {
+            let order = ["north", "east", "south", "west"];
+            let i = order.iter().position(|d| *d == facing).unwrap_or(0);
+            order[if clockwise { (i + 1) % 4 } else { (i + 3) % 4 }]
+        };
+        let sides = match property("shape") {
+            Some("straight") => face(facing),
+            Some("inner_left") => face(facing) | face(turn(false)),
+            Some("inner_right") => face(facing) | face(turn(true)),
+            _ => 0,
+        };
+        return Some(half(property("half")) | sides);
+    }
+    match name {
+        "snow" if property("layers") == Some("8") => Some(63),
+        "snow"
+        | "farmland"
+        | "dirt_path"
+        | "daylight_detector"
+        | "enchanting_table"
+        | "end_portal_frame"
+        | "lectern"
+        | "stonecutter"
+        | "sculk_sensor"
+        | "calibrated_sculk_sensor"
+        | "sculk_shrieker" => Some(face("down")),
+        "piston_head" => Some(face(property("facing").unwrap_or("up"))),
+        _ => None,
     }
 }
 

@@ -31,6 +31,7 @@ pub fn run(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("attach") => observe(&args[1..], Fact::Attach),
         Some("conductor") => observe(&args[1..], Fact::Conductor),
+        Some("opacity") => observe(&args[1..], Fact::Opacity),
         _ => bail!("usage: observe attach|conductor [--first <state>] [--count <n>]"),
     }
 }
@@ -43,6 +44,7 @@ fn cell(i: usize) -> (i32, i32) {
 enum Fact {
     Attach,
     Conductor,
+    Opacity,
 }
 
 impl Fact {
@@ -50,6 +52,7 @@ impl Fact {
         match self {
             Fact::Attach => "fence_attach.json",
             Fact::Conductor => "conductor.json",
+            Fact::Opacity => "opacity.json",
         }
     }
 
@@ -60,6 +63,9 @@ impl Fact {
             }
             Fact::Conductor => {
                 "whether each block state conducts redstone power (lever west, lamp east): 1 yes, 0 no, 2 a power source; 16 = state changed after placing; -1 = not observed"
+            }
+            Fact::Opacity => {
+                "how much sky light each block state takes away going down into a closed cell below it (0-15); +16 = state changed after placing; -1 = not observed"
             }
         }
     }
@@ -140,17 +146,33 @@ fn observe_batch(
             "gamerule spawn_mobs false",
             "kill @e[type=!player]",
             "tp Parity 0 -40 0",
-            "tick freeze",
             "fill -80 -60 -80 80 -60 80 stone",
         ] {
             vanilla.send(setup)?;
         }
+        // Light only spreads while the game runs.
+        if fact != Fact::Opacity {
+            vanilla.send("tick freeze")?;
+        }
         vanilla.drain()?;
         wait_quiet(&mut mirror, Duration::from_secs(3))?;
+        if fact == Fact::Opacity {
+            // A closed cell under each block, open only at the top.
+            for i in 0..states.len() {
+                let (x, z) = cell(i);
+                for (dx, dy, dz) in [(-1, 8, 0), (1, 8, 0), (0, 8, -1), (0, 8, 1), (0, 7, 0)] {
+                    vanilla.send(&format!("setblock {} {} {} stone", x + dx, Y + dy, z + dz))?;
+                }
+            }
+        }
         for (i, &state) in states.iter().enumerate() {
             let (x, z) = cell(i);
             let text = data.blocks.describe(state).context("unknown state")?;
             let text = text.trim_end_matches("[]");
+            if fact == Fact::Opacity {
+                vanilla.send(&format!("setblock {x} {} {z} {text}", Y + 9))?;
+                continue;
+            }
             vanilla.send(&format!("setblock {x} {Y} {z} {text}"))?;
             if fact == Fact::Conductor {
                 vanilla.send(&format!("setblock {x} {Y} {} {text}", z + 2))?;
@@ -168,6 +190,7 @@ fn observe_batch(
                     vanilla.send(&format!("setblock {} {Y} {z} redstone_lamp", x + 1))?;
                     vanilla.send(&format!("setblock {} {Y} {} redstone_lamp", x + 1, z + 2))?;
                 }
+                Fact::Opacity => {}
             }
         }
         if fact == Fact::Conductor {
@@ -190,6 +213,16 @@ fn observe_batch(
         }
         vanilla.drain()?;
         wait_quiet(&mut mirror, Duration::from_secs(5))?;
+        if fact == Fact::Opacity {
+            // Light comes with chunk data: walk away and back so the client
+            // is sent the chunks again, lit as they are now.
+            vanilla.send("tp Parity 2000 -40 2000")?;
+            vanilla.drain()?;
+            wait_quiet(&mut mirror, Duration::from_secs(3))?;
+            vanilla.send("tp Parity 0 -40 0")?;
+            vanilla.drain()?;
+            wait_quiet(&mut mirror, Duration::from_secs(4))?;
+        }
         let connected = |state: Option<u32>, side: &str| {
             state.and_then(|s| data.blocks.property(s, side)) == Some("true")
         };
@@ -199,6 +232,14 @@ fn observe_batch(
             .map(|(i, &state)| {
                 let (x, z) = cell(i);
                 let mut bits = 0;
+                if fact == Fact::Opacity {
+                    let changed = mirror.block(x, Y + 9, z) != Some(state);
+                    let bits = match mirror.light(0, x, Y + 8, z) {
+                        Some(sky) => 15 - i32::from(sky),
+                        None => -1,
+                    };
+                    return (state, bits + if changed && bits >= 0 { 16 } else { 0 });
+                }
                 if fact == Fact::Conductor {
                     let lit = |z: i32| {
                         mirror

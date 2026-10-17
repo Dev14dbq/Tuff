@@ -1363,6 +1363,22 @@ pub mod play {
         }
     }
 
+    /// Update Light: new light for some sections of a chunk.
+    #[derive(Clone, Debug)]
+    pub struct LightUpdate {
+        pub x: i32,
+        pub z: i32,
+        pub light: LightData,
+    }
+    packet!(LightUpdate, Play, "minecraft:light_update");
+    impl Encode for LightUpdate {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.x);
+            out.put_varint(self.z);
+            self.light.encode(out);
+        }
+    }
+
     /// Update Section Blocks: several blocks of one 16³ section changed.
     #[derive(Clone, Debug)]
     pub struct SectionBlocksUpdate {

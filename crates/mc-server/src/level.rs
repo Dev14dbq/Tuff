@@ -23,6 +23,8 @@ pub struct WorldLevel<'a> {
     index: HashMap<BlockPos, usize>,
     /// Entities created by block logic, for the tick to add.
     pub spawned: Vec<mc_entity::Entity>,
+    /// Chunks whose light changed.
+    lit: Vec<(i32, i32)>,
 }
 
 impl<'a> WorldLevel<'a> {
@@ -32,6 +34,7 @@ impl<'a> WorldLevel<'a> {
             changes: Vec::new(),
             index: HashMap::new(),
             spawned: Vec::new(),
+            lit: Vec::new(),
         }
     }
 
@@ -50,11 +53,23 @@ impl<'a> WorldLevel<'a> {
 
     /// What changed, each block once with its final state.
     pub fn into_changes(self) -> Vec<(Position, u32)> {
+        if !self.lit.is_empty() {
+            let _ = self
+                .ctx
+                .events
+                .send(crate::context::Event::LightChanged(self.lit));
+        }
         self.changes
     }
 
     /// What changed and the entities block logic created.
     pub fn finish(self) -> (Vec<(Position, u32)>, Vec<mc_entity::Entity>) {
+        if !self.lit.is_empty() {
+            let _ = self
+                .ctx
+                .events
+                .send(crate::context::Event::LightChanged(self.lit));
+        }
         (self.changes, self.spawned)
     }
 }
@@ -75,6 +90,11 @@ impl Level for WorldLevel<'_> {
             .is_none()
         {
             return false;
+        }
+        for chunk in ctx.world.relight(to_position(p)) {
+            if !self.lit.contains(&chunk) {
+                self.lit.push(chunk);
+            }
         }
         match self.index.get(&p) {
             Some(&i) => self.changes[i].1 = state,

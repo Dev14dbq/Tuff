@@ -792,6 +792,15 @@ async fn play(
                         writer.queue(&play::SystemChat { content, overlay: false })?;
                     }
                     Ok(Event::Time(packet)) => writer.queue(&packet)?,
+                    Ok(Event::LightChanged(chunks)) => {
+                        for (x, z) in chunks {
+                            if view.has_block(Position::new(x * 16, 0, z * 16))
+                                && let Some(light) = ctx.world.light_data(x, z)
+                            {
+                                writer.queue(&play::LightUpdate { x, z, light })?;
+                            }
+                        }
+                    }
                     Ok(Event::EntitySpawned(entity)) => {
                         let (x, _, z) = entity.block_pos();
                         if view.has_block(Position::new(x, 0, z)) {

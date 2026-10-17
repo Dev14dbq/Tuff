@@ -50,6 +50,8 @@ pub struct World {
     block_entity_types: HashMap<String, i32>,
     /// The world folder (`None` for the flat test world).
     folder: Option<PathBuf>,
+    /// Opacity and emission of block states.
+    light: mc_light::Tables,
 }
 
 /// What one save did.
@@ -168,7 +170,12 @@ fn block_entity_types(data: &McData) -> Result<HashMap<String, i32>> {
 
 impl World {
     /// Classic superflat: bedrock, two dirt, grass.
-    pub fn flat(data: &McData, synced: &SyncedIds, rules: &BlockRules) -> Result<Self> {
+    pub fn flat(
+        data: &McData,
+        synced: &SyncedIds,
+        rules: &BlockRules,
+        light: mc_light::Tables,
+    ) -> Result<Self> {
         let dim = overworld(data, synced)?;
         let biomes = &synced["minecraft:worldgen/biome"];
         let generator = FlatGenerator {
@@ -190,6 +197,7 @@ impl World {
             air: state(data, "minecraft:air")?,
         };
         let mut chunk = generator.generate(0, 0, dim.min_y, dim.height);
+        light_alone(&mut chunk, &light);
         for name in HEIGHTMAPS {
             let words = chunk.heightmap(|s| heightmap_counts(name, s, &data.blocks, rules));
             chunk.heightmaps.push((name.to_owned(), words));
@@ -204,6 +212,7 @@ impl World {
             data_version: data.version.world_version,
             block_entity_types: block_entity_types(data)?,
             folder: None,
+            light,
             dimension: dim.name,
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
@@ -217,7 +226,12 @@ impl World {
     }
 
     /// A world folder saved by vanilla 26.3 (`level.dat`, region files).
-    pub fn open(dir: &Path, data: &McData, synced: &SyncedIds) -> Result<Self> {
+    pub fn open(
+        dir: &Path,
+        data: &McData,
+        synced: &SyncedIds,
+        light: mc_light::Tables,
+    ) -> Result<Self> {
         let dim = overworld(data, synced)?;
         // 26.x keeps dimensions under dimensions/<namespace>/<name>/.
         let regions = [
@@ -253,6 +267,7 @@ impl World {
             data_version: data.version.world_version,
             block_entity_types: block_entity_types(data)?,
             folder: Some(dir.to_owned()),
+            light,
             dimension: dim.name,
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
@@ -359,6 +374,27 @@ impl World {
                 .contains_y(p.y)
                 .then(|| chunk.block((p.x & 15) as usize, p.y, (p.z & 15) as usize))
         })
+    }
+
+    /// Fixes light after the block at `p` changed. Returns the chunks whose
+    /// light changed (their packets are dropped and they are marked changed).
+    pub fn relight(&self, p: Position) -> Vec<(i32, i32)> {
+        let mut chunks = self.chunks.lock().expect("chunks lock");
+        let mut view = LightView {
+            chunks: &mut chunks,
+            min_y: self.min_y,
+            top: self.min_y + self.height as i32,
+            touched: Vec::new(),
+        };
+        mc_light::block_changed(&mut view, &self.light, (p.x, p.y, p.z));
+        view.touched
+    }
+
+    /// Light Data of a chunk as it is now (for Update Light).
+    pub fn light_data(&self, x: i32, z: i32) -> Option<LightData> {
+        let chunks = self.chunks.lock().expect("chunks lock");
+        let chunk = chunks.get(&(x, z))?.chunk.as_ref()?;
+        Some(stored_light(chunk))
     }
 
     /// The block entity at `p` (chest contents, sign text...).
@@ -740,6 +776,166 @@ fn client_data(id: &str, data: &mc_nbt::Compound) -> Option<mc_nbt::Compound> {
         data.remove(key);
     }
     (!data.is_empty()).then_some(data)
+}
+
+/// Lights one chunk by itself (nothing around it): for the flat template.
+fn light_alone(chunk: &mut Chunk, tables: &mc_light::Tables) {
+    let (x, z) = (chunk.x, chunk.z);
+    let min_y = chunk.min_y;
+    let top = min_y + chunk.height() as i32;
+    let mut slot = HashMap::new();
+    slot.insert(
+        (x, z),
+        Slot {
+            chunk: Some(Box::new(chunk.clone())),
+            frame: None,
+            dirty: false,
+            viewers: 0,
+        },
+    );
+    let mut view = LightView {
+        chunks: &mut slot,
+        min_y,
+        top,
+        touched: Vec::new(),
+    };
+    mc_light::light_region(
+        &mut view,
+        tables,
+        (x * 16, z * 16),
+        (x * 16 + 16, z * 16 + 16),
+        min_y,
+    );
+    if let Some(lit) = slot.remove(&(x, z)).and_then(|s| s.chunk) {
+        chunk.light = lit.light;
+    }
+}
+
+/// The loaded chunks as the light engine sees them.
+struct LightView<'a> {
+    chunks: &'a mut HashMap<(i32, i32), Slot>,
+    min_y: i32,
+    top: i32,
+    touched: Vec<(i32, i32)>,
+}
+
+impl LightView<'_> {
+    fn chunk(&self, p: mc_light::Pos) -> Option<&Chunk> {
+        if p.1 < self.min_y || p.1 >= self.top {
+            return None;
+        }
+        self.chunks.get(&(p.0 >> 4, p.2 >> 4))?.chunk.as_deref()
+    }
+}
+
+/// A section's stored light value. A missing sky array reads as the bottom
+/// layer of the nearest stored array above it (open sky if there is none),
+/// as clients read it; missing block light is dark.
+fn stored_level(chunk: &Chunk, kind: mc_light::Kind, section: usize, index: usize) -> u8 {
+    let value = |a: &[u8], index: usize| {
+        let byte = a[index / 2];
+        if index.is_multiple_of(2) {
+            byte & 15
+        } else {
+            byte >> 4
+        }
+    };
+    match kind {
+        mc_light::Kind::Block => chunk
+            .light
+            .get(section)
+            .and_then(|l| l.block.as_ref())
+            .map_or(0, |a| value(a, index)),
+        mc_light::Kind::Sky => {
+            if let Some(a) = chunk.light.get(section).and_then(|l| l.sky.as_ref()) {
+                return value(a, index);
+            }
+            chunk
+                .light
+                .iter()
+                .skip(section + 1)
+                .find_map(|l| l.sky.as_ref())
+                .map_or(15, |a| value(a, index & 0xFF))
+        }
+    }
+}
+
+impl mc_light::LightWorld for LightView<'_> {
+    fn state(&self, p: mc_light::Pos) -> Option<u32> {
+        let chunk = self.chunk(p)?;
+        Some(chunk.block((p.0 & 15) as usize, p.1, (p.2 & 15) as usize))
+    }
+
+    fn light(&self, kind: mc_light::Kind, p: mc_light::Pos) -> u8 {
+        if p.1 >= self.top {
+            return if kind == mc_light::Kind::Sky { 15 } else { 0 };
+        }
+        let Some(chunk) = self.chunk(p) else { return 0 };
+        let local = (p.1 - self.min_y) as usize;
+        let index = ((local & 15) << 8) | (((p.2 & 15) as usize) << 4) | (p.0 & 15) as usize;
+        stored_level(chunk, kind, local / 16, index)
+    }
+
+    fn set_light(&mut self, kind: mc_light::Kind, p: mc_light::Pos, level: u8) {
+        if p.1 < self.min_y || p.1 >= self.top {
+            return;
+        }
+        let key = (p.0 >> 4, p.2 >> 4);
+        let Some(slot) = self.chunks.get_mut(&key) else {
+            return;
+        };
+        let Some(chunk) = slot.chunk.as_mut() else {
+            return;
+        };
+        let local = (p.1 - self.min_y) as usize;
+        let section = local / 16;
+        let index = ((local & 15) << 8) | (((p.2 & 15) as usize) << 4) | (p.0 & 15) as usize;
+        if chunk.light.len() < chunk.sections.len() {
+            chunk
+                .light
+                .resize(chunk.sections.len(), mc_world::SectionLight::default());
+        }
+        if stored_level(chunk, kind, section, index) == level {
+            return;
+        }
+        // Make the array real, with the values it stood for.
+        let missing = match kind {
+            mc_light::Kind::Sky => chunk.light[section].sky.is_none(),
+            mc_light::Kind::Block => chunk.light[section].block.is_none(),
+        };
+        if missing {
+            let array = (0..2048)
+                .map(|i| {
+                    stored_level(chunk, kind, section, 2 * i)
+                        | (stored_level(chunk, kind, section, 2 * i + 1) << 4)
+                })
+                .collect();
+            match kind {
+                mc_light::Kind::Sky => chunk.light[section].sky = Some(array),
+                mc_light::Kind::Block => chunk.light[section].block = Some(array),
+            }
+        }
+        let array = match kind {
+            mc_light::Kind::Sky => chunk.light[section].sky.as_mut(),
+            mc_light::Kind::Block => chunk.light[section].block.as_mut(),
+        }
+        .expect("made above");
+        let byte = &mut array[index / 2];
+        *byte = if index.is_multiple_of(2) {
+            (*byte & 0xF0) | level
+        } else {
+            (*byte & 0x0F) | (level << 4)
+        };
+        slot.frame = None;
+        slot.dirty = true;
+        if !self.touched.contains(&key) {
+            self.touched.push(key);
+        }
+    }
+
+    fn top(&self) -> i32 {
+        self.top
+    }
 }
 
 /// Light as stored: a section's array is sent when the world has one. Like

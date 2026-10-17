@@ -16,8 +16,8 @@ pub(crate) struct ChunkContent {
     pub(crate) blocks: Vec<Vec<u32>>,
     biomes: Vec<Vec<u32>>,
     heightmaps: BTreeMap<i32, Vec<i64>>,
-    sky: BTreeMap<usize, Vec<u8>>,
-    block_light: BTreeMap<usize, Vec<u8>>,
+    pub(crate) sky: BTreeMap<usize, Vec<u8>>,
+    pub(crate) block_light: BTreeMap<usize, Vec<u8>>,
     /// Position, type, and the keys of the data the client gets.
     block_entities: Vec<(u8, i16, i32, String)>,
 }
@@ -182,6 +182,31 @@ pub(crate) fn decode(body: &[u8]) -> Result<((i32, i32), ChunkContent)> {
         block_entities.push((xz, y, kind, describe_keys(data.as_ref())));
     }
     block_entities.sort_unstable();
+    let light = decode_light(&mut r)?;
+    let (sky, block_light) = (light.sky, light.block);
+    Ok((
+        key,
+        ChunkContent {
+            blocks,
+            biomes,
+            heightmaps,
+            sky,
+            block_light,
+            block_entities,
+        },
+    ))
+}
+
+/// Light Data (in Chunk Data and Update Light): arrays by section bit (bit 0
+/// is the section below the world), and the sections marked empty.
+pub(crate) struct Light {
+    pub(crate) sky: BTreeMap<usize, Vec<u8>>,
+    pub(crate) block: BTreeMap<usize, Vec<u8>>,
+    pub(crate) empty_sky: Vec<usize>,
+    pub(crate) empty_block: Vec<usize>,
+}
+
+pub(crate) fn decode_light(r: &mut Reader) -> Result<Light> {
     let masks: Vec<Vec<u8>> = (0..4)
         .map(|_| r.byte_array(1024).map(<[u8]>::to_vec))
         .collect::<Result<_, _>>()?;
@@ -202,16 +227,11 @@ pub(crate) fn decode(body: &[u8]) -> Result<((i32, i32), ChunkContent)> {
             .collect()
     };
     let sky = arrays(&masks[0])?;
-    let block_light = arrays(&masks[1])?;
-    Ok((
-        key,
-        ChunkContent {
-            blocks,
-            biomes,
-            heightmaps,
-            sky,
-            block_light,
-            block_entities,
-        },
-    ))
+    let block = arrays(&masks[1])?;
+    Ok(Light {
+        sky,
+        block,
+        empty_sky: bits(&masks[2]),
+        empty_block: bits(&masks[3]),
+    })
 }

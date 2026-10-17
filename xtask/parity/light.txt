@@ -1,0 +1,40 @@
+# Light on a superflat world (stone floor at y=-60): sky light under roofs of
+# different blocks and block light from sources.
+region -4 -61 -4 20 -50 20
+run fill -4 -60 -4 20 -60 20 stone
+light
+
+# A glowstone in the open.
+run setblock 4 -59 4 glowstone
+light
+# A stone roof over it, open at the sides.
+run fill 0 -54 0 8 -54 8 stone
+light
+# Walls on two sides.
+run fill 0 -59 0 0 -55 8 stone
+run fill 0 -59 0 8 -55 0 stone
+light
+# The source goes; a torch and a lantern elsewhere.
+run setblock 4 -59 4 air
+run setblock 14 -59 4 torch
+run setblock 14 -59 14 lantern
+light
+
+# Roofs that let some light through.
+run fill 10 -55 10 18 -55 18 oak_leaves[persistent=true]
+light
+run fill 10 -56 10 18 -56 18 glass
+run fill 10 -57 2 18 -57 6 water
+light
+# A slab roof and a stair.
+run fill 2 -56 12 7 -56 17 stone_slab[type=bottom]
+light
+run fill 2 -56 12 7 -56 17 stone_slab[type=top]
+light
+# Stairs facing different ways under the open sky, and farmland.
+run fill 2 -56 12 7 -56 17 air
+run setblock 3 -59 14 oak_stairs[facing=east]
+run setblock 5 -59 14 oak_stairs[facing=north,half=top]
+run setblock 3 -59 16 farmland
+run setblock 5 -59 16 snow[layers=3]
+light

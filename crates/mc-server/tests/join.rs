@@ -1770,18 +1770,105 @@ fn check_flat_chunk(body: &[u8]) {
     let masks: Vec<Vec<u8>> = (0..4)
         .map(|_| r.byte_array(1024).unwrap().to_vec())
         .collect();
-    assert_eq!(
-        masks[0],
-        [0xff, 0xff, 0xff, 0x03],
-        "sky data for all 26 sections"
-    );
+    // Only the bottom section has sky light other than open sky (clients
+    // read sections without data above the last one as open sky).
+    assert_eq!(masks[0], [0x02], "sky data for the bottom section");
     assert!(masks[1].is_empty() && masks[2].is_empty());
-    let sky = r.length_prefix().unwrap();
-    assert_eq!(sky, 26, "24 sections + 1 below + 1 above");
-    for _ in 0..sky {
-        assert_eq!(r.length_prefix().unwrap(), 2048);
-        r.bytes(2048).unwrap();
-    }
+    assert_eq!(r.length_prefix().unwrap(), 1);
+    let sky = r.byte_array(2048).unwrap();
+    let level = |y: usize| sky[(y << 8) / 2] & 15;
+    assert_eq!(
+        (0..16).map(level).collect::<Vec<_>>(),
+        [0, 0, 0, 0, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15],
+        "dark in the ground, open sky above it"
+    );
     assert_eq!(r.length_prefix().unwrap(), 0, "no block light arrays");
     assert_eq!(r.remaining(), 0);
+}
+
+/// Reads Update Light: chunk x, z and the block light arrays by section bit.
+fn read_block_light(body: &[u8]) -> (i32, i32, Vec<(usize, Vec<u8>)>) {
+    let mut r = Reader::new(body);
+    let (x, z) = (r.varint().unwrap(), r.varint().unwrap());
+    let mut masks = Vec::new();
+    for _ in 0..4 {
+        let n = r.length_prefix().unwrap();
+        masks.push(r.bytes(n).unwrap().to_vec());
+    }
+    let bits = |mask: &[u8]| -> Vec<usize> {
+        (0..mask.len() * 8)
+            .filter(|i| mask[i / 8] & (1 << (i % 8)) != 0)
+            .collect()
+    };
+    let sky = r.length_prefix().unwrap();
+    for _ in 0..sky {
+        r.byte_array(2048).unwrap();
+    }
+    let count = r.length_prefix().unwrap();
+    let block = (0..count)
+        .map(|_| r.byte_array(2048).unwrap().to_vec())
+        .collect::<Vec<_>>();
+    (x, z, bits(&masks[1]).into_iter().zip(block).collect())
+}
+
+#[tokio::test]
+async fn light_sources_light_up_around_them() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Admin".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut admin, _) = join_offline(addr, ctx.ids.clone(), "Admin").await;
+    let mut body = Vec::new();
+    body.put_string("setblock 3 -60 3 glowstone");
+    admin.send("minecraft:chat_command", body).await;
+    let (_, update) = admin.recv_until("minecraft:light_update").await;
+    let (x, z, arrays) = read_block_light(&update);
+    assert_eq!((x, z), (0, 0));
+    // y -60 is section -4: bit 1 (bit 0 is below the world), local y 4.
+    let (_, array) = arrays
+        .iter()
+        .find(|(bit, _)| *bit == 1)
+        .expect("section -4");
+    let level = |x: usize, y: usize, z: usize| {
+        let i = (y << 8) | (z << 4) | x;
+        (array[i / 2] >> (4 * (i % 2))) & 15
+    };
+    assert_eq!(level(3, 4, 3), 15, "glowstone gives 15");
+    assert_eq!(level(4, 4, 3), 14);
+    assert_eq!(level(3, 5, 3), 14);
+    assert_eq!(level(6, 4, 3), 12);
+    assert_eq!(level(3, 3, 3), 0, "the grass under it stays dark");
+
+    let mut body = Vec::new();
+    body.put_string("setblock 3 -60 3 air");
+    admin.send("minecraft:chat_command", body).await;
+    // The first glowstone also lit the chunks next to it: skip those.
+    let mut dark = false;
+    for _ in 0..8 {
+        let (_, update) = admin.recv_until("minecraft:light_update").await;
+        let (x, z, arrays) = read_block_light(&update);
+        if (x, z) == (0, 0) {
+            dark = arrays
+                .iter()
+                .find(|(bit, _)| *bit == 1)
+                .is_none_or(|(_, a)| a.iter().all(|&b| b == 0));
+            if dark {
+                break;
+            }
+        }
+    }
+    assert!(dark, "the light goes when the glowstone does");
+    let _ = stop.send(());
 }
