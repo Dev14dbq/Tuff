@@ -309,11 +309,113 @@ fn decompress(path: &Path, compression: u8, payload: &[u8]) -> Result<Vec<u8>> {
             out.extend_from_slice(payload);
             Ok(out.len())
         }
-        // 4 = LZ4 (lz4-java block stream), 127 = custom: not supported yet.
+        4 => {
+            out =
+                lz4_blocks(payload).map_err(|what| StorageError::Corrupt(path.to_owned(), what))?;
+            Ok(out.len())
+        }
+        // 127 = a custom compression named in the data: not supported.
         other => return Err(StorageError::UnsupportedCompression(path.to_owned(), other)),
     };
     read.map_err(|e| StorageError::Io(path.to_owned(), e))?;
     Ok(out)
+}
+
+/// Decodes the LZ4 block stream that `region-file-compression=lz4` writes (the
+/// publicly documented lz4-java `LZ4BlockOutputStream` format). Each block:
+/// magic `LZ4Block`, a token (high nibble 1 = stored, 2 = LZ4), compressed and
+/// original length (little-endian `u32`), an XXH32 checksum of the original
+/// bytes (seed `0x9747b28c`, low 28 bits), then the data. An empty block ends
+/// the stream.
+fn lz4_blocks(mut input: &[u8]) -> std::result::Result<Vec<u8>, String> {
+    const MAGIC: &[u8; 8] = b"LZ4Block";
+    const SEED: u32 = 0x9747_b28c;
+    let mut out = Vec::new();
+    while !input.is_empty() {
+        if input.len() < 21 || &input[..8] != MAGIC {
+            return Err("bad LZ4 block header".into());
+        }
+        let le = |at: usize| u32::from_le_bytes(input[at..at + 4].try_into().expect("4 bytes"));
+        let method = input[8] & 0xF0;
+        let (packed, original, checksum) = (le(9) as usize, le(13) as usize, le(17));
+        let data = input.get(21..21 + packed).ok_or("LZ4 block is truncated")?;
+        input = &input[21 + packed..];
+        if original == 0 {
+            break;
+        }
+        let start = out.len();
+        out.resize(start + original, 0);
+        match method {
+            0x10 if packed == original => out[start..].copy_from_slice(data),
+            0x20 => {
+                let written = lz4_flex::block::decompress_into(data, &mut out[start..])
+                    .map_err(|e| format!("LZ4: {e}"))?;
+                if written != original {
+                    return Err(format!("LZ4 block gave {written} of {original} bytes"));
+                }
+            }
+            other => return Err(format!("unknown LZ4 block method {other:#x}")),
+        }
+        if xxh32(&out[start..], SEED) & 0x0FFF_FFFF != checksum {
+            return Err("LZ4 block checksum mismatch".into());
+        }
+    }
+    Ok(out)
+}
+
+/// XXH32, as specified in the xxHash documentation.
+fn xxh32(data: &[u8], seed: u32) -> u32 {
+    const P1: u32 = 0x9E37_79B1;
+    const P2: u32 = 0x85EB_CA77;
+    const P3: u32 = 0xC2B2_AE3D;
+    const P4: u32 = 0x27D4_EB2F;
+    const P5: u32 = 0x1656_67B1;
+    let word = |b: &[u8]| u32::from_le_bytes(b[..4].try_into().expect("4 bytes"));
+    let round = |acc: u32, lane: u32| {
+        acc.wrapping_add(lane.wrapping_mul(P2))
+            .rotate_left(13)
+            .wrapping_mul(P1)
+    };
+    let mut rest = data;
+    let mut hash = if data.len() >= 16 {
+        let mut v = [
+            seed.wrapping_add(P1).wrapping_add(P2),
+            seed.wrapping_add(P2),
+            seed,
+            seed.wrapping_sub(P1),
+        ];
+        while rest.len() >= 16 {
+            for (i, lane) in v.iter_mut().enumerate() {
+                *lane = round(*lane, word(&rest[i * 4..]));
+            }
+            rest = &rest[16..];
+        }
+        v[0].rotate_left(1)
+            .wrapping_add(v[1].rotate_left(7))
+            .wrapping_add(v[2].rotate_left(12))
+            .wrapping_add(v[3].rotate_left(18))
+    } else {
+        seed.wrapping_add(P5)
+    };
+    hash = hash.wrapping_add(data.len() as u32);
+    while rest.len() >= 4 {
+        hash = hash
+            .wrapping_add(word(rest).wrapping_mul(P3))
+            .rotate_left(17)
+            .wrapping_mul(P4);
+        rest = &rest[4..];
+    }
+    for &byte in rest {
+        hash = hash
+            .wrapping_add(u32::from(byte).wrapping_mul(P5))
+            .rotate_left(11)
+            .wrapping_mul(P1);
+    }
+    hash ^= hash >> 15;
+    hash = hash.wrapping_mul(P2);
+    hash ^= hash >> 13;
+    hash = hash.wrapping_mul(P3);
+    hash ^ (hash >> 16)
 }
 
 /// The region files of one dimension (`.../region/`), opened on demand.
@@ -470,6 +572,18 @@ mod tests {
         assert_eq!(region.location(0, 0).0, 2);
         assert_eq!(region.location(31, 1).0, 3);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn xxh32_matches_reference_values() {
+        // Published test vectors of the xxHash reference implementation.
+        assert_eq!(xxh32(b"", 0), 0x02CC_5D05);
+        assert_eq!(xxh32(b"a", 0), 0x550D_7456);
+        assert_eq!(xxh32(b"abc", 0), 0x32D1_53FF);
+        assert_eq!(
+            xxh32(b"Nobody inspects the spammish repetition", 0),
+            0xE229_3B2F
+        );
     }
 
     #[test]

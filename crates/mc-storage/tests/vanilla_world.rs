@@ -1,5 +1,6 @@
-//! Decodes a world saved by a vanilla 26.3 server, if one is available at
-//! cache/vanilla-server/26.3/world-normal (see docs/specs/protocol-26.3.md).
+//! Decodes worlds saved by a vanilla 26.3 server, if available under
+//! cache/vanilla-server/26.3/: `world-normal` (zlib, the default) and
+//! `world-lz4` (`region-file-compression=lz4`). See docs/specs/world-26.3.md.
 
 use std::path::Path;
 
@@ -7,12 +8,24 @@ use mc_storage::{Decoded, Names, Palettes, RegionFile, RegionStorage, decode_chu
 
 #[test]
 fn decodes_every_chunk_of_a_vanilla_world() {
+    decode_world("world-normal", 256);
+}
+
+#[test]
+fn decodes_every_chunk_of_an_lz4_world() {
+    decode_world("world-lz4", 64);
+}
+
+/// Decodes, re-encodes and decodes again every chunk of a test world; at least
+/// `min_full` chunks must be fully generated.
+fn decode_world(name: &str, min_full: usize) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let data_dir = root.join("cache/mcdata/26.3");
-    let regions =
-        root.join("cache/vanilla-server/26.3/world-normal/dimensions/minecraft/overworld/region");
+    let regions = root.join(format!(
+        "cache/vanilla-server/26.3/{name}/dimensions/minecraft/overworld/region"
+    ));
     if !data_dir.is_dir() || !regions.is_dir() {
-        eprintln!("skipped: no extracted data or vanilla test world");
+        eprintln!("skipped: no extracted data or vanilla test world {name}");
         return;
     }
     let data = mc_data::McData::load(&data_dir).unwrap();
@@ -95,10 +108,7 @@ fn decodes_every_chunk_of_a_vanilla_world() {
     eprintln!(
         "{full} full chunks, {partial} partially generated, {with_block_entities} with block entities"
     );
-    assert!(
-        full >= 256,
-        "the 16×16 force-loaded area is fully generated"
-    );
+    assert!(full >= min_full, "{name}: only {full} full chunks");
     assert_eq!(
         palettes.unresolved.get(),
         0,

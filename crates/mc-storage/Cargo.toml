@@ -12,6 +12,7 @@ mc-data.workspace = true
 flate2 = "1.1.10"
 mc-nbt.workspace = true
 mc-world.workspace = true
+lz4_flex = { version = "0.11", default-features = false, features = ["safe-decode"] }
 
 [lints]
 workspace = true
