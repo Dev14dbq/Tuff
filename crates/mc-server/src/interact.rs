@@ -214,6 +214,8 @@ pub struct Outcome {
     pub drops: Vec<(Position, crate::loot::Drop)>,
     /// A container the player opened.
     pub open: Option<(Position, crate::containers::Kind)>,
+    /// The player opened a crafting table.
+    pub open_crafting: bool,
 }
 
 /// Who is acting.
@@ -374,6 +376,16 @@ pub fn use_item_on(
     let held = held.as_ref();
     let (world, blocks) = (&ctx.world, &ctx.data.blocks);
     let block_at = |p: Position| world.block(p, blocks);
+    // Crafting tables open their grid.
+    if block_at(clicked).and_then(|s| blocks.block_name(s)) == Some("minecraft:crafting_table") {
+        outcome.open_crafting = true;
+        outcome.events.push(Event::Swing {
+            uuid: actor.uuid,
+            entity_id: actor.entity_id,
+            times: 1,
+        });
+        return outcome;
+    }
     // Containers open.
     if let Some(kind) = block_at(clicked)
         .and_then(|s| blocks.block_name(s))

@@ -23,6 +23,9 @@ use crate::commands::Source;
 use crate::context::{Event, OnlinePlayer, Pose};
 use crate::interact::{Actor, Hands, Outcome};
 use crate::tick::{Action, Request};
+
+#[path = "windows.rs"]
+mod windows;
 use crate::util::{offline_uuid, random_u64, random_uuid, uuid_string, valid_player_name};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
@@ -61,6 +64,7 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
                 let ctx = ctx.clone();
                 tokio::task::spawn_blocking(move || crate::save_player(&ctx, uuid)).await?;
             }
+            crate::containers::player_left(&ctx, uuid);
             ctx.players.lock().expect("players lock").remove(&uuid);
             ctx.inventories
                 .lock()
@@ -526,11 +530,8 @@ async fn play(
         .expect("inventories lock")
         .insert(uuid, hands);
     update_player(&ctx, uuid, |p| p.main_hand = main_hand);
-    let mut state_id = 1;
     let mut game_mode = me.game_mode;
-    // The container window the player has open: id, block, number of slots.
-    let mut window: Option<(i32, Position, usize)> = None;
-    let mut next_window = 0;
+    let mut windows = windows::Windows::new();
     let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
     // Non-player entities this client has been told about.
     let mut seen_entities: HashSet<i32> = HashSet::new();
@@ -546,28 +547,10 @@ async fn play(
         tokio::select! {
             Some(mut outcome) = replies.recv() => {
                 if let Some((position, kind)) = outcome.open.take() {
-                    if let Some((_, old, _)) = window.take() {
-                        crate::containers::close(&ctx, uuid, old);
-                    }
-                    next_window = next_window % 100 + 1;
-                    let slots = crate::containers::open(&ctx, uuid, position, kind);
-                    let menu = ctx.data.builtin.id("minecraft:menu", kind.menu).unwrap_or(2);
-                    writer.queue(&play::OpenScreen {
-                        window: next_window,
-                        menu,
-                        title: text::plain(kind.title),
-                    })?;
-                    let mut all = slots;
-                    let hands = ctx.inventories.lock().expect("inventories lock").get(&uuid).cloned().unwrap_or_default();
-                    all.extend(hands.slots[9..45].iter().cloned());
-                    state_id += 1;
-                    writer.queue(&play::ContainerSetContent {
-                        window: next_window,
-                        state_id,
-                        slots: all,
-                        carried: hands.carried.clone(),
-                    })?;
-                    window = Some((next_window, position, kind.slots));
+                    windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
+                }
+                if std::mem::take(&mut outcome.open_crafting) {
+                    windows.open_crafting(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose })?;
                 }
                 answer(writer, &ctx, outcome)?;
             }
@@ -638,75 +621,12 @@ async fn play(
                             change_hands(&ctx, uuid, entity_id, |hands| hands.selected = slot);
                         }
                     }
-                    play::Serverbound::ContainerClick { window: 0, slot, button, mode, changed, carried, .. } => {
-                        let mut thrown = Vec::new();
-                        change_hands(&ctx, uuid, entity_id, |hands| {
-                            thrown = hands.click(slot, button, mode, &changed, carried);
-                        });
-                        for stack in thrown {
-                            crate::tick::throw_item(&ctx, pose, stack);
-                        }
+                    play::Serverbound::ContainerClick { window, slot, button, mode, changed, carried, .. } => {
+                        let click = windows::Click { window, slot, button, mode, changed, carried };
+                        windows.click(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, click)?;
                     }
-                    play::Serverbound::ContainerClick { window: id, slot, button, mode, changed, carried, .. }
-                        if window.is_some_and(|(w, _, _)| w == id) =>
-                    {
-                        let (_, position, size) = window.expect("checked");
-                        // Window slots: the container, then the main inventory, then the hotbar.
-                        let to_player = |s: usize| if s < size + 27 { 9 + s - size } else { 36 + s - size - 27 };
-                        let mut mine = Vec::new();
-                        let mut theirs = Vec::new();
-                        for (s, stack) in changed {
-                            match usize::try_from(s) {
-                                Ok(s) if s < size => theirs.push((s, stack)),
-                                Ok(s) if s < size + 36 => mine.push((to_player(s) as i16, stack)),
-                                _ => {}
-                            }
-                        }
-                        let player_slot = match usize::try_from(slot) {
-                            Ok(s) if (size..size + 36).contains(&s) => to_player(s) as i16,
-                            Ok(_) => -1,
-                            Err(_) => slot,
-                        };
-                        // Q over a container slot throws from the container.
-                        if mode == 4 && let Ok(s) = usize::try_from(slot) && s < size {
-                            let before = ctx.containers.lock().expect("containers lock")
-                                .get(&(position.x, position.y, position.z))
-                                .and_then(|o| o.slots.get(s).cloned().flatten());
-                            if let Some(stack) = before {
-                                let count = if button == 1 { stack.count } else { 1 };
-                                crate::tick::throw_item(&ctx, pose, play::ItemStack { count, ..stack });
-                            }
-                        }
-                        let mut thrown = Vec::new();
-                        change_hands(&ctx, uuid, entity_id, |hands| {
-                            thrown = hands.click(player_slot, button, mode, &mine, carried);
-                        });
-                        for stack in thrown {
-                            crate::tick::throw_item(&ctx, pose, stack);
-                        }
-                        if !theirs.is_empty() {
-                            let (viewers, slots) = crate::containers::change(&ctx, uuid, position, &theirs);
-                            if !viewers.is_empty() {
-                                let _ = ctx.events.send(Event::ContainerSlots { position, viewers, slots });
-                            }
-                        }
-                    }
-                    play::Serverbound::ContainerClose { window: id } if window.is_some_and(|(w, _, _)| w == id) => {
-                        let (_, position, _) = window.take().expect("checked");
-                        crate::containers::close(&ctx, uuid, position);
-                        let mut thrown = None;
-                        change_hands(&ctx, uuid, entity_id, |hands| thrown = hands.carried.take());
-                        if let Some(stack) = thrown {
-                            crate::tick::throw_item(&ctx, pose, stack);
-                        }
-                    }
-                    play::Serverbound::ContainerClose { window: 0 } => {
-                        // What is still on the cursor falls out.
-                        let mut thrown = None;
-                        change_hands(&ctx, uuid, entity_id, |hands| thrown = hands.carried.take());
-                        if let Some(stack) = thrown {
-                            crate::tick::throw_item(&ctx, pose, stack);
-                        }
+                    play::Serverbound::ContainerClose { window } => {
+                        windows.close(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window)?;
                     }
                     play::Serverbound::PlayerAction { status: status @ (3 | 4), .. } => {
                         // Q: drop one (4) or the whole stack (3) from the main hand.
@@ -729,8 +649,7 @@ async fn play(
                             crate::tick::throw_item(&ctx, pose, stack);
                         }
                         if let Some((slot, item)) = changed_slot {
-                            state_id += 1;
-                            writer.queue(&play::ContainerSetSlot { window: 0, state_id, slot: slot as i16, item })?;
+                            windows.inventory_slot(writer, slot as i16, item)?;
                         }
                     }
                     play::Serverbound::Punch => {
@@ -834,22 +753,11 @@ async fn play(
                         }
                     }
                     Ok(Event::ContainerSlots { position, viewers, slots }) if viewers.contains(&uuid) => {
-                        if let Some((id, open, _)) = window && open == position {
-                            for (slot, item) in slots {
-                                state_id += 1;
-                                writer.queue(&play::ContainerSetSlot { window: id, state_id, slot: slot as i16, item })?;
-                            }
-                        }
+                        windows.container_slots(writer, position, slots)?;
                     }
-                    Ok(Event::ContainerGone { position }) => {
-                        if let Some((id, open, _)) = window && open == position {
-                            writer.queue(&play::ContainerCloseClientbound { window: id })?;
-                            window = None;
-                        }
-                    }
+                    Ok(Event::ContainerGone { position }) => windows.container_gone(writer, position)?,
                     Ok(Event::InventorySlot { uuid: who, slot, item }) if who == uuid => {
-                        state_id += 1;
-                        writer.queue(&play::ContainerSetSlot { window: 0, state_id, slot, item })?;
+                        windows.inventory_slot(writer, slot, item)?;
                     }
                     Ok(Event::ItemTaken { item_entity, collector, count }) => {
                         if seen_entities.contains(&item_entity) {

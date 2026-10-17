@@ -11,6 +11,7 @@ mod commands;
 mod connection;
 mod containers;
 mod context;
+mod crafting;
 mod interact;
 mod level;
 mod loot;

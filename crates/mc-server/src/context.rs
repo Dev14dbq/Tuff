@@ -188,6 +188,8 @@ pub struct ServerContext {
     pub containers: Mutex<crate::containers::Containers>,
     /// What broken blocks drop.
     pub loot: crate::loot::BlockLoot,
+    /// Crafting recipes.
+    pub recipes: crate::crafting::Recipes,
     /// Player files of the world folder (none for the flat test world).
     pub player_files: Option<crate::players::Store>,
     /// Game mode of players who never played here (level.dat `GameType`).
@@ -346,6 +348,7 @@ impl ServerContext {
             inventories: Mutex::new(HashMap::new()),
             containers: Mutex::new(HashMap::new()),
             loot: crate::loot::BlockLoot::load(&data),
+            recipes: crate::crafting::Recipes::load(&data),
             player_files,
             default_game_mode,
             entity_types: EntityTypes {

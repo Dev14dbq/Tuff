@@ -53,7 +53,7 @@ fn key(p: Position) -> (i32, i32, i32) {
     (p.x, p.y, p.z)
 }
 
-fn item_name(ctx: &ServerContext, item: i32) -> Option<String> {
+pub fn item_name(ctx: &ServerContext, item: i32) -> Option<String> {
     ctx.data
         .builtin
         .get("minecraft:item")?

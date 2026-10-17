@@ -1147,6 +1147,105 @@ async fn chests_keep_what_players_put_in() {
 }
 
 #[tokio::test]
+async fn the_inventory_grid_crafts() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let log = ctx
+        .data
+        .builtin
+        .id("minecraft:item", "minecraft:oak_log")
+        .unwrap();
+    let planks = ctx
+        .data
+        .builtin
+        .id("minecraft:item", "minecraft:oak_planks")
+        .unwrap();
+    let (mut crafter, _) = join_offline(addr, ctx.ids.clone(), "Crafter").await;
+    let hashed = |b: &mut Vec<u8>, item: Option<(i32, i32)>| match item {
+        None => b.put_bool(false),
+        Some((item, count)) => {
+            b.put_bool(true);
+            b.put_varint(item);
+            b.put_varint(count);
+            b.put_varint(0);
+            b.put_varint(0);
+        }
+    };
+    let click = |slot: i16, changed: &[(i16, Option<(i32, i32)>)], carried: Option<(i32, i32)>| {
+        let mut b = Vec::new();
+        b.put_varint(0);
+        b.put_varint(1);
+        b.put_i16(slot);
+        b.put_i8(0);
+        b.put_varint(0);
+        b.put_varint(changed.len() as i32);
+        for (s, item) in changed {
+            b.put_i16(*s);
+            hashed(&mut b, *item);
+        }
+        hashed(&mut b, carried);
+        b
+    };
+    // A log goes into the first grid slot: the result shows four planks.
+    crafter
+        .send(
+            "minecraft:container_click",
+            click(1, &[(1, Some((log, 1)))], None),
+        )
+        .await;
+    let (_, result) = crafter.recv_until("minecraft:container_set_slot").await;
+    let mut r = Reader::new(&result);
+    assert_eq!(r.varint().unwrap(), 0);
+    r.varint().unwrap();
+    assert_eq!(r.i16().unwrap(), 0, "result slot");
+    assert_eq!((r.varint().unwrap(), r.varint().unwrap()), (4, planks));
+    // Taking the result empties the grid and the result.
+    crafter
+        .send(
+            "minecraft:container_click",
+            click(0, &[(0, None), (1, None)], Some((planks, 4))),
+        )
+        .await;
+    for _ in 0..50 {
+        let carried = ctx
+            .inventories
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .and_then(|h| h.carried.clone());
+        if carried.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let hands = ctx
+        .inventories
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .cloned()
+        .unwrap();
+    assert_eq!(hands.carried.map(|c| (c.item, c.count)), Some((planks, 4)));
+    assert!(hands.slots[0].is_none() && hands.slots[1].is_none());
+    let _ = stop.send(());
+}
+
+#[tokio::test]
 async fn serves_a_world_saved_by_vanilla() {
     let world =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/vanilla-server/26.3/world-normal");
