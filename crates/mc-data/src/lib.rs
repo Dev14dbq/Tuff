@@ -236,7 +236,7 @@ pub struct BlockInfo {
 
 /// Block types and their global state ids, from the blocks report. Block
 /// registry ids are in [`BuiltinRegistries`] (`minecraft:block`).
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Blocks {
     by_name: HashMap<String, BlockInfo>,
     state_count: u32,

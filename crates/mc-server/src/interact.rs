@@ -15,6 +15,7 @@ use mc_protocol::packets::play::{ItemStack, dig};
 
 use crate::blocks::{self, Placement, offset};
 use crate::context::{Event, Pose, ServerContext};
+use crate::level::{WorldLevel, to_pos};
 
 /// How far a player reaches, from the eyes to the block centre. The protocol
 /// documentation gives 6 for digging.
@@ -142,25 +143,24 @@ pub fn dig(
         return outcome;
     }
     let block_at = |p: Position| world.block(p, blocks);
-    let mut changes = Vec::new();
-    for (p, new) in blocks::break_block(&ctx.data, &ctx.rules, position, state, &block_at) {
-        if world.set_block(p, new, blocks, &ctx.rules).is_some() {
-            changes.push((p, new));
-        }
-    }
-    if changes.is_empty() {
+    // The other half of a door or bed goes with the shape updates.
+    let left = blocks::break_block(&ctx.data, &ctx.rules, position, state, &block_at)[0].1;
+    let mut level = WorldLevel::new(ctx);
+    if !level.set_block(position, left) {
         outcome.updates.push((position, state));
         return outcome;
     }
-    outcome.updates.clone_from(&changes);
+    outcome.updates.push((position, left));
     outcome.events.push(Event::BlockBroken {
         by: actor.uuid,
         position,
         state,
     });
+    // Everyone gets every change, the breaker included (vanilla sends the
+    // broken block to the breaker twice: as the answer and with the rest).
     outcome.events.push(Event::BlocksChanged {
-        by: actor.uuid,
-        changes,
+        by: 0,
+        changes: level.into_changes(),
     });
     outcome
 }
@@ -229,25 +229,26 @@ pub fn use_item_on(
         return refuse(outcome);
     }
 
-    let mut changes = Vec::new();
+    let mut level = WorldLevel::new(ctx);
+    let mut placed_any = false;
     for &(p, state) in &placed.blocks {
-        if world.set_block(p, state, blocks, &ctx.rules).is_some() {
-            changes.push((p, state));
-        }
+        // Connections and shape from the neighbours, as the block is placed.
+        let state = ctx.shapes.placement_shape(&level, to_pos(p), state);
+        placed_any |= level.set_block(p, state);
     }
-    if changes.is_empty() {
+    if !placed_any {
         return refuse(outcome);
     }
-    if let Some(state) = block_at(clicked)
-        && !changes.iter().any(|&(p, _)| p == clicked)
-    {
-        outcome.updates.push((clicked, state));
+    let changes = level.into_changes();
+    // The answer: the clicked block, then the placed ones.
+    for p in std::iter::once(clicked).chain(placed.blocks.iter().map(|&(p, _)| p)) {
+        if let Some(state) = block_at(p)
+            && !outcome.updates.iter().any(|&(q, _)| q == p)
+        {
+            outcome.updates.push((p, state));
+        }
     }
-    outcome.updates.extend_from_slice(&changes);
-    outcome.events.push(Event::BlocksChanged {
-        by: actor.uuid,
-        changes,
-    });
+    outcome.events.push(Event::BlocksChanged { by: 0, changes });
     outcome.events.push(Event::Swing {
         uuid: actor.uuid,
         entity_id: actor.entity_id,

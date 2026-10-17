@@ -11,6 +11,7 @@ mod commands;
 mod connection;
 mod context;
 mod interact;
+mod level;
 mod tick;
 mod util;
 mod world;

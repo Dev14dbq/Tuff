@@ -28,7 +28,7 @@ use crate::probe::{
     Client, is_timeout, join_player_with, load_data, packet_ids, teleport_confirmation,
 };
 
-const VANILLA_PORT: u16 = 25571;
+pub(crate) const VANILLA_PORT: u16 = 25571;
 const OURS_PORT: u16 = 25572;
 const BOT: &str = "Parity";
 /// Where the bot waits: away from the test area, inside view distance.
@@ -103,9 +103,8 @@ pub fn run(args: &[String]) -> Result<()> {
                 }
                 "run" => {
                     for server in servers.iter_mut() {
-                        server.command(rest, verbose)?;
+                        server.send(rest)?;
                     }
-                    settle(&mut mirrors, Duration::from_millis(300))?;
                 }
                 "step" | "compare" => {
                     let ticks: u32 = if word == "step" && !rest.is_empty() {
@@ -113,10 +112,11 @@ pub fn run(args: &[String]) -> Result<()> {
                     } else {
                         u32::from(word == "step")
                     };
-                    if ticks > 0 {
-                        for server in servers.iter_mut() {
-                            server.command(&format!("tick step {ticks}"), verbose)?;
+                    for server in servers.iter_mut() {
+                        if ticks > 0 {
+                            server.send(&format!("tick step {ticks}"))?;
                         }
+                        server.command("", verbose)?;
                     }
                     let wait = Duration::from_millis(400 + 60 * u64::from(ticks));
                     settle(&mut mirrors, wait)?;
@@ -146,7 +146,7 @@ pub fn run(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-struct Server {
+pub(crate) struct Server {
     name: &'static str,
     child: Child,
     stdin: ChildStdin,
@@ -154,7 +154,7 @@ struct Server {
 }
 
 impl Server {
-    fn vanilla(root: &Path) -> Result<Self> {
+    pub(crate) fn vanilla(root: &Path) -> Result<Self> {
         let dir = root.join("cache/vanilla-server/26.3-parity");
         let source = root.join("cache/vanilla-server/26.3");
         std::fs::create_dir_all(&dir)?;
@@ -249,10 +249,25 @@ impl Server {
         })
     }
 
+    /// Sends a console command without waiting for its feedback.
+    pub(crate) fn send(&mut self, command: &str) -> Result<()> {
+        writeln!(self.stdin, "{command}")?;
+        Ok(())
+    }
+
+    /// Drops the server's console output so far.
+    pub(crate) fn drain(&mut self) -> Result<()> {
+        self.stdin.flush()?;
+        while self.lines.try_recv().is_ok() {}
+        Ok(())
+    }
+
     /// Sends a console command and, with `echo`, prints what the server said
     /// about it.
-    fn command(&mut self, command: &str, echo: bool) -> Result<()> {
-        writeln!(self.stdin, "{command}")?;
+    pub(crate) fn command(&mut self, command: &str, echo: bool) -> Result<()> {
+        if !command.is_empty() {
+            writeln!(self.stdin, "{command}")?;
+        }
         self.stdin.flush()?;
         std::thread::sleep(Duration::from_millis(100));
         while let Ok(line) = self.lines.try_recv() {
@@ -263,7 +278,7 @@ impl Server {
         Ok(())
     }
 
-    fn stop(&mut self) {
+    pub(crate) fn stop(&mut self) {
         let _ = writeln!(self.stdin, "stop");
         let _ = self.stdin.flush();
         let deadline = Instant::now() + Duration::from_secs(20);
@@ -286,13 +301,13 @@ fn strip_log_prefix(line: &str) -> &str {
 }
 
 /// The blocks one client has been sent.
-struct Mirror {
+pub(crate) struct Mirror {
     client: Client,
     chunks: HashMap<(i32, i32), Vec<Vec<u32>>>,
 }
 
 impl Mirror {
-    fn join(addr: &str, ids: mc_protocol::PacketIds) -> Result<Self> {
+    pub(crate) fn join(addr: &str, ids: mc_protocol::PacketIds) -> Result<Self> {
         let (client, _) = join_player_with(addr, ids, BOT, 6)?;
         client.set_read_timeout(Duration::from_millis(20))?;
         let mut mirror = Self {
@@ -304,7 +319,7 @@ impl Mirror {
     }
 
     /// Reads what has arrived; returns whether anything changed blocks.
-    fn pump(&mut self) -> Result<bool> {
+    pub(crate) fn pump(&mut self) -> Result<bool> {
         let mut changed = false;
         loop {
             let (packet, body) = match self.client.recv() {
@@ -382,7 +397,7 @@ impl Mirror {
         }
     }
 
-    fn block(&self, x: i32, y: i32, z: i32) -> Option<u32> {
+    pub(crate) fn block(&self, x: i32, y: i32, z: i32) -> Option<u32> {
         let sections = self.chunks.get(&(x >> 4, z >> 4))?;
         let (section, i) = Self::index(x, y, z);
         sections.get(section).map(|s| s[i])

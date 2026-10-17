@@ -1,0 +1,15 @@
+# Fluids spread by scheduled ticks (water every 5 ticks, lava every 30).
+region -10 -61 -10 22 -55 22
+run fill -10 -60 -10 22 -60 22 stone
+run setblock 0 -59 0 water
+step 1
+step 4
+step 5
+step 10
+step 40
+run setblock 12 -57 12 lava
+step 30
+step 60
+step 200
+run setblock 4 -59 0 lava
+step 40

@@ -137,6 +137,8 @@ pub struct ServerContext {
     pub world: World,
     /// How placing and breaking blocks works (until block behaviours exist).
     pub rules: BlockRules,
+    /// Neighbour-dependent block shapes.
+    pub shapes: mc_tick::Shapes,
     /// `minecraft:player` in `minecraft:entity_type`.
     pub player_entity_type: i32,
     /// RSA key for the online-mode key exchange (`None` in offline mode).
@@ -223,6 +225,18 @@ impl ServerContext {
         };
         let tags = build_tags(&data, &synced_ids)?;
         let rules = BlockRules::new(&data)?;
+        let observed = config.data_dir.join("observed/fence_attach.json");
+        let attach = std::fs::read_to_string(&observed)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| serde_json::from_value::<Vec<i32>>(v["states"].clone()).ok());
+        if attach.is_none() {
+            warn!(
+                "no {} (cargo xtask observe attach): fences guess which blocks they attach to",
+                observed.display()
+            );
+        }
+        let shapes = mc_tick::Shapes::new(&data, attach);
         let world = match &config.world {
             Some(dir) => World::open(dir, &data, &synced_ids)?,
             None => World::flat(&data, &synced_ids, &rules)?,
@@ -253,6 +267,7 @@ impl ServerContext {
             tags,
             world,
             rules,
+            shapes,
             player_entity_type,
             key,
             players: Mutex::new(HashMap::new()),

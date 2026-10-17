@@ -8,6 +8,7 @@ use mc_protocol::Position;
 use mc_protocol::packets::play::{TickingState, TickingStep};
 
 use crate::context::{Event, Pose, ServerContext};
+use crate::level::WorldLevel;
 use crate::tick::{TickControl, lock};
 
 /// Who runs a command.
@@ -185,7 +186,8 @@ fn in_world(ctx: &ServerContext, p: Position) -> bool {
     p.y >= ctx.world.min_y && p.y < ctx.world.min_y + ctx.world.height as i32
 }
 
-/// Applies changes and announces them to everyone (nobody predicted them).
+/// Applies changes with block updates and announces everything that changed
+/// to everyone (nobody predicted it). Returns how many of `changes` took.
 fn apply(
     ctx: &ServerContext,
     changes: Vec<(Position, u32)>,
@@ -193,27 +195,29 @@ fn apply(
     out: &mut Output,
 ) -> usize {
     let blocks = &ctx.data.blocks;
-    let mut applied = Vec::with_capacity(changes.len());
+    let mut level = WorldLevel::new(ctx);
+    let mut count = 0;
     for (p, state) in changes {
-        match ctx.world.set_block(p, state, blocks, &ctx.rules) {
-            Some(old) if old != state => {
-                if destroy && !blocks.is_air(old) {
-                    out.events.push(Event::BlockBroken {
-                        by: 0,
-                        position: p,
-                        state: old,
-                    });
-                }
-                applied.push((p, state));
+        let old = ctx.world.block(p, blocks);
+        let state = ctx
+            .shapes
+            .command_shape(&level, crate::level::to_pos(p), state);
+        if level.set_block(p, state) {
+            count += 1;
+            if destroy && let Some(old) = old.filter(|&o| !blocks.is_air(o)) {
+                out.events.push(Event::BlockBroken {
+                    by: 0,
+                    position: p,
+                    state: old,
+                });
             }
-            _ => {}
         }
     }
-    let count = applied.len();
-    if count > 0 {
+    let changed = level.into_changes();
+    if !changed.is_empty() {
         out.events.push(Event::BlocksChanged {
             by: 0,
-            changes: applied,
+            changes: changed,
         });
     }
     count

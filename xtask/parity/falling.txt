@@ -1,0 +1,9 @@
+# Gravity blocks fall as entities, a few ticks after an update.
+region -2 -61 -2 6 -50 6
+run fill 0 -60 0 4 -60 4 stone
+run setblock 1 -55 1 sand
+run setblock 3 -52 3 gravel
+step 1
+step 2
+step 10
+step 20

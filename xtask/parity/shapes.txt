@@ -1,0 +1,41 @@
+# Neighbour shapes on a frozen superflat world (surface at y=-61).
+region -2 -61 -2 12 -55 14
+run fill 0 -60 0 10 -60 13 stone
+compare
+
+# Stairs turn into corners, fences connect, walls next to fences.
+run setblock 2 -59 2 oak_stairs[facing=east]
+run setblock 3 -59 2 oak_stairs[facing=north]
+run setblock 5 -59 5 oak_fence
+run setblock 6 -59 5 oak_fence
+run setblock 6 -59 6 cobblestone_wall
+run setblock 8 -59 5 nether_brick_fence
+run setblock 9 -59 5 oak_fence
+run setblock 8 -59 3 glass_pane
+run setblock 9 -59 3 glass
+run setblock 7 -59 3 iron_bars
+compare
+
+# Lone halves placed by commands, then a neighbour changes.
+run setblock 0 -59 11 oak_door[half=upper]
+run setblock 2 -58 11 oak_door[half=lower]
+run setblock 4 -59 11 tall_grass[half=upper]
+run setblock 6 -59 11 red_bed[part=head]
+run setblock 8 -59 11 grass_block
+run setblock 8 -58 11 snow
+compare
+run setblock 1 -59 11 stone
+run setblock 3 -58 11 stone
+run setblock 0 -58 11 stone
+run setblock 2 -57 11 stone
+compare
+# Breaking one half of a whole door and bed.
+run setblock 4 -59 13 oak_door[half=lower]
+run setblock 4 -58 13 oak_door[half=upper]
+run setblock 6 -59 13 red_bed[part=foot,facing=east]
+run setblock 7 -59 13 red_bed[part=head,facing=east]
+compare
+run setblock 4 -58 13 air
+run setblock 6 -59 13 air
+run setblock 8 -58 11 air
+compare
