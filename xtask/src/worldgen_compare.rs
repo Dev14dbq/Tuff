@@ -249,7 +249,7 @@ pub fn map(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `cargo xtask worldgen-find <world> <block> <radius>`: where a block is,
+/// `cargo xtask worldgen-find <world> <block> <radius> [cx cz]`: where a block is,
 /// grouped by chunk (count and bounds).
 pub fn find(args: &[String]) -> Result<()> {
     let data = load_data(None)?;
@@ -264,9 +264,13 @@ pub fn find(args: &[String]) -> Result<()> {
     };
     let want = &args[1];
     let radius: i32 = args[2].parse()?;
+    let (ox, oz): (i32, i32) = match (args.get(3), args.get(4)) {
+        (Some(a), Some(b)) => (a.parse()?, b.parse()?),
+        _ => (0, 0),
+    };
     let mut s = mc_storage::region::RegionStorage::new(region(Path::new(&args[0])));
-    for cz in -radius..=radius {
-        for cx in -radius..=radius {
+    for cz in oz - radius..=oz + radius {
+        for cx in ox - radius..=ox + radius {
             let Some(t) = s.read_chunk(cx, cz)? else {
                 continue;
             };

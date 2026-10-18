@@ -479,7 +479,7 @@ mod tests {
             // Hilly stone with caves and some leaves (opacity 1).
             for x in 0..24 {
                 for z in 0..24 {
-                    let h = 8 + ((x * 7 + z * 3) % 9) as i32;
+                    let h = 8 + (x * 7 + z * 3) % 9;
                     for y in 0..h {
                         let b = if next(10) == 0 {
                             0
@@ -534,7 +534,7 @@ mod tests {
             let mut blocks = HashMap::new();
             for x in 0..48 {
                 for z in 0..48 {
-                    let h = 6 + ((x * 5 + z * 11) % 13) as i32;
+                    let h = 6 + (x * 5 + z * 11) % 13;
                     for y in 0..h {
                         let b = if next(6) == 0 {
                             0

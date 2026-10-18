@@ -49,6 +49,8 @@ pub enum Condition {
         noise: Arc<FbmNoise>,
         min: f64,
         max: f64,
+        /// Sampled at the block's height too, not just its column.
+        is_3d: bool,
     },
     Gradient {
         random: Positional,
@@ -235,8 +237,14 @@ impl Materials {
     fn test(&self, cond: &Condition, c: &Column) -> bool {
         match cond {
             Condition::Biome(list) => list.contains(&c.biome),
-            Condition::Noise { noise, min, max } => {
-                let v = noise.value(f64::from(c.x), 0.0, f64::from(c.z));
+            Condition::Noise {
+                noise,
+                min,
+                max,
+                is_3d,
+            } => {
+                let y = if *is_3d { f64::from(c.y) } else { 0.0 };
+                let v = noise.value(f64::from(c.x), y, f64::from(c.z));
                 v >= *min && v <= *max
             }
             Condition::Gradient {
@@ -397,6 +405,7 @@ fn parse_condition(
                 .ok_or("unknown noise in rule")?,
             min: v["min_threshold"].as_f64().unwrap_or(f64::MIN),
             max: v["max_threshold"].as_f64().unwrap_or(f64::MAX),
+            is_3d: flag("is_3d"),
         },
         "vertical_gradient" => Condition::Gradient {
             random: builder

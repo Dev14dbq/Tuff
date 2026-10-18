@@ -48,8 +48,15 @@ impl Frame<'_> {
         }
     }
 
+    /// The block there; air outside the chunk being placed, as pieces see
+    /// it (so a wall that skips air draws no random number there either).
     pub fn get(&self, region: &dyn Region, x: i32, y: i32, z: i32) -> u32 {
-        region.block(self.world(x, y, z))
+        let p = self.world(x, y, z);
+        if self.chunk.inside(p) {
+            region.block(p)
+        } else {
+            self.facts.air
+        }
     }
 
     pub fn set(&self, region: &mut dyn Region, state: u32, x: i32, y: i32, z: i32) {

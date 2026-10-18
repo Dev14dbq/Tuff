@@ -30,6 +30,7 @@ pub enum Kind {
     Treasure(P),
     Built(Built),
     Mineshaft(super::mineshaft::Part),
+    Stronghold(super::stronghold::Part),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -303,6 +304,7 @@ pub fn generate(
             ))
         }
         "mineshaft" => super::mineshaft::generate(v, r, x, z, h, ground),
+        "stronghold" => super::stronghold::generate(seed, x, z, h),
         _ => None,
     }
 }
@@ -578,6 +580,7 @@ pub fn place(
         Kind::Treasure(p) => treasure(facts, region, r, *p, chunk),
         Kind::Built(b) => super::built::place(facts, region, r, b, chunk),
         Kind::Mineshaft(part) => super::mineshaft::place(facts, region, r, part, chunk),
+        Kind::Stronghold(part) => super::stronghold::place(facts, region, r, part, chunk),
     }
 }
 

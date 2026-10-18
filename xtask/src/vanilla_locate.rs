@@ -1,6 +1,6 @@
 //! `cargo xtask vanilla-locate --seed <n> <structure>...`: asks a vanilla
 //! server (a new world with that seed) where the nearest of each structure
-//! is from 0, 0, to compare structure placement with ours.
+//! is from 0, 0 (or `name@x,z`), to compare structure placement with ours.
 
 use std::time::Duration;
 
@@ -32,13 +32,16 @@ pub fn run(args: &[String]) -> Result<()> {
     Server::prepare(&root, &dir, &properties)?;
     let mut server = Server::start_java(&root, &dir)?;
     for n in &names {
+        // `name@x,z` asks from that block instead of 0, 0.
+        let (n, at) = n.split_once('@').unwrap_or((n, "0,0"));
+        let (ax, az) = at.split_once(',').context("name@x,z")?;
         let id = if n.contains(':') {
-            n.clone()
+            n.to_owned()
         } else {
             format!("minecraft:{n}")
         };
         server.command(
-            &format!("execute positioned 0 0 0 run locate structure {id}"),
+            &format!("execute positioned {ax} 0 {az} run locate structure {id}"),
             false,
         )?;
         std::thread::sleep(Duration::from_secs(4));

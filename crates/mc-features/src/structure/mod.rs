@@ -8,6 +8,7 @@ pub mod built;
 pub mod jigsaw;
 pub mod legacy;
 pub mod mineshaft;
+pub mod stronghold;
 pub mod template;
 
 use std::collections::{HashMap, HashSet};
@@ -83,6 +84,7 @@ enum Placement {
         distance: i32,
         spread: i32,
         count: i32,
+        preferred: HashSet<u32>,
     },
 }
 
@@ -348,6 +350,7 @@ impl Structures {
                     distance: p["distance"].as_i64().unwrap_or(32) as i32,
                     spread: p["spread"].as_i64().unwrap_or(3) as i32,
                     count: p["count"].as_i64().unwrap_or(128) as i32,
+                    preferred: biome_set(&p["preferred_biomes"], &tags, biome_ids, 0),
                 }
             } else {
                 Placement::Spread {
@@ -501,7 +504,7 @@ impl Structures {
                 distance,
                 spread,
                 count,
-                ..
+                ref preferred,
             } = set.placement
             else {
                 continue;
@@ -509,7 +512,6 @@ impl Structures {
             if self.rings.lock().expect("rings lock").contains_key(&set.id) {
                 continue;
             }
-            let _ = &ground;
             let mut r = WorldgenRandom::legacy(seed);
             let mut angle = r.next_double() * std::f64::consts::PI * 2.0;
             let mut list = Vec::new();
@@ -519,9 +521,26 @@ impl Structures {
                     + (r.next_double() - 0.5) * (f64::from(distance) * 2.5);
                 let cx = (angle.cos() * dist).round() as i32;
                 let cz = (angle.sin() * dist).round() as i32;
-                // The biome search gets its own fork of the source.
-                r.next_long();
-                list.push((cx, cz));
+                // Moved to a preferred biome within 112 blocks, picked at
+                // random among those there (its own fork of the source).
+                let mut fork = WorldgenRandom::legacy(r.next_long());
+                let (qx, qz) = ((cx * 16 + 8) >> 2, (cz * 16 + 8) >> 2);
+                let k = 112 >> 2;
+                let mut found: Option<(i32, i32)> = None;
+                let mut m = 0;
+                for p in -k..=k {
+                    for q in -k..=k {
+                        let (bx, bz) = (qx + q, qz + p);
+                        if !preferred.contains(&ground.biome(bx, 0, bz)) {
+                            continue;
+                        }
+                        if found.is_none() || fork.next_int_bound(m + 1) == 0 {
+                            found = Some(((bx << 2) >> 4, (bz << 2) >> 4));
+                        }
+                        m += 1;
+                    }
+                }
+                list.push(found.unwrap_or((cx, cz)));
                 angle += std::f64::consts::PI * 2.0 / f64::from(per_ring);
                 in_ring += 1;
                 if in_ring == per_ring {

@@ -54,35 +54,6 @@ pub fn valid_player_name(name: &str) -> bool {
     (1..=16).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn offline_uuid_matches_known_value() {
-        // Well-known offline UUID of "Notch".
-        assert_eq!(
-            uuid_string(offline_uuid("Notch")),
-            "b50ad385-829d-3141-a216-7e7d7539ba7f"
-        );
-    }
-
-    #[test]
-    fn random_uuids_differ_and_are_v4() {
-        let (a, b) = (random_uuid(), random_uuid());
-        assert_ne!(a, b);
-        assert_eq!(uuid_string(a).as_bytes()[14], b'4');
-    }
-
-    #[test]
-    fn player_names() {
-        assert!(valid_player_name("Steve_01"));
-        assert!(!valid_player_name(""));
-        assert!(!valid_player_name("seventeen_chars__"));
-        assert!(!valid_player_name("bad name"));
-    }
-}
-
 /// Seconds since the Unix epoch.
 pub fn now_secs() -> i64 {
     chrono::Utc::now().timestamp()
@@ -120,4 +91,33 @@ pub fn parse_uuid(s: &str) -> Option<u128> {
         return None;
     }
     u128::from_str_radix(&hex, 16).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offline_uuid_matches_known_value() {
+        // Well-known offline UUID of "Notch".
+        assert_eq!(
+            uuid_string(offline_uuid("Notch")),
+            "b50ad385-829d-3141-a216-7e7d7539ba7f"
+        );
+    }
+
+    #[test]
+    fn random_uuids_differ_and_are_v4() {
+        let (a, b) = (random_uuid(), random_uuid());
+        assert_ne!(a, b);
+        assert_eq!(uuid_string(a).as_bytes()[14], b'4');
+    }
+
+    #[test]
+    fn player_names() {
+        assert!(valid_player_name("Steve_01"));
+        assert!(!valid_player_name(""));
+        assert!(!valid_player_name("seventeen_chars__"));
+        assert!(!valid_player_name("bad name"));
+    }
 }

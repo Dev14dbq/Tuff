@@ -75,7 +75,8 @@ async fn main() -> anyhow::Result<()> {
     if let Ok(r) = std::env::var("LOCATE") {
         let r: i32 = r.parse()?;
         let t = std::time::Instant::now();
-        let found = ctx.world.locate(ox * 16, oz * 16, r, None);
+        let name = std::env::var("NAME").ok();
+        let found = ctx.world.locate(ox * 16, oz * 16, r, name.as_deref());
         println!(
             "{} starts within {r} chunks ({:.1} s):",
             found.len(),
@@ -194,7 +195,7 @@ async fn main() -> anyhow::Result<()> {
         counts.get("! loose leaves").copied().unwrap_or(0)
     );
     let mut list: Vec<_> = counts.into_iter().collect();
-    list.sort_by(|a, b| b.1.cmp(&a.1));
+    list.sort_by_key(|e| std::cmp::Reverse(e.1));
     for (n, c) in list.iter().take(70) {
         println!("{c:>9} {n}");
     }
