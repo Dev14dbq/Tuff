@@ -435,6 +435,29 @@ impl World {
         chunk
     }
 
+    /// Structures starting within `radius` chunks of block `x, z`: name and
+    /// the start chunk's corner (with the structure's middle height), nearest
+    /// first.
+    pub fn locate(
+        &self,
+        x: i32,
+        z: i32,
+        radius: i32,
+        name: Option<&str>,
+    ) -> Vec<(String, (i32, i32, i32))> {
+        let Source::Anvil(anvil) = &self.source else {
+            return Vec::new();
+        };
+        let Some(g) = &anvil.generation else {
+            return Vec::new();
+        };
+        g.pipeline
+            .locate(x >> 4, z >> 4, radius, name)
+            .into_iter()
+            .map(|(n, c, p)| (n, (c.0 * 16, p.y, c.1 * 16)))
+            .collect()
+    }
+
     /// Chunks whose light a new neighbour changed since the last call.
     pub fn take_relit(&self) -> Vec<(i32, i32)> {
         let mut list = std::mem::take(&mut *self.relit.lock().expect("relit lock"));

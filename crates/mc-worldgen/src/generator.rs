@@ -125,6 +125,26 @@ impl NoiseGenerator {
     }
 
     pub fn generate(&self, cx: i32, cz: i32) -> Generated {
+        self.generate_with(cx, cz, &|_, _, _| 0.0)
+    }
+
+    /// Heights of columns from the density alone (no chunk generated):
+    /// what structures stand on before the terrain exists.
+    pub fn columns(&self) -> ColumnSampler<'_> {
+        ColumnSampler {
+            g: self,
+            ctxs: HashMap::new(),
+        }
+    }
+
+    /// A chunk with `beard` added to the terrain density (the
+    /// `beardifier`: terrain made to fit structures).
+    pub fn generate_with(
+        &self,
+        cx: i32,
+        cz: i32,
+        beard: &dyn Fn(i32, i32, i32) -> f64,
+    ) -> Generated {
         let (x0, z0) = (cx * 16, cz * 16);
         let (min_y, height) = (self.min_y, self.height);
         let sections = (height / 16) as usize;
@@ -161,7 +181,7 @@ impl NoiseGenerator {
             for lz in 0..16 {
                 for lx in 0..16 {
                     let (x, z) = (x0 + lx, z0 + lz);
-                    let density = self.final_density.eval_in(x, y, z, &mut ctx);
+                    let density = self.final_density.eval_in(x, y, z, &mut ctx) + beard(x, y, z);
                     let fluid = match &mut aquifer {
                         Some(a) => a.substance(x, y, z, density, &mut ctx),
                         None if density > 0.0 => None,
@@ -261,5 +281,43 @@ impl NoiseGenerator {
             }
         }
         Generated { blocks, biomes }
+    }
+}
+
+/// Column heights from the density, one evaluation context per chunk.
+pub struct ColumnSampler<'a> {
+    g: &'a NoiseGenerator,
+    ctxs: HashMap<(i32, i32), Ctx>,
+}
+
+impl std::fmt::Debug for ColumnSampler<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ColumnSampler").finish_non_exhaustive()
+    }
+}
+
+impl ColumnSampler<'_> {
+    /// The first free y above the column's top block: solid ground, or the
+    /// sea for `WORLD_SURFACE_WG` (`ocean_floor` false).
+    pub fn height(&mut self, x: i32, z: i32, ocean_floor: bool) -> i32 {
+        let g = self.g;
+        let key = (x >> 4, z >> 4);
+        let ctx = self
+            .ctxs
+            .entry(key)
+            .or_insert_with(|| Ctx::new(key.0 * 16, key.1 * 16, g.min_y, g.height));
+        let mut y = g.min_y + g.height - 1;
+        while y >= g.min_y {
+            if g.final_density.eval_in(x, y, z, ctx) > 0.0 || (!ocean_floor && y < g.sea_level) {
+                return y + 1;
+            }
+            y -= 1;
+        }
+        g.min_y
+    }
+
+    /// The biome (id) of a 4×4×4 cell.
+    pub fn biome(&self, qx: i32, qy: i32, qz: i32) -> u32 {
+        self.g.noise_biome(qx, qy, qz)
     }
 }

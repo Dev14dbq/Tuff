@@ -16,6 +16,8 @@ const PORT: u16 = 25573;
 pub fn run(args: &[String]) -> Result<()> {
     let (mut seed, mut radius) = (12345i64, 7i32);
     let mut features = false;
+    let mut structures = false;
+    let (mut cx, mut cz) = (0i32, 0i32);
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = || {
@@ -27,14 +29,20 @@ pub fn run(args: &[String]) -> Result<()> {
             "--seed" => seed = value()?.parse()?,
             "--radius" => radius = value()?.parse()?,
             "--features" => features = true,
+            "--structures" => structures = true,
+            "--center" => {
+                cx = value()?.parse()?;
+                cz = it.next().context("--center needs x and z")?.parse()?;
+            }
             other => bail!("unknown option `{other}`"),
         }
     }
     let root = crate::workspace_root();
     let data_root = root.join("cache/mcdata/26.3/data/minecraft/worldgen/biome");
     let dir = root.join(format!(
-        "cache/vanilla-server/26.3-worldgen/{seed}{}",
-        if features { "-features" } else { "" }
+        "cache/vanilla-server/26.3-worldgen/{seed}{}{}",
+        if features { "-features" } else { "" },
+        if structures { "-structures" } else { "" }
     ));
     let world = dir.join("world");
     let _ = std::fs::remove_dir_all(&world);
@@ -60,7 +68,7 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     let properties = format!(
         "online-mode=false\nserver-ip=127.0.0.1\nserver-port={PORT}\nlevel-name=world\n\
-         level-seed={seed}\nlevel-type=minecraft\\:normal\ngenerate-structures=false\n\
+         level-seed={seed}\nlevel-type=minecraft\\:normal\ngenerate-structures={structures}\n\
          initial-enabled-packs=vanilla,file/terrain\nview-distance=4\nsimulation-distance=4\n\
          spawn-protection=0\npause-when-empty-seconds=0\nenable-status=true\n\
          sync-chunk-writes=false\n"
@@ -68,8 +76,9 @@ pub fn run(args: &[String]) -> Result<()> {
     Server::prepare(&root, &dir, &properties)?;
     let mut server = Server::start_java(&root, &dir)?;
     let result = (|| -> Result<()> {
-        let (lo, hi) = (-radius * 16, radius * 16 + 15);
-        server.command(&format!("forceload add {lo} {lo} {hi} {hi}"), true)?;
+        let (x0, x1) = ((cx - radius) * 16, (cx + radius) * 16 + 15);
+        let (z0, z1) = ((cz - radius) * 16, (cz + radius) * 16 + 15);
+        server.command(&format!("forceload add {x0} {z0} {x1} {z1}"), true)?;
         // Let the chunks generate.
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(20 + (radius as u64) * 6) {

@@ -72,6 +72,20 @@ async fn main() -> anyhow::Result<()> {
     let server = Server::bind(config).await?;
     let ctx = server.context().clone();
     let blocks = &ctx.data.blocks;
+    if let Ok(r) = std::env::var("LOCATE") {
+        let r: i32 = r.parse()?;
+        let t = std::time::Instant::now();
+        let found = ctx.world.locate(ox * 16, oz * 16, r, None);
+        println!(
+            "{} starts within {r} chunks ({:.1} s):",
+            found.len(),
+            t.elapsed().as_secs_f32()
+        );
+        for (n, p) in found.iter().take(40) {
+            println!("  {n} at {p:?} (chunk {}, {})", p.0 >> 4, p.2 >> 4);
+        }
+        return Ok(());
+    }
     let started = std::time::Instant::now();
     let size = (radius * 2 + 1) * 16;
     let mut img = vec![0u8; (size * size * 3) as usize];

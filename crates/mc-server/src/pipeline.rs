@@ -11,8 +11,9 @@
 //! it goes as ordinary fluid ticks.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use mc_features::structure::{Beard, Start};
 use mc_features::{Facts, Features, Heightmap, Heights, P, Region};
 use mc_tick::{BlockPos, Dir, TickQueue};
 use mc_world::{BlockEntity, Chunk, Section};
@@ -47,7 +48,30 @@ pub struct Pipeline {
     biome_fallback: u32,
     protos: Mutex<HashMap<(i32, i32), Proto>>,
     finished: Mutex<HashSet<(i32, i32)>>,
+    /// Structures starting in each chunk looked at so far.
+    starts: Mutex<StartMap>,
 }
+
+/// Structures starting in each chunk.
+type StartMap = HashMap<(i32, i32), Vec<Arc<Start>>>;
+
+/// The ground as the density alone gives it, for starting structures.
+struct Columns<'a> {
+    sampler: mc_worldgen::generator::ColumnSampler<'a>,
+}
+
+impl mc_features::structure::Ground for Columns<'_> {
+    fn height(&mut self, x: i32, z: i32, ocean_floor: bool) -> i32 {
+        self.sampler.height(x, z, ocean_floor)
+    }
+
+    fn biome(&mut self, qx: i32, qy: i32, qz: i32) -> u32 {
+        self.sampler.biome(qx, qy, qz)
+    }
+}
+
+/// How far (in chunks) a structure's pieces may reach from its start.
+const STRUCTURE_REACH: i32 = 8;
 
 impl std::fmt::Debug for Pipeline {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -94,15 +118,90 @@ impl Pipeline {
             biome_fallback,
             protos: Mutex::new(HashMap::new()),
             finished: Mutex::new(HashSet::new()),
+            starts: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Works out which structures start in the chunks around `x, z` (within
+    /// `radius`) that were not looked at yet.
+    fn ensure_starts(&self, x: i32, z: i32, radius: i32) {
+        let mut starts = self.starts.lock().expect("starts lock");
+        let mut ground: Option<Columns> = None;
+        for cz in z - radius..=z + radius {
+            for cx in x - radius..=x + radius {
+                if starts.contains_key(&(cx, cz)) {
+                    continue;
+                }
+                let g = ground.get_or_insert_with(|| {
+                    let mut g = Columns {
+                        sampler: self.generator.columns(),
+                    };
+                    self.features.structures.prepare_rings(self.seed, &mut g);
+                    g
+                });
+                let found = self
+                    .features
+                    .structures
+                    .starts(self.seed, cx, cz, self.heights, g);
+                starts.insert((cx, cz), found);
+            }
+        }
+    }
+
+    /// Structures that start within `radius` chunks of chunk `x, z`
+    /// (name, start chunk, centre block), nearest first.
+    pub fn locate(
+        &self,
+        x: i32,
+        z: i32,
+        radius: i32,
+        name: Option<&str>,
+    ) -> Vec<(String, (i32, i32), P)> {
+        self.ensure_starts(x, z, radius);
+        let starts = self.starts.lock().expect("starts lock");
+        let mut out = Vec::new();
+        for cz in z - radius..=z + radius {
+            for cx in x - radius..=x + radius {
+                for s in starts.get(&(cx, cz)).into_iter().flatten() {
+                    let id = &self.features.structures.structures[s.structure].id;
+                    if name.is_some_and(|n| n != id && Some(n) != id.strip_prefix("minecraft:")) {
+                        continue;
+                    }
+                    out.push((id.clone(), (cx, cz), s.bbox.center()));
+                }
+            }
+        }
+        out.sort_by_key(|(_, (cx, cz), _)| (cx - x).pow(2) + (cz - z).pow(2));
+        out
+    }
+
+    /// Structures whose pieces may reach chunk `x, z`.
+    fn starts_near(&self, x: i32, z: i32) -> Vec<Arc<Start>> {
+        self.ensure_starts(x, z, STRUCTURE_REACH);
+        let starts = self.starts.lock().expect("starts lock");
+        let mut out = Vec::new();
+        for cz in z - STRUCTURE_REACH..=z + STRUCTURE_REACH {
+            for cx in x - STRUCTURE_REACH..=x + STRUCTURE_REACH {
+                if let Some(list) = starts.get(&(cx, cz)) {
+                    out.extend(list.iter().cloned());
+                }
+            }
+        }
+        out
     }
 
     pub fn facts(&self) -> &Facts {
         &self.features.facts
     }
 
-    fn terrain(&self, x: i32, z: i32) -> Proto {
-        let made = self.generator.generate(x, z);
+    fn terrain(&self, x: i32, z: i32, near: &[Arc<Start>]) -> Proto {
+        let beard = Beard::new(&self.features.structures, near, x, z);
+        let made = if beard.is_empty() {
+            self.generator.generate(x, z)
+        } else {
+            self.generator
+                .generate_with(x, z, &|bx, by, bz| beard.compute(bx, by, bz))
+        };
         let h = self.heights;
         let mut chunk = Chunk::new(
             x,
@@ -184,12 +283,14 @@ impl Pipeline {
                 if let Some(p) = protos.get_mut(&pos) {
                     p.prime_final(self.facts());
                 }
+                let near = self.starts_near(pos.0, pos.1);
                 let mut region = Gen {
                     protos: &mut protos,
                     center: pos,
                     pipeline: self,
                 };
-                self.features.decorate(&mut region, pos.0, pos.1, &biomes);
+                self.features
+                    .decorate(&mut region, pos.0, pos.1, &biomes, &near);
                 if let Some(p) = protos.get_mut(&pos) {
                     p.decorated = true;
                 }
@@ -241,9 +342,11 @@ impl Pipeline {
         if list.len() <= 1 {
             return list
                 .iter()
-                .map(|&(x, z)| ((x, z), self.terrain(x, z)))
+                .map(|&(x, z)| ((x, z), self.terrain(x, z, &self.starts_near(x, z))))
                 .collect();
         }
+        let near: Vec<Vec<Arc<Start>>> =
+            list.iter().map(|&(x, z)| self.starts_near(x, z)).collect();
         let threads = std::thread::available_parallelism()
             .map_or(4, |n| n.get())
             .min(list.len());
@@ -255,7 +358,7 @@ impl Pipeline {
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(&(x, z)) = list.get(i) else { break };
-                        let proto = self.terrain(x, z);
+                        let proto = self.terrain(x, z, &near[i]);
                         out.lock().expect("terrain lock").push(((x, z), proto));
                     }
                 });

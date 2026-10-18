@@ -17,6 +17,7 @@ pub mod predicate;
 pub mod rand;
 pub mod registry;
 pub mod state;
+pub mod structure;
 pub mod tree;
 pub mod value;
 

@@ -26,7 +26,8 @@ struct Biome {
 }
 
 pub struct Features {
-    pub facts: Facts,
+    pub facts: Arc<Facts>,
+    pub structures: crate::structure::Structures,
     steps: Vec<Vec<Arc<Placed>>>,
     biomes: HashMap<u32, Biome>,
     pub info_noise: PerlinSimplex,
@@ -57,6 +58,7 @@ impl Features {
         biome_ids: &HashMap<String, u32>,
         heights: Heights,
     ) -> Self {
+        let facts = Arc::new(facts);
         let loader = Loader::new(&facts, worldgen.to_owned());
         // Each biome's lists, in the biome source's order.
         let mut lists: Vec<(String, Vec<Vec<String>>, Value)> = Vec::new();
@@ -128,6 +130,8 @@ impl Features {
             }
             biomes.insert(id, b);
         }
+        let structures =
+            crate::structure::Structures::load(worldgen, facts.clone(), &loader, biome_ids);
         let configured = loader.configured_by_id();
         let mut unsupported: Vec<(String, usize)> = loader
             .unsupported
@@ -139,6 +143,7 @@ impl Features {
         drop(loader);
         Self {
             facts,
+            structures,
             steps,
             biomes,
             info_noise: PerlinSimplex::new(2345, &[0]),
@@ -226,12 +231,14 @@ impl Features {
 
     /// Places the features of the chunk at `cx, cz` (whose biomes are
     /// `chunk_biomes`) into the region around it.
+    /// `starts` are the structures whose pieces reach into the chunk.
     pub fn decorate(
         &self,
         region: &mut dyn Region,
         cx: i32,
         cz: i32,
         chunk_biomes: &BTreeSet<u32>,
+        starts: &[Arc<crate::structure::Start>],
     ) {
         let ctx = Ctx {
             facts: &self.facts,
@@ -241,7 +248,20 @@ impl Features {
         let origin = P::new(x0, region.heights().min_y, z0);
         let mut r = WorldgenRandom::xoroshiro(0);
         let decoration = r.set_decoration_seed(region.seed(), x0, z0);
+        let h = region.heights();
+        let chunk =
+            crate::structure::template::BBox::chunk(cx, cz, h.min_y, h.min_y + h.height - 1);
         for (step, features) in self.steps.iter().enumerate() {
+            if let Some(list) = self.structures.by_step.get(step) {
+                for (index, &s) in list.iter().enumerate() {
+                    r.set_feature_seed(decoration, index as i32, step as i32);
+                    for start in starts.iter().filter(|st| st.structure == s) {
+                        if start.bbox.intersects(&chunk) {
+                            self.structures.place(self, region, &mut r, start, cx, cz);
+                        }
+                    }
+                }
+            }
             let mut wanted: BTreeSet<usize> = BTreeSet::new();
             for b in chunk_biomes {
                 if let Some(list) = self.biomes.get(b).and_then(|b| b.steps.get(step)) {

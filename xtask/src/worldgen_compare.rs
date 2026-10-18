@@ -19,10 +19,15 @@ fn region(world: &Path) -> std::path::PathBuf {
 pub fn run(args: &[String]) -> Result<()> {
     let mut paths = Vec::new();
     let mut radius = 4;
+    let (mut ox, mut oz) = (0i32, 0i32);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--radius" => radius = it.next().map_or(Ok(4), |v| v.parse())?,
+            "--center" => {
+                ox = it.next().map_or(Ok(0), |v| v.parse())?;
+                oz = it.next().map_or(Ok(0), |v| v.parse())?;
+            }
             _ => paths.push(std::path::PathBuf::from(a)),
         }
     }
@@ -52,8 +57,8 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut counts: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     let mut pairs: HashMap<(String, String), usize> = HashMap::new();
     let mut chunks = 0;
-    for cz in -radius..=radius {
-        for cx in -radius..=radius {
+    for cz in oz - radius..=oz + radius {
+        for cx in ox - radius..=ox + radius {
             let (Some(ta), Some(tb)) = (a.read_chunk(cx, cz)?, b.read_chunk(cx, cz)?) else {
                 continue;
             };
@@ -178,11 +183,15 @@ pub fn map(args: &[String]) -> Result<()> {
         unresolved: std::cell::Cell::new(0),
     };
     let radius: i32 = args[1].parse()?;
+    let (ox, oz): (i32, i32) = match (args.get(3), args.get(4)) {
+        (Some(a), Some(b)) => (a.parse()?, b.parse()?),
+        _ => (0, 0),
+    };
     let size = (radius * 2 + 1) * 16;
     let mut img = vec![0u8; (size * size * 3) as usize];
     let mut s = mc_storage::region::RegionStorage::new(region(Path::new(&args[0])));
-    for cz in -radius..=radius {
-        for cx in -radius..=radius {
+    for cz in oz - radius..=oz + radius {
+        for cx in ox - radius..=ox + radius {
             let Some(t) = s.read_chunk(cx, cz)? else {
                 continue;
             };
@@ -221,8 +230,8 @@ pub fn map(args: &[String]) -> Result<()> {
                         };
                         let shade = ((y - 40).clamp(0, 120) as f32 / 120.0) * 0.6 + 0.6;
                         let (ix, iz) = (
-                            (cx + radius) * 16 + lx as i32,
-                            (cz + radius) * 16 + lz as i32,
+                            (cx - ox + radius) * 16 + lx as i32,
+                            (cz - oz + radius) * 16 + lz as i32,
                         );
                         let i = ((iz * size + ix) * 3) as usize;
                         for k in 0..3 {

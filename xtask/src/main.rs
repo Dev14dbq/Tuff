@@ -10,6 +10,7 @@ mod observe;
 mod parity;
 mod probe;
 mod registry_diff;
+mod vanilla_locate;
 mod watch;
 mod worldgen_compare;
 mod worldgen_diff;
@@ -74,6 +75,7 @@ fn main() -> ExitCode {
         Some("worldgen-ref") => worldgen_ref::run(&args[1..]),
         Some("worldgen-diff") => worldgen_diff::run(&args[1..]),
         Some("worldgen-compare") => worldgen_compare::run(&args[1..]),
+        Some("vanilla-locate") => vanilla_locate::run(&args[1..]),
         Some("worldgen-logs") => worldgen_compare::logs(&args[1..]),
         Some("worldgen-map") => worldgen_compare::map(&args[1..]),
         Some("worldgen-find") => worldgen_compare::find(&args[1..]),
