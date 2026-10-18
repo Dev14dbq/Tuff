@@ -367,6 +367,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-features"
+version = "0.0.0"
+dependencies = [
+ "flate2",
+ "mc-data",
+ "mc-nbt",
+ "mc-tick",
+ "mc-worldgen",
+ "serde_json",
+]
+
+[[package]]
 name = "mc-light"
 version = "0.0.0"
 dependencies = [
@@ -395,6 +407,7 @@ dependencies = [
  "flate2",
  "mc-data",
  "mc-entity",
+ "mc-features",
  "mc-light",
  "mc-nbt",
  "mc-protocol",

@@ -52,6 +52,8 @@ pub struct World {
     folder: Option<PathBuf>,
     /// Opacity and emission of block states.
     light: mc_light::Tables,
+    /// Fluid ticks generation left for chunks players already have.
+    live_ticks: Mutex<Vec<(mc_tick::BlockPos, u32)>>,
 }
 
 /// What one save did.
@@ -79,10 +81,9 @@ struct Anvil {
     unresolved_reported: AtomicU32,
 }
 
-/// The world's noise generator, with what turning its output into chunks
-/// needs.
+/// The world's generator, with what turning its output into chunks needs.
 struct Generation {
-    generator: mc_worldgen::generator::NoiseGenerator,
+    pipeline: crate::pipeline::Pipeline,
     /// Per state: which heightmaps count it (a bit per [`HEIGHTMAPS`] entry).
     counts: Vec<u8>,
 }
@@ -229,6 +230,7 @@ impl World {
             block_entity_types: block_entity_types(data)?,
             folder: None,
             light,
+            live_ticks: Mutex::new(Vec::new()),
             dimension: dim.name,
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
@@ -251,6 +253,7 @@ impl World {
         light: mc_light::Tables,
         rules: &BlockRules,
         seed: Option<i64>,
+        shapes: mc_tick::Shapes,
     ) -> Result<Self> {
         let dim = overworld(data, synced)?;
         let biome_ids: HashMap<String, u32> = synced["minecraft:worldgen/biome"]
@@ -264,13 +267,24 @@ impl World {
             let g = crate::generation::overworld(data, seed, &biome_ids)?;
             let spawn = crate::generation::find_spawn(&g, &data.blocks);
             crate::generation::create(dir, data, seed, spawn)?;
-            generator = Some(g);
+            generator = Some((g, seed));
         } else if let Some(seed) = crate::generation::seed_of(dir) {
-            generator = Some(crate::generation::overworld(data, seed, &biome_ids)?);
+            generator = Some((crate::generation::overworld(data, seed, &biome_ids)?, seed));
             info!("new chunks are generated from seed {seed}");
         }
-        let generation = generator.map(|generator| Generation {
-            generator,
+        let generation = match generator {
+            Some((generator, seed)) => {
+                let features = crate::generation::features(data, shapes, &biome_ids, &generator)?;
+                let air = state(data, "minecraft:air")?;
+                let plains = biome_ids.get("minecraft:plains").copied().unwrap_or(0);
+                Some(crate::pipeline::Pipeline::new(
+                    generator, features, seed, air, plains,
+                ))
+            }
+            None => None,
+        };
+        let generation = generation.map(|pipeline| Generation {
+            pipeline,
             counts: (0..data.blocks.state_count())
                 .map(|s| {
                     HEIGHTMAPS.iter().enumerate().fold(0u8, |bits, (i, name)| {
@@ -319,6 +333,7 @@ impl World {
             block_entity_types: block_entity_types(data)?,
             folder: Some(dir.to_owned()),
             light,
+            live_ticks: Mutex::new(Vec::new()),
             dimension: dim.name,
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
@@ -372,30 +387,29 @@ impl World {
         }
     }
 
-    /// A new chunk from the noise generator, lit, with heightmaps.
+    /// A new chunk from the generator, lit, with heightmaps.
     fn generate(&self, g: &Generation, x: i32, z: i32, anvil: &Anvil) -> Box<Chunk> {
-        let made = g.generator.generate(x, z);
-        let mut chunk = Chunk::new(
-            x,
-            z,
-            self.min_y,
-            self.height,
-            anvil.air,
-            anvil.fallback_biome,
-        );
-        for (i, section) in chunk.sections.iter_mut().enumerate() {
-            *section = mc_world::Section::from_parts(
-                made.blocks[i * 4096..(i + 1) * 4096].to_vec(),
-                made.biomes[i * 64..(i + 1) * 64].to_vec(),
-            );
+        let view = Generated { world: self, anvil };
+        let done = g.pipeline.finish(x, z, &view);
+        if !done.live_ticks.is_empty() {
+            self.live_ticks
+                .lock()
+                .expect("live ticks lock")
+                .extend(done.live_ticks);
         }
+        let mut chunk = done.chunk;
         light_alone(&mut chunk, &self.light);
         for (i, name) in HEIGHTMAPS.iter().enumerate() {
             let words =
                 chunk.heightmap(|s| g.counts.get(s as usize).is_some_and(|b| b & (1 << i) != 0));
             chunk.heightmaps.push(((*name).to_owned(), words));
         }
-        Box::new(chunk)
+        chunk
+    }
+
+    /// Fluid ticks generation left for chunks players already have.
+    pub fn take_live_ticks(&self) -> Vec<(mc_tick::BlockPos, u32)> {
+        std::mem::take(&mut *self.live_ticks.lock().expect("live ticks lock"))
     }
 
     /// The framed Chunk Data packet for a player who now has the chunk (pair
@@ -799,7 +813,45 @@ impl World {
     }
 }
 
+/// The world as the generation pipeline sees it.
+struct Generated<'a> {
+    world: &'a World,
+    anvil: &'a Anvil,
+}
+
+impl crate::pipeline::Finished for Generated<'_> {
+    fn is_finished(&self, x: i32, z: i32) -> bool {
+        if let Some(slot) = self.world.chunks.lock().expect("chunks lock").get(&(x, z)) {
+            return slot.chunk.is_some();
+        }
+        self.anvil.has_full(x, z)
+    }
+
+    fn block(&self, p: mc_tick::BlockPos) -> Option<u32> {
+        let chunks = self.world.chunks.lock().expect("chunks lock");
+        let chunk = chunks.get(&(p.x >> 4, p.z >> 4))?.chunk.as_ref()?;
+        chunk
+            .contains_y(p.y)
+            .then(|| chunk.block((p.x & 15) as usize, p.y, (p.z & 15) as usize))
+    }
+}
+
 impl Anvil {
+    /// Whether the folder has a finished chunk here (without decoding it).
+    fn has_full(&self, x: i32, z: i32) -> bool {
+        let raw = self.storage.lock().expect("region storage").read_raw(x, z);
+        let Ok(Some(raw)) = raw else {
+            return false;
+        };
+        match raw.parse() {
+            Ok(Tag::Compound(root)) => match root.get("Status") {
+                Some(Tag::String(s)) => s == "minecraft:full" || s == "full",
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
     /// `None` if the world has no finished chunk here.
     fn load(
         &self,

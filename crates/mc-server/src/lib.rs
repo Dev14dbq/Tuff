@@ -18,6 +18,7 @@ mod interact;
 mod items;
 mod level;
 mod loot;
+mod pipeline;
 mod players;
 mod tick;
 mod util;

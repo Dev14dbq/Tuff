@@ -19,6 +19,7 @@ mc-light = { path = "crates/mc-light" }
 mc-entity = { path = "crates/mc-entity" }
 mc-tick = { path = "crates/mc-tick" }
 mc-storage = { path = "crates/mc-storage" }
+mc-features = { path = "crates/mc-features" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -48,4 +49,7 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.mc-world]
+opt-level = 3
+
+[profile.dev.package.mc-features]
 opt-level = 3

@@ -13,6 +13,7 @@ mc-protocol.workspace = true
 mc-data.workspace = true
 mc-world.workspace = true
 mc-worldgen.workspace = true
+mc-features.workspace = true
 mc-light.workspace = true
 mc-entity.workspace = true
 mc-tick.workspace = true

@@ -380,7 +380,25 @@ impl ServerContext {
         .with_support(observed("support.json"))
         .with_push(observed("push.json"));
         let world = match &config.world {
-            Some(dir) => World::open(dir, &data, &synced_ids, light, &rules, config.seed)?,
+            Some(dir) => {
+                let world_shapes = mc_tick::Shapes::new(
+                    &data,
+                    observed("fence_attach.json"),
+                    observed("conductor.json"),
+                )
+                .with_instruments(observed("instrument.json"))
+                .with_support(observed("support.json"))
+                .with_push(observed("push.json"));
+                World::open(
+                    dir,
+                    &data,
+                    &synced_ids,
+                    light,
+                    &rules,
+                    config.seed,
+                    world_shapes,
+                )?
+            }
             None => World::flat(&data, &synced_ids, &rules, light)?,
         };
         let time = world.load_time(&synced_ids)?;

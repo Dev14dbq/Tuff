@@ -270,3 +270,53 @@ pub fn create(dir: &Path, data: &McData, seed: i64, spawn: (i32, i32, i32)) -> R
     super::world::write_nbt_gz(&dir.join("data/minecraft/world_gen_settings.dat"), &root)?;
     Ok(())
 }
+
+/// The overworld's features, in the biome source's order of biomes.
+pub fn features(
+    data: &McData,
+    shapes: mc_tick::Shapes,
+    biomes: &HashMap<String, u32>,
+    generator: &NoiseGenerator,
+) -> Result<mc_features::Features> {
+    let rules = mc_tick::BlockRules::new(data).map_err(anyhow::Error::msg)?;
+    let facts = mc_features::Facts::new(data, shapes, rules).map_err(anyhow::Error::msg)?;
+    let parameters: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            data.root
+                .join("reports/biome_parameters/minecraft/overworld.json"),
+        )
+        .context("biome parameter report (cargo xtask extract-data)")?,
+    )?;
+    let mut order: Vec<String> = Vec::new();
+    for entry in parameters["biomes"].as_array().into_iter().flatten() {
+        if let Some(name) = entry["biome"].as_str()
+            && !order.iter().any(|n| n == name)
+        {
+            order.push(name.to_owned());
+        }
+    }
+    let heights = mc_features::Heights {
+        min_y: generator.min_y,
+        height: generator.height,
+        sea_level: generator.sea_level,
+    };
+    let started = std::time::Instant::now();
+    let features = mc_features::Features::load(
+        &data.data_pack().root.join("minecraft/worldgen"),
+        facts,
+        &order,
+        biomes,
+        heights,
+    );
+    tracing::info!(
+        "features loaded in {} ms; not generated yet: {}",
+        started.elapsed().as_millis(),
+        features
+            .unsupported
+            .iter()
+            .map(|(k, n)| format!("{k} ×{n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    Ok(features)
+}

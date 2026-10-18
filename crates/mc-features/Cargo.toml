@@ -1,0 +1,19 @@
+[package]
+name = "mc-features"
+description = "World generation features (trees, plants, ores, lakes...) and structures, from the data pack."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+mc-data.workspace = true
+mc-nbt.workspace = true
+mc-tick.workspace = true
+mc-worldgen.workspace = true
+serde_json = "1.0.154"
+flate2 = "1.1.10"
+
+[lints]
+workspace = true

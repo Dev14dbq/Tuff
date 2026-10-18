@@ -1,0 +1,289 @@
+//! `cargo xtask worldgen-compare <vanilla world> <our world> [--radius n]`:
+//! compares two worlds chunk by chunk around 0, 0: how many blocks are the
+//! same, which blocks differ most, and how often each block occurs in
+//! each (features: trees, plants, ores).
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
+
+use anyhow::{Result, bail};
+use mc_storage::chunk::{Decoded, Palettes, decode_chunk};
+
+use crate::probe::load_data;
+
+fn region(world: &Path) -> std::path::PathBuf {
+    let d = world.join("dimensions/minecraft/overworld/region");
+    if d.is_dir() { d } else { world.join("region") }
+}
+
+pub fn run(args: &[String]) -> Result<()> {
+    let mut paths = Vec::new();
+    let mut radius = 4;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--radius" => radius = it.next().map_or(Ok(4), |v| v.parse())?,
+            _ => paths.push(std::path::PathBuf::from(a)),
+        }
+    }
+    let [theirs, ours] = &paths[..] else {
+        bail!("usage: worldgen-compare <vanilla world> <our world> [--radius n]");
+    };
+    let data = load_data(None)?;
+    let air = data.blocks.default_state("minecraft:air").unwrap_or(0);
+    let lookup = |_: &str| Some(0u32);
+    let palettes = Palettes {
+        blocks: &data.blocks,
+        biome: &lookup,
+        air,
+        fallback_biome: 0,
+        unresolved: std::cell::Cell::new(0),
+    };
+    let mut a = mc_storage::region::RegionStorage::new(region(theirs));
+    let mut b = mc_storage::region::RegionStorage::new(region(ours));
+    let name = |s: u32| {
+        data.blocks
+            .block_name(s)
+            .unwrap_or("?")
+            .trim_start_matches("minecraft:")
+            .to_owned()
+    };
+    let (mut same, mut total) = (0usize, 0usize);
+    let mut counts: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut pairs: HashMap<(String, String), usize> = HashMap::new();
+    let mut chunks = 0;
+    for cz in -radius..=radius {
+        for cx in -radius..=radius {
+            let (Some(ta), Some(tb)) = (a.read_chunk(cx, cz)?, b.read_chunk(cx, cz)?) else {
+                continue;
+            };
+            let (Ok(Decoded::Chunk(ca)), Ok(Decoded::Chunk(cb))) = (
+                decode_chunk(&ta, -64, 384, &palettes),
+                decode_chunk(&tb, -64, 384, &palettes),
+            ) else {
+                continue;
+            };
+            chunks += 1;
+            for y in -64..320 {
+                for lz in 0..16 {
+                    for lx in 0..16 {
+                        let (sa, sb) = (ca.block(lx, y, lz), cb.block(lx, y, lz));
+                        let (na, nb) = (name(sa), name(sb));
+                        total += 1;
+                        if na == nb {
+                            same += 1;
+                        } else {
+                            *pairs.entry((na.clone(), nb.clone())).or_default() += 1;
+                        }
+                        if na != "air" && na != "stone" && na != "deepslate" {
+                            counts.entry(na).or_default().0 += 1;
+                        }
+                        if nb != "air" && nb != "stone" && nb != "deepslate" {
+                            counts.entry(nb).or_default().1 += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println!(
+        "{chunks} chunks: {same}/{total} blocks the same ({:.3}%)",
+        same as f64 * 100.0 / total.max(1) as f64
+    );
+    let mut list: Vec<_> = pairs.into_iter().collect();
+    list.sort_by_key(|x| std::cmp::Reverse(x.1));
+    println!("most different (vanilla → ours):");
+    for ((x, y), n) in list.iter().take(
+        std::env::var("TOP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30),
+    ) {
+        println!("{n:>9}  {x} → {y}");
+    }
+    println!("{:>30} {:>9} {:>9}", "block", "vanilla", "ours");
+    let mut rows: Vec<_> = counts.into_iter().collect();
+    rows.sort_by_key(|x| std::cmp::Reverse(x.1.0 + x.1.1));
+    for (n, (va, vb)) in rows.iter().take(90) {
+        let mark = if *va == 0 || *vb == 0 || (*va as f64 / *vb as f64 - 1.0).abs() > 0.25 {
+            " <"
+        } else {
+            ""
+        };
+        println!("{n:>30} {va:>9} {vb:>9}{mark}");
+    }
+    Ok(())
+}
+
+/// `cargo xtask worldgen-logs <vanilla> <ours> <cx> <cz>`: tree logs in one
+/// chunk of each world.
+pub fn logs(args: &[String]) -> Result<()> {
+    let data = load_data(None)?;
+    let air = data.blocks.default_state("minecraft:air").unwrap_or(0);
+    let lookup = |_: &str| Some(0u32);
+    let palettes = Palettes {
+        blocks: &data.blocks,
+        biome: &lookup,
+        air,
+        fallback_biome: 0,
+        unresolved: std::cell::Cell::new(0),
+    };
+    let (cx, cz): (i32, i32) = (args[2].parse()?, args[3].parse()?);
+    for w in &args[..2] {
+        let mut s = mc_storage::region::RegionStorage::new(region(Path::new(w)));
+        let Some(t) = s.read_chunk(cx, cz)? else {
+            continue;
+        };
+        let Ok(Decoded::Chunk(c)) = decode_chunk(&t, -64, 384, &palettes) else {
+            continue;
+        };
+        let mut cols: BTreeMap<(usize, usize), Vec<(i32, String)>> = BTreeMap::new();
+        let want = std::env::var("BLOCK").unwrap_or_else(|_| "_log".into());
+        for y in -64..320 {
+            for lz in 0..16 {
+                for lx in 0..16 {
+                    let n = data
+                        .blocks
+                        .describe(c.block(lx, y, lz))
+                        .unwrap_or("?")
+                        .to_owned();
+                    if n.contains(&want) {
+                        cols.entry((lx, lz))
+                            .or_default()
+                            .push((y, n.trim_start_matches("minecraft:").to_owned()));
+                    }
+                }
+            }
+        }
+        println!("== {w}");
+        for ((x, z), list) in cols {
+            let ys: Vec<String> = list.iter().map(|(y, n)| format!("{y}:{n}")).collect();
+            println!("  {x:>2},{z:>2}: {}", ys.join(" "));
+        }
+    }
+    Ok(())
+}
+
+/// `cargo xtask worldgen-map <world> <radius> <out.ppm>`: top blocks of
+/// the chunks around 0, 0, coloured roughly.
+pub fn map(args: &[String]) -> Result<()> {
+    let data = load_data(None)?;
+    let air = data.blocks.default_state("minecraft:air").unwrap_or(0);
+    let lookup = |_: &str| Some(0u32);
+    let palettes = Palettes {
+        blocks: &data.blocks,
+        biome: &lookup,
+        air,
+        fallback_biome: 0,
+        unresolved: std::cell::Cell::new(0),
+    };
+    let radius: i32 = args[1].parse()?;
+    let size = (radius * 2 + 1) * 16;
+    let mut img = vec![0u8; (size * size * 3) as usize];
+    let mut s = mc_storage::region::RegionStorage::new(region(Path::new(&args[0])));
+    for cz in -radius..=radius {
+        for cx in -radius..=radius {
+            let Some(t) = s.read_chunk(cx, cz)? else {
+                continue;
+            };
+            let Ok(Decoded::Chunk(c)) = decode_chunk(&t, -64, 384, &palettes) else {
+                continue;
+            };
+            for lz in 0..16 {
+                for lx in 0..16 {
+                    for y in (-64..320).rev() {
+                        let st = c.block(lx, y, lz);
+                        if data.blocks.is_air(st) {
+                            continue;
+                        }
+                        let n = data
+                            .blocks
+                            .block_name(st)
+                            .unwrap_or("?")
+                            .trim_start_matches("minecraft:");
+                        let col: [u8; 3] = match n {
+                            "grass_block" => [95, 159, 53],
+                            "water" => [52, 90, 210],
+                            "sand" | "sandstone" => [219, 207, 163],
+                            "stone" | "andesite" | "diorite" | "granite" | "gravel" => {
+                                [125, 125, 125]
+                            }
+                            "snow" | "snow_block" => [250, 250, 250],
+                            "ice" | "packed_ice" => [160, 190, 250],
+                            "dirt" | "coarse_dirt" | "podzol" => [134, 96, 67],
+                            "birch_leaves" => [130, 170, 70],
+                            _ if n.ends_with("_leaves") => [40, 110, 30],
+                            _ if n.ends_with("_log") => [100, 70, 40],
+                            "short_grass" | "tall_grass" | "fern" | "bush" => [80, 180, 50],
+                            "leaf_litter" => [170, 110, 40],
+                            "seagrass" | "tall_seagrass" | "kelp" | "kelp_plant" => [40, 140, 120],
+                            _ => [230, 60, 200],
+                        };
+                        let shade = ((y - 40).clamp(0, 120) as f32 / 120.0) * 0.6 + 0.6;
+                        let (ix, iz) = (
+                            (cx + radius) * 16 + lx as i32,
+                            (cz + radius) * 16 + lz as i32,
+                        );
+                        let i = ((iz * size + ix) * 3) as usize;
+                        for k in 0..3 {
+                            img[i + k] = (f32::from(col[k]) * shade).min(255.0) as u8;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = format!("P6\n{size} {size}\n255\n").into_bytes();
+    out.extend_from_slice(&img);
+    std::fs::write(&args[2], out)?;
+    Ok(())
+}
+
+/// `cargo xtask worldgen-find <world> <block> <radius>`: where a block is,
+/// grouped by chunk (count and bounds).
+pub fn find(args: &[String]) -> Result<()> {
+    let data = load_data(None)?;
+    let air = data.blocks.default_state("minecraft:air").unwrap_or(0);
+    let lookup = |_: &str| Some(0u32);
+    let palettes = Palettes {
+        blocks: &data.blocks,
+        biome: &lookup,
+        air,
+        fallback_biome: 0,
+        unresolved: std::cell::Cell::new(0),
+    };
+    let want = &args[1];
+    let radius: i32 = args[2].parse()?;
+    let mut s = mc_storage::region::RegionStorage::new(region(Path::new(&args[0])));
+    for cz in -radius..=radius {
+        for cx in -radius..=radius {
+            let Some(t) = s.read_chunk(cx, cz)? else {
+                continue;
+            };
+            let Ok(Decoded::Chunk(c)) = decode_chunk(&t, -64, 384, &palettes) else {
+                continue;
+            };
+            let mut n = 0;
+            let mut lo = (i32::MAX, i32::MAX, i32::MAX);
+            let mut hi = (i32::MIN, i32::MIN, i32::MIN);
+            for y in -64..320 {
+                for lz in 0..16 {
+                    for lx in 0..16 {
+                        let name = data.blocks.block_name(c.block(lx, y, lz)).unwrap_or("?");
+                        if name.trim_start_matches("minecraft:") == want {
+                            n += 1;
+                            let (x, z) = (cx * 16 + lx as i32, cz * 16 + lz as i32);
+                            lo = (lo.0.min(x), lo.1.min(y), lo.2.min(z));
+                            hi = (hi.0.max(x), hi.1.max(y), hi.2.max(z));
+                        }
+                    }
+                }
+            }
+            if n > 0 {
+                println!("chunk {cx},{cz}: {n} from {lo:?} to {hi:?}");
+            }
+        }
+    }
+    Ok(())
+}

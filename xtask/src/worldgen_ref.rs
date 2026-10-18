@@ -15,6 +15,7 @@ const PORT: u16 = 25573;
 
 pub fn run(args: &[String]) -> Result<()> {
     let (mut seed, mut radius) = (12345i64, 7i32);
+    let mut features = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = || {
@@ -25,12 +26,16 @@ pub fn run(args: &[String]) -> Result<()> {
         match arg.as_str() {
             "--seed" => seed = value()?.parse()?,
             "--radius" => radius = value()?.parse()?,
+            "--features" => features = true,
             other => bail!("unknown option `{other}`"),
         }
     }
     let root = crate::workspace_root();
     let data_root = root.join("cache/mcdata/26.3/data/minecraft/worldgen/biome");
-    let dir = root.join(format!("cache/vanilla-server/26.3-worldgen/{seed}"));
+    let dir = root.join(format!(
+        "cache/vanilla-server/26.3-worldgen/{seed}{}",
+        if features { "-features" } else { "" }
+    ));
     let world = dir.join("world");
     let _ = std::fs::remove_dir_all(&world);
     // The data pack: every biome without features and carvers.
@@ -44,7 +49,9 @@ pub fn run(args: &[String]) -> Result<()> {
     for entry in std::fs::read_dir(&data_root)? {
         let path = entry?.path();
         let mut biome: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
-        biome["features"] = serde_json::json!([]);
+        if !features {
+            biome["features"] = serde_json::json!([]);
+        }
         biome["carvers"] = serde_json::json!([]);
         std::fs::write(
             biomes.join(path.file_name().context("biome file")?),

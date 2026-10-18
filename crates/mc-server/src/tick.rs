@@ -214,6 +214,15 @@ fn run_scheduled_ticks(ctx: &ServerContext) {
     let now = lock(&ctx.time).age;
     let due = {
         let mut ticks = lock(&ctx.ticks);
+        // Flow new chunks pass on to chunks players already have.
+        for (pos, fluid) in ctx.world.take_live_ticks() {
+            let delay = if fluid == mc_tick::fluids::Fluid::Lava as u32 {
+                30
+            } else {
+                5
+            };
+            ticks.fluids.schedule(pos, fluid, now + delay, 0);
+        }
         let blocks = ticks.blocks.take_due(now);
         let fluids = ticks.fluids.take_due(now);
         (blocks, fluids)

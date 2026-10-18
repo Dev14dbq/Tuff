@@ -87,8 +87,37 @@ fn flowing(ctx: Ctx, fluid: Fluid, amount: i32) -> u32 {
 fn can_replace(ctx: Ctx, fluid: Fluid, target: u32) -> bool {
     match fluid_of(ctx, target) {
         Some((other, level)) => other == fluid && level != 0,
-        None => ctx.shapes.is_air(target) || !ctx.facts.blocks_motion(target),
+        None => {
+            ctx.shapes.is_air(target) || (washable(ctx, target) && !ctx.facts.blocks_motion(target))
+        }
     }
+}
+
+/// Whether flowing fluid may wash a block away: blocks that hold water
+/// themselves (waterlogged, seagrass, kelp), doors, signs, ladders, sugar
+/// cane, bubble columns and portals stay (minecraft.wiki, "Water": "Water
+/// cannot destroy...").
+fn washable(ctx: Ctx, target: u32) -> bool {
+    if ctx.shapes.property(target, "waterlogged") == Some("true") {
+        return false;
+    }
+    let name = ctx.shapes.block_name(target).unwrap_or("");
+    !(name.ends_with("_door")
+        || name.ends_with("_sign")
+        || matches!(
+            name,
+            "minecraft:seagrass"
+                | "minecraft:tall_seagrass"
+                | "minecraft:kelp"
+                | "minecraft:kelp_plant"
+                | "minecraft:bubble_column"
+                | "minecraft:ladder"
+                | "minecraft:sugar_cane"
+                | "minecraft:nether_portal"
+                | "minecraft:end_portal"
+                | "minecraft:end_gateway"
+                | "minecraft:structure_void"
+        ))
 }
 
 /// Called whenever a fluid block is set: lava may harden, otherwise the fluid
