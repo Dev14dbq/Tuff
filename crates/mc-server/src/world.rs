@@ -249,6 +249,7 @@ impl World {
     /// A world folder saved by vanilla 26.3 (`level.dat`, region files).
     /// Chunks it does not have are generated from its seed. A folder without
     /// `level.dat` becomes a new world (`seed`, or a random one).
+    #[allow(clippy::too_many_arguments)]
     pub fn open(
         dir: &Path,
         data: &McData,
