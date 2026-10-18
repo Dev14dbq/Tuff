@@ -772,13 +772,11 @@ fn fast_inv_sqrt(x: f64) -> f64 {
     y * (1.5 - half * y * y)
 }
 
+/// The kernel: a Gaussian bump; the sign comes from the height above the
+/// piece's ground.
 fn compute_beard(x: i32, y: i32, z: i32) -> f64 {
-    let d = f64::from(x * x + z * z);
-    let e = f64::from(y) + 0.5;
-    let f = e * e;
-    let g = (-(f / 16.0 + d / 16.0)).exp();
-    let h = -e * fast_inv_sqrt(f / 2.0 + d / 2.0) / 2.0;
-    h * g
+    let d = f64::from(x * x + y * y + z * z);
+    (-d / 16.0).exp()
 }
 
 fn beard_contribution(x: i32, y: i32, z: i32, to_ground: i32) -> f64 {
