@@ -135,6 +135,32 @@ pub enum Misc {
         amount: i32,
         attempts: i32,
     },
+    Template {
+        templates: Vec<(String, i32)>,
+        processors: Vec<Arc<crate::structure::template::Processor>>,
+    },
+    Fossil {
+        fossils: Vec<String>,
+        overlays: Vec<String>,
+        fossil_processors: Vec<Arc<crate::structure::template::Processor>>,
+        overlay_processors: Vec<Arc<crate::structure::template::Processor>>,
+        max_empty_corners: i32,
+    },
+    LargeDripstone(Box<LargeDripstone>),
+}
+
+#[derive(Debug)]
+pub struct LargeDripstone {
+    search: i32,
+    radius: IntProvider,
+    radius_range: (i32, i32),
+    height_scale: FloatProvider,
+    ratio: f32,
+    stalactite_bluntness: FloatProvider,
+    stalagmite_bluntness: FloatProvider,
+    wind_speed: FloatProvider,
+    min_radius_for_wind: i32,
+    min_bluntness_for_wind: f32,
 }
 
 #[derive(Debug)]
@@ -432,6 +458,56 @@ impl Misc {
                         .and_then(Value::as_i64)
                         .unwrap_or(3) as i32,
                     bias_distance: int(v, "max_distance_from_center_affecting_height_bias", 8),
+                }))
+            }
+            "template" => Misc::Template {
+                templates: v["templates"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|e| {
+                        let id = e["data"]["id"].as_str().or_else(|| e["data"].as_str())?;
+                        Some((id.to_owned(), e["weight"].as_i64().unwrap_or(1) as i32))
+                    })
+                    .collect(),
+                processors: l.processors(&v["processors"]),
+            },
+            "fossil" => {
+                let names = |k: &str| -> Vec<String> {
+                    v[k].as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|s| s.as_str().map(str::to_owned))
+                        .collect()
+                };
+                Misc::Fossil {
+                    fossils: names("fossil_structures"),
+                    overlays: names("overlay_structures"),
+                    fossil_processors: l.processors(&v["fossil_processors"]),
+                    overlay_processors: l.processors(&v["overlay_processors"]),
+                    max_empty_corners: int(v, "max_empty_corners_allowed", 4),
+                }
+            }
+            "large_dripstone" => {
+                let radius = ip(v, "column_radius", 3);
+                let radius_range = match &radius {
+                    IntProvider::Clamped(_, lo, hi) => (*lo, *hi),
+                    IntProvider::Uniform(lo, hi) => (*lo, *hi),
+                    p => (p.max(), p.max()),
+                };
+                let fp = |k: &str, d: f32| {
+                    FloatProvider::parse(&v[k]).unwrap_or(FloatProvider::Constant(d))
+                };
+                Misc::LargeDripstone(Box::new(LargeDripstone {
+                    search: int(v, "floor_to_ceiling_search_range", 30),
+                    radius,
+                    radius_range,
+                    height_scale: fp("height_scale", 1.0),
+                    ratio: float(v, "max_column_radius_to_cave_height_ratio", 0.4),
+                    stalactite_bluntness: fp("stalactite_bluntness", 0.5),
+                    stalagmite_bluntness: fp("stalagmite_bluntness", 0.5),
+                    wind_speed: fp("wind_speed", 0.0),
+                    min_radius_for_wind: int(v, "min_radius_for_wind", 4),
+                    min_bluntness_for_wind: float(v, "min_bluntness_for_wind", 0.6),
                 }))
             }
             "sculk_patch" => Misc::SculkPatch {
@@ -755,6 +831,46 @@ impl Misc {
                 amount,
                 attempts,
             } => sculk_patch(facts, region, r, p, *charges, *amount, *attempts),
+            Misc::Template {
+                templates,
+                processors,
+            } => {
+                let Some(id) = crate::value::weighted(templates, r) else {
+                    return false;
+                };
+                let Some(t) = cx.features.structures.template(id) else {
+                    return false;
+                };
+                let rotation = crate::structure::template::Rotation(r.next_int_bound(4) as u8);
+                let pivot = P::new(t.size.x / 2, 0, t.size.z / 2);
+                let settings = crate::structure::template::Settings {
+                    rotation,
+                    pivot,
+                    processors: processors.clone(),
+                    waterlog: true,
+                    ..Default::default()
+                };
+                let corner = p.offset(-pivot.x, 0, -pivot.z);
+                t.place(facts, region, r, corner, corner, &settings)
+            }
+            Misc::Fossil {
+                fossils,
+                overlays,
+                fossil_processors,
+                overlay_processors,
+                max_empty_corners,
+            } => fossil(
+                cx,
+                region,
+                r,
+                p,
+                fossils,
+                overlays,
+                fossil_processors,
+                overlay_processors,
+                *max_empty_corners,
+            ),
+            Misc::LargeDripstone(c) => large_dripstone(facts, region, r, p, c),
         }
     }
 }
@@ -2464,6 +2580,285 @@ fn sculk_patch(
                 above,
                 facts.with(facts.with(vein, "down", "true"), "waterlogged", "false"),
             );
+        }
+    }
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fossil(
+    cx: &Ctx,
+    region: &mut dyn Region,
+    r: &mut WorldgenRandom,
+    p: P,
+    fossils: &[String],
+    overlays: &[String],
+    fossil_processors: &[Arc<crate::structure::template::Processor>],
+    overlay_processors: &[Arc<crate::structure::template::Processor>],
+    max_empty_corners: i32,
+) -> bool {
+    use crate::structure::template::{BBox, Mirror, Rotation, Settings};
+    let facts = cx.facts;
+    if fossils.is_empty() {
+        return false;
+    }
+    let rot = Rotation(r.next_int_bound(4) as u8);
+    let i = r.next_int_bound(fossils.len() as i32) as usize;
+    let s = &cx.features.structures;
+    let (Some(t), Some(t2)) = (
+        s.template(&fossils[i]),
+        overlays.get(i).and_then(|o| s.template(o)),
+    ) else {
+        return false;
+    };
+    let h = region.heights();
+    let (cxk, czk) = (p.x >> 4, p.z >> 4);
+    let bbox = BBox {
+        min: P::new(cxk * 16 - 16, h.min_y, czk * 16 - 16),
+        max: P::new(
+            cxk * 16 + 15 + 16,
+            h.min_y + h.height - 1,
+            czk * 16 + 15 + 16,
+        ),
+    };
+    let (sx, sz) = if rot.0 % 2 == 1 {
+        (t.size.z, t.size.x)
+    } else {
+        (t.size.x, t.size.z)
+    };
+    let bp = p.offset(-sx / 2, 0, -sz / 2);
+    let mut j = p.y;
+    for k in 0..sx {
+        for l in 0..sz {
+            j = j.min(region.height(Heightmap::OceanFloorWg, bp.x + k, bp.z + l));
+        }
+    }
+    let k = (j - 15 - r.next_int_bound(10)).max(h.min_y + 10);
+    // The corner that keeps the turned template where it was meant to be.
+    let (xi, zj) = (t.size.x - 1, t.size.z - 1);
+    let base = bp.with_y(k);
+    let zero = match rot.0 {
+        3 => base.offset(0, 0, xi),
+        1 => base.offset(zj, 0, 0),
+        2 => base.offset(xi, 0, zj),
+        _ => base,
+    };
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(r.clone()));
+    let mut settings = Settings {
+        rotation: rot,
+        mirror: Mirror::None,
+        bbox: Some(bbox),
+        processors: fossil_processors.to_vec(),
+        shared: Some(shared.clone()),
+        ..Settings::default()
+    };
+    let fb = t.bbox(zero, rot, P::default(), Mirror::None);
+    let corners = [
+        P::new(fb.min.x, fb.min.y, fb.min.z),
+        P::new(fb.max.x, fb.min.y, fb.min.z),
+        P::new(fb.min.x, fb.max.y, fb.min.z),
+        P::new(fb.max.x, fb.max.y, fb.min.z),
+        P::new(fb.min.x, fb.min.y, fb.max.z),
+        P::new(fb.max.x, fb.min.y, fb.max.z),
+        P::new(fb.min.x, fb.max.y, fb.max.z),
+        P::new(fb.max.x, fb.max.y, fb.max.z),
+    ];
+    let empty = corners
+        .iter()
+        .filter(|c| {
+            let s = region.block(**c);
+            facts.is_air(s) || facts.is(s, "minecraft:water") || facts.is(s, "minecraft:lava")
+        })
+        .count() as i32;
+    if empty > max_empty_corners {
+        return false;
+    }
+    t.place(facts, region, r, zero, zero, &settings);
+    settings.processors = overlay_processors.to_vec();
+    t2.place(facts, region, r, zero, zero, &settings);
+    *r = shared.lock().expect("random lock").clone();
+    true
+}
+
+fn drip_height(dist: f64, radius: f64, scale: f64, bluntness: f64) -> f64 {
+    let dist = dist.max(bluntness);
+    let e = dist / radius * 0.384;
+    let f = 0.75 * e.powf(4.0 / 3.0);
+    let g = e.powf(2.0 / 3.0);
+    let h = e.ln() / 3.0;
+    let i = (scale * (f - g - h)).max(0.0);
+    i / 0.384 * radius
+}
+
+struct Drip {
+    root: P,
+    up: bool,
+    radius: i32,
+    bluntness: f64,
+    scale: f64,
+}
+
+impl Drip {
+    fn height_at(&self, f: f32) -> i32 {
+        drip_height(
+            f64::from(f),
+            f64::from(self.radius),
+            self.scale,
+            self.bluntness,
+        ) as i32
+    }
+}
+
+fn large_dripstone(
+    facts: &Facts,
+    region: &mut dyn Region,
+    r: &mut WorldgenRandom,
+    p: P,
+    c: &LargeDripstone,
+) -> bool {
+    let empty = |s: u32| facts.is_air(s) || facts.is(s, "minecraft:water");
+    let empty_or_lava = |s: u32| empty(s) || facts.is(s, "minecraft:lava");
+    let base = |s: u32| {
+        facts.in_named(s, "minecraft:dripstone_replaceable_blocks") || facts.is(s, "minecraft:lava")
+    };
+    if !empty(region.block(p)) {
+        return false;
+    }
+    // The open column through p, with ground below and a roof above.
+    let mut ceiling = p;
+    let mut i = 1;
+    while i < c.search && empty(region.block(ceiling)) {
+        ceiling = ceiling.above(1);
+        i += 1;
+    }
+    let mut floor = p;
+    let mut i = 1;
+    while i < c.search && empty(region.block(floor)) {
+        floor = floor.below(1);
+        i += 1;
+    }
+    if !base(region.block(ceiling)) || !base(region.block(floor)) {
+        return false;
+    }
+    let height = ceiling.y - floor.y - 1;
+    if height < 4 {
+        return false;
+    }
+    let max = ((height as f32 * c.ratio) as i32).clamp(c.radius_range.0, c.radius_range.1);
+    let k = r.int_between(c.radius_range.0, max);
+    let _ = &c.radius;
+    let mut stalactite = Drip {
+        root: p.with_y(ceiling.y - 1),
+        up: false,
+        radius: k,
+        bluntness: f64::from(c.stalactite_bluntness.sample(r)),
+        scale: f64::from(c.height_scale.sample(r)),
+    };
+    let mut stalagmite = Drip {
+        root: p.with_y(floor.y + 1),
+        up: true,
+        radius: k,
+        bluntness: f64::from(c.stalagmite_bluntness.sample(r)),
+        scale: f64::from(c.height_scale.sample(r)),
+    };
+    let windy = |d: &Drip| {
+        d.radius >= c.min_radius_for_wind && d.bluntness >= f64::from(c.min_bluntness_for_wind)
+    };
+    let wind = if windy(&stalactite) && windy(&stalagmite) {
+        let f = c.wind_speed.sample(r);
+        let g = r.float_between(0.0, std::f32::consts::PI);
+        Some((p.y, f64::from(g.cos() * f), f64::from(g.sin() * f)))
+    } else {
+        None
+    };
+    let offset = |q: P| match wind {
+        Some((oy, wx, wz)) => {
+            let i = f64::from(oy - q.y);
+            q.offset((wx * i).floor() as i32, 0, (wz * i).floor() as i32)
+        }
+        None => q,
+    };
+    let settle = |region: &dyn Region, d: &mut Drip| -> bool {
+        while d.radius > 1 {
+            let mut m = d.root;
+            let steps = d.height_at(0.0).min(10);
+            for _ in 0..steps {
+                if facts.is(region.block(m), "minecraft:lava") {
+                    return false;
+                }
+                // Mostly in stone around: none of the circle's points open.
+                let at = offset(m);
+                let embedded = !empty_or_lava(region.block(at)) && {
+                    let g = 6.0 / d.radius as f32;
+                    let mut h = 0.0f32;
+                    let mut ok = true;
+                    while h < std::f32::consts::TAU {
+                        let q = at.offset(
+                            (h.cos() * d.radius as f32) as i32,
+                            0,
+                            (h.sin() * d.radius as f32) as i32,
+                        );
+                        if empty_or_lava(region.block(q)) {
+                            ok = false;
+                            break;
+                        }
+                        h += g;
+                    }
+                    ok
+                };
+                if embedded {
+                    d.root = m;
+                    return true;
+                }
+                m = if d.up { m.below(1) } else { m.above(1) };
+            }
+            d.radius /= 2;
+        }
+        false
+    };
+    let a = settle(region, &mut stalactite);
+    let b = settle(region, &mut stalagmite);
+    let Some(dripstone) = facts.default_state("minecraft:dripstone_block") else {
+        return false;
+    };
+    for (ok, d) in [(a, &stalactite), (b, &stalagmite)] {
+        if !ok {
+            continue;
+        }
+        for i in -d.radius..=d.radius {
+            for j in -d.radius..=d.radius {
+                let f = ((i * i + j * j) as f32).sqrt();
+                if f > d.radius as f32 {
+                    continue;
+                }
+                let mut k = d.height_at(f);
+                if k <= 0 {
+                    continue;
+                }
+                if r.next_float() < 0.2 {
+                    k = (k as f32 * r.float_between(0.8, 1.0)) as i32;
+                }
+                let mut m = d.root.offset(i, 0, j);
+                let mut placed = false;
+                let limit = if d.up {
+                    region.height(Heightmap::WorldSurfaceWg, m.x, m.z)
+                } else {
+                    i32::MAX
+                };
+                let mut n = 0;
+                while n < k && m.y < limit {
+                    let q = offset(m);
+                    let s = region.block(q);
+                    if empty_or_lava(s) {
+                        placed = true;
+                        region.set(q, dripstone);
+                    } else if placed && facts.in_named(s, "minecraft:base_stone_overworld") {
+                        break;
+                    }
+                    m = if d.up { m.above(1) } else { m.below(1) };
+                    n += 1;
+                }
+            }
         }
     }
     true

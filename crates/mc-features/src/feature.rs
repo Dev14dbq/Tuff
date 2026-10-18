@@ -96,6 +96,29 @@ impl<'a> Loader<'a> {
         serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
     }
 
+    /// Processors: a `processor_list` id or `{"processors": [...]}`.
+    pub fn processors(
+        &self,
+        v: &Value,
+    ) -> Vec<std::sync::Arc<crate::structure::template::Processor>> {
+        let def = match v {
+            Value::String(id) => self.read("processor_list", id).unwrap_or(Value::Null),
+            o => o.clone(),
+        };
+        let list = if def.is_array() {
+            def.clone()
+        } else {
+            def["processors"].clone()
+        };
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                crate::structure::template::Processor::parse(p, self.facts).map(std::sync::Arc::new)
+            })
+            .collect()
+    }
+
     pub fn provider(&self, v: &Value) -> Option<StateProvider> {
         StateProvider::parse(v, self.facts, &self.named)
     }

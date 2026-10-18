@@ -419,7 +419,14 @@ impl World {
     }
 
     /// A new chunk from the generator, lit, with heightmaps.
-    fn generate(&self, g: &Generation, x: i32, z: i32, anvil: &Anvil, blocks: &Blocks) -> Box<Chunk> {
+    fn generate(
+        &self,
+        g: &Generation,
+        x: i32,
+        z: i32,
+        anvil: &Anvil,
+        blocks: &Blocks,
+    ) -> Box<Chunk> {
         let view = Generated {
             world: self,
             anvil,
@@ -683,7 +690,10 @@ impl World {
                 Ok(())
             })();
             if let Err(err) = result {
-                warn!("saving chunk {},{} (still generating): {err:#}", chunk.x, chunk.z);
+                warn!(
+                    "saving chunk {},{} (still generating): {err:#}",
+                    chunk.x, chunk.z
+                );
             }
         }
         for chunk in dirty {
@@ -915,7 +925,13 @@ impl crate::pipeline::Finished for Generated<'_> {
     }
 
     fn stored_proto(&self, x: i32, z: i32) -> Option<Chunk> {
-        let raw = self.anvil.storage.lock().expect("region storage").read_raw(x, z).ok()??;
+        let raw = self
+            .anvil
+            .storage
+            .lock()
+            .expect("region storage")
+            .read_raw(x, z)
+            .ok()??;
         let tag = raw.parse().ok()?;
         let biome = |name: &str| self.anvil.biome_ids.get(name).copied();
         let palettes = Palettes {
@@ -925,7 +941,9 @@ impl crate::pipeline::Finished for Generated<'_> {
             fallback_biome: self.anvil.fallback_biome,
             unresolved: Default::default(),
         };
-        let (status, chunk) = mc_storage::decode_with_status(&tag, self.world.min_y, self.world.height, &palettes).ok()?;
+        let (status, chunk) =
+            mc_storage::decode_with_status(&tag, self.world.min_y, self.world.height, &palettes)
+                .ok()?;
         (status == "minecraft:features").then_some(*chunk)
     }
 

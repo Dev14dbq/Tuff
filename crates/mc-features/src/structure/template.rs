@@ -504,10 +504,7 @@ impl Template {
         match self.palettes.len() {
             0 => &[],
             1 => &self.palettes[0],
-            n => {
-                let mut r = settings.random_at(pos);
-                &self.palettes[r.next_int_bound(n as i32) as usize]
-            }
+            n => &self.palettes[settings.with_random(pos, |r| r.next_int_bound(n as i32)) as usize],
         }
     }
 
@@ -662,9 +659,20 @@ pub struct Settings {
     pub waterlog: bool,
     /// A fixed random source instead of one per position.
     pub seed: Option<i64>,
+    /// One source for all blocks in turn (fossils), instead of one per
+    /// position.
+    pub shared: Option<std::sync::Arc<std::sync::Mutex<WorldgenRandom>>>,
 }
 
 impl Settings {
+    /// Runs `f` with the random source a processor uses at `pos`.
+    pub fn with_random<T>(&self, pos: P, f: impl FnOnce(&mut WorldgenRandom) -> T) -> T {
+        match &self.shared {
+            Some(r) => f(&mut r.lock().expect("random lock")),
+            None => f(&mut self.random_at(pos)),
+        }
+    }
+
     /// The random source a processor uses at `pos`.
     pub fn random_at(&self, pos: P) -> WorldgenRandom {
         match self.seed {

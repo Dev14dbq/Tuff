@@ -189,7 +189,10 @@ async fn main() -> anyhow::Result<()> {
         "{chunks} chunks in {:.1} s",
         started.elapsed().as_secs_f32()
     );
-    println!("loose leaves: {}", counts.get("! loose leaves").copied().unwrap_or(0));
+    println!(
+        "loose leaves: {}",
+        counts.get("! loose leaves").copied().unwrap_or(0)
+    );
     let mut list: Vec<_> = counts.into_iter().collect();
     list.sort_by(|a, b| b.1.cmp(&a.1));
     for (n, c) in list.iter().take(70) {

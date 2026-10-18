@@ -53,6 +53,14 @@ pub enum Modifier {
     },
     Fixed(Vec<P>),
     OneOf(Vec<Modifier>),
+    /// Every position of a box from here: its faces, and its edges and
+    /// inside when asked.
+    Cuboid {
+        xz: IntProvider,
+        y: IntProvider,
+        edges: bool,
+        interior: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -126,6 +134,12 @@ impl Modifier {
                     })
                     .collect(),
             ),
+            "cuboid" => Modifier::Cuboid {
+                xz: ip("xz_size")?,
+                y: ip("y_size")?,
+                edges: v["include_edges"].as_bool().unwrap_or(false),
+                interior: v["include_interior"].as_bool().unwrap_or(false),
+            },
             "randomly_selected" => Modifier::OneOf(
                 v["placements"]
                     .as_array()?
@@ -293,6 +307,34 @@ impl Modifier {
                 .copied()
                 .filter(|q| q.x >> 4 == p.x >> 4 && q.z >> 4 == p.z >> 4)
                 .collect(),
+            Modifier::Cuboid {
+                xz,
+                y,
+                edges,
+                interior,
+            } => {
+                let sx = xz.sample(r);
+                let sy = y.sample(r);
+                let sz = xz.sample(r);
+                let mut out = Vec::new();
+                for m in 0..=sx {
+                    for n in 0..=sy {
+                        for o in 0..=sz {
+                            let on = [m == 0 || m == sx, n == 0 || n == sy, o == 0 || o == sz];
+                            let k = on.iter().filter(|b| **b).count();
+                            let keep = match k {
+                                0 => *interior,
+                                1 => true,
+                                _ => *edges,
+                            };
+                            if keep {
+                                out.push(p.offset(m, n, o));
+                            }
+                        }
+                    }
+                }
+                out
+            }
             Modifier::OneOf(list) => {
                 if list.is_empty() {
                     return vec![p];
