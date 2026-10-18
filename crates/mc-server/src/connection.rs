@@ -49,7 +49,7 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
     match intention.intent {
         1 => status(&mut reader, &mut writer).await,
         2 | 3 => {
-            let login = login(&mut reader, &mut writer, &intention);
+            let login = login(&mut reader, &mut writer, &intention, peer);
             let session = tokio::time::timeout(LOGIN_TIMEOUT, login)
                 .await
                 .context("login timed out")??;
@@ -58,7 +58,7 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
             };
             let name = player.player.profile.name.clone();
             let uuid = player.player.profile.uuid;
-            info!("{name} ({}) joined from {peer}", uuid_string(uuid));
+            let _ = uuid_string;
             let result = play(&mut reader, &mut writer, &player).await;
             {
                 let ctx = ctx.clone();
@@ -72,13 +72,18 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
                 .remove(&uuid);
             let entity_id = player.player.entity_id;
             let _ = ctx.events.send(Event::PlayerLeft { uuid, entity_id });
-            let left = text::colored(&format!("{name} left the game"), "yellow");
+            let left = text::translate_colored(
+                "multiplayer.player.left",
+                vec![text::plain(&name)],
+                "yellow",
+            );
             let _ = ctx.events.send(Event::Chat(left));
             let reason = result
                 .as_ref()
                 .err()
-                .map_or("disconnected".to_owned(), |e| format!("{e:#}"));
-            info!("{name} left: {reason}");
+                .map_or("Disconnected".to_owned(), |e| format!("{e:#}"));
+            info!("{name} lost connection: {reason}");
+            info!("{name} left the game");
             result
         }
         other => bail!("unknown handshake intent {other}"),
@@ -133,6 +138,18 @@ struct Session {
     view_distance: i32,
     /// Displayed skin parts from Client Information (cape, jacket, sleeves, ...).
     skin_parts: u8,
+    /// Where the client connects from.
+    peer: SocketAddr,
+}
+
+/// "You are banned from this server. Reason: ...", with the end of a
+/// temporary ban.
+fn ban_message(key: &str, ban: &crate::lists::Ban) -> serde_json::Value {
+    let mut v = serde_json::json!({"translate": key, "with": [ban.reason]});
+    if !ban.expires.is_empty() && ban.expires != "forever" {
+        v["extra"] = serde_json::json!([{"translate": "multiplayer.disconnect.banned.expiration", "with": [ban.expires]}]);
+    }
+    v
 }
 
 fn refusal(reason: serde_json::Value) -> login::LoginDisconnect {
@@ -146,6 +163,7 @@ async fn login(
     reader: &mut PacketReader,
     writer: &mut PacketWriter,
     intention: &handshake::Intention,
+    peer: SocketAddr,
 ) -> Result<Option<Session>> {
     let ctx = writer.ctx.clone();
     let name = match reader.next(State::Login).await? {
@@ -154,15 +172,13 @@ async fn login(
     };
 
     if intention.protocol_version != mc_protocol::PROTOCOL_VERSION {
-        let reason = format!(
-            "This server runs Minecraft {} (protocol {}), you have protocol {}",
-            ctx.data.version.name,
-            mc_protocol::PROTOCOL_VERSION,
-            intention.protocol_version
-        );
-        writer
-            .send(&refusal(serde_json::json!({ "text": reason })))
-            .await?;
+        let key = if intention.protocol_version < mc_protocol::PROTOCOL_VERSION {
+            "multiplayer.disconnect.outdated_client"
+        } else {
+            "multiplayer.disconnect.outdated_server"
+        };
+        let reason = serde_json::json!({"translate": key, "with": [ctx.data.version.name]});
+        writer.send(&refusal(reason)).await?;
         return Ok(None);
     }
     if !valid_player_name(&name) {
@@ -210,13 +226,68 @@ async fn login(
         flying: saved.as_ref().is_some_and(|s| s.flying),
     };
     let uuid = player.profile.uuid;
+    // Bans and the whitelist (operators are always let in).
+    let refused_by_lists = {
+        let mut lists = ctx.lists.lock().expect("lists lock");
+        let ip = peer.ip().to_string();
+        let reason = if let Some(ban) = lists.player_ban(uuid, &player.profile.name) {
+            Some(ban_message("multiplayer.disconnect.banned.reason", ban))
+        } else if let Some(ban) = lists.ip_ban(&ip) {
+            Some(ban_message("multiplayer.disconnect.banned_ip.reason", ban))
+        } else if ctx.white_list()
+            && !lists.whitelisted(uuid, &player.profile.name)
+            && lists.op(uuid, &player.profile.name).is_none()
+        {
+            Some(serde_json::json!({"translate": "multiplayer.disconnect.not_whitelisted"}))
+        } else {
+            None
+        };
+        if reason.is_none() {
+            lists.seen(uuid, &player.profile.name);
+        }
+        reason
+    };
+    if let Some(reason) = refused_by_lists {
+        writer.send(&refusal(reason)).await?;
+        return Ok(None);
+    }
+    // Already online: the old connection goes, as vanilla does.
+    if ctx
+        .players
+        .lock()
+        .expect("players lock")
+        .contains_key(&uuid)
+    {
+        let _ = ctx.events.send(Event::Kick {
+            uuid,
+            reason: text::translate("multiplayer.disconnect.duplicate_login", Vec::new()),
+        });
+        for _ in 0..100 {
+            if !ctx
+                .players
+                .lock()
+                .expect("players lock")
+                .contains_key(&uuid)
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
     // The lock guard must not live across an await.
     let refused = {
         let mut players = ctx.players.lock().expect("players lock");
         if players.contains_key(&uuid) {
-            Some("You are already connected to this server")
-        } else if players.len() >= ctx.config.max_players {
-            Some("The server is full")
+            Some("multiplayer.disconnect.duplicate_login")
+        } else if players.len() >= ctx.config.max_players
+            && !ctx
+                .lists
+                .lock()
+                .expect("lists lock")
+                .op(uuid, &player.profile.name)
+                .is_some_and(|o| o.bypasses_player_limit)
+        {
+            Some("multiplayer.disconnect.server_full")
         } else {
             players.insert(uuid, player.clone());
             None
@@ -224,7 +295,7 @@ async fn login(
     };
     if let Some(reason) = refused {
         writer
-            .send(&refusal(serde_json::json!({ "text": reason })))
+            .send(&refusal(serde_json::json!({ "translate": reason })))
             .await?;
         return Ok(None);
     }
@@ -234,6 +305,7 @@ async fn login(
         saved,
         view_distance: i32::from(ctx.config.view_distance),
         skin_parts: 0,
+        peer,
     };
     // From here on the player is registered; remove them if login fails.
     let result = configure(reader, writer, &mut session).await;
@@ -507,7 +579,16 @@ async fn play(
         entity_id,
         pose,
     });
-    let joined = text::colored(&format!("{} joined the game", me.profile.name), "yellow");
+    info!(
+        "{}[/{}] logged in with entity id {} at ({}, {}, {})",
+        me.profile.name, session.peer, me.entity_id, pose.x, pose.y, pose.z
+    );
+    info!("{} joined the game", me.profile.name);
+    let joined = text::translate_colored(
+        "multiplayer.player.joined",
+        vec![text::plain(&me.profile.name)],
+        "yellow",
+    );
     let _ = ctx.events.send(Event::Chat(joined));
 
     let mut keep_alive = tokio::time::interval(KEEP_ALIVE_INTERVAL);
@@ -599,12 +680,12 @@ async fn play(
                         }
                     }
                     play::Serverbound::Chat { message } => {
-                        let line = format!("<{}> {}", me.profile.name, message);
-                        info!("{line}");
-                        let _ = ctx.events.send(Event::Chat(text::plain(&line)));
+                        info!("<{}> {}", me.profile.name, message);
+                        let line = text::translate("chat.type.text", vec![text::plain(&me.profile.name), text::plain(&message)]);
+                        let _ = ctx.events.send(Event::Chat(line));
                     }
                     play::Serverbound::ChatCommand { command } => {
-                        let op = ctx.config.ops.iter().any(|o| o.eq_ignore_ascii_case(&me.profile.name));
+                        let op = ctx.lists.lock().expect("lists lock").op(uuid, &me.profile.name).is_some();
                         if op {
                             info!("{} issued server command: /{command}", me.profile.name);
                             let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
@@ -915,8 +996,16 @@ async fn play(
                     }
                     Ok(Event::TickingStep(packet)) => writer.queue(&packet)?,
                     Ok(Event::Kick { uuid: who, reason }) if who == uuid => {
-                        writer.send(&play::Disconnect { reason: text::plain(&reason) }).await?;
-                        bail!("kicked: {reason}");
+                        let said = match &reason {
+                            mc_nbt::Tag::String(s) => s.clone(),
+                            mc_nbt::Tag::Compound(c) => match c.get("translate") {
+                                Some(mc_nbt::Tag::String(k)) => k.clone(),
+                                _ => String::new(),
+                            },
+                            _ => String::new(),
+                        };
+                        writer.send(&play::Disconnect { reason }).await?;
+                        bail!("{said}");
                     }
                     Ok(Event::Teleport { uuid: who, pose: to }) if who == uuid => {
                         next_teleport += 1;

@@ -16,6 +16,8 @@ pub use packets::{Encode, Packet};
 
 /// Protocol version whose packet layouts this crate implements.
 pub const PROTOCOL_VERSION: i32 = 777;
+/// The game version the protocol belongs to.
+pub const VERSION_NAME: &str = "26.3";
 
 /// Packet name not present in the id table (wrong data version).
 #[derive(Clone, Debug, PartialEq, Eq)]

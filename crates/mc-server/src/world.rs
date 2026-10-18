@@ -20,7 +20,7 @@ use mc_protocol::packets::play::{ChunkBlockEntity, LevelChunkWithLight, LightDat
 use mc_storage::{Decoded, Names, Palettes, RegionStorage, decode_chunk, encode_chunk};
 use mc_world::Chunk;
 use mc_worldgen::{FlatGenerator, FlatLayer};
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::blocks::BlockRules;
 use crate::tick::{Clock, WorldTime};
@@ -257,6 +257,7 @@ impl World {
         rules: &BlockRules,
         seed: Option<i64>,
         shapes: mc_tick::Shapes,
+        new: crate::generation::NewWorld,
     ) -> Result<Self> {
         let dim = overworld(data, synced)?;
         let biome_ids: HashMap<String, u32> = synced["minecraft:worldgen/biome"]
@@ -266,14 +267,14 @@ impl World {
         let mut generator = None;
         if !dir.join("level.dat").is_file() {
             let seed = seed.unwrap_or_else(|| crate::util::random_u64() as i64);
-            info!("creating a new world in {} (seed {seed})", dir.display());
+            tracing::debug!("creating a new world in {} (seed {seed})", dir.display());
             let g = crate::generation::overworld(data, seed, &biome_ids)?;
             let spawn = crate::generation::find_spawn(&g, &data.blocks);
-            crate::generation::create(dir, data, seed, spawn)?;
+            crate::generation::create(dir, data, seed, spawn, new)?;
             generator = Some((g, seed));
         } else if let Some(seed) = crate::generation::seed_of(dir) {
             generator = Some((crate::generation::overworld(data, seed, &biome_ids)?, seed));
-            info!("new chunks are generated from seed {seed}");
+            tracing::debug!("new chunks are generated from seed {seed}");
         }
         let generation = match generator {
             Some((generator, seed)) => {
@@ -318,7 +319,7 @@ impl World {
             || dir.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
-        info!("world {} from {}", name, regions.display());
+        tracing::debug!("world {} from {}", name, regions.display());
         Ok(Self {
             source: Source::Anvil(Box::new(Anvil {
                 storage: Mutex::new(RegionStorage::new(regions)),

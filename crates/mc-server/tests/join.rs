@@ -297,22 +297,20 @@ async fn ping_login_spawn_and_chat() {
     loop {
         let (_, body) = bot.recv_until("minecraft:system_chat").await;
         let (tag, _) = mc_nbt::read_network(&body).unwrap();
-        if tag == Tag::from("<Bot> hello world") {
+        // chat.type.text with the sender and the message.
+        let text = format!("{tag:?}");
+        if text.contains("chat.type.text") && text.contains("hello world") {
             break;
         }
     }
 
-    // --- the same name cannot log in twice
+    // --- logging in again kicks the old session (duplicate_login)
     let mut twin = Bot::connect(addr, ids.clone()).await;
     twin.login("Bot").await;
-    let (name, body) = twin.recv().await;
-    assert_eq!(name, "minecraft:login_disconnect");
-    assert!(
-        Reader::new(&body)
-            .string(32767)
-            .unwrap()
-            .contains("already connected")
-    );
+    let (_, body) = bot.recv_until("minecraft:disconnect").await;
+    let (tag, _) = mc_nbt::read_network(&body).unwrap();
+    assert!(format!("{tag:?}").contains("multiplayer.disconnect.duplicate_login"));
+    twin.recv_until("minecraft:login_compression").await;
 
     drop(bot);
     stop.send(()).unwrap();
@@ -2192,5 +2190,88 @@ async fn a_new_world_is_generated_served_and_saved() {
     let region = dir.join("dimensions/minecraft/overworld/region");
     let files = std::fs::read_dir(&region).unwrap().count();
     assert!(files > 0, "region files in {}", region.display());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn whitelist_and_bans_keep_players_out_as_vanilla() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("mc-rewrite-lists-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("banned-players.json"),
+        r#"[{"name": "Villain", "created": "2026-01-01 00:00:00 +0000", "source": "Server", "expires": "forever", "reason": "Griefing"}]"#,
+    )
+    .unwrap();
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.server_dir = Some(dir.clone());
+    config.white_list = true;
+    config.ops = vec!["Boss".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ids = server.context().ids.clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let running = tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let refused = |name: &'static str| {
+        let ids = ids.clone();
+        async move {
+            let mut bot = Bot::connect(addr, ids).await;
+            bot.login(name).await;
+            loop {
+                let (packet, body) = bot.recv().await;
+                match packet.as_str() {
+                    "minecraft:login_disconnect" => {
+                        return Some(Reader::new(&body).string(32767).unwrap());
+                    }
+                    "minecraft:login_compression" => {
+                        bot.compression = Some(Reader::new(&body).varint().unwrap() as usize);
+                    }
+                    "minecraft:login_finished" => return None,
+                    _ => {}
+                }
+            }
+        }
+    };
+    let stranger = refused("Stranger").await.expect("strangers are refused");
+    assert!(
+        stranger.contains("multiplayer.disconnect.not_whitelisted"),
+        "{stranger}"
+    );
+    let villain = refused("Villain")
+        .await
+        .expect("banned players are refused");
+    assert!(
+        villain.contains("multiplayer.disconnect.banned.reason") && villain.contains("Griefing"),
+        "{villain}"
+    );
+    assert!(
+        refused("Boss").await.is_none(),
+        "operators pass the whitelist"
+    );
+    // The files are there, in vanilla's format.
+    for f in [
+        "ops.json",
+        "whitelist.json",
+        "banned-players.json",
+        "banned-ips.json",
+        "usercache.json",
+    ] {
+        assert!(dir.join(f).is_file(), "{f}");
+    }
+    let ops: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("ops.json")).unwrap()).unwrap();
+    assert_eq!(ops[0]["name"], "Boss");
+    assert_eq!(ops[0]["level"], 4);
+    let _ = stop.send(());
+    let _ = running.await;
     let _ = std::fs::remove_dir_all(&dir);
 }

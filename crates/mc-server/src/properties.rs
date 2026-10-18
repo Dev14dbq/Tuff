@@ -185,7 +185,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mc-props-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("server.properties");
-        std::fs::write(&path, "#x\nmotd=Hello\\: world\nserver-port=25570\nlevel-type=minecraft\\:flat\n").unwrap();
+        std::fs::write(
+            &path,
+            "#x\nmotd=Hello\\: world\nserver-port=25570\nlevel-type=minecraft\\:flat\n",
+        )
+        .unwrap();
         let p = Properties::load(&path).unwrap();
         assert_eq!(p.get("motd"), "Hello: world");
         assert_eq!(p.int("server-port"), Some(25570));

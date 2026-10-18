@@ -14,7 +14,7 @@ use mc_protocol::packets::play::{ItemStack, PlayerInfoEntry, SetTime, TickingSta
 use mc_protocol::packets::{GameProfile, KnownPack};
 use mc_protocol::{Direction, PacketIds, State};
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::Config;
 use crate::auth::ServerKey;
@@ -191,7 +191,7 @@ pub enum Event {
     /// Disconnect a player with a reason.
     Kick {
         uuid: u128,
-        reason: String,
+        reason: Tag,
     },
     /// A player's arm swings (`times` in a row, as vanilla does on placing).
     Swing {
@@ -260,6 +260,10 @@ pub struct ServerContext {
     pub player_files: Option<crate::players::Store>,
     /// Game mode of players who never played here (level.dat `GameType`).
     pub default_game_mode: i32,
+    /// `ops.json`, `whitelist.json`, bans and the user cache.
+    pub lists: Mutex<crate::lists::Lists>,
+    /// Whether only listed players may join (`white-list`).
+    pub white_list: std::sync::atomic::AtomicBool,
     /// `minecraft:entity_type` ids of the entities we have.
     pub entity_types: EntityTypes,
     /// `minecraft:player` in `minecraft:entity_type`.
@@ -291,6 +295,10 @@ impl std::fmt::Debug for ServerContext {
 }
 
 impl ServerContext {
+    pub fn white_list(&self) -> bool {
+        self.white_list.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     pub fn new(config: Config, data: McData) -> Result<Self> {
         let mut ids = PacketIds::new();
         for packet in &data.packets {
@@ -357,13 +365,14 @@ impl ServerContext {
             Some(ids) => crate::furnaces::Fuels::load(&data, &items, ids),
             None => crate::furnaces::Fuels::default(),
         };
+        let warned_observed = std::cell::Cell::new(false);
         let observed = |file: &str| {
             let path = config.data_dir.join("observed").join(file);
             let table = std::fs::read_to_string(&path)
                 .ok()
                 .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
                 .and_then(|v| serde_json::from_value::<Vec<i32>>(v["states"].clone()).ok());
-            if table.is_none() {
+            if table.is_none() && !warned_observed.replace(true) {
                 warn!(
                     "no {} (cargo xtask observe): block facts are guessed",
                     path.display()
@@ -397,6 +406,11 @@ impl ServerContext {
                     &rules,
                     config.seed,
                     world_shapes,
+                    crate::generation::NewWorld {
+                        game_mode: config.new_world_game_mode,
+                        difficulty: config.new_world_difficulty,
+                        hardcore: false,
+                    },
                 )?
             }
             None => World::flat(&data, &synced_ids, &rules, light)?,
@@ -424,13 +438,21 @@ impl ServerContext {
                 .with_context(|| format!("{name} missing from the registries report"))
         };
         let player_entity_type = entity_type("minecraft:player")?;
-        info!(
+        tracing::debug!(
             "loaded {} packets, {} synchronized registries, tags for {} registries",
             ids.len(),
             registries.len(),
             tags.registries.len()
         );
 
+        let mut lists = match &config.server_dir {
+            Some(dir) => crate::lists::Lists::load(dir),
+            None => crate::lists::Lists::default(),
+        };
+        for name in &config.ops {
+            lists.add_op_name(name);
+        }
+        let white_list = config.white_list;
         Ok(Self {
             core_pack: KnownPack {
                 namespace: "minecraft".into(),
@@ -463,6 +485,8 @@ impl ServerContext {
             damage_types,
             player_files,
             default_game_mode,
+            lists: Mutex::new(lists),
+            white_list: std::sync::atomic::AtomicBool::new(white_list),
             entity_types: EntityTypes {
                 falling_block: entity_type("minecraft:falling_block")?,
                 item: entity_type("minecraft:item")?,

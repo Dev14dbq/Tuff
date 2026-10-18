@@ -50,23 +50,30 @@ cargo test --workspace
 
 ### Запуск сервера
 
+Сервер устроен как ванильный: его запускают в папке сервера (в репозитории это `run/`, она не
+попадает в git). При первом запуске там появляются `server.properties` со значениями ванили 26.3,
+`ops.json`, `whitelist.json`, `banned-players.json`, `banned-ips.json`, `usercache.json`,
+`logs/latest.log` и мир `world/`, сгенерированный из `level-seed`. Настройки берутся из
+`server.properties`, как у ванили.
+
 ```bash
-cargo run --release -p mc-server
+cargo build --release -p mc-server
+mkdir -p run && cd run && ../target/release/mc-server --op <твой ник>
 ```
 
-Сервер слушает `127.0.0.1:25565` в **online-режиме**, как ванильный: аккаунт проверяется через
-сервер сессий Mojang, соединение шифруется, скины работают. В клиенте Minecraft 26.3: «Сетевая
-игра» → «Прямое подключение» → `localhost`. Чтобы пустить других, добавь `--bind 0.0.0.0`. Мир
-плоский, режим творческий. Опции: `--help`, подробные логи: `RUST_LOG=debug`.
+Отличие от ванили одно: в созданном `server.properties` стоит `server-ip=127.0.0.1`, то есть
+сервер слушает только этот компьютер. Пустое значение — все адреса, как у ванили. Ванильные опции
+`--universe <папка>`, `--world <имя>`, `--port`, `--initSettings`, `--nogui` работают. Свои:
+`--op <ник>` добавляет оператора, `--seed`, `--offline`, `--data`, `--no-console`. Подробные
+логи: `RUST_LOG=debug`.
 
-`--world <папка>` раздаёт мир, сохранённый ванильным сервером 26.3, вместо плоского. Пока только
-для чтения, см. [docs/specs/world-26.3.md](docs/specs/world-26.3.md).
+`level-type=minecraft:flat` даёт плоский тестовый мир. Мир, сохранённый ванильным сервером 26.3,
+можно просто положить в папку сервера как `world/`.
 
-`--offline` отключает проверку аккаунтов и шифрование, тогда войти можно под любым именем. Это
-нужно для ботов и тестов:
+`--offline` (или `online-mode=false`) отключает проверку аккаунтов и шифрование, тогда войти
+можно под любым именем. Это нужно для ботов и тестов:
 
 ```bash
-cargo run --release -p mc-server -- --offline
 cargo xtask bots --count 100 --seconds 30   # нагрузочный тест
 cargo xtask probe --mover                   # сверка форматов, см. docs/specs/protocol-26.3.md
 cargo xtask registry-diff --a <ваниль> --b <наш>   # реестры в NBT против ванили

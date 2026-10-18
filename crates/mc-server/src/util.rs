@@ -82,3 +82,42 @@ mod tests {
         assert!(!valid_player_name("bad name"));
     }
 }
+
+/// Seconds since the Unix epoch.
+pub fn now_secs() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+/// `2026-10-19 02:00:58 +0300`, as the JSON lists write dates (local time).
+pub fn date_text(secs: i64) -> String {
+    match chrono::DateTime::from_timestamp(secs, 0) {
+        Some(t) => t
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S %z")
+            .to_string(),
+        None => String::new(),
+    }
+}
+
+/// A list date back to seconds.
+pub fn parse_date(text: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S %z")
+        .ok()
+        .map(|t| t.timestamp())
+}
+
+/// `Mon Oct 19 02:00:58 +03:00 2026`, as `server.properties` is stamped.
+pub fn now_text() -> String {
+    chrono::Local::now()
+        .format("%a %b %d %H:%M:%S %Z %Y")
+        .to_string()
+}
+
+/// `xxxxxxxx-xxxx-...` back to a number.
+pub fn parse_uuid(s: &str) -> Option<u128> {
+    let hex: String = s.chars().filter(|c| *c != '-').collect();
+    if hex.len() != 32 {
+        return None;
+    }
+    u128::from_str_radix(&hex, 16).ok()
+}

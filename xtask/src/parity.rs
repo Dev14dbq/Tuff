@@ -240,14 +240,20 @@ impl Server {
             .current_dir(root)
             .status()?;
         ensure!(status.success(), "building mc-server failed");
+        // A server folder with a flat world, as the vanilla side has.
+        let dir = root.join("cache/ours-parity");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(
+            dir.join("server.properties"),
+            format!(
+                "online-mode=false\nserver-ip=127.0.0.1\nserver-port={OURS_PORT}\n\
+                 level-type=minecraft\\:flat\nview-distance=6\nwhite-list=false\n\
+                 gamemode=creative\n"
+            ),
+        )?;
         let child = Command::new(root.join("target/release/mc-server"))
-            .args([
-                "--offline",
-                "--port",
-                &OURS_PORT.to_string(),
-                "--view-distance",
-                "6",
-            ])
+            .args(["--universe".as_ref(), dir.as_os_str()])
             .env("NO_COLOR", "1")
             .current_dir(root)
             .stdin(Stdio::piped())
@@ -255,7 +261,7 @@ impl Server {
             .stderr(Stdio::null())
             .spawn()
             .context("starting mc-server")?;
-        Self::started("ours", child, "server on", Duration::from_secs(60))
+        Self::started("ours", child, "Done (", Duration::from_secs(60))
     }
 
     fn started(

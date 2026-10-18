@@ -752,16 +752,17 @@ fn kick(ctx: &ServerContext, args: &[&str], out: &mut Output) -> Result<String> 
         return Err(usage("kick <player> [<reason>]"));
     };
     let (uuid, _) = find_player(ctx, who)?;
-    let reason = if reason.is_empty() {
-        "Kicked by an operator".to_owned()
+    let (reason, text) = if reason.is_empty() {
+        (
+            mc_protocol::text::translate("multiplayer.disconnect.kicked", Vec::new()),
+            "Kicked by an operator".to_owned(),
+        )
     } else {
-        reason.join(" ")
+        let r = reason.join(" ");
+        (mc_protocol::text::plain(&r), r)
     };
-    out.events.push(Event::Kick {
-        uuid,
-        reason: reason.clone(),
-    });
-    Ok(format!("Kicked {who}: {reason}"))
+    out.events.push(Event::Kick { uuid, reason });
+    Ok(format!("Kicked {who}: {text}"))
 }
 
 fn tag_f64(tag: Option<&mc_nbt::Tag>) -> Option<f64> {

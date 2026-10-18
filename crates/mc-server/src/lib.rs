@@ -17,9 +17,12 @@ mod generation;
 mod interact;
 mod items;
 mod level;
+mod lists;
+pub mod logs;
 mod loot;
 mod pipeline;
 mod players;
+pub mod properties;
 mod tick;
 mod util;
 mod vitals;
@@ -61,8 +64,16 @@ pub struct Config {
     pub autosave: std::time::Duration,
     /// Read commands from standard input.
     pub console: bool,
-    /// Players allowed to run commands.
+    /// Players allowed to run commands (added to `ops.json`).
     pub ops: Vec<String>,
+    /// The server's folder (`server.properties`, `ops.json`, the lists);
+    /// `None` keeps the lists in memory (tests).
+    pub server_dir: Option<PathBuf>,
+    /// Only listed players and operators may join.
+    pub white_list: bool,
+    /// Game mode (0–3) and difficulty (0–3) of a new world.
+    pub new_world_game_mode: i32,
+    pub new_world_difficulty: i32,
 }
 
 impl Config {
@@ -83,8 +94,19 @@ impl Config {
             autosave: std::time::Duration::from_secs(300),
             console: false,
             ops: Vec::new(),
+            server_dir: None,
+            white_list: false,
+            new_world_game_mode: 0,
+            new_world_difficulty: 2,
         }
     }
+}
+
+static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// When the server process started (for "Done (…s)!").
+pub fn started() -> std::time::Instant {
+    *STARTED.get_or_init(std::time::Instant::now)
 }
 
 /// Finds extracted data for the protocol we implement: `cache/mcdata/<version>`
@@ -151,16 +173,20 @@ impl Server {
 
     /// Accepts connections until `shutdown` completes.
     pub async fn run(self, shutdown: impl Future<Output = ()>) -> Result<()> {
+        info!("Starting Minecraft server on {}", self.local_addr());
+        if !self.ctx.config.online_mode {
+            tracing::warn!("**** SERVER IS RUNNING IN OFFLINE/INSECURE MODE!");
+            tracing::warn!("The server will make no attempt to authenticate usernames. Beware.");
+            tracing::warn!(
+                "While this makes the game possible to play without internet access, it also opens up the ability for hackers to connect with any username they choose."
+            );
+            tracing::warn!(
+                "To change this, set \"online-mode\" to \"true\" in the server.properties file."
+            );
+        }
         info!(
-            "Minecraft {} (protocol {}) server on {}, {} mode",
-            self.ctx.data.version.name,
-            mc_protocol::PROTOCOL_VERSION,
-            self.local_addr(),
-            if self.ctx.config.online_mode {
-                "online"
-            } else {
-                "offline"
-            }
+            "Done ({:.3}s)! For help, type \"help\"",
+            started().elapsed().as_secs_f64()
         );
         tokio::pin!(shutdown);
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -199,7 +225,7 @@ impl Server {
                 () = &mut shutdown => break,
             }
         }
-        info!("stopping");
+        info!("Stopping server");
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let ctx = self.ctx.clone();
         tokio::task::spawn_blocking(move || {
@@ -282,11 +308,12 @@ fn console(ctx: &Arc<ServerContext>) {
     }
 }
 
-/// Writes changed chunks and the time, and reports it.
+/// Writes changed chunks and the time.
 fn save(ctx: &ServerContext) {
     if !ctx.world.is_saved() {
         return;
     }
+    tracing::debug!("Saving players");
     let started = std::time::Instant::now();
     let time = ctx.time.lock().expect("time lock").clone();
     if let Err(err) = ctx.world.save_time(&time) {
@@ -302,9 +329,10 @@ fn save(ctx: &ServerContext) {
     for uuid in online {
         save_player(ctx, uuid);
     }
+    tracing::debug!("Saving worlds");
     let saved = ctx.world.save(&ctx.data.blocks);
     if saved.chunks > 0 || saved.failed > 0 {
-        info!(
+        tracing::debug!(
             "saved {} chunks in {} ms{}",
             saved.chunks,
             started.elapsed().as_millis(),

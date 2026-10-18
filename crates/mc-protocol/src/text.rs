@@ -13,3 +13,23 @@ pub fn colored(text: &str, color: &str) -> Tag {
     compound.insert("text", text).insert("color", color);
     Tag::Compound(compound)
 }
+
+/// A translatable message (`translate` key with `with` arguments), shown in
+/// the player's language.
+pub fn translate(key: &str, args: Vec<Tag>) -> Tag {
+    let mut compound = Compound::new();
+    compound.insert("translate", key);
+    if !args.is_empty() {
+        compound.insert("with", Tag::List(args));
+    }
+    Tag::Compound(compound)
+}
+
+/// The same with a color.
+pub fn translate_colored(key: &str, args: Vec<Tag>, color: &str) -> Tag {
+    let mut t = translate(key, args);
+    if let Tag::Compound(c) = &mut t {
+        c.insert("color", color);
+    }
+    t
+}

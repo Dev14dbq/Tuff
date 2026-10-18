@@ -141,9 +141,11 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         if now < next {
             std::thread::sleep(next - now);
         } else if now - next > MAX_LAG {
+            let behind = now - next;
             warn!(
-                "can't keep up: {} ms behind, skipping ahead",
-                (now - next).as_millis()
+                "Can't keep up! Is the server overloaded? Running {}ms or {} ticks behind",
+                behind.as_millis(),
+                (behind.as_secs_f64() * f64::from(control.rate)) as u64
             );
             next = now;
         }

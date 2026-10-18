@@ -171,7 +171,23 @@ pub fn find_spawn(generator: &NoiseGenerator, blocks: &Blocks) -> (i32, i32, i32
 }
 
 /// Writes a new world folder for `seed` with its spawn.
-pub fn create(dir: &Path, data: &McData, seed: i64, spawn: (i32, i32, i32)) -> Result<()> {
+/// How a new world starts (from `server.properties`).
+#[derive(Clone, Copy, Debug)]
+pub struct NewWorld {
+    pub game_mode: i32,
+    pub difficulty: i32,
+    pub hardcore: bool,
+}
+
+pub fn create(
+    dir: &Path,
+    data: &McData,
+    seed: i64,
+    spawn: (i32, i32, i32),
+    new: NewWorld,
+) -> Result<()> {
+    let difficulty_name =
+        ["peaceful", "easy", "normal", "hard"][new.difficulty.clamp(0, 3) as usize];
     std::fs::create_dir_all(dir.join("dimensions/minecraft/overworld/region"))?;
     std::fs::create_dir_all(dir.join("data/minecraft"))?;
     let version = data.version.world_version;
@@ -182,8 +198,8 @@ pub fn create(dir: &Path, data: &McData, seed: i64, spawn: (i32, i32, i32)) -> R
     spawn_tag.insert("pitch", Tag::Float(0.0));
     spawn_tag.insert("dimension", s("minecraft:overworld"));
     let mut difficulty = Compound::new();
-    difficulty.insert("difficulty", s("normal"));
-    difficulty.insert("hardcore", Tag::Byte(0));
+    difficulty.insert("difficulty", s(difficulty_name));
+    difficulty.insert("hardcore", Tag::Byte(i8::from(new.hardcore)));
     difficulty.insert("locked", Tag::Byte(0));
     let mut version_tag = Compound::new();
     version_tag.insert("Id", Tag::Int(version));
@@ -201,7 +217,7 @@ pub fn create(dir: &Path, data: &McData, seed: i64, spawn: (i32, i32, i32)) -> R
             .file_name()
             .map_or_else(|| "world".into(), |n| n.to_string_lossy().into_owned())),
     );
-    level.insert("GameType", Tag::Int(0));
+    level.insert("GameType", Tag::Int(new.game_mode));
     level.insert("Time", Tag::Long(0));
     level.insert("spawn", Tag::Compound(spawn_tag));
     level.insert("difficulty_settings", Tag::Compound(difficulty));
@@ -308,7 +324,7 @@ pub fn features(
         biomes,
         heights,
     );
-    tracing::info!(
+    tracing::debug!(
         "features loaded in {} ms; not generated yet: {}",
         started.elapsed().as_millis(),
         features
