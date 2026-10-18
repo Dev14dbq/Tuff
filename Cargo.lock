@@ -446,6 +446,7 @@ version = "0.0.0"
 dependencies = [
  "mc-data",
  "mc-world",
+ "serde_json",
 ]
 
 [[package]]
@@ -1183,6 +1184,7 @@ dependencies = [
  "mc-protocol",
  "mc-storage",
  "mc-world",
+ "mc-worldgen",
  "serde_json",
  "sha1_smol",
  "zip",
