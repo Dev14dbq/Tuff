@@ -926,7 +926,7 @@ impl crate::pipeline::Finished for Generated<'_> {
             unresolved: Default::default(),
         };
         let (status, chunk) = mc_storage::decode_with_status(&tag, self.world.min_y, self.world.height, &palettes).ok()?;
-        (status == "minecraft:features").then(|| *chunk)
+        (status == "minecraft:features").then_some(*chunk)
     }
 
     fn block(&self, p: mc_tick::BlockPos) -> Option<u32> {
