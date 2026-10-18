@@ -2139,6 +2139,53 @@ async fn a_new_world_is_generated_served_and_saved() {
         ctx.data.blocks.block_name(bottom),
         Some("minecraft:bedrock")
     );
+    // Features are there: something grows or lies on the ground around.
+    let blocks = &ctx.data.blocks;
+    let (cx, cz) = (below.x >> 4, below.z >> 4);
+    let mut decorated = 0;
+    for x in (cx - 1) * 16..(cx + 2) * 16 {
+        for z in (cz - 1) * 16..(cz + 2) * 16 {
+            for y in 40..140 {
+                let s = ctx
+                    .world
+                    .block(mc_protocol::Position::new(x, y, z), blocks)
+                    .unwrap();
+                let name = blocks.block_name(s).unwrap_or("");
+                if name.ends_with("_log")
+                    || name.ends_with("_leaves")
+                    || name.ends_with("_ore")
+                    || name.contains("grass")
+                    || name.contains("seagrass")
+                    || name.contains("kelp")
+                {
+                    decorated += 1;
+                }
+            }
+        }
+    }
+    assert!(decorated > 50, "only {decorated} decorated blocks");
+    // Light at rest across chunk edges: no air darker than a neighbour by
+    // more than one.
+    for x in cx * 16 - 1..=(cx + 1) * 16 {
+        for z in cz * 16 - 1..=(cz + 1) * 16 {
+            for y in 40..140 {
+                let p = mc_protocol::Position::new(x, y, z);
+                if !blocks.is_air(ctx.world.block(p, blocks).unwrap()) {
+                    continue;
+                }
+                let here = ctx.world.brightness(p);
+                for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let there = ctx
+                        .world
+                        .brightness(mc_protocol::Position::new(x + dx, y, z + dz));
+                    assert!(
+                        i32::from(here) >= i32::from(there) - 1,
+                        "dark spot at {x} {y} {z}: {here} next to {there}"
+                    );
+                }
+            }
+        }
+    }
     let _ = stop.send(());
     let _ = running.await;
     // The generated chunks are on disk now.

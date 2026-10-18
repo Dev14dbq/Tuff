@@ -355,11 +355,14 @@ mod tests {
     struct Test {
         blocks: HashMap<Pos, u32>,
         light: [HashMap<Pos, u8>; 2],
+        /// Loaded 16×16 chunks; all when empty.
+        loaded: Vec<(i32, i32)>,
     }
 
     impl LightWorld for Test {
         fn state(&self, p: Pos) -> Option<u32> {
-            ((0..48).contains(&p.0) && (0..48).contains(&p.2) && (0..32).contains(&p.1))
+            let loaded = self.loaded.is_empty() || self.loaded.contains(&(p.0 >> 4, p.2 >> 4));
+            (loaded && (0..48).contains(&p.0) && (0..48).contains(&p.2) && (0..32).contains(&p.1))
                 .then(|| self.blocks.get(&p).copied().unwrap_or(0))
         }
         fn light(&self, kind: Kind, p: Pos) -> u8 {
@@ -384,6 +387,7 @@ mod tests {
         let mut t = Test {
             blocks: HashMap::new(),
             light: [HashMap::new(), HashMap::new()],
+            loaded: Vec::new(),
         };
         for x in 0..48 {
             for z in 0..48 {
@@ -452,5 +456,143 @@ mod tests {
         block_changed(&mut t, &tables, (10, 5, 10));
         assert_eq!(t.light(Kind::Block, (13, 5, 10)), 12, "from the one left");
         assert_eq!(t.light(Kind::Block, (10, 5, 10)), 9);
+    }
+
+    /// Random changes, each followed by the incremental fix, end where
+    /// lighting from scratch does.
+    #[test]
+    fn incremental_matches_from_scratch() {
+        let tables = tables();
+        let mut seed: u64 = 0x1234_5678;
+        let mut next = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for round in 0..20 {
+            let mut t = Test {
+                blocks: HashMap::new(),
+                light: [HashMap::new(), HashMap::new()],
+                loaded: Vec::new(),
+            };
+            // Hilly stone with caves and some leaves (opacity 1).
+            for x in 0..24 {
+                for z in 0..24 {
+                    let h = 8 + ((x * 7 + z * 3) % 9) as i32;
+                    for y in 0..h {
+                        let b = if next(10) == 0 {
+                            0
+                        } else if next(15) == 0 {
+                            3
+                        } else {
+                            1
+                        };
+                        t.blocks.insert((x, y, z), b);
+                    }
+                }
+            }
+            light_region(&mut t, &tables, (0, 0), (24, 24), 0);
+            for _ in 0..60 {
+                let p = (next(24) as i32, next(24) as i32, next(24) as i32);
+                let b = [0, 1, 2, 3][next(4) as usize];
+                t.blocks.insert(p, b);
+                block_changed(&mut t, &tables, p);
+            }
+            let mut fresh = Test {
+                blocks: t.blocks.clone(),
+                light: [HashMap::new(), HashMap::new()],
+                loaded: Vec::new(),
+            };
+            light_region(&mut fresh, &tables, (0, 0), (24, 24), 0);
+            for x in 0..24 {
+                for z in 0..24 {
+                    for y in 0..32 {
+                        for kind in [Kind::Sky, Kind::Block] {
+                            let (a, b) = (t.light(kind, (x, y, z)), fresh.light(kind, (x, y, z)));
+                            assert_eq!(a, b, "round {round}: {kind:?} at {x} {y} {z}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Chunks lit one by one as they load, in any order, end where lighting
+    /// them all at once does.
+    #[test]
+    fn chunks_lit_in_turn_match_all_at_once() {
+        let tables = tables();
+        let mut seed: u64 = 0x9e37_79b9;
+        let mut next = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for round in 0..10 {
+            let mut blocks = HashMap::new();
+            for x in 0..48 {
+                for z in 0..48 {
+                    let h = 6 + ((x * 5 + z * 11) % 13) as i32;
+                    for y in 0..h {
+                        let b = if next(6) == 0 {
+                            0
+                        } else if next(20) == 0 {
+                            2
+                        } else if next(9) == 0 {
+                            3
+                        } else {
+                            1
+                        };
+                        blocks.insert((x, y, z), b);
+                    }
+                    // Overhangs.
+                    if next(5) == 0 {
+                        blocks.insert((x, h + 3, z), 1);
+                    }
+                }
+            }
+            let mut order: Vec<(i32, i32)> =
+                (0..3).flat_map(|x| (0..3).map(move |z| (x, z))).collect();
+            for i in (1..order.len()).rev() {
+                order.swap(i, next(i as u64 + 1) as usize);
+            }
+            let mut t = Test {
+                blocks: blocks.clone(),
+                light: [HashMap::new(), HashMap::new()],
+                loaded: Vec::new(),
+            };
+            t.loaded.push((99, 99));
+            for &(cx, cz) in &order {
+                t.loaded.push((cx, cz));
+                light_region(
+                    &mut t,
+                    &tables,
+                    (cx * 16, cz * 16),
+                    (cx * 16 + 16, cz * 16 + 16),
+                    0,
+                );
+            }
+            let mut fresh = Test {
+                blocks,
+                light: [HashMap::new(), HashMap::new()],
+                loaded: Vec::new(),
+            };
+            light_region(&mut fresh, &tables, (0, 0), (48, 48), 0);
+            for x in 0..48 {
+                for z in 0..48 {
+                    for y in 0..32 {
+                        for kind in [Kind::Sky, Kind::Block] {
+                            let (a, b) = (t.light(kind, (x, y, z)), fresh.light(kind, (x, y, z)));
+                            assert_eq!(
+                                a, b,
+                                "round {round} order {order:?}: {kind:?} at {x} {y} {z}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }

@@ -110,6 +110,56 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+    // Light at rest: an air block is never darker than a neighbour minus 1.
+    let mut bad = 0;
+    let mut border_bad = 0;
+    let mut checked = 0;
+    let inner = radius - 1;
+    for x in (ox - inner) * 16..(ox + inner + 1) * 16 {
+        for z in (oz - inner) * 16..(oz + inner + 1) * 16 {
+            for y in min_y + 1..top - 1 {
+                let p = Position { x, y, z };
+                let s = ctx.world.block(p, blocks).unwrap_or(0);
+                if !blocks.is_air(s) {
+                    continue;
+                }
+                checked += 1;
+                let here = ctx.world.brightness(p);
+                for (dx, dy, dz) in [
+                    (1, 0, 0),
+                    (-1, 0, 0),
+                    (0, 0, 1),
+                    (0, 0, -1),
+                    (0, 1, 0),
+                    (0, -1, 0),
+                ] {
+                    let n = Position {
+                        x: x + dx,
+                        y: y + dy,
+                        z: z + dz,
+                    };
+                    let there = ctx.world.brightness(n);
+                    if i32::from(here) < i32::from(there) - 1 {
+                        bad += 1;
+                        if x.rem_euclid(16) == 0
+                            || x.rem_euclid(16) == 15
+                            || z.rem_euclid(16) == 0
+                            || z.rem_euclid(16) == 15
+                        {
+                            border_bad += 1;
+                        }
+                        if bad <= 5 {
+                            println!(
+                                "dark spot at {x} {y} {z}: {here} next to {there} at {dx},{dy},{dz}"
+                            );
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    println!("light: {bad} dark air blocks of {checked} ({border_bad} at chunk edges)");
     let saved = ctx.world.save(blocks);
     println!("saved {} chunks", saved.chunks);
     let mut f = std::fs::File::create(out)?;

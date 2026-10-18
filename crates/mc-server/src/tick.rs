@@ -212,6 +212,10 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
 /// goes to everyone.
 fn run_scheduled_ticks(ctx: &ServerContext) {
     let now = lock(&ctx.time).age;
+    let relit = ctx.world.take_relit();
+    if !relit.is_empty() {
+        let _ = ctx.events.send(Event::LightChanged(relit));
+    }
     let due = {
         let mut ticks = lock(&ctx.ticks);
         // Flow new chunks pass on to chunks players already have.

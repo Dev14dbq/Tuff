@@ -54,6 +54,8 @@ pub struct World {
     light: mc_light::Tables,
     /// Fluid ticks generation left for chunks players already have.
     live_ticks: Mutex<Vec<(mc_tick::BlockPos, u32)>>,
+    /// Loaded chunks whose light a new neighbour changed.
+    relit: Mutex<Vec<(i32, i32)>>,
 }
 
 /// What one save did.
@@ -231,6 +233,7 @@ impl World {
             folder: None,
             light,
             live_ticks: Mutex::new(Vec::new()),
+            relit: Mutex::new(Vec::new()),
             dimension: dim.name,
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
@@ -334,6 +337,7 @@ impl World {
             folder: Some(dir.to_owned()),
             light,
             live_ticks: Mutex::new(Vec::new()),
+            relit: Mutex::new(Vec::new()),
             dimension: dim.name,
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
@@ -355,13 +359,38 @@ impl World {
         let (chunk, generated) = self.load(x, z, blocks);
         let mut chunks = self.chunks.lock().expect("chunks lock");
         // Someone else may have loaded it meanwhile; theirs wins.
-        let slot = chunks.entry((x, z)).or_insert(Slot {
+        let fresh = !chunks.contains_key(&(x, z));
+        chunks.entry((x, z)).or_insert(Slot {
             chunk,
             frame: None,
             // A generated chunk is saved like a changed one.
             dirty: generated,
             viewers: 0,
         });
+        if generated && fresh {
+            // Lit together with the chunks around it: light crosses the
+            // border both ways, and neighbours whose light changed are sent
+            // again.
+            let mut view = LightView {
+                chunks: &mut chunks,
+                min_y: self.min_y,
+                top: self.min_y + self.height as i32,
+                touched: Vec::new(),
+            };
+            mc_light::light_region(
+                &mut view,
+                &self.light,
+                (x * 16, z * 16),
+                (x * 16 + 16, z * 16 + 16),
+                self.min_y,
+            );
+            let relit: Vec<(i32, i32)> =
+                view.touched.into_iter().filter(|&c| c != (x, z)).collect();
+            if !relit.is_empty() {
+                self.relit.lock().expect("relit lock").extend(relit);
+            }
+        }
+        let slot = chunks.get_mut(&(x, z)).expect("inserted above");
         f(slot)
     }
 
@@ -398,13 +427,20 @@ impl World {
                 .extend(done.live_ticks);
         }
         let mut chunk = done.chunk;
-        light_alone(&mut chunk, &self.light);
         for (i, name) in HEIGHTMAPS.iter().enumerate() {
             let words =
                 chunk.heightmap(|s| g.counts.get(s as usize).is_some_and(|b| b & (1 << i) != 0));
             chunk.heightmaps.push(((*name).to_owned(), words));
         }
         chunk
+    }
+
+    /// Chunks whose light a new neighbour changed since the last call.
+    pub fn take_relit(&self) -> Vec<(i32, i32)> {
+        let mut list = std::mem::take(&mut *self.relit.lock().expect("relit lock"));
+        list.sort_unstable();
+        list.dedup();
+        list
     }
 
     /// Fluid ticks generation left for chunks players already have.
@@ -1054,6 +1090,35 @@ impl mc_light::LightWorld for LightView<'_> {
             mc_light::Kind::Sky => chunk.light[section].sky.is_none(),
             mc_light::Kind::Block => chunk.light[section].block.is_none(),
         };
+        if missing && kind == mc_light::Kind::Sky {
+            // Sections below without sky light read it through this one;
+            // they keep what they read now, so a later change here does
+            // not silently change them too.
+            let mut below = Vec::new();
+            let mut t = section;
+            while t > 0 {
+                t -= 1;
+                if chunk.light[t].sky.is_some() {
+                    break;
+                }
+                below.push(t);
+            }
+            let arrays: Vec<(usize, Vec<u8>)> = below
+                .into_iter()
+                .map(|t| {
+                    let a = (0..2048)
+                        .map(|i| {
+                            stored_level(chunk, kind, t, 2 * i)
+                                | (stored_level(chunk, kind, t, 2 * i + 1) << 4)
+                        })
+                        .collect();
+                    (t, a)
+                })
+                .collect();
+            for (t, a) in arrays {
+                chunk.light[t].sky = Some(a);
+            }
+        }
         if missing {
             let array = (0..2048)
                 .map(|i| {
