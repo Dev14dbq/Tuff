@@ -524,6 +524,31 @@ impl Template {
             .collect()
     }
 
+    /// Data markers (structure blocks in data mode): where they end up and
+    /// what they say.
+    pub fn data_markers(&self, facts: &Facts, offset: P, settings: &Settings) -> Vec<(P, String)> {
+        self.palette(settings, offset)
+            .iter()
+            .filter(|b| facts.is(b.state, "minecraft:structure_block"))
+            .filter_map(|b| {
+                let nbt = b.nbt.as_ref()?;
+                let mode = match nbt.get("mode") {
+                    Some(Tag::String(m)) => m.as_str(),
+                    _ => "",
+                };
+                if !mode.eq_ignore_ascii_case("data") {
+                    return None;
+                }
+                let Some(Tag::String(meta)) = nbt.get("metadata") else {
+                    return None;
+                };
+                let pos = transform(b.pos, settings.mirror, settings.rotation, settings.pivot)
+                    .add(offset);
+                Some((pos, meta.clone()))
+            })
+            .collect()
+    }
+
     /// Places the template with its corner at `offset`; `world_pivot` is
     /// what processors measure positions from.
     pub fn place(
@@ -762,6 +787,19 @@ fn parse_rule(v: &Value, facts: &Facts) -> Option<Rule> {
         output: crate::state::parse_state(&v["output_state"], facts)?,
         nbt,
     })
+}
+
+impl Rule {
+    /// Replaces what `input` matches with `output`, anywhere.
+    pub fn simple(input: RuleTest, output: u32) -> Self {
+        Self {
+            input,
+            location: RuleTest::Always,
+            position: PosTest::Always,
+            output,
+            nbt: NbtModifier::Keep,
+        }
+    }
 }
 
 impl Processor {

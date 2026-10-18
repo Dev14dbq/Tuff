@@ -4,8 +4,10 @@
 //! pieces), placing the part of each piece that lies in a chunk during
 //! decoration, and the terrain shaped around them (the beardifier).
 
+pub mod built;
 pub mod jigsaw;
 pub mod legacy;
+pub mod mineshaft;
 pub mod template;
 
 use std::collections::{HashMap, HashSet};
@@ -148,6 +150,8 @@ pub struct Structures {
     sets: Vec<Set>,
     /// Per step: the structures in it, in registry order.
     pub by_step: Vec<Vec<usize>>,
+    /// Biomes cold enough for snowy ruined portals.
+    pub cold_biomes: HashSet<u32>,
     /// Stronghold positions per set, worked out once.
     rings: Mutex<HashMap<String, Vec<(i32, i32)>>>,
 }
@@ -372,8 +376,14 @@ impl Structures {
                 placement,
             });
         }
+        let cold_biomes = read_dir_json(&worldgen.join("biome"))
+            .into_iter()
+            .filter(|(_, v)| v["temperature"].as_f64().unwrap_or(0.5) < 0.15)
+            .filter_map(|(id, _)| biome_ids.get(&id).copied())
+            .collect();
         Self {
             facts,
+            cold_biomes,
             template_root: data.join("structure"),
             templates: Templates::default(),
             pools,

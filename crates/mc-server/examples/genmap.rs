@@ -116,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
                             }
                             drawn = true;
                         }
-                        if y > 40 || name.ends_with("_ore") {
+                        if y > 40 || name.ends_with("_ore") || std::env::var_os("ALL_Y").is_some() {
                             *counts.entry(name.to_owned()).or_default() += 1;
                         }
                     }
