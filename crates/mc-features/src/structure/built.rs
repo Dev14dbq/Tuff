@@ -121,7 +121,7 @@ impl Frame<'_> {
         let min = region.heights().min_y;
         while p.y > min + 1 {
             let s = region.block(p);
-            if !(self.facts.is_air(s) || !self.facts.fluid(s).is_none()) {
+            if !self.facts.is_air(s) && self.facts.fluid(s).is_none() {
                 break;
             }
             region.set(p, state);
