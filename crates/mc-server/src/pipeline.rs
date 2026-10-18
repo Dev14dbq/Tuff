@@ -36,6 +36,8 @@ struct Proto {
     decorated: bool,
     /// A copy of a chunk that is already finished: read, never written.
     readonly: bool,
+    /// Changed since it was last saved (only decorated chunks are saved).
+    dirty: bool,
 }
 
 pub struct Pipeline {
@@ -87,6 +89,8 @@ pub trait Finished {
     fn is_finished(&self, x: i32, z: i32) -> bool;
     /// A block of a finished chunk that is loaded.
     fn block(&self, p: BlockPos) -> Option<u32>;
+    /// A chunk saved while still being generated (decorated).
+    fn stored_proto(&self, x: i32, z: i32) -> Option<Chunk>;
 }
 
 /// A finished chunk and the fluid ticks it leaves for chunks players have.
@@ -245,7 +249,72 @@ impl Pipeline {
             ticks: Vec::new(),
             decorated: false,
             readonly: false,
+            dirty: false,
         }
+    }
+
+    /// A chunk saved while still being generated: decorated already.
+    fn stored(&self, mut chunk: Chunk) -> Proto {
+        let facts = self.facts();
+        let block_entities = std::mem::take(&mut chunk.block_entities)
+            .into_iter()
+            .map(|be| {
+                let mut nbt = be.data;
+                nbt.insert("id", mc_nbt::Tag::String(be.id));
+                (P::new(be.x, be.y, be.z), nbt)
+            })
+            .collect();
+        let mut p = Proto {
+            chunk,
+            heights: vec![[self.heights.min_y; 256]; Heightmap::ALL.len()],
+            final_primed: true,
+            block_entities,
+            ticks: Vec::new(),
+            decorated: true,
+            readonly: false,
+            dirty: false,
+        };
+        for (m, map) in Heightmap::ALL.iter().enumerate() {
+            for lz in 0..16 {
+                for lx in 0..16 {
+                    p.heights[m][lz * 16 + lx] = p.scan(facts, *map, lx, lz);
+                }
+            }
+        }
+        p
+    }
+
+    /// Chunks decorated but not finished that changed since the last call,
+    /// to be saved as `minecraft:features` (so a restart loses nothing).
+    pub fn unsaved(&self) -> Vec<Chunk> {
+        let mut protos = self.protos.lock().expect("protos lock");
+        protos
+            .values_mut()
+            .filter(|p| p.decorated && !p.readonly && p.dirty)
+            .map(|p| {
+                p.dirty = false;
+                let mut c = p.chunk.clone();
+                c.block_entities = p
+                    .block_entities
+                    .iter()
+                    .filter_map(|(pos, nbt)| {
+                        let mut data = nbt.clone();
+                        let id = match data.remove("id") {
+                            Some(mc_nbt::Tag::String(id)) => id,
+                            _ => return None,
+                        };
+                        Some(BlockEntity {
+                            x: pos.x,
+                            y: pos.y,
+                            z: pos.z,
+                            id,
+                            data,
+                        })
+                    })
+                    .collect();
+                c
+            })
+            .collect()
     }
 
     /// Generates chunk `x, z` with everything around it it needs.
@@ -261,6 +330,20 @@ impl Pipeline {
             .flat_map(|dz| (-2..=2).map(move |dx| (x + dx, z + dz)))
             .filter(|p| !protos.contains_key(p))
             .collect();
+        // Chunks saved half way come back as they were.
+        let mut missing = missing;
+        missing.retain(|&(cx, cz)| {
+            if is_final(cx, cz, &finished) {
+                return true;
+            }
+            match world.stored_proto(cx, cz) {
+                Some(chunk) => {
+                    protos.insert((cx, cz), self.stored(chunk));
+                    false
+                }
+                None => true,
+            }
+        });
         let made = self.terrain_parallel(&missing);
         for (pos, mut proto) in made {
             proto.readonly = is_final(pos.0, pos.1, &finished);
@@ -293,6 +376,7 @@ impl Pipeline {
                     .decorate(&mut region, pos.0, pos.1, &biomes, &near);
                 if let Some(p) = protos.get_mut(&pos) {
                     p.decorated = true;
+                    p.dirty = true;
                 }
             }
         }
@@ -434,6 +518,7 @@ impl Proto {
         if old == state {
             return old;
         }
+        self.dirty = true;
         if facts.block(old) != facts.block(state) {
             self.block_entities.remove(&p);
         }

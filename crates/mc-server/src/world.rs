@@ -407,7 +407,7 @@ impl World {
             Source::Anvil(anvil) => match anvil.load(x, z, blocks, self.min_y, self.height) {
                 Ok(Some(chunk)) => (Some(chunk), false),
                 Ok(None) => match &anvil.generation {
-                    Some(g) => (Some(self.generate(g, x, z, anvil)), true),
+                    Some(g) => (Some(self.generate(g, x, z, anvil, blocks)), true),
                     None => (None, false),
                 },
                 Err(err) => {
@@ -419,8 +419,12 @@ impl World {
     }
 
     /// A new chunk from the generator, lit, with heightmaps.
-    fn generate(&self, g: &Generation, x: i32, z: i32, anvil: &Anvil) -> Box<Chunk> {
-        let view = Generated { world: self, anvil };
+    fn generate(&self, g: &Generation, x: i32, z: i32, anvil: &Anvil, blocks: &Blocks) -> Box<Chunk> {
+        let view = Generated {
+            world: self,
+            anvil,
+            blocks,
+        };
         let done = g.pipeline.finish(x, z, &view);
         if !done.live_ticks.is_empty() {
             self.live_ticks
@@ -660,7 +664,28 @@ impl World {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as u32);
         let mut saved = Saved::default();
+        // Chunks still being generated go out as `minecraft:features`.
+        let protos = anvil
+            .generation
+            .as_ref()
+            .map(|g| g.pipeline.unsaved())
+            .unwrap_or_default();
         let mut storage = anvil.storage.lock().expect("region storage");
+        for chunk in protos {
+            let result = (|| -> Result<()> {
+                let Tag::Compound(mut root) = encode_chunk(&chunk, None, &names, true)? else {
+                    bail!("encoded chunk is not a compound");
+                };
+                root.insert("Status", Tag::String("minecraft:features".into()));
+                let mut bytes = Vec::new();
+                mc_nbt::write_named("", &Tag::Compound(root), &mut bytes)?;
+                storage.write_chunk(chunk.x, chunk.z, &bytes, now)?;
+                Ok(())
+            })();
+            if let Err(err) = result {
+                warn!("saving chunk {},{} (still generating): {err:#}", chunk.x, chunk.z);
+            }
+        }
         for chunk in dirty {
             let result = (|| -> Result<()> {
                 let stored = storage.read_chunk(chunk.x, chunk.z)?;
@@ -878,6 +903,7 @@ impl World {
 struct Generated<'a> {
     world: &'a World,
     anvil: &'a Anvil,
+    blocks: &'a Blocks,
 }
 
 impl crate::pipeline::Finished for Generated<'_> {
@@ -886,6 +912,21 @@ impl crate::pipeline::Finished for Generated<'_> {
             return slot.chunk.is_some();
         }
         self.anvil.has_full(x, z)
+    }
+
+    fn stored_proto(&self, x: i32, z: i32) -> Option<Chunk> {
+        let raw = self.anvil.storage.lock().expect("region storage").read_raw(x, z).ok()??;
+        let tag = raw.parse().ok()?;
+        let biome = |name: &str| self.anvil.biome_ids.get(name).copied();
+        let palettes = Palettes {
+            blocks: self.blocks,
+            biome: &biome,
+            air: self.anvil.air,
+            fallback_biome: self.anvil.fallback_biome,
+            unresolved: Default::default(),
+        };
+        let (status, chunk) = mc_storage::decode_with_status(&tag, self.world.min_y, self.world.height, &palettes).ok()?;
+        (status == "minecraft:features").then(|| *chunk)
     }
 
     fn block(&self, p: mc_tick::BlockPos) -> Option<u32> {

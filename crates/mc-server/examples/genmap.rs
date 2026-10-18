@@ -116,6 +116,12 @@ async fn main() -> anyhow::Result<()> {
                             }
                             drawn = true;
                         }
+                        if name.ends_with("_leaves")
+                            && blocks.property(s, "distance") == Some("7")
+                            && blocks.property(s, "persistent") == Some("false")
+                        {
+                            *counts.entry("! loose leaves".to_owned()).or_default() += 1;
+                        }
                         if y > 40 || name.ends_with("_ore") || std::env::var_os("ALL_Y").is_some() {
                             *counts.entry(name.to_owned()).or_default() += 1;
                         }
@@ -183,6 +189,7 @@ async fn main() -> anyhow::Result<()> {
         "{chunks} chunks in {:.1} s",
         started.elapsed().as_secs_f32()
     );
+    println!("loose leaves: {}", counts.get("! loose leaves").copied().unwrap_or(0));
     let mut list: Vec<_> = counts.into_iter().collect();
     list.sort_by(|a, b| b.1.cmp(&a.1));
     for (n, c) in list.iter().take(70) {

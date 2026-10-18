@@ -97,6 +97,33 @@ pub fn decode_chunk(
     if status != "minecraft:full" {
         return Ok(Decoded::NotFull(status.to_owned()));
     }
+    decode_any(root, min_y, height, palettes).map(Decoded::Chunk)
+}
+
+/// The chunk's status (`minecraft:full` when there is none) and its blocks
+/// whatever the status (a chunk still being generated has its sections too).
+pub fn decode_with_status(
+    root: &Tag,
+    min_y: i32,
+    height: u32,
+    palettes: &Palettes,
+) -> Result<(String, Box<Chunk>), ChunkError> {
+    let Tag::Compound(root) = root else {
+        return Err(bad("root is not a compound"));
+    };
+    let status = match get(root, "Status").or_else(|| get(root, "status")) {
+        Some(Tag::String(s)) => s.clone(),
+        _ => "minecraft:full".to_owned(),
+    };
+    Ok((status, decode_any(root, min_y, height, palettes)?))
+}
+
+fn decode_any(
+    root: &Compound,
+    min_y: i32,
+    height: u32,
+    palettes: &Palettes,
+) -> Result<Box<Chunk>, ChunkError> {
     let (x, z) = (int(root, "xPos")?, int(root, "zPos")?);
     let mut chunk = Chunk::new(x, z, min_y, height, palettes.air, palettes.fallback_biome);
     let section_count = chunk.sections.len();
@@ -160,7 +187,7 @@ pub fn decode_chunk(
             });
         }
     }
-    Ok(Decoded::Chunk(Box::new(chunk)))
+    Ok(Box::new(chunk))
 }
 
 fn light_array(section: &Compound, key: &str) -> Result<Option<Vec<u8>>, ChunkError> {
@@ -354,6 +381,8 @@ pub fn encode_chunk(
             root
         }
     };
+    // A finished chunk (one stored while still generating is finished now).
+    root.insert("Status", Tag::String("minecraft:full".into()));
     let min_section = chunk.min_y.div_euclid(16);
     root.insert("xPos", Tag::Int(chunk.x));
     root.insert("zPos", Tag::Int(chunk.z));
