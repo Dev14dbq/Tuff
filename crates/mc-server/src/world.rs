@@ -71,10 +71,26 @@ enum Source {
 #[derive(Debug)]
 struct Anvil {
     storage: Mutex<RegionStorage>,
+    /// Makes the chunks the folder does not have.
+    generation: Option<Generation>,
     biome_ids: HashMap<String, u32>,
     fallback_biome: u32,
     air: u32,
     unresolved_reported: AtomicU32,
+}
+
+/// The world's noise generator, with what turning its output into chunks
+/// needs.
+struct Generation {
+    generator: mc_worldgen::generator::NoiseGenerator,
+    /// Per state: which heightmaps count it (a bit per [`HEIGHTMAPS`] entry).
+    counts: Vec<u8>,
+}
+
+impl std::fmt::Debug for Generation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Generation").finish_non_exhaustive()
+    }
 }
 
 /// A chunk in memory.
@@ -226,13 +242,47 @@ impl World {
     }
 
     /// A world folder saved by vanilla 26.3 (`level.dat`, region files).
+    /// Chunks it does not have are generated from its seed. A folder without
+    /// `level.dat` becomes a new world (`seed`, or a random one).
     pub fn open(
         dir: &Path,
         data: &McData,
         synced: &SyncedIds,
         light: mc_light::Tables,
+        rules: &BlockRules,
+        seed: Option<i64>,
     ) -> Result<Self> {
         let dim = overworld(data, synced)?;
+        let biome_ids: HashMap<String, u32> = synced["minecraft:worldgen/biome"]
+            .iter()
+            .map(|(k, &v)| (k.clone(), v as u32))
+            .collect();
+        let mut generator = None;
+        if !dir.join("level.dat").is_file() {
+            let seed = seed.unwrap_or_else(|| crate::util::random_u64() as i64);
+            info!("creating a new world in {} (seed {seed})", dir.display());
+            let g = crate::generation::overworld(data, seed, &biome_ids)?;
+            let spawn = crate::generation::find_spawn(&g, &data.blocks);
+            crate::generation::create(dir, data, seed, spawn)?;
+            generator = Some(g);
+        } else if let Some(seed) = crate::generation::seed_of(dir) {
+            generator = Some(crate::generation::overworld(data, seed, &biome_ids)?);
+            info!("new chunks are generated from seed {seed}");
+        }
+        let generation = generator.map(|generator| Generation {
+            generator,
+            counts: (0..data.blocks.state_count())
+                .map(|s| {
+                    HEIGHTMAPS.iter().enumerate().fold(0u8, |bits, (i, name)| {
+                        if heightmap_counts(name, s, &data.blocks, rules) {
+                            bits | (1 << i)
+                        } else {
+                            bits
+                        }
+                    })
+                })
+                .collect(),
+        });
         // 26.x keeps dimensions under dimensions/<namespace>/<name>/.
         let regions = [
             dir.join("dimensions/minecraft/overworld/region"),
@@ -255,6 +305,7 @@ impl World {
         Ok(Self {
             source: Source::Anvil(Box::new(Anvil {
                 storage: Mutex::new(RegionStorage::new(regions)),
+                generation,
                 biome_ids: biomes.iter().map(|(k, &v)| (k.clone(), v as u32)).collect(),
                 fallback_biome,
                 air,
@@ -286,33 +337,65 @@ impl World {
         if let Some(slot) = self.chunks.lock().expect("chunks lock").get_mut(&(x, z)) {
             return f(slot);
         }
-        let chunk = self.load(x, z, blocks);
+        let (chunk, generated) = self.load(x, z, blocks);
         let mut chunks = self.chunks.lock().expect("chunks lock");
         // Someone else may have loaded it meanwhile; theirs wins.
         let slot = chunks.entry((x, z)).or_insert(Slot {
             chunk,
             frame: None,
-            dirty: false,
+            // A generated chunk is saved like a changed one.
+            dirty: generated,
             viewers: 0,
         });
         f(slot)
     }
 
-    fn load(&self, x: i32, z: i32, blocks: &Blocks) -> Option<Box<Chunk>> {
+    /// The chunk, and whether it was generated just now.
+    fn load(&self, x: i32, z: i32, blocks: &Blocks) -> (Option<Box<Chunk>>, bool) {
         match &self.source {
             Source::Flat(template) => {
                 let mut chunk = template.as_ref().clone();
                 (chunk.x, chunk.z) = (x, z);
-                Some(Box::new(chunk))
+                (Some(Box::new(chunk)), false)
             }
             Source::Anvil(anvil) => match anvil.load(x, z, blocks, self.min_y, self.height) {
-                Ok(chunk) => chunk,
+                Ok(Some(chunk)) => (Some(chunk), false),
+                Ok(None) => match &anvil.generation {
+                    Some(g) => (Some(self.generate(g, x, z, anvil)), true),
+                    None => (None, false),
+                },
                 Err(err) => {
                     warn!("chunk {x},{z}: {err:#}; sending it empty");
-                    None
+                    (None, false)
                 }
             },
         }
+    }
+
+    /// A new chunk from the noise generator, lit, with heightmaps.
+    fn generate(&self, g: &Generation, x: i32, z: i32, anvil: &Anvil) -> Box<Chunk> {
+        let made = g.generator.generate(x, z);
+        let mut chunk = Chunk::new(
+            x,
+            z,
+            self.min_y,
+            self.height,
+            anvil.air,
+            anvil.fallback_biome,
+        );
+        for (i, section) in chunk.sections.iter_mut().enumerate() {
+            *section = mc_world::Section::from_parts(
+                made.blocks[i * 4096..(i + 1) * 4096].to_vec(),
+                made.biomes[i * 64..(i + 1) * 64].to_vec(),
+            );
+        }
+        light_alone(&mut chunk, &self.light);
+        for (i, name) in HEIGHTMAPS.iter().enumerate() {
+            let words =
+                chunk.heightmap(|s| g.counts.get(s as usize).is_some_and(|b| b & (1 << i) != 0));
+            chunk.heightmaps.push(((*name).to_owned(), words));
+        }
+        Box::new(chunk)
     }
 
     /// The framed Chunk Data packet for a player who now has the chunk (pair
@@ -980,6 +1063,14 @@ const CLOCKS_FILE: &str = "data/minecraft/world_clocks.dat";
 const GAME_RULES_FILE: &str = "data/minecraft/game_rules.dat";
 
 /// A gzip-compressed NBT file (level.dat, data/*.dat).
+pub(crate) fn read_nbt_gz(path: &Path) -> Result<mc_nbt::Compound> {
+    read_gz(path)
+}
+
+pub(crate) fn write_nbt_gz(path: &Path, root: &mc_nbt::Compound) -> Result<()> {
+    write_gz(path, root)
+}
+
 fn read_gz(path: &Path) -> Result<mc_nbt::Compound> {
     let raw = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let mut bytes = Vec::new();

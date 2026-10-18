@@ -378,7 +378,7 @@ impl ServerContext {
         .with_support(observed("support.json"))
         .with_push(observed("push.json"));
         let world = match &config.world {
-            Some(dir) => World::open(dir, &data, &synced_ids, light)?,
+            Some(dir) => World::open(dir, &data, &synced_ids, light, &rules, config.seed)?,
             None => World::flat(&data, &synced_ids, &rules, light)?,
         };
         let time = world.load_time(&synced_ids)?;

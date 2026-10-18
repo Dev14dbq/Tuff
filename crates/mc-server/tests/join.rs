@@ -2083,3 +2083,58 @@ async fn two_chests_open_as_a_large_chest() {
     assert_eq!(seen[27], (7, emerald));
     let _ = stop.send(());
 }
+
+#[tokio::test]
+async fn a_new_world_is_generated_served_and_saved() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("mc-rewrite-new-world-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut config = Config::new(data_dir.clone());
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.world = Some(dir.clone());
+    config.seed = Some(12345);
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    assert!(dir.join("level.dat").is_file(), "the new world is written");
+    assert!(dir.join("data/minecraft/world_gen_settings.dat").is_file());
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let running = tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut player, spawn) = join_offline(addr, ctx.ids.clone(), "Explorer").await;
+    // Standing on land above the sea.
+    let below = mc_protocol::Position::new(
+        spawn.0.floor() as i32,
+        spawn.1.floor() as i32 - 1,
+        spawn.2.floor() as i32,
+    );
+    let ground = ctx.world.block(below, &ctx.data.blocks).unwrap();
+    assert!(!ctx.data.blocks.is_air(ground) && !ctx.data.blocks.is_fluid(ground));
+    assert!(spawn.1 >= 64.0, "spawn {spawn:?}");
+    let _ = &mut player;
+    // Bedrock at the bottom, deepslate deep down.
+    let bottom = ctx
+        .world
+        .block(
+            mc_protocol::Position::new(below.x, -64, below.z),
+            &ctx.data.blocks,
+        )
+        .unwrap();
+    assert_eq!(
+        ctx.data.blocks.block_name(bottom),
+        Some("minecraft:bedrock")
+    );
+    let _ = stop.send(());
+    let _ = running.await;
+    // The generated chunks are on disk now.
+    let region = dir.join("dimensions/minecraft/overworld/region");
+    let files = std::fs::read_dir(&region).unwrap().count();
+    assert!(files > 0, "region files in {}", region.display());
+    let _ = std::fs::remove_dir_all(&dir);
+}

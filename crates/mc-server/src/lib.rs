@@ -13,6 +13,7 @@ mod containers;
 mod context;
 mod crafting;
 mod furnaces;
+mod generation;
 mod interact;
 mod items;
 mod level;
@@ -51,7 +52,10 @@ pub struct Config {
     /// Base URL of the session server (Mojang's by default).
     pub session_server: String,
     /// A world folder saved by vanilla 26.3; `None` for a superflat test world.
+    /// A folder without `level.dat` becomes a new generated world.
     pub world: Option<PathBuf>,
+    /// Seed for a new world (random if `None`).
+    pub seed: Option<i64>,
     /// How often changed chunks are written (vanilla: every 5 minutes).
     pub autosave: std::time::Duration,
     /// Read commands from standard input.
@@ -74,6 +78,7 @@ impl Config {
             online_mode: true,
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
             world: None,
+            seed: None,
             autosave: std::time::Duration::from_secs(300),
             console: false,
             ops: Vec::new(),

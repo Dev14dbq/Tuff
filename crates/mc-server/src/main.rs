@@ -14,7 +14,9 @@ Usage: mc-server [options]
 Options:
   --data <dir>           extracted game data (default: cache/mcdata/<version> found upwards)
   --world <dir>          world folder saved by vanilla 26.3 (default: a superflat test world);
-                         changes are saved there every --autosave seconds and on Ctrl-C
+                         changes are saved there every --autosave seconds and on Ctrl-C;
+                         a folder without level.dat becomes a new generated world
+  --seed <seed>          seed of a new world (a number or text; random if left out)
   --autosave <seconds>   how often changed chunks are written (default 300)
   --bind <ip>            address to listen on (default 127.0.0.1)
   --port <port>          port (default 25565)
@@ -51,6 +53,7 @@ async fn main() -> ExitCode {
 async fn run() -> Result<()> {
     let mut data_dir: Option<PathBuf> = None;
     let mut world: Option<PathBuf> = None;
+    let mut seed: Option<i64> = None;
     let mut overrides: Vec<(String, String)> = Vec::new();
     let mut no_compression = false;
     let mut offline = false;
@@ -69,6 +72,17 @@ async fn run() -> Result<()> {
             "--op" => ops.push(args.next().context("--op needs a name")?),
             "--data" => data_dir = Some(args.next().context("--data needs a value")?.into()),
             "--world" => world = Some(args.next().context("--world needs a value")?.into()),
+            "--seed" => {
+                let text = args.next().context("--seed needs a value")?;
+                // Numbers as they are; anything else hashed like vanilla's
+                // seed field (Java String.hashCode).
+                seed = Some(text.parse::<i64>().unwrap_or_else(|_| {
+                    i64::from(
+                        text.encode_utf16()
+                            .fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32)),
+                    )
+                }));
+            }
             "--bind" | "--port" | "--view-distance" | "--max-players" | "--motd" | "--autosave" => {
                 let value = args
                     .next()
@@ -111,6 +125,7 @@ async fn run() -> Result<()> {
     }
     config.online_mode = !offline;
     config.world = world;
+    config.seed = seed;
     config.console = console;
     config.ops = ops;
 

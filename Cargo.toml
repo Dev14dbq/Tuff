@@ -38,3 +38,14 @@ debug = true
 # RSA key generation in debug builds (tests) is slow without optimised bignums.
 [profile.dev.package.num-bigint-dig]
 opt-level = 3
+
+# World generation and lighting are too slow unoptimised for tests and
+# local runs.
+[profile.dev.package.mc-worldgen]
+opt-level = 3
+
+[profile.dev.package.mc-light]
+opt-level = 3
+
+[profile.dev.package.mc-world]
+opt-level = 3
