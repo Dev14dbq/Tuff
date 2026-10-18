@@ -34,6 +34,8 @@ pub struct OnlinePlayer {
     pub pose: Option<Pose>,
     /// What others see in their main hand.
     pub main_hand: Option<ItemStack>,
+    /// Flying (creative players who double-jumped, and spectators).
+    pub flying: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

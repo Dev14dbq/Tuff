@@ -24,6 +24,8 @@ use crate::util::uuid_string;
 pub struct Saved {
     pub pose: Pose,
     pub game_mode: i32,
+    /// `abilities.flying`.
+    pub flying: bool,
     pub hands: Hands,
     pub vitals: crate::vitals::Vitals,
 }
@@ -134,6 +136,10 @@ impl Store {
             Some(Tag::Int(m)) => *m,
             _ => 0,
         };
+        let flying = match root.get("abilities") {
+            Some(Tag::Compound(a)) => matches!(a.get("flying"), Some(Tag::Byte(1))),
+            _ => false,
+        };
         let mut hands = Hands::default();
         if let Some(Tag::Int(selected)) = root.get("SelectedItemSlot") {
             hands.selected = (*selected).clamp(0, 8) as usize;
@@ -184,6 +190,7 @@ impl Store {
         Ok(Some(Saved {
             pose,
             game_mode,
+            flying,
             hands,
             vitals,
         }))
@@ -226,6 +233,26 @@ impl Store {
         );
         root.insert("OnGround", Tag::Byte(i8::from(p.on_ground)));
         root.insert("playerGameType", Tag::Int(saved.game_mode));
+        // What the game mode allows, and whether the player was flying.
+        let mut abilities = match root.get("abilities") {
+            Some(Tag::Compound(a)) => a.clone(),
+            _ => {
+                let mut a = Compound::new();
+                a.insert("flySpeed", Tag::Float(0.05));
+                a.insert("walkSpeed", Tag::Float(0.1));
+                a
+            }
+        };
+        let (creative, spectator) = (saved.game_mode == 1, saved.game_mode == 3);
+        abilities.insert("flying", Tag::Byte(i8::from(saved.flying)));
+        abilities.insert("instabuild", Tag::Byte(i8::from(creative)));
+        abilities.insert("invulnerable", Tag::Byte(i8::from(creative || spectator)));
+        abilities.insert(
+            "mayBuild",
+            Tag::Byte(i8::from(saved.game_mode != 2 && !spectator)),
+        );
+        abilities.insert("mayfly", Tag::Byte(i8::from(creative || spectator)));
+        root.insert("abilities", Tag::Compound(abilities));
         root.insert("Health", Tag::Float(saved.vitals.health));
         root.insert("foodLevel", Tag::Int(saved.vitals.food));
         root.insert("foodSaturationLevel", Tag::Float(saved.vitals.saturation));

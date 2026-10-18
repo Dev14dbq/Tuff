@@ -243,6 +243,7 @@ pub(crate) fn save_player(ctx: &ServerContext, uuid: u128) {
     let saved = players::Saved {
         pose,
         game_mode: player.game_mode,
+        flying: player.flying,
         hands,
         vitals,
     };

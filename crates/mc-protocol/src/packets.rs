@@ -591,6 +591,10 @@ pub mod play {
         PlayerInput {
             flags: u8,
         },
+        /// The player started (0x02) or stopped flying.
+        PlayerAbilities {
+            flags: u8,
+        },
         Other(String),
     }
 
@@ -784,6 +788,7 @@ pub mod play {
                     action: r.varint()?,
                 },
                 "minecraft:player_input" => Serverbound::PlayerInput { flags: r.u8()? },
+                "minecraft:player_abilities" => Serverbound::PlayerAbilities { flags: r.u8()? },
                 other => Serverbound::Other(other.to_owned()),
             })
         }

@@ -207,6 +207,7 @@ async fn login(
         skin_parts: 0,
         pose: None,
         main_hand: None,
+        flying: saved.as_ref().is_some_and(|s| s.flying),
     };
     let uuid = player.profile.uuid;
     // The lock guard must not live across an await.
@@ -425,7 +426,8 @@ async fn play(
         online_mode: ctx.config.online_mode,
         enforces_secure_chat: false,
     })?;
-    writer.queue(&abilities(me.game_mode))?;
+    let mut flying = me.flying || me.game_mode == 3;
+    writer.queue(&abilities(me.game_mode, flying))?;
     let mut awaiting_teleport = Some(1);
     let mut next_teleport = 1;
     writer.queue(&play::PlayerPosition {
@@ -680,7 +682,9 @@ async fn play(
                                 sea_level: world.sea_level,
                                 data_kept: 0,
                             })?;
-                            writer.queue(&abilities(game_mode))?;
+                            flying = game_mode == 3;
+                            update_player(&ctx, uuid, |p| p.flying = flying);
+                            writer.queue(&abilities(game_mode, flying))?;
                             writer.queue(&health)?;
                             let (sx, sy, sz) = world.spawn;
                             pose = Pose { x: sx, y: sy, z: sz, yaw: world.spawn_yaw, pitch: 0.0, on_ground: true };
@@ -718,6 +722,10 @@ async fn play(
                         }
                     }
                     play::Serverbound::PlayerInput { flags } => sneaking = flags & 0x20 != 0,
+                    play::Serverbound::PlayerAbilities { flags } if matches!(game_mode, 1 | 3) => {
+                        flying = flags & play::abilities::FLYING != 0 || game_mode == 3;
+                        update_player(&ctx, uuid, |p| p.flying = flying);
+                    }
                     play::Serverbound::Attack { entity_id: target } if game_mode != 3 => {
                         let victim = ctx.players.lock().expect("players lock").values()
                             .find(|p| p.entity_id == target)
@@ -865,7 +873,15 @@ async fn play(
                                 event: play::game_event::CHANGE_GAME_MODE,
                                 value: mode as f32,
                             })?;
-                            writer.queue(&abilities(mode))?;
+                            // Creative keeps flying, spectators always fly,
+                            // the other modes land.
+                            flying = match mode {
+                                1 => flying,
+                                3 => true,
+                                _ => false,
+                            };
+                            update_player(&ctx, uuid, |p| p.flying = flying);
+                            writer.queue(&abilities(mode, flying))?;
                         }
                         let known = ctx.players.lock().expect("players lock").get(&who).cloned();
                         if let Some(player) = known {
@@ -1088,13 +1104,16 @@ fn send_block_changes(
 
 /// What a game mode lets the player do (survival 0, creative 1, adventure 2,
 /// spectator 3).
-fn abilities(mode: i32) -> play::PlayerAbilities {
+fn abilities(mode: i32, flying: bool) -> play::PlayerAbilities {
     use play::abilities::*;
-    let flags = match mode {
+    let mut flags = match mode {
         1 => INVULNERABLE | ALLOW_FLYING | INSTANT_BREAK,
         3 => INVULNERABLE | FLYING | ALLOW_FLYING,
         _ => 0,
     };
+    if flying && flags & ALLOW_FLYING != 0 {
+        flags |= FLYING;
+    }
     play::PlayerAbilities {
         flags,
         flying_speed: 0.05,

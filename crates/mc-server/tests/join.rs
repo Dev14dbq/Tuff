@@ -920,6 +920,7 @@ async fn players_come_back_where_they_left_with_their_items() {
         config.view_distance = 2;
         config.online_mode = false;
         config.world = Some(world);
+        config.ops = vec!["Walker".into()];
         let server = Server::bind(config).await.unwrap();
         let addr = server.local_addr();
         let ctx = server.context().clone();
@@ -958,6 +959,12 @@ async fn players_come_back_where_they_left_with_their_items() {
     moved.put_f32(10.0);
     moved.put_u8(0x01);
     walker.send("minecraft:move_player_pos_rot", moved).await;
+    // Creative, then take off: the flight is kept too.
+    let mut command = Vec::new();
+    command.put_string("gamemode creative");
+    walker.send("minecraft:chat_command", command).await;
+    walker.recv_until("minecraft:player_abilities").await;
+    walker.send("minecraft:player_abilities", vec![0x02]).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     drop(walker);
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -978,6 +985,8 @@ async fn players_come_back_where_they_left_with_their_items() {
     bot.recv_until("minecraft:finish_configuration").await;
     bot.send("minecraft:finish_configuration", Vec::new()).await;
     bot.state = State::Play;
+    let (_, abilities) = bot.recv_until("minecraft:player_abilities").await;
+    assert_eq!(abilities[0], 0x0F, "creative and still flying");
     let (_, position) = bot.recv_until("minecraft:player_position").await;
     let mut r = Reader::new(&position);
     r.varint().unwrap();
