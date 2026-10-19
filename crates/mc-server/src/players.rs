@@ -186,6 +186,15 @@ impl Store {
         if let Some(Tag::Float(e)) = root.get("foodExhaustionLevel") {
             vitals.exhaustion = *e;
         }
+        if let Some(Tag::Int(l)) = root.get("XpLevel") {
+            vitals.xp_level = *l;
+        }
+        if let Some(Tag::Float(p)) = root.get("XpP") {
+            vitals.xp_progress = *p;
+        }
+        if let Some(Tag::Int(t)) = root.get("XpTotal") {
+            vitals.xp_total = *t;
+        }
         vitals.dead = vitals.health <= 0.0;
         Ok(Some(Saved {
             pose,
@@ -257,6 +266,9 @@ impl Store {
         root.insert("foodLevel", Tag::Int(saved.vitals.food));
         root.insert("foodSaturationLevel", Tag::Float(saved.vitals.saturation));
         root.insert("foodExhaustionLevel", Tag::Float(saved.vitals.exhaustion));
+        root.insert("XpLevel", Tag::Int(saved.vitals.xp_level));
+        root.insert("XpP", Tag::Float(saved.vitals.xp_progress));
+        root.insert("XpTotal", Tag::Int(saved.vitals.xp_total));
         root.insert("SelectedItemSlot", Tag::Int(saved.hands.selected as i32));
         let mut inventory = Vec::new();
         for index in 0..36 {

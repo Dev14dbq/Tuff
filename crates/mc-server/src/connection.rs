@@ -636,6 +636,7 @@ async fn play(
         .map(|s| s.vitals.clone())
         .unwrap_or_default();
     writer.queue(&vitals.packet())?;
+    writer.queue(&vitals.experience_packet())?;
     ctx.vitals.lock().expect("vitals lock").insert(uuid, vitals);
     let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
     // Non-player entities this client has been told about.
@@ -1028,6 +1029,7 @@ async fn play(
                             Direct::Times(p) => writer.queue(&p)?,
                             Direct::Clear(p) => writer.queue(&p)?,
                             Direct::Sound(p) => writer.queue(&p)?,
+                            Direct::Experience(p) => writer.queue(&p)?,
                             Direct::StopSound(p) => writer.queue(&p)?,
                         }
                     }

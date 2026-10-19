@@ -49,6 +49,7 @@ pub enum Direct {
     Times(mc_protocol::packets::play::TitlesAnimation),
     Clear(mc_protocol::packets::play::ClearTitles),
     Sound(mc_protocol::packets::play::Sound),
+    Experience(mc_protocol::packets::play::SetExperience),
     StopSound(mc_protocol::packets::play::StopSound),
 }
 

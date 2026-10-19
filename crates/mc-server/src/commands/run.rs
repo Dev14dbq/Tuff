@@ -453,6 +453,14 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
             ..,
         ] => item_replace(r, kind),
         ["weather", kind, ..] => weather(r, kind),
+        [
+            "experience",
+            op @ ("add" | "set"),
+            "target",
+            "amount",
+            rest @ ..,
+        ] => experience_change(r, op, rest.first() == Some(&"levels")),
+        ["experience", "query", "target", what] => experience_query(r, *what == "levels"),
         ["worldborder", rest @ ..] => worldborder(r, rest),
         ["title", "targets", rest @ ..] => title(r, rest),
         ["playsound", "sound", ..] => playsound(r, path),
@@ -2647,4 +2655,68 @@ fn datapack_list(r: &mut Run, which: Option<&str>) -> Result<i32> {
         );
     }
     Ok(1)
+}
+
+fn experience_change(r: &mut Run, op: &str, levels: bool) -> Result<i32> {
+    let targets = r.targets("target", true)?;
+    let amount = r.int("amount").unwrap_or(0);
+    let mut done = 0;
+    for t in &targets {
+        let mut all = lock(&r.ctx.vitals);
+        let Some(v) = all.get_mut(&t.uuid()) else {
+            continue;
+        };
+        match (op, levels) {
+            ("add", false) => v.add_xp_points(amount),
+            ("add", true) => v.add_xp_levels(amount),
+            ("set", true) => {
+                v.xp_level = amount.max(0);
+            }
+            _ => {
+                let need = crate::vitals::xp_needed(v.xp_level);
+                if amount > need {
+                    if targets.len() == 1 {
+                        return Err(err("commands.experience.set.points.invalid", Vec::new()));
+                    }
+                    continue;
+                }
+                v.xp_progress = amount as f32 / need as f32;
+            }
+        }
+        let packet = v.experience_packet();
+        drop(all);
+        direct(r, t.uuid(), crate::context::Direct::Experience(packet));
+        done += 1;
+    }
+    let kind = if levels { "levels" } else { "points" };
+    let msg = if targets.len() == 1 {
+        translate(
+            &format!("commands.experience.{op}.{kind}.success.single"),
+            vec![Tag::Int(amount), targets[0].display()],
+        )
+    } else {
+        translate(
+            &format!("commands.experience.{op}.{kind}.success.multiple"),
+            vec![Tag::Int(amount), Tag::Int(targets.len() as i32)],
+        )
+    };
+    r.success(msg, true);
+    Ok(done)
+}
+
+fn experience_query(r: &mut Run, levels: bool) -> Result<i32> {
+    let targets = r.targets("target", true)?;
+    let Some(t) = targets.first() else {
+        return Err(err("argument.entity.notfound.player", Vec::new()));
+    };
+    let value = lock(&r.ctx.vitals)
+        .get(&t.uuid())
+        .map_or(0, |v| if levels { v.xp_level } else { v.xp_points() });
+    let key = if levels {
+        "commands.experience.query.levels"
+    } else {
+        "commands.experience.query.points"
+    };
+    r.success(translate(key, vec![t.display(), Tag::Int(value)]), false);
+    Ok(value)
 }

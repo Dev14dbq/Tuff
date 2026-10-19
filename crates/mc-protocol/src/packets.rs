@@ -924,6 +924,22 @@ pub mod play {
         }
     }
 
+    /// Set Experience: the bar (0–1), the level and the total points.
+    #[derive(Clone, Debug)]
+    pub struct SetExperience {
+        pub bar: f32,
+        pub level: i32,
+        pub total: i32,
+    }
+    packet!(SetExperience, Play, "minecraft:set_experience");
+    impl Encode for SetExperience {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_f32(self.bar);
+            out.put_varint(self.level);
+            out.put_varint(self.total);
+        }
+    }
+
     /// Combat Death: the death screen.
     #[derive(Clone, Debug)]
     pub struct PlayerCombatKill {

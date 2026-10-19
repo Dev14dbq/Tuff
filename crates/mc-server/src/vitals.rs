@@ -42,6 +42,66 @@ pub struct Vitals {
     food_timer: i32,
     immune: i32,
     pub dead: bool,
+    /// Experience: the level, the part of the next one (0–1) and every
+    /// point ever collected (`XpLevel`, `XpP`, `XpTotal`).
+    pub xp_level: i32,
+    pub xp_progress: f32,
+    pub xp_total: i32,
+}
+
+/// Points from one experience level to the next (wiki, "Experience").
+pub fn xp_needed(level: i32) -> i32 {
+    if level >= 30 {
+        112 + (level - 30) * 9
+    } else if level >= 15 {
+        37 + (level - 15) * 5
+    } else {
+        7 + level * 2
+    }
+}
+
+impl Vitals {
+    pub fn add_xp_points(&mut self, points: i32) {
+        self.xp_progress += points as f32 / xp_needed(self.xp_level) as f32;
+        self.xp_total = self.xp_total.saturating_add(points).max(0);
+        while self.xp_progress < 0.0 {
+            let f = self.xp_progress * xp_needed(self.xp_level) as f32;
+            if self.xp_level > 0 {
+                self.add_xp_levels(-1);
+                self.xp_progress = 1.0 + f / xp_needed(self.xp_level) as f32;
+            } else {
+                self.add_xp_levels(-1);
+                self.xp_progress = 0.0;
+            }
+        }
+        while self.xp_progress >= 1.0 {
+            self.xp_progress = (self.xp_progress - 1.0) * xp_needed(self.xp_level) as f32;
+            self.add_xp_levels(1);
+            self.xp_progress /= xp_needed(self.xp_level) as f32;
+        }
+    }
+
+    pub fn add_xp_levels(&mut self, levels: i32) {
+        self.xp_level = self.xp_level.saturating_add(levels);
+        if self.xp_level < 0 {
+            self.xp_level = 0;
+            self.xp_progress = 0.0;
+            self.xp_total = 0;
+        }
+    }
+
+    /// Points into the current level.
+    pub fn xp_points(&self) -> i32 {
+        (self.xp_progress * xp_needed(self.xp_level) as f32).floor() as i32
+    }
+
+    pub fn experience_packet(&self) -> mc_protocol::packets::play::SetExperience {
+        mc_protocol::packets::play::SetExperience {
+            bar: self.xp_progress,
+            level: self.xp_level,
+            total: self.xp_total,
+        }
+    }
 }
 
 impl Default for Vitals {
@@ -55,6 +115,9 @@ impl Default for Vitals {
             food_timer: 0,
             immune: 0,
             dead: false,
+            xp_level: 0,
+            xp_progress: 0.0,
+            xp_total: 0,
         }
     }
 }
