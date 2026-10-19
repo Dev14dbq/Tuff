@@ -173,6 +173,12 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             crate::vitals::tick(&ctx);
             crate::vitals::tick_using(&ctx);
             crate::furnaces::tick(&ctx);
+            let advance = ctx.game_rule_bool("advance_weather");
+            let changes = lock(&ctx.weather).tick(advance);
+            if changes != crate::weather::Changes::default() {
+                let _ = ctx.events.send(Event::Weather(changes));
+            }
+            lock(&ctx.border).tick();
         }
 
         while let Ok(request) = requests.try_recv() {

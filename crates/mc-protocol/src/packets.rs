@@ -1013,6 +1013,135 @@ pub mod play {
         }
     }
 
+    /// Set Title Text, Set Subtitle Text, Set Action Bar Text.
+    macro_rules! text_packet {
+        ($ty:ident, $name:literal) => {
+            #[derive(Clone, Debug)]
+            pub struct $ty {
+                pub text: Tag,
+            }
+            packet!($ty, Play, $name);
+            impl Encode for $ty {
+                fn encode(&self, out: &mut Vec<u8>) {
+                    crate::codec::put_nbt(out, &self.text);
+                }
+            }
+        };
+    }
+    text_packet!(SetTitleText, "minecraft:set_title_text");
+    text_packet!(SetSubtitleText, "minecraft:set_subtitle_text");
+    text_packet!(SetActionBarText, "minecraft:set_action_bar_text");
+
+    /// Set Titles Animation (ticks).
+    #[derive(Clone, Debug)]
+    pub struct TitlesAnimation {
+        pub fade_in: i32,
+        pub stay: i32,
+        pub fade_out: i32,
+    }
+    packet!(TitlesAnimation, Play, "minecraft:set_titles_animation");
+    impl Encode for TitlesAnimation {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_i32(self.fade_in);
+            out.put_i32(self.stay);
+            out.put_i32(self.fade_out);
+        }
+    }
+
+    /// Clear Titles (`reset` also resets the times).
+    #[derive(Clone, Debug)]
+    pub struct ClearTitles {
+        pub reset: bool,
+    }
+    packet!(ClearTitles, Play, "minecraft:clear_titles");
+    impl Encode for ClearTitles {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_bool(self.reset);
+        }
+    }
+
+    /// Sound Effect at a position: a sound event by registry id, or by
+    /// name when it is not in the registry.
+    #[derive(Clone, Debug)]
+    pub struct Sound {
+        /// `minecraft:sound_event` id, or `None` with `name`.
+        pub id: Option<i32>,
+        pub name: String,
+        pub category: i32,
+        pub x: f64,
+        pub y: f64,
+        pub z: f64,
+        pub volume: f32,
+        pub pitch: f32,
+        pub seed: i64,
+    }
+    packet!(Sound, Play, "minecraft:sound");
+    impl Encode for Sound {
+        fn encode(&self, out: &mut Vec<u8>) {
+            match self.id {
+                Some(id) => out.put_varint(id + 1),
+                None => {
+                    out.put_varint(0);
+                    out.put_string(&self.name);
+                    out.put_bool(false);
+                }
+            }
+            out.put_varint(self.category);
+            out.put_i32((self.x * 8.0) as i32);
+            out.put_i32((self.y * 8.0) as i32);
+            out.put_i32((self.z * 8.0) as i32);
+            out.put_f32(self.volume);
+            out.put_f32(self.pitch);
+            out.put_i64(self.seed);
+        }
+    }
+
+    /// Stop Sound: by category and/or name, or every sound.
+    #[derive(Clone, Debug)]
+    pub struct StopSound {
+        pub category: Option<i32>,
+        pub name: Option<String>,
+    }
+    packet!(StopSound, Play, "minecraft:stop_sound");
+    impl Encode for StopSound {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_u8(u8::from(self.category.is_some()) | (u8::from(self.name.is_some()) << 1));
+            if let Some(c) = self.category {
+                out.put_varint(c);
+            }
+            if let Some(n) = &self.name {
+                out.put_string(n);
+            }
+        }
+    }
+
+    /// Initialize World Border.
+    #[derive(Clone, Debug)]
+    pub struct InitializeBorder {
+        pub x: f64,
+        pub z: f64,
+        pub old_size: f64,
+        pub new_size: f64,
+        /// Milliseconds the change takes.
+        pub speed: i64,
+        pub portal_boundary: i32,
+        pub warning_blocks: i32,
+        pub warning_time: i32,
+    }
+    packet!(InitializeBorder, Play, "minecraft:initialize_border");
+    impl Encode for InitializeBorder {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_f64(self.x);
+            out.put_f64(self.z);
+            out.put_f64(self.old_size);
+            out.put_f64(self.new_size);
+            out.put_varlong(self.speed);
+            out.put_varint(self.portal_boundary);
+            out.put_varint(self.warning_blocks);
+            out.put_varint(self.warning_time);
+        }
+    }
+
     /// Change Difficulty.
     #[derive(Clone, Debug)]
     pub struct ChangeDifficulty {
@@ -1061,8 +1190,14 @@ pub mod play {
     }
 
     pub mod game_event {
+        pub const BEGIN_RAINING: u8 = 1;
+        pub const END_RAINING: u8 = 2;
         /// Value: 0 survival, 1 creative, 2 adventure, 3 spectator.
         pub const CHANGE_GAME_MODE: u8 = 3;
+        /// Value: rain level 0–1.
+        pub const RAIN_LEVEL: u8 = 7;
+        /// Value: thunder level 0–1.
+        pub const THUNDER_LEVEL: u8 = 8;
         pub const START_WAITING_FOR_CHUNKS: u8 = 13;
     }
 

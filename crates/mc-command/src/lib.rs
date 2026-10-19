@@ -9,6 +9,7 @@ pub mod env;
 pub mod error;
 pub mod lang;
 pub mod reader;
+pub mod suggest;
 pub mod text;
 pub mod tree;
 pub mod usage;

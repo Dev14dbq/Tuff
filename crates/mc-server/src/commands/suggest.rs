@@ -2,7 +2,6 @@
 //! `minecraft:ask_server` in the tree (time markers, players for `/op`,
 //! banned addresses, structure templates...).
 
-use mc_command::tree::{Kind, ROOT};
 use mc_protocol::packets::play::CommandSuggestions;
 
 use super::Source;
@@ -99,6 +98,26 @@ fn candidates(ctx: &ServerContext, path: &[String]) -> Vec<String> {
     out
 }
 
+struct Known<'a>(&'a ServerContext);
+
+impl mc_command::suggest::Known for Known<'_> {
+    fn players(&self) -> Vec<String> {
+        let mut names: Vec<String> = lock(&self.0.players)
+            .values()
+            .map(|p| p.profile.name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn ask(&self, path: &[String], typed: &str) -> Vec<String> {
+        candidates(self.0, path)
+            .into_iter()
+            .filter(|c| completes(c, typed))
+            .collect()
+    }
+}
+
 /// The answer to a Command Suggestions Request for `text` (with its `/`).
 pub fn suggest(
     ctx: &ServerContext,
@@ -113,54 +132,27 @@ pub fn suggest(
         Source::Console => 4,
         Source::Player { uuid, name, .. } => super::level(ctx, *uuid, name),
     };
-    // The completed part up to the last space, and the word being typed.
-    let split = input.rfind(' ');
-    let (done, word) = match split {
-        Some(i) => (&input[..i], &input[i + 1..]),
-        None => ("", input),
-    };
-    let tree = &commands.tree;
-    let node = if done.is_empty() {
-        ROOT
-    } else {
-        let parse = mc_command::dispatch::parse(tree, done, level, &commands.env);
-        if parse.cursor < done.len() {
-            return Some(CommandSuggestions {
-                id,
-                start: (offset + input.len()) as i32,
-                length: 0,
-                matches: Vec::new(),
-            });
-        }
-        let last = parse.chain.last()?;
-        match last.nodes.last() {
-            Some(&(n, _, _)) => tree.nodes[n].redirect.unwrap_or(n),
-            None => ROOT,
-        }
-    };
-    let mut matches = Vec::new();
-    for &c in &tree.nodes[node].children {
-        let n = &tree.nodes[c];
-        if n.level > level || n.suggestions.as_deref() != Some("minecraft:ask_server") {
-            continue;
-        }
-        if !matches!(n.kind, Kind::Argument { .. }) {
-            continue;
-        }
-        let mut path = tree.names(node);
-        path.push(n.name.clone());
-        for cand in candidates(ctx, &path) {
-            if completes(&cand, word) && !matches.iter().any(|(m, _)| *m == cand) {
-                matches.push((cand, None));
-            }
-        }
+    let (start, matches) = mc_command::suggest::complete(
+        &commands.tree,
+        input,
+        level,
+        &commands.env,
+        &commands.env,
+        &Known(ctx),
+    );
+    if matches.is_empty() {
+        // Vanilla's empty suggestions cover nothing.
+        return Some(CommandSuggestions {
+            id,
+            start: 0,
+            length: 0,
+            matches,
+        });
     }
-    matches.sort_by(|a, b| a.0.cmp(&b.0));
-    let start = offset + split.map_or(0, |i| i + 1);
     Some(CommandSuggestions {
         id,
-        start: start as i32,
-        length: word.len() as i32,
+        start: (offset + start) as i32,
+        length: (input.len() - start) as i32,
         matches,
     })
 }

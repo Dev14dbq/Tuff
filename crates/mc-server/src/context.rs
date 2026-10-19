@@ -40,6 +40,18 @@ pub struct OnlinePlayer {
     pub address: Option<String>,
 }
 
+/// Packets commands send to one player.
+#[derive(Clone, Debug)]
+pub enum Direct {
+    Title(mc_protocol::packets::play::SetTitleText),
+    Subtitle(mc_protocol::packets::play::SetSubtitleText),
+    ActionBar(mc_protocol::packets::play::SetActionBarText),
+    Times(mc_protocol::packets::play::TitlesAnimation),
+    Clear(mc_protocol::packets::play::ClearTitles),
+    Sound(mc_protocol::packets::play::Sound),
+    StopSound(mc_protocol::packets::play::StopSound),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pose {
     pub x: f64,
@@ -205,6 +217,15 @@ pub enum Event {
     Permissions {
         uuid: u128,
     },
+    /// A packet for one player only.
+    Direct {
+        uuid: u128,
+        packet: Direct,
+    },
+    /// Rain or thunder came or went.
+    Weather(crate::weather::Changes),
+    /// The world border changed.
+    Border,
     /// The difficulty changed (0–3).
     Difficulty(i32),
     /// A message for one player (`tellraw`, `msg`...).
@@ -306,6 +327,8 @@ pub struct ServerContext {
     /// The command tree and what commands are checked against.
     pub commands: crate::commands::Commands,
     pub game_rules: Mutex<crate::rules::GameRules>,
+    pub weather: Mutex<crate::weather::Weather>,
+    pub border: Mutex<crate::border::Border>,
     next_entity_id: AtomicI32,
 }
 
@@ -482,6 +505,8 @@ impl ServerContext {
             world.folder(),
             data.version.world_version,
         );
+        let weather = crate::weather::Weather::load(world.folder(), data.version.world_version);
+        let border = crate::border::Border::load(world.folder(), data.version.world_version);
         Ok(Self {
             core_pack: KnownPack {
                 namespace: "minecraft".into(),
@@ -536,6 +561,8 @@ impl ServerContext {
             next_entity_id: AtomicI32::new(1),
             commands: crate::commands::Commands::load(&config_data_dir),
             game_rules: Mutex::new(game_rules),
+            weather: Mutex::new(weather),
+            border: Mutex::new(border),
             data,
         })
     }

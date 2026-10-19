@@ -548,6 +548,18 @@ async fn play(
         yaw: 0.0,
         pitch: 0.0,
     })?;
+    writer.queue(&ctx.border.lock().expect("border lock").packet())?;
+    {
+        let w = ctx.weather.lock().expect("weather lock");
+        if w.rain_level > 0.0 {
+            let changes = crate::weather::Changes {
+                raining: Some(true),
+                rain_level: Some(w.rain_level),
+                thunder_level: Some(w.thunder_level),
+            };
+            send_weather(writer, &changes)?;
+        }
+    }
     writer.queue(&play::GameEvent {
         event: play::game_event::START_WAITING_FOR_CHUNKS,
         value: 0.0,
@@ -1006,6 +1018,23 @@ async fn play(
                             writer.queue(&play::SystemChat { content: line, overlay: false })?;
                         }
                     }
+                    Ok(Event::Weather(changes)) => send_weather(writer, &changes)?,
+                    Ok(Event::Direct { uuid: who, packet }) if who == uuid => {
+                        use crate::context::Direct;
+                        match packet {
+                            Direct::Title(p) => writer.queue(&p)?,
+                            Direct::Subtitle(p) => writer.queue(&p)?,
+                            Direct::ActionBar(p) => writer.queue(&p)?,
+                            Direct::Times(p) => writer.queue(&p)?,
+                            Direct::Clear(p) => writer.queue(&p)?,
+                            Direct::Sound(p) => writer.queue(&p)?,
+                            Direct::StopSound(p) => writer.queue(&p)?,
+                        }
+                    }
+                    Ok(Event::Border) => {
+                        let packet = ctx.border.lock().expect("border lock").packet();
+                        writer.queue(&packet)?;
+                    }
                     Ok(Event::Difficulty(d)) => {
                         writer.queue(&play::ChangeDifficulty { difficulty: d as u8, locked: false })?;
                     }
@@ -1143,6 +1172,28 @@ fn set_position(pose: &mut Pose, x: f64, y: f64, z: f64, flags: u8) -> bool {
     }
     (pose.x, pose.y, pose.z, pose.on_ground) = (x, y, z, flags & 1 != 0);
     true
+}
+
+/// Rain starting or stopping and the levels the client draws.
+fn send_weather(writer: &mut PacketWriter, c: &crate::weather::Changes) -> Result<()> {
+    use play::game_event::{BEGIN_RAINING, END_RAINING, RAIN_LEVEL, THUNDER_LEVEL};
+    if let Some(r) = c.raining {
+        let event = if r { BEGIN_RAINING } else { END_RAINING };
+        writer.queue(&play::GameEvent { event, value: 0.0 })?;
+    }
+    if let Some(v) = c.rain_level {
+        writer.queue(&play::GameEvent {
+            event: RAIN_LEVEL,
+            value: v,
+        })?;
+    }
+    if let Some(v) = c.thunder_level {
+        writer.queue(&play::GameEvent {
+            event: THUNDER_LEVEL,
+            value: v,
+        })?;
+    }
+    Ok(())
 }
 
 /// The player's permission level (Entity Event 24 + level) and the

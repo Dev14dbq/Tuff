@@ -7,6 +7,7 @@
 
 mod auth;
 mod blocks;
+mod border;
 mod commands;
 mod connection;
 mod containers;
@@ -27,6 +28,7 @@ mod rules;
 mod tick;
 mod util;
 mod vitals;
+mod weather;
 mod world;
 
 use std::future::Future;
@@ -317,6 +319,8 @@ fn save(ctx: &ServerContext) {
     tracing::debug!("Saving players");
     let started = std::time::Instant::now();
     let time = ctx.time.lock().expect("time lock").clone();
+    ctx.weather.lock().expect("weather lock").save();
+    ctx.border.lock().expect("border lock").save();
     if let Err(err) = ctx.world.save_time(&time) {
         tracing::warn!("saving the time: {err:#}");
     }

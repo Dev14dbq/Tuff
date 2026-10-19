@@ -43,9 +43,6 @@ pub fn run(args: &[String]) -> Result<()> {
         .map(str::to_owned)
         .collect();
     let dir = root.join("cache/vanilla-server/26.3-commands");
-    let _ = std::fs::remove_dir_all(dir.join("world"));
-    // Made operator after joining, so the tree is sent again for it.
-    let _ = std::fs::remove_file(dir.join("ops.json"));
     let properties = format!(
         "online-mode=false\nserver-ip=127.0.0.1\nserver-port={PORT}\nlevel-name=world\n\
          level-type=minecraft\\:flat\ngamemode=creative\nspawn-protection=0\n\
@@ -71,6 +68,9 @@ pub fn run(args: &[String]) -> Result<()> {
         println!("{} lines → {}", replies.len(), out.display());
         return Ok(());
     }
+    let _ = std::fs::remove_dir_all(dir.join("world"));
+    // Made operator after joining, so the tree is sent again for it.
+    let _ = std::fs::remove_file(dir.join("ops.json"));
     Server::prepare(&root, &dir, &properties)?;
     let mut server = Server::start_java(&root, &dir)?;
     let result = observe(

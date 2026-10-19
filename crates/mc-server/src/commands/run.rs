@@ -452,6 +452,14 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
             "item",
             ..,
         ] => item_replace(r, kind),
+        ["weather", kind, ..] => weather(r, kind),
+        ["worldborder", rest @ ..] => worldborder(r, rest),
+        ["title", "targets", rest @ ..] => title(r, rest),
+        ["playsound", "sound", ..] => playsound(r, path),
+        ["stopsound", "targets", rest @ ..] => stopsound(r, rest),
+        ["random", kind @ ("value" | "roll"), "range", ..] => random(r, *kind == "roll"),
+        ["clone", ..] => clone(r, path),
+        ["datapack", "list", rest @ ..] => datapack_list(r, rest.first().copied()),
         _ => return None,
     })
 }
@@ -2184,4 +2192,459 @@ fn item_replace(r: &mut Run, kind: &str) -> Result<i32> {
     };
     r.success(msg, true);
     Ok(done)
+}
+
+fn weather(r: &mut Run, kind: &str) -> Result<i32> {
+    use crate::weather as w;
+    let given = r.int("duration");
+    let mut weather = lock(&r.ctx.weather);
+    let (key, duration) = match kind {
+        "clear" => {
+            let d = given.unwrap_or_else(w::rain_delay);
+            weather.set(d, 0, false, false);
+            ("commands.weather.set.clear", d)
+        }
+        "rain" => {
+            let d = given.unwrap_or_else(w::rain_duration);
+            weather.set(0, d, true, false);
+            ("commands.weather.set.rain", d)
+        }
+        _ => {
+            let d = given.unwrap_or_else(w::thunder_duration);
+            weather.set(0, d, true, true);
+            ("commands.weather.set.thunder", d)
+        }
+    };
+    drop(weather);
+    r.success(translate(key, Vec::new()), true);
+    Ok(duration)
+}
+
+fn worldborder(r: &mut Run, rest: &[&str]) -> Result<i32> {
+    use crate::border::MAX_SIZE;
+    let mut b = lock(&r.ctx.border);
+    let result = match rest {
+        ["get"] => {
+            let size = b.size;
+            drop(b);
+            r.success(
+                translate(
+                    "commands.worldborder.get",
+                    vec![Tag::String(format!("{size:.0}"))],
+                ),
+                false,
+            );
+            return Ok((size + 0.5).floor() as i32);
+        }
+        [op @ ("set" | "add"), "distance", ..] => {
+            let d = match r.arg("distance") {
+                Some(Arg::Double(v)) => *v,
+                _ => 0.0,
+            };
+            let target = if *op == "add" { b.size + d } else { d };
+            let ticks = r.int("time").unwrap_or(0);
+            if target == b.size && ticks == 0 {
+                return Err(err("commands.worldborder.set.failed.nochange", Vec::new()));
+            }
+            if target < 1.0 {
+                return Err(err("commands.worldborder.set.failed.small", Vec::new()));
+            }
+            if target > MAX_SIZE {
+                return Err(err(
+                    "commands.worldborder.set.failed.big",
+                    vec![Tag::String(format!("{MAX_SIZE:.0}"))],
+                ));
+            }
+            let size = Tag::String(format!("{target:.1}"));
+            let moved = (target - b.size).abs() as i32;
+            let msg = if ticks > 0 {
+                let key = if target > b.size {
+                    "commands.worldborder.set.grow"
+                } else {
+                    "commands.worldborder.set.shrink"
+                };
+                b.lerp_target = target;
+                b.lerp_time = i64::from(ticks) * 50;
+                translate(key, vec![size, Tag::Long(i64::from(ticks / 20))])
+            } else {
+                b.size = target;
+                b.lerp_target = target;
+                b.lerp_time = 0;
+                translate("commands.worldborder.set.immediate", vec![size])
+            };
+            (msg, moved)
+        }
+        ["center", "pos"] => {
+            let (x, z) = match r.arg("pos") {
+                Some(Arg::Pos2([x, z])) => (
+                    if x.relative {
+                        r.src.pos[0] + x.value
+                    } else {
+                        x.value
+                    },
+                    if z.relative {
+                        r.src.pos[2] + z.value
+                    } else {
+                        z.value
+                    },
+                ),
+                _ => (0.0, 0.0),
+            };
+            if b.center_x == x && b.center_z == z {
+                return Err(err("commands.worldborder.center.failed", Vec::new()));
+            }
+            b.center_x = x;
+            b.center_z = z;
+            let args = vec![
+                Tag::String(format!("{x:.2}")),
+                Tag::String(format!("{z:.2}")),
+            ];
+            (translate("commands.worldborder.center.success", args), 0)
+        }
+        ["damage", "amount", "damagePerBlock"] => {
+            let v = f64::from(r.float("damagePerBlock").unwrap_or(0.0));
+            if b.damage_per_block == v {
+                return Err(err("commands.worldborder.damage.amount.failed", Vec::new()));
+            }
+            b.damage_per_block = v;
+            let args = vec![Tag::String(format!("{v:.2}"))];
+            (
+                translate("commands.worldborder.damage.amount.success", args),
+                v as i32,
+            )
+        }
+        ["damage", "buffer", "distance"] => {
+            let v = f64::from(r.float("distance").unwrap_or(0.0));
+            if b.safe_zone == v {
+                return Err(err("commands.worldborder.damage.buffer.failed", Vec::new()));
+            }
+            b.safe_zone = v;
+            let args = vec![Tag::String(format!("{v:.2}"))];
+            (
+                translate("commands.worldborder.damage.buffer.success", args),
+                v as i32,
+            )
+        }
+        ["warning", "distance", "distance"] => {
+            let v = r.int("distance").unwrap_or(0);
+            if b.warning_blocks == v {
+                return Err(err(
+                    "commands.worldborder.warning.distance.failed",
+                    Vec::new(),
+                ));
+            }
+            b.warning_blocks = v;
+            (
+                translate(
+                    "commands.worldborder.warning.distance.success",
+                    vec![Tag::Int(v)],
+                ),
+                v,
+            )
+        }
+        ["warning", "time", "time"] => {
+            let v = r.int("time").unwrap_or(0) / 20;
+            if b.warning_time == v {
+                return Err(err("commands.worldborder.warning.time.failed", Vec::new()));
+            }
+            b.warning_time = v;
+            (
+                translate(
+                    "commands.worldborder.warning.time.success",
+                    vec![Tag::Int(v)],
+                ),
+                v,
+            )
+        }
+        _ => return Err(err("command.failed", Vec::new())),
+    };
+    b.save();
+    drop(b);
+    r.out.events.push(Event::Border);
+    r.success(result.0, true);
+    Ok(result.1)
+}
+
+fn direct(r: &mut Run, uuid: u128, packet: crate::context::Direct) {
+    r.out.events.push(Event::Direct { uuid, packet });
+}
+
+fn title(r: &mut Run, rest: &[&str]) -> Result<i32> {
+    use crate::context::Direct;
+    use mc_protocol::packets::play as p;
+    let targets = r.targets("targets", true)?;
+    let text = r.nbt("title").unwrap_or_else(|| Tag::from(""));
+    let (key, packet) = match rest {
+        ["clear"] => ("cleared", Direct::Clear(p::ClearTitles { reset: false })),
+        ["reset"] => ("reset", Direct::Clear(p::ClearTitles { reset: true })),
+        ["title", "title"] => ("show.title", Direct::Title(p::SetTitleText { text })),
+        ["subtitle", "title"] => (
+            "show.subtitle",
+            Direct::Subtitle(p::SetSubtitleText { text }),
+        ),
+        ["actionbar", "title"] => (
+            "show.actionbar",
+            Direct::ActionBar(p::SetActionBarText { text }),
+        ),
+        ["times", ..] => (
+            "times",
+            Direct::Times(p::TitlesAnimation {
+                fade_in: r.int("fadeIn").unwrap_or(10),
+                stay: r.int("stay").unwrap_or(70),
+                fade_out: r.int("fadeOut").unwrap_or(20),
+            }),
+        ),
+        _ => return Err(err("command.failed", Vec::new())),
+    };
+    for t in &targets {
+        direct(r, t.uuid(), packet.clone());
+    }
+    let msg = if targets.len() == 1 {
+        translate(
+            &format!("commands.title.{key}.single"),
+            vec![targets[0].display()],
+        )
+    } else {
+        translate(
+            &format!("commands.title.{key}.multiple"),
+            vec![Tag::Int(targets.len() as i32)],
+        )
+    };
+    r.success(msg, true);
+    Ok(targets.len() as i32)
+}
+
+const SOUND_SOURCES: [&str; 11] = [
+    "master", "music", "record", "weather", "block", "hostile", "neutral", "player", "ambient",
+    "voice", "ui",
+];
+
+fn playsound(r: &mut Run, path: &[&str]) -> Result<i32> {
+    let sound = r.string("sound").unwrap_or_default();
+    let category = path
+        .get(2)
+        .and_then(|c| SOUND_SOURCES.iter().position(|s| s == c))
+        .unwrap_or(0) as i32;
+    let targets = r.targets_or_self("targets", true)?;
+    let at = r.vec3("pos").unwrap_or(r.src.pos);
+    let volume = r.float("volume").unwrap_or(1.0);
+    let pitch = r.float("pitch").unwrap_or(1.0);
+    let id = r.ctx.data.builtin.id("minecraft:sound_event", &sound);
+    for t in &targets {
+        let packet = mc_protocol::packets::play::Sound {
+            id,
+            name: sound.clone(),
+            category,
+            x: at[0],
+            y: at[1],
+            z: at[2],
+            volume,
+            pitch,
+            seed: crate::util::random_u64() as i64,
+        };
+        direct(r, t.uuid(), crate::context::Direct::Sound(packet));
+    }
+    let msg = if targets.len() == 1 {
+        translate(
+            "commands.playsound.success.single",
+            vec![str_tag(&sound), targets[0].display()],
+        )
+    } else {
+        translate(
+            "commands.playsound.success.multiple",
+            vec![str_tag(&sound), Tag::Int(targets.len() as i32)],
+        )
+    };
+    r.success(msg, true);
+    Ok(targets.len() as i32)
+}
+
+fn stopsound(r: &mut Run, rest: &[&str]) -> Result<i32> {
+    let targets = r.targets("targets", true)?;
+    let source = rest.first().filter(|s| **s != "*").copied();
+    let category = source
+        .and_then(|c| SOUND_SOURCES.iter().position(|s| *s == c))
+        .map(|c| c as i32);
+    let sound = r.string("sound");
+    for t in &targets {
+        let packet = mc_protocol::packets::play::StopSound {
+            category,
+            name: sound.clone(),
+        };
+        direct(r, t.uuid(), crate::context::Direct::StopSound(packet));
+    }
+    let msg = match (source, &sound) {
+        (None, None) => translate("commands.stopsound.success.sourceless.any", Vec::new()),
+        (Some(src), None) => translate("commands.stopsound.success.source.any", vec![str_tag(src)]),
+        (None, Some(s)) => translate(
+            "commands.stopsound.success.sourceless.sound",
+            vec![str_tag(s)],
+        ),
+        (Some(src), Some(s)) => translate(
+            "commands.stopsound.success.source.sound",
+            vec![str_tag(s), str_tag(src)],
+        ),
+    };
+    r.success(msg, true);
+    Ok(targets.len() as i32)
+}
+
+fn random(r: &mut Run, roll: bool) -> Result<i32> {
+    let Some(Arg::Range(range)) = r.arg("range").cloned() else {
+        return Err(err("command.failed", Vec::new()));
+    };
+    let min = range.min.map_or(i64::from(i32::MIN), |v| v as i64);
+    let max = range.max.map_or(i64::from(i32::MAX), |v| v as i64);
+    let span = max - min + 1;
+    if span < 2 {
+        return Err(err("commands.random.error.range_too_small", Vec::new()));
+    }
+    if span > i64::from(i32::MAX) {
+        return Err(err("commands.random.error.range_too_large", Vec::new()));
+    }
+    let value = min + (crate::util::random_u64() % span as u64) as i64;
+    if roll {
+        let line = translate(
+            "commands.random.roll",
+            vec![source_name(r), int(value), int(min), int(max)],
+        );
+        r.out.events.push(Event::Chat(line));
+    } else {
+        r.success(
+            translate("commands.random.sample.success", vec![int(value)]),
+            false,
+        );
+    }
+    Ok(value as i32)
+}
+
+fn clone(r: &mut Run, path: &[&str]) -> Result<i32> {
+    let a = r.loaded_pos("begin")?;
+    let b = r.loaded_pos("end")?;
+    let dest = r.loaded_pos("destination")?;
+    let masked = path.contains(&"masked");
+    let filtered = path.contains(&"filtered");
+    let force = path.contains(&"force");
+    let moving = path.contains(&"move");
+    let (min, max) = (
+        (a.x.min(b.x), a.y.min(b.y), a.z.min(b.z)),
+        (a.x.max(b.x), a.y.max(b.y), a.z.max(b.z)),
+    );
+    let size = (max.0 - min.0, max.1 - min.1, max.2 - min.2);
+    let volume = i64::from(size.0 + 1) * i64::from(size.1 + 1) * i64::from(size.2 + 1);
+    let limit = block_limit(r.ctx);
+    if volume > limit {
+        return Err(err("commands.clone.toobig", vec![int(limit), int(volume)]));
+    }
+    let overlaps = dest.x <= max.0
+        && dest.x + size.0 >= min.0
+        && dest.y <= max.1
+        && dest.y + size.1 >= min.1
+        && dest.z <= max.2
+        && dest.z + size.2 >= min.2;
+    if overlaps && !force {
+        return Err(err("commands.clone.overlap", Vec::new()));
+    }
+    let far = Position::new(dest.x + size.0, dest.y + size.1, dest.z + size.2);
+    if !in_world(r.ctx, far) {
+        return Err(err("argument.pos.outofworld", Vec::new()));
+    }
+    let blocks = &r.ctx.data.blocks;
+    let filter = match r.arg("filter") {
+        Some(Arg::Block(f)) if filtered => Some(f.clone()),
+        _ => None,
+    };
+    let mut changes = Vec::new();
+    let mut cleared = Vec::new();
+    for y in min.1..=max.1 {
+        for z in min.2..=max.2 {
+            for x in min.0..=max.0 {
+                let from = Position::new(x, y, z);
+                let Some(state) = r.ctx.world.block(from, blocks) else {
+                    return Err(err("argument.pos.unloaded", Vec::new()));
+                };
+                if masked && blocks.is_air(state) {
+                    continue;
+                }
+                if let Some(f) = &filter {
+                    let name = blocks.block_name(state).unwrap_or("");
+                    let ok = if f.tag {
+                        r.ctx
+                            .commands
+                            .env
+                            .tag("minecraft:block", &f.id)
+                            .iter()
+                            .any(|i| i == name)
+                    } else {
+                        f.id == name
+                    };
+                    if !ok {
+                        continue;
+                    }
+                }
+                let to = Position::new(dest.x + x - min.0, dest.y + y - min.1, dest.z + z - min.2);
+                changes.push((to, state));
+                if moving {
+                    cleared.push((from, r.ctx.rules.air));
+                }
+            }
+        }
+    }
+    let count = changes.len();
+    if count == 0 {
+        return Err(err("commands.clone.failed", Vec::new()));
+    }
+    if moving {
+        apply(r.ctx, cleared, false, r.out);
+    }
+    apply(r.ctx, changes, false, r.out);
+    r.success(
+        translate("commands.clone.success", vec![Tag::Int(count as i32)]),
+        true,
+    );
+    Ok(count as i32)
+}
+
+fn datapack_list(r: &mut Run, which: Option<&str>) -> Result<i32> {
+    let mut hover_text = Compound::new();
+    hover_text.insert("text", "");
+    hover_text.insert(
+        "extra",
+        mc_protocol::text::list(vec![
+            translate("dataPack.vanilla.name", Vec::new()),
+            Tag::from("\n"),
+            translate("dataPack.vanilla.description", Vec::new()),
+        ]),
+    );
+    let mut hover = Compound::new();
+    hover.insert("action", "show_text");
+    hover.insert("value", Tag::Compound(hover_text));
+    let source = vec![
+        Tag::from("vanilla"),
+        translate("pack.source.builtin", Vec::new()),
+    ];
+    let mut name = translate("pack.nameAndSource", source);
+    style(&mut name, &[("color", "gray")]);
+    let mut pack = translate("chat.square_brackets", vec![name]);
+    style(&mut pack, &[("color", "green")]);
+    if let Tag::Compound(c) = &mut pack {
+        c.insert("hover_event", Tag::Compound(hover));
+        c.insert("insertion", "vanilla");
+    }
+    if which != Some("available") {
+        r.success(
+            translate(
+                "commands.datapack.list.enabled.success",
+                vec![Tag::Int(1), pack],
+            ),
+            false,
+        );
+    }
+    if which != Some("enabled") {
+        r.success(
+            translate("commands.datapack.list.available.none", Vec::new()),
+            false,
+        );
+    }
+    Ok(1)
 }
