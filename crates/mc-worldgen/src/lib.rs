@@ -4,6 +4,7 @@
 //! generator with vanilla parity is ROADMAP Ф4.
 
 pub mod aquifer;
+pub mod carver;
 pub mod climate;
 pub mod density;
 pub mod generator;

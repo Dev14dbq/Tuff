@@ -22,6 +22,8 @@ use crate::{P, Region};
 
 pub const SIDE: i32 = 58;
 pub const TALL: i32 = 23;
+/// How far around a monument the sea floor is cut away.
+const SLOPE: i32 = 3;
 
 #[derive(Debug, Default)]
 pub struct Observed {
@@ -270,6 +272,21 @@ pub fn place_monument(
         return;
     };
     let h = region.heights();
+    // Around it the sea floor is cut away in steps: 1 to 3 blocks out,
+    // from 2 blocks higher with each block.
+    let (x0, z0) = (m.origin.x, m.origin.z);
+    let (x1, z1) = (x0 + SIDE - 1, z0 + SIDE - 1);
+    for z in chunk.min.z.max(z0 - SLOPE)..=chunk.max.z.min(z1 + SLOPE) {
+        for x in chunk.min.x.max(x0 - SLOPE)..=chunk.max.x.min(x1 + SLOPE) {
+            let d = (x0 - x).max(x - x1).max(z0 - z).max(z - z1);
+            if d < 1 {
+                continue;
+            }
+            for y in m.origin.y + 2 * (d - 1)..h.sea_level {
+                region.set(P::new(x, y, z), facts.water);
+            }
+        }
+    }
     for z in chunk.min.z.max(m.origin.z)..=chunk.max.z.min(m.origin.z + SIDE - 1) {
         for x in chunk.min.x.max(m.origin.x)..=chunk.max.x.min(m.origin.x + SIDE - 1) {
             let (sx, sz) = m.source(x - m.origin.x, z - m.origin.z);

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::aquifer::{Aquifer, Fluid, Functions, Global};
+use crate::carver::{Carver, Target, Trig};
 use crate::climate::{BiomeList, Climate};
 use crate::density::{Builder, Ctx, Df, Source};
 use crate::materials::{Column, Materials, Names, zoom_seed, zoomed_cell};
@@ -37,6 +38,10 @@ pub struct NoiseGenerator {
     zoom: i64,
     /// Biome name → id.
     biome_ids: HashMap<String, u32>,
+    seed: i64,
+    /// The carvers of each biome (id).
+    carvers: HashMap<u32, Vec<Carver>>,
+    trig: Trig,
 }
 
 impl std::fmt::Debug for NoiseGenerator {
@@ -100,9 +105,30 @@ impl NoiseGenerator {
             Some("minecraft:lava") => Fluid::Lava,
             _ => Fluid::Water,
         };
+        let (min_y, height) = (
+            noise["min_y"].as_i64().unwrap_or(-64) as i32,
+            noise["height"].as_i64().unwrap_or(384) as i32,
+        );
+        let mut carvers = HashMap::new();
+        for (name, &id) in &biome_ids {
+            let Some(biome) = source.read("biome", name) else {
+                continue;
+            };
+            let ids: Vec<&str> = match &biome["carvers"] {
+                Value::String(s) => vec![s.as_str()],
+                Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
+                _ => Vec::new(),
+            };
+            let list: Vec<Carver> = ids
+                .iter()
+                .filter_map(|c| source.read("carver", c))
+                .filter_map(|v| Carver::parse(&v, min_y, height))
+                .collect();
+            carvers.insert(id, list);
+        }
         Ok(Self {
-            min_y: noise["min_y"].as_i64().unwrap_or(-64) as i32,
-            height: noise["height"].as_i64().unwrap_or(384) as i32,
+            min_y,
+            height,
             sea_level: settings["sea_level"].as_i64().unwrap_or(63) as i32,
             climate,
             biomes: BiomeList::from_json(parameters),
@@ -115,6 +141,9 @@ impl NoiseGenerator {
             default_fluid,
             zoom: zoom_seed(seed),
             biome_ids,
+            seed,
+            carvers,
+            trig: Trig::default(),
         })
     }
 
@@ -195,6 +224,41 @@ impl NoiseGenerator {
                     };
                 }
             }
+        }
+        // Carvers cut the raw terrain; the aquifer fills what they cut.
+        let biome = self.noise_biome((cx - 8) * 4, 0, (cz - 8) * 4);
+        if let Some(list) = self.carvers.get(&biome).filter(|l| !l.is_empty()) {
+            let stone = self.blocks.stone;
+            let fill = self.blocks;
+            let mut carve = |x: i32, y: i32, z: i32| {
+                let i = at(y, z - z0, x - x0);
+                if blocks[i] != stone {
+                    return false;
+                }
+                let fluid = match &mut aquifer {
+                    Some(a) => a.substance(x, y, z, 0.0, &mut ctx),
+                    None => Some(global.at(y).at(y)),
+                };
+                let Some(fluid) = fluid else {
+                    return false;
+                };
+                blocks[i] = match fluid {
+                    Fluid::Air => fill.air,
+                    Fluid::Water => fill.water,
+                    Fluid::Lava => fill.lava,
+                };
+                true
+            };
+            let mut target = Target {
+                cx,
+                cz,
+                min_y,
+                height,
+                trig: &self.trig,
+                carve: &mut carve,
+                mask: vec![false; n],
+            };
+            crate::carver::carve(self.seed, &mut target, &|_, _| list.clone());
         }
         // Heights before materials (WORLD_SURFACE_WG: above the top
         // non-air block).
