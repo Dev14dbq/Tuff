@@ -121,3 +121,39 @@ mod tests {
         assert!(!valid_player_name("bad name"));
     }
 }
+
+/// Areas of chunks one thread works on at a time: claiming waits until no
+/// claimed chunk is in the asked-for area.
+#[derive(Debug, Default)]
+pub struct Claims {
+    held: std::sync::Mutex<std::collections::HashSet<(i32, i32)>>,
+    released: std::sync::Condvar,
+}
+
+/// Holds an area until dropped.
+#[derive(Debug)]
+pub struct Claim<'a> {
+    claims: &'a Claims,
+    area: Vec<(i32, i32)>,
+}
+
+impl Claims {
+    pub fn claim(&self, area: Vec<(i32, i32)>) -> Claim<'_> {
+        let mut held = self.held.lock().expect("claims lock");
+        while area.iter().any(|p| held.contains(p)) {
+            held = self.released.wait(held).expect("claims lock");
+        }
+        held.extend(area.iter().copied());
+        Claim { claims: self, area }
+    }
+}
+
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        let mut held = self.claims.held.lock().expect("claims lock");
+        for p in &self.area {
+            held.remove(p);
+        }
+        self.claims.released.notify_all();
+    }
+}

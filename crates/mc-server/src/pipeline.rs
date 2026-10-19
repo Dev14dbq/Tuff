@@ -58,6 +58,9 @@ pub struct Pipeline {
     terrain: Mutex<HashMap<(i32, i32), TerrainCell, Fast>>,
     /// Structures starting in each chunk looked at so far.
     starts: Mutex<StartMap>,
+    /// Chunks some thread is decorating or settling around: finishing
+    /// chunks whose 5×5 areas do not overlap goes on at the same time.
+    claims: crate::util::Claims,
     /// Stronghold rings, placed once before any start is looked for.
     rings: OnceLock<()>,
 }
@@ -140,6 +143,7 @@ impl Pipeline {
             terrain: Mutex::new(HashMap::default()),
             starts: Mutex::new(HashMap::default()),
             rings: OnceLock::new(),
+            claims: crate::util::Claims::default(),
         }
     }
 
@@ -148,15 +152,13 @@ impl Pipeline {
     /// Places the stronghold rings, as the game does when the world loads;
     /// structure starts wait for it.
     pub fn prepare(&self) {
-        let mut g = Columns {
-            sampler: self.generator.columns(),
-        };
-        self.ensure_rings(&mut g);
+        self.ensure_rings();
     }
 
-    fn ensure_rings(&self, g: &mut Columns) {
+    fn ensure_rings(&self) {
         self.rings.get_or_init(|| {
-            self.features.structures.prepare_rings(self.seed, g);
+            let biome = |qx, qy, qz| self.generator.noise_biome(qx, qy, qz);
+            self.features.structures.prepare_rings(self.seed, &biome);
         });
     }
 
@@ -182,11 +184,10 @@ impl Pipeline {
             }
             cell.get_or_init(|| {
                 let g = ground.get_or_insert_with(|| {
-                    let mut g = Columns {
+                    self.ensure_rings();
+                    Columns {
                         sampler: self.generator.columns(),
-                    };
-                    self.ensure_rings(&mut g);
-                    g
+                    }
                 });
                 self.features
                     .structures
@@ -355,49 +356,68 @@ impl Pipeline {
 
     /// Generates chunk `x, z` with everything around it it needs.
     pub fn finish(&self, x: i32, z: i32, world: &dyn Finished) -> Done {
-        let mut protos = self.protos.lock().expect("protos lock");
-        let finished = self.finished.lock().expect("finished lock");
-        let is_final = |cx: i32, cz: i32, finished: &HashSet<(i32, i32)>| {
-            (cx, cz) != (x, z) && (finished.contains(&(cx, cz)) || world.is_finished(cx, cz))
-        };
         // Terrain for the 5×5 around: decorating a neighbour reads its own
         // neighbours.
-        let missing: Vec<(i32, i32)> = (-2..=2)
+        let area: Vec<(i32, i32)> = (-2..=2)
             .flat_map(|dz| (-2..=2).map(move |dx| (x + dx, z + dz)))
-            .filter(|p| !protos.contains_key(p))
             .collect();
+        // Whether a chunk is finished already (asked without holding our
+        // locks: the world has its own).
+        let finals = |list: &[(i32, i32)]| -> Vec<bool> {
+            let known: Vec<bool> = {
+                let finished = self.finished.lock().expect("finished lock");
+                list.iter().map(|p| finished.contains(p)).collect()
+            };
+            list.iter()
+                .zip(known)
+                .map(|(&p, known)| p != (x, z) && (known || world.is_finished(p.0, p.1)))
+                .collect()
+        };
+        let absent: Vec<(i32, i32)> = {
+            let protos = self.protos.lock().expect("protos lock");
+            area.iter()
+                .copied()
+                .filter(|p| !protos.contains_key(p))
+                .collect()
+        };
         // Chunks saved half way come back as they were.
-        let mut missing = missing;
-        missing.retain(|&(cx, cz)| {
-            if is_final(cx, cz, &finished) {
-                return true;
+        let mut missing = Vec::new();
+        let mut stored = Vec::new();
+        for (p, is_final) in absent.iter().zip(finals(&absent)) {
+            match (!is_final).then(|| world.stored_proto(p.0, p.1)).flatten() {
+                Some(chunk) => stored.push((*p, self.stored(chunk))),
+                None => missing.push(*p),
             }
-            match world.stored_proto(cx, cz) {
-                Some(chunk) => {
-                    protos.insert((cx, cz), self.stored(chunk));
-                    false
-                }
-                None => true,
+        }
+        if !stored.is_empty() {
+            let mut protos = self.protos.lock().expect("protos lock");
+            for (p, proto) in stored {
+                protos.entry(p).or_insert(proto);
             }
-        });
+        }
         // Terrain needs nothing shared: make it without holding the locks so
         // other chunks can be finished meanwhile.
-        drop(finished);
-        drop(protos);
         let made = self.terrain_parallel(&missing);
-        let mut protos = self.protos.lock().expect("protos lock");
-        let mut finished = self.finished.lock().expect("finished lock");
-        for (pos, mut proto) in made {
-            // Someone else may have made (and since changed) it meanwhile.
-            if protos.contains_key(&pos) {
-                continue;
+        let _claim = self.claims.claim(area.clone());
+        // Nothing in the area gets finished while we hold it.
+        let made_pos: Vec<(i32, i32)> = made.iter().map(|(p, _)| *p).collect();
+        let made_final = finals(&made_pos);
+        // The area is ours: take its chunks out to work on them unlocked.
+        let mut protos: HashMap<(i32, i32), Proto, Fast> = {
+            let mut shared = self.protos.lock().expect("protos lock");
+            let finished = self.finished.lock().expect("finished lock");
+            for ((pos, mut proto), is_final) in made.into_iter().zip(made_final) {
+                // Someone else may have made (and since changed) it meanwhile.
+                if shared.contains_key(&pos) {
+                    continue;
+                }
+                proto.readonly = is_final || finished.contains(&pos) && pos != (x, z);
+                shared.insert(pos, proto);
             }
-            proto.readonly = is_final(pos.0, pos.1, &finished);
-            if proto.readonly {
-                finished.insert(pos);
-            }
-            protos.insert(pos, proto);
-        }
+            area.iter()
+                .filter_map(|p| shared.remove(p).map(|proto| (*p, proto)))
+                .collect()
+        };
         // Features for the 3×3.
         for dz in -1..=1 {
             for dx in -1..=1 {
@@ -448,9 +468,17 @@ impl Pipeline {
         let mut proto = protos.remove(&(x, z)).expect("center generated");
         settle_falling(facts, &mut proto);
         bubble_columns(facts, &mut proto);
-        finished.insert((x, z));
-        // Terrain no unfinished chunk can ask for any more.
         {
+            // Same order as everywhere: protos, then finished.
+            let mut shared = self.protos.lock().expect("protos lock");
+            let mut finished = self.finished.lock().expect("finished lock");
+            for (pos, proto) in &protos {
+                if proto.readonly {
+                    finished.insert(*pos);
+                }
+            }
+            finished.insert((x, z));
+            // Terrain no unfinished chunk can ask for any more.
             let mut terrain = self.terrain.lock().expect("terrain lock");
             for dz in -2..=2 {
                 for dx in -2..=2 {
@@ -461,12 +489,18 @@ impl Pipeline {
                     }
                 }
             }
+            drop(terrain);
+            // Back with the others, but for copies nobody can need any more:
+            // every neighbour is finished.
+            for (pos, p) in protos {
+                let done = p.readonly
+                    && (-1..=1)
+                        .all(|dz| (-1..=1).all(|dx| finished.contains(&(pos.0 + dx, pos.1 + dz))));
+                if !done {
+                    shared.insert(pos, p);
+                }
+            }
         }
-        // Copies nobody can need any more: every neighbour is finished.
-        protos.retain(|&(px, pz), p| {
-            !p.readonly
-                || !(-1..=1).all(|dz| (-1..=1).all(|dx| finished.contains(&(px + dx, pz + dz))))
-        });
         let mut chunk = proto.chunk;
         chunk.block_entities = proto
             .block_entities

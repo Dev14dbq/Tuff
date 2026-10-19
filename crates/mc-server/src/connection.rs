@@ -1547,75 +1547,72 @@ impl ChunkView {
         missing.sort_by_key(|&(x, z)| (x - cx).pow(2) + (z - cz).pow(2));
 
         writer.queue(&play::SetChunkCacheCenter { x: cx, z: cz })?;
-        // Nearest first, in batches that grow, each sent as soon as it is
-        // loaded: the player sees the ground at once.
-        let mut rest = &missing[..];
-        let mut size = FIRST_BATCH;
-        while !rest.is_empty() {
-            let (batch, later) = rest.split_at(size.min(rest.len()));
-            let frames = load_chunks(&self.ctx, batch).await?;
+        // All of them are worked on at once, nearest first; each batch sent
+        // holds what is ready by then, so the player sees the ground at once.
+        let mut ready = load_chunks(&self.ctx, missing);
+        while let Some(first) = ready.recv().await {
+            let mut batch = vec![first];
+            while let Ok(more) = ready.try_recv() {
+                batch.push(more);
+            }
             writer.queue(&play::ChunkBatchStart)?;
-            for (&(x, z), frame) in batch.iter().zip(&frames) {
+            for ((x, z), frame) in &batch {
                 writer.queue_frame(frame);
-                self.loaded.insert((x, z));
+                self.loaded.insert((*x, *z));
             }
             writer.queue(&play::ChunkBatchFinished {
                 batch_size: batch.len() as i32,
             })?;
             writer.flush().await?;
-            rest = later;
-            size = (size * 2).min(MAX_BATCH);
         }
         Ok(())
     }
 }
 
-/// Chunks in the first batch a player gets after moving (a 5×5 square).
-const FIRST_BATCH: usize = 25;
-const MAX_BATCH: usize = 256;
-
 /// Loads (or takes from memory) the framed packets of `coords`, in order, on
 /// the blocking pool: up to one task per core, so a joining player's chunks
 /// are read, decoded and compressed in parallel and connection tasks never
 /// block.
-async fn load_chunks(ctx: &Arc<ServerContext>, coords: &[(i32, i32)]) -> Result<Vec<Arc<[u8]>>> {
-    const PER_TASK: usize = 8;
-    let tasks = std::thread::available_parallelism()
+/// A chunk's position and its Chunk Data packet.
+type ReadyChunk = ((i32, i32), Arc<[u8]>);
+
+/// Loads (or generates) chunks on several threads, nearest first as given;
+/// each one's packet comes out of the channel as soon as it is ready.
+fn load_chunks(
+    ctx: &Arc<ServerContext>,
+    coords: Vec<(i32, i32)>,
+) -> tokio::sync::mpsc::UnboundedReceiver<ReadyChunk> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let workers = std::thread::available_parallelism()
         .map_or(4, usize::from)
-        .min(coords.len().div_ceil(PER_TASK))
+        .min(coords.len())
         .max(1);
-    // Task i takes every tasks-th chunk, so all of them start near the player.
-    let handles: Vec<_> = (0..tasks)
-        .map(|i| {
-            let ctx = ctx.clone();
-            let mine: Vec<(i32, i32)> = coords.iter().copied().skip(i).step_by(tasks).collect();
-            tokio::task::spawn_blocking(move || {
-                let compression = ctx.config.compression_threshold;
-                let frame = |packet: &play::LevelChunkWithLight| {
-                    let mut out = Vec::new();
-                    ctx.ids
-                        .write(packet, &mut out, compression)
-                        .expect("chunk data is a known packet");
-                    out
-                };
-                mine.into_iter()
-                    .map(|(x, z)| ctx.world.watch(x, z, &ctx.data.blocks, &frame))
-                    .collect::<Vec<_>>()
-            })
-        })
-        .collect();
-    let mut parts = Vec::with_capacity(tasks);
-    for handle in handles {
-        parts.push(
-            handle
-                .await
-                .context("chunk loading task failed")?
-                .into_iter(),
-        );
+    let coords = Arc::new(coords);
+    let next = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for _ in 0..workers {
+        let (ctx, coords, next, tx) = (ctx.clone(), coords.clone(), next.clone(), tx.clone());
+        tokio::task::spawn_blocking(move || {
+            let compression = ctx.config.compression_threshold;
+            let frame = |packet: &play::LevelChunkWithLight| {
+                let mut out = Vec::new();
+                ctx.ids
+                    .write(packet, &mut out, compression)
+                    .expect("chunk data is a known packet");
+                out
+            };
+            loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(&(x, z)) = coords.get(i) else { break };
+                let bytes = ctx.world.watch(x, z, &ctx.data.blocks, &frame);
+                if tx.send(((x, z), bytes)).is_err() {
+                    // The player left: nobody has this one after all.
+                    ctx.world.unwatch(x, z);
+                    break;
+                }
+            }
+        });
     }
-    Ok((0..coords.len())
-        .map(|i| parts[i % tasks].next().expect("one packet per chunk"))
-        .collect())
+    rx
 }
 
 // ---------------------------------------------------------------------------

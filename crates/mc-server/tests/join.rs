@@ -270,19 +270,16 @@ async fn ping_login_spawn_and_chat() {
     }
     moved.put_u8(0x01);
     bot.send("minecraft:move_player_pos", moved).await;
-    let (seen, _) = bot.recv_until("minecraft:chunk_batch_finished").await;
-    assert_eq!(
-        seen.iter()
-            .filter(|n| *n == "minecraft:level_chunk_with_light")
-            .count(),
-        3 * 7
-    );
-    assert_eq!(
-        seen.iter()
-            .filter(|n| *n == "minecraft:forget_level_chunk")
-            .count(),
-        3 * 7
-    );
+    // They may come in several batches, as they get ready.
+    let (mut chunks, mut forgotten) = (0, 0);
+    while chunks < 3 * 7 {
+        let (seen, _) = bot.recv_until("minecraft:chunk_batch_finished").await;
+        let count = |name: &str| seen.iter().filter(|n| *n == name).count();
+        chunks += count("minecraft:level_chunk_with_light");
+        forgotten += count("minecraft:forget_level_chunk");
+    }
+    assert_eq!(chunks, 3 * 7);
+    assert_eq!(forgotten, 3 * 7);
 
     // --- chat comes back as a system message
     let mut chat = Vec::new();
@@ -689,6 +686,13 @@ async fn chunks_nobody_has_are_unloaded() {
     }));
 
     let (alice, _) = join_offline(addr, ctx.ids.clone(), "Alice").await;
+    // The view arrives in batches as chunks get ready.
+    for _ in 0..100 {
+        if ctx.world.loaded_chunks() == 25 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(ctx.world.loaded_chunks(), 25, "a 5×5 view");
     assert_eq!(ctx.world.unload_unused(), 0, "Alice still has them");
     drop(alice);

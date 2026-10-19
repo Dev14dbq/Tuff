@@ -56,6 +56,9 @@ pub struct World {
     live_ticks: Mutex<Vec<(mc_tick::BlockPos, u32)>>,
     /// Loaded chunks whose light a new neighbour changed.
     relit: Mutex<Vec<(i32, i32)>>,
+    /// New chunks are lit with their neighbours outside the chunks lock;
+    /// overlapping 3×3 areas take turns.
+    lighting: crate::util::Claims,
     /// `/save-off`.
     no_autosave: std::sync::atomic::AtomicBool,
 }
@@ -106,6 +109,9 @@ struct Slot {
     chunk: Option<Box<Chunk>>,
     /// The Chunk Data packet as it goes on the wire (id, compression).
     frame: Option<Arc<[u8]>>,
+    /// Counts changes, so a packet made from a copy is kept only if the
+    /// chunk did not change meanwhile.
+    changes: u64,
     /// Changed since it was loaded or saved.
     dirty: bool,
     /// Players whose client has this chunk.
@@ -241,6 +247,7 @@ impl World {
             light,
             live_ticks: Mutex::new(Vec::new()),
             relit: Mutex::new(Vec::new()),
+            lighting: crate::util::Claims::default(),
             no_autosave: std::sync::atomic::AtomicBool::new(false),
             dimension: dim.name,
             dimension_type_id: dim.type_id,
@@ -351,6 +358,7 @@ impl World {
             light,
             live_ticks: Mutex::new(Vec::new()),
             relit: Mutex::new(Vec::new()),
+            lighting: crate::util::Claims::default(),
             no_autosave: std::sync::atomic::AtomicBool::new(false),
             dimension: dim.name,
             dimension_type_id: dim.type_id,
@@ -371,20 +379,83 @@ impl World {
             return f(slot);
         }
         let (chunk, generated) = self.load(x, z, blocks);
-        let mut chunks = self.chunks.lock().expect("chunks lock");
-        // Someone else may have loaded it meanwhile; theirs wins.
-        let fresh = !chunks.contains_key(&(x, z));
-        chunks.entry((x, z)).or_insert(Slot {
+        let new_slot = |chunk| Slot {
             chunk,
             frame: None,
+            changes: 0,
             // A generated chunk is saved like a changed one.
             dirty: generated,
             viewers: 0,
+        };
+        if !generated {
+            let mut chunks = self.chunks.lock().expect("chunks lock");
+            // Someone else may have loaded it meanwhile; theirs wins.
+            let slot = chunks.entry((x, z)).or_insert_with(|| new_slot(chunk));
+            return f(slot);
+        }
+        // Lit together with the chunks around it: light crosses the border
+        // both ways, and neighbours whose light changed are sent again. The
+        // work is done on copies; what changed is put back after.
+        let area: Vec<(i32, i32)> = (-1..=1)
+            .flat_map(|dz| (-1..=1).map(move |dx| (x + dx, z + dz)))
+            .collect();
+        let claim = self.lighting.claim(area.clone());
+        let mut local: HashMap<(i32, i32), Slot, mc_worldgen::density::Fast> = HashMap::default();
+        {
+            let mut chunks = self.chunks.lock().expect("chunks lock");
+            if let Some(slot) = chunks.get_mut(&(x, z)) {
+                return f(slot);
+            }
+            for &p in &area {
+                if let Some(slot) = chunks.get(&p) {
+                    local.insert(
+                        p,
+                        Slot {
+                            chunk: slot.chunk.clone(),
+                            frame: None,
+                            changes: slot.changes,
+                            dirty: false,
+                            viewers: 0,
+                        },
+                    );
+                }
+            }
+        }
+        let versions: HashMap<(i32, i32), u64> =
+            local.iter().map(|(p, s)| (*p, s.changes)).collect();
+        local.insert((x, z), new_slot(chunk));
+        let mut view = LightView {
+            chunks: &mut local,
+            min_y: self.min_y,
+            top: self.min_y + self.height as i32,
+            touched: Vec::new(),
+        };
+        mc_light::light_region(
+            &mut view,
+            &self.light,
+            (x * 16, z * 16),
+            (x * 16 + 16, z * 16 + 16),
+            self.min_y,
+        );
+        let mut touched = view.touched;
+        touched.sort_unstable();
+        touched.dedup();
+        let mut chunks = self.chunks.lock().expect("chunks lock");
+        if chunks.contains_key(&(x, z)) {
+            drop(claim);
+            return f(chunks.get_mut(&(x, z)).expect("present"));
+        }
+        let conflict = touched.iter().any(|c| {
+            *c != (x, z)
+                && versions
+                    .get(c)
+                    .is_none_or(|&v| chunks.get(c).is_none_or(|s| s.changes != v))
         });
-        if generated && fresh {
-            // Lit together with the chunks around it: light crosses the
-            // border both ways, and neighbours whose light changed are sent
-            // again.
+        let mut slot = local.remove(&(x, z)).expect("inserted above");
+        slot.changes = 0;
+        chunks.insert((x, z), slot);
+        let relit: Vec<(i32, i32)> = if conflict {
+            // A neighbour changed meanwhile: light again, on the real thing.
             let mut view = LightView {
                 chunks: &mut chunks,
                 min_y: self.min_y,
@@ -398,12 +469,24 @@ impl World {
                 (x * 16 + 16, z * 16 + 16),
                 self.min_y,
             );
-            let relit: Vec<(i32, i32)> =
-                view.touched.into_iter().filter(|&c| c != (x, z)).collect();
-            if !relit.is_empty() {
-                self.relit.lock().expect("relit lock").extend(relit);
+            view.touched.into_iter().filter(|&c| c != (x, z)).collect()
+        } else {
+            for c in touched.iter().filter(|&&c| c != (x, z)) {
+                if let (Some(from), Some(to)) = (local.get_mut(c), chunks.get_mut(c))
+                    && let (Some(lit), Some(chunk)) = (from.chunk.take(), to.chunk.as_mut())
+                {
+                    chunk.light = lit.light;
+                    to.frame = None;
+                    to.changes += 1;
+                    to.dirty |= from.dirty;
+                }
             }
+            touched.into_iter().filter(|&c| c != (x, z)).collect()
+        };
+        if !relit.is_empty() {
+            self.relit.lock().expect("relit lock").extend(relit);
         }
+        drop(claim);
         let slot = chunks.get_mut(&(x, z)).expect("inserted above");
         f(slot)
     }
@@ -506,23 +589,34 @@ impl World {
         blocks: &Blocks,
         frame: &dyn Fn(&LevelChunkWithLight) -> Vec<u8>,
     ) -> Arc<[u8]> {
-        self.with_slot(x, z, blocks, |slot| {
+        // Encoding and compressing happen without the lock, on a copy.
+        let copy = self.with_slot(x, z, blocks, |slot| {
             slot.viewers += 1;
-            if let Some(frame) = &slot.frame {
-                return frame.clone();
+            match &slot.frame {
+                Some(frame) => Err(frame.clone()),
+                None => Ok((slot.chunk.clone(), slot.changes)),
             }
-            let packet = match &slot.chunk {
-                Some(chunk) => self.encode(chunk, blocks),
-                None => {
-                    let mut empty = self.empty.clone();
-                    (empty.x, empty.z) = (x, z);
-                    self.encode(&empty, blocks)
-                }
-            };
-            let bytes: Arc<[u8]> = frame(&packet).into();
+        });
+        let (chunk, changes) = match copy {
+            Err(frame) => return frame,
+            Ok(copy) => copy,
+        };
+        let packet = match &chunk {
+            Some(chunk) => self.encode(chunk, blocks),
+            None => {
+                let mut empty = self.empty.clone();
+                (empty.x, empty.z) = (x, z);
+                self.encode(&empty, blocks)
+            }
+        };
+        let bytes: Arc<[u8]> = frame(&packet).into();
+        if let Some(slot) = self.chunks.lock().expect("chunks lock").get_mut(&(x, z))
+            && slot.frame.is_none()
+            && slot.changes == changes
+        {
             slot.frame = Some(bytes.clone());
-            bytes
-        })
+        }
+        bytes
     }
 
     /// A player's client no longer has the chunk.
@@ -622,6 +716,7 @@ impl World {
                 .retain(|other| (other.x, other.y, other.z) != (be.x, be.y, be.z));
             chunk.block_entities.push(be);
             slot.frame = None;
+            slot.changes += 1;
             slot.dirty = true;
         });
     }
@@ -656,6 +751,7 @@ impl World {
                     .retain(|be| (be.x, be.y, be.z) != (p.x, p.y, p.z));
             }
             slot.frame = None;
+            slot.changes += 1;
             slot.dirty = true;
             Some(old)
         })
@@ -1106,6 +1202,7 @@ fn light_alone(chunk: &mut Chunk, tables: &mc_light::Tables) {
         Slot {
             chunk: Some(Box::new(chunk.clone())),
             frame: None,
+            changes: 0,
             dirty: false,
             viewers: 0,
         },
@@ -1273,6 +1370,7 @@ impl mc_light::LightWorld for LightView<'_> {
             (*byte & 0x0F) | (level << 4)
         };
         slot.frame = None;
+        slot.changes += 1;
         slot.dirty = true;
         if !self.touched.contains(&key) {
             self.touched.push(key);

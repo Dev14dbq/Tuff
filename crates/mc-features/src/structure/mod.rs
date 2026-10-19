@@ -533,7 +533,9 @@ impl Structures {
 
     /// The stronghold ring positions (chunk coordinates), from the world
     /// seed; each moved to a nearby preferred biome when there is one.
-    pub fn prepare_rings(&self, seed: i64, ground: &mut dyn Ground) {
+    /// Places the ring structures (strongholds). `biome` is the noise
+    /// biome of a 4×4×4 cell; the searches run on several threads.
+    pub fn prepare_rings(&self, seed: i64, biome: &(dyn Fn(i32, i32, i32) -> u32 + Sync)) {
         for set in &self.sets {
             let Placement::Rings {
                 distance,
@@ -547,35 +549,18 @@ impl Structures {
             if self.rings.lock().expect("rings lock").contains_key(&set.id) {
                 continue;
             }
+            // Where each one would go, and the seed of its search: the
+            // searches draw from their own forks, so they can run apart.
             let mut r = WorldgenRandom::legacy(seed);
             let mut angle = r.next_double() * std::f64::consts::PI * 2.0;
-            let mut list = Vec::new();
+            let mut spots = Vec::new();
             let (mut in_ring, mut ring, mut per_ring) = (0, 0, spread);
             for n in 0..count {
                 let dist = f64::from(4 * distance + distance * ring * 6)
                     + (r.next_double() - 0.5) * (f64::from(distance) * 2.5);
                 let cx = (angle.cos() * dist).round() as i32;
                 let cz = (angle.sin() * dist).round() as i32;
-                // Moved to a preferred biome within 112 blocks, picked at
-                // random among those there (its own fork of the source).
-                let mut fork = WorldgenRandom::legacy(r.next_long());
-                let (qx, qz) = ((cx * 16 + 8) >> 2, (cz * 16 + 8) >> 2);
-                let k = 112 >> 2;
-                let mut found: Option<(i32, i32)> = None;
-                let mut m = 0;
-                for p in -k..=k {
-                    for q in -k..=k {
-                        let (bx, bz) = (qx + q, qz + p);
-                        if !preferred.contains(&ground.biome(bx, 0, bz)) {
-                            continue;
-                        }
-                        if found.is_none() || fork.next_int_bound(m + 1) == 0 {
-                            found = Some(((bx << 2) >> 4, (bz << 2) >> 4));
-                        }
-                        m += 1;
-                    }
-                }
-                list.push(found.unwrap_or((cx, cz)));
+                spots.push((cx, cz, r.next_long()));
                 angle += std::f64::consts::PI * 2.0 / f64::from(per_ring);
                 in_ring += 1;
                 if in_ring == per_ring {
@@ -586,6 +571,42 @@ impl Structures {
                     angle += r.next_double() * std::f64::consts::PI * 2.0;
                 }
             }
+            // Moved to a preferred biome within 112 blocks, picked at random
+            // among those there.
+            let search = |&(cx, cz, fork_seed): &(i32, i32, i64)| {
+                let mut fork = WorldgenRandom::legacy(fork_seed);
+                let (qx, qz) = ((cx * 16 + 8) >> 2, (cz * 16 + 8) >> 2);
+                let k = 112 >> 2;
+                let mut found: Option<(i32, i32)> = None;
+                let mut m = 0;
+                for p in -k..=k {
+                    for q in -k..=k {
+                        let (bx, bz) = (qx + q, qz + p);
+                        if !preferred.contains(&biome(bx, 0, bz)) {
+                            continue;
+                        }
+                        if found.is_none() || fork.next_int_bound(m + 1) == 0 {
+                            found = Some(((bx << 2) >> 4, (bz << 2) >> 4));
+                        }
+                        m += 1;
+                    }
+                }
+                found.unwrap_or((cx, cz))
+            };
+            let threads = std::thread::available_parallelism()
+                .map_or(4, |n| n.get())
+                .min(spots.len().max(1));
+            let per = spots.len().div_ceil(threads).max(1);
+            let list: Vec<(i32, i32)> = std::thread::scope(|s| {
+                let parts: Vec<_> = spots
+                    .chunks(per)
+                    .map(|part| s.spawn(move || part.iter().map(search).collect::<Vec<_>>()))
+                    .collect();
+                parts
+                    .into_iter()
+                    .flat_map(|h| h.join().expect("ring search"))
+                    .collect()
+            });
             self.rings
                 .lock()
                 .expect("rings lock")
