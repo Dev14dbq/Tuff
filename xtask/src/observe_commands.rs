@@ -26,11 +26,17 @@ pub fn run(args: &[String]) -> Result<()> {
     let root = crate::workspace_root();
     let mut lines_file = root.join("xtask/commands.txt");
     let mut ours = false;
+    // `--area name`: its own server folders, port and output files, so
+    // several areas can be observed side by side.
+    let mut area: Option<String> = None;
+    let mut port = PORT;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--lines" => lines_file = it.next().context("--lines needs a file")?.into(),
             "--ours" => ours = true,
+            "--area" => area = Some(it.next().context("--area needs a name")?.clone()),
+            "--port" => port = it.next().context("--port needs a number")?.parse()?,
             other => bail!("unknown option `{other}`"),
         }
     }
@@ -42,25 +48,29 @@ pub fn run(args: &[String]) -> Result<()> {
         .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
         .map(str::to_owned)
         .collect();
-    let dir = root.join("cache/vanilla-server/26.3-commands");
+    let suffix = area.as_ref().map_or(String::new(), |a| format!("-{a}"));
+    let dir = root.join(format!("cache/vanilla-server/26.3-commands{suffix}"));
     let properties = format!(
-        "online-mode=false\nserver-ip=127.0.0.1\nserver-port={PORT}\nlevel-name=world\n\
+        "online-mode=false\nserver-ip=127.0.0.1\nserver-port={port}\nlevel-name=world\n\
          level-type=minecraft\\:flat\ngamemode=creative\nspawn-protection=0\n\
          view-distance=2\nsimulation-distance=2\ngenerate-structures=false\n\
          pause-when-empty-seconds=0\nenable-status=true\nsync-chunk-writes=false\n\
          level-seed=1\nwhite-list=false\nenforce-whitelist=false\n"
     );
     if ours {
-        let dir = root.join("cache/ours-commands");
+        let dir = root.join(format!("cache/ours-commands{suffix}"));
         let mut server = Server::ours_in(&root, &dir, &properties)?;
         let result = observe(
             &mut server,
+            port,
             &lines,
             &dir.join("world/data/minecraft/game_rules.dat"),
         );
         server.stop();
         let (tree, _, replies, _) = result?;
-        let out = root.join("cache/mcdata/26.3/observed/commands-ours.json");
+        let out = root.join(format!(
+            "cache/mcdata/26.3/observed/commands{suffix}-ours.json"
+        ));
         std::fs::write(
             &out,
             serde_json::to_string_pretty(&json!({ "tree": tree, "lines": replies }))?,
@@ -75,6 +85,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut server = Server::start_java(&root, &dir)?;
     let result = observe(
         &mut server,
+        port,
         &lines,
         &dir.join("world/data/minecraft/game_rules.dat"),
     );
@@ -82,6 +93,15 @@ pub fn run(args: &[String]) -> Result<()> {
     let (tree, raw, replies, rules) = result?;
     let out = root.join("cache/mcdata/26.3/observed");
     std::fs::create_dir_all(&out)?;
+    if area.is_some() {
+        let file = out.join(format!("commands{suffix}.json"));
+        std::fs::write(
+            &file,
+            serde_json::to_string_pretty(&json!({ "lines": replies }))?,
+        )?;
+        println!("{} lines → {}", replies.len(), file.display());
+        return Ok(());
+    }
     std::fs::write(out.join("commands.bin"), &raw)?;
     std::fs::write(
         out.join("commands.json"),
@@ -102,11 +122,12 @@ type Observed = (Value, Vec<u8>, Vec<Value>, Value);
 
 fn observe(
     server: &mut Server,
+    port: u16,
     lines: &[String],
     rules_file: &std::path::Path,
 ) -> Result<Observed> {
     let ids = load_packet_ids(None)?;
-    let (mut client, _) = join_player(&format!("127.0.0.1:{PORT}"), ids, NAME)?;
+    let (mut client, _) = join_player(&format!("127.0.0.1:{port}"), ids, NAME)?;
     client.set_read_timeout(Duration::from_millis(100))?;
     server.wait_for(&format!("op {NAME}"), "operator", Duration::from_secs(10))?;
     // The tree is sent again for the new permission level.

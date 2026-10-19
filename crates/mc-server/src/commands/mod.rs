@@ -4,7 +4,12 @@
 //! them, recorded by `cargo xtask observe-commands`). They run on the tick
 //! thread, in order with everything else that changes the world.
 
+mod functions;
+mod living;
+mod places;
+mod rare;
 mod run;
+mod scores;
 mod suggest;
 mod target;
 mod world;

@@ -12,13 +12,14 @@ use mc_protocol::packets::play::{ItemStack, TickingState, TickingStep};
 use super::target::{self, Target, player_name};
 use super::world::{apply, in_world, put_block_data};
 use super::{Result, Run, Src, Who};
+use super::{functions, living, places, rare, scores};
 use crate::context::{Event, ServerContext};
 use crate::rules;
 use crate::tick::lock;
 
 /// Most blocks one `fill` or `clone` may change (the
 /// `max_block_modifications` default).
-fn block_limit(ctx: &ServerContext) -> i64 {
+pub(super) fn block_limit(ctx: &ServerContext) -> i64 {
     i64::from(
         ctx.game_rules
             .lock()
@@ -27,20 +28,20 @@ fn block_limit(ctx: &ServerContext) -> i64 {
     )
 }
 
-fn err(key: &str, args: Vec<Tag>) -> CommandError {
+pub(super) fn err(key: &str, args: Vec<Tag>) -> CommandError {
     CommandError::new(key, args)
 }
 
-fn str_tag(s: &str) -> Tag {
+pub(super) fn str_tag(s: &str) -> Tag {
     Tag::from(s)
 }
 
 /// A number as vanilla's `%f`: six decimals.
-fn six(v: f64) -> Tag {
+pub(super) fn six(v: f64) -> Tag {
     Tag::String(format!("{v:.6}"))
 }
 
-fn game_mode_id(name: &str) -> i32 {
+pub(super) fn game_mode_id(name: &str) -> i32 {
     match name {
         "creative" => 1,
         "adventure" => 2,
@@ -49,7 +50,7 @@ fn game_mode_id(name: &str) -> i32 {
     }
 }
 
-fn game_mode_key(mode: i32) -> String {
+pub(super) fn game_mode_key(mode: i32) -> String {
     let name = match mode {
         1 => "creative",
         2 => "adventure",
@@ -62,32 +63,32 @@ fn game_mode_key(mode: i32) -> String {
 const DIFFICULTIES: [&str; 4] = ["peaceful", "easy", "normal", "hard"];
 
 impl Run<'_> {
-    fn arg(&self, name: &str) -> Option<&Arg> {
+    pub(super) fn arg(&self, name: &str) -> Option<&Arg> {
         self.c.arg(name)
     }
 
-    fn int(&self, name: &str) -> Option<i32> {
+    pub(super) fn int(&self, name: &str) -> Option<i32> {
         match self.arg(name)? {
             Arg::Int(v) | Arg::Time(v) => Some(*v),
             _ => None,
         }
     }
 
-    fn float(&self, name: &str) -> Option<f32> {
+    pub(super) fn float(&self, name: &str) -> Option<f32> {
         match self.arg(name)? {
             Arg::Float(v) => Some(*v),
             _ => None,
         }
     }
 
-    fn boolean(&self, name: &str) -> Option<bool> {
+    pub(super) fn boolean(&self, name: &str) -> Option<bool> {
         match self.arg(name)? {
             Arg::Bool(v) => Some(*v),
             _ => None,
         }
     }
 
-    fn string(&self, name: &str) -> Option<String> {
+    pub(super) fn string(&self, name: &str) -> Option<String> {
         match self.arg(name)? {
             Arg::Str(s) | Arg::Raw(s) | Arg::Id(s) => Some(s.clone()),
             Arg::IdOrTag { id, tag } => Some(if *tag { format!("#{id}") } else { id.clone() }),
@@ -95,14 +96,14 @@ impl Run<'_> {
         }
     }
 
-    fn nbt(&self, name: &str) -> Option<Tag> {
+    pub(super) fn nbt(&self, name: &str) -> Option<Tag> {
         match self.arg(name)? {
             Arg::Nbt(t) => Some(t.clone()),
             _ => None,
         }
     }
 
-    fn targets(&self, name: &str, players: bool) -> Result<Vec<Target>> {
+    pub(super) fn targets(&self, name: &str, players: bool) -> Result<Vec<Target>> {
         match self.arg(name) {
             Some(Arg::Entity(s)) => target::entities(self.ctx, s, &self.src, players),
             _ => Err(err("argument.entity.notfound.entity", Vec::new())),
@@ -110,7 +111,7 @@ impl Run<'_> {
     }
 
     /// The targets, or the source itself when the argument is left out.
-    fn targets_or_self(&self, name: &str, players: bool) -> Result<Vec<Target>> {
+    pub(super) fn targets_or_self(&self, name: &str, players: bool) -> Result<Vec<Target>> {
         if self.arg(name).is_some() {
             return self.targets(name, players);
         }
@@ -132,14 +133,14 @@ impl Run<'_> {
         Ok(me)
     }
 
-    fn vec3(&self, name: &str) -> Option<[f64; 3]> {
+    pub(super) fn vec3(&self, name: &str) -> Option<[f64; 3]> {
         match self.arg(name)? {
             Arg::Pos(p) => Some(resolve(p, &self.src)),
             _ => None,
         }
     }
 
-    fn block_pos(&self, name: &str) -> Option<Position> {
+    pub(super) fn block_pos(&self, name: &str) -> Option<Position> {
         let [x, y, z] = self.vec3(name)?;
         Some(Position::new(
             x.floor() as i32,
@@ -149,7 +150,7 @@ impl Run<'_> {
     }
 
     /// A block position that must be in the world and loaded.
-    fn loaded_pos(&self, name: &str) -> Result<Position> {
+    pub(super) fn loaded_pos(&self, name: &str) -> Result<Position> {
         let p = self
             .block_pos(name)
             .ok_or_else(|| err("argument.pos.unloaded", Vec::new()))?;
@@ -163,7 +164,7 @@ impl Run<'_> {
     }
 
     /// A block state with its block entity data.
-    fn block(&self, name: &str) -> Option<(u32, Option<Compound>)> {
+    pub(super) fn block(&self, name: &str) -> Option<(u32, Option<Compound>)> {
         let Arg::Block(b) = self.arg(name)? else {
             return None;
         };
@@ -468,7 +469,13 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         ["random", kind @ ("value" | "roll"), "range", ..] => random(r, *kind == "roll"),
         ["clone", ..] => clone(r, path),
         ["datapack", "list", rest @ ..] => datapack_list(r, rest.first().copied()),
-        _ => return None,
+        _ => {
+            return scores::run(r, path)
+                .or_else(|| places::run(r, path))
+                .or_else(|| functions::run(r, path))
+                .or_else(|| living::run(r, path))
+                .or_else(|| rare::run(r, path));
+        }
     })
 }
 
@@ -538,7 +545,7 @@ fn list(r: &mut Run, uuids: bool) -> Result<i32> {
 }
 
 /// Components joined with `, ` as vanilla lists them.
-fn join(items: Vec<Tag>) -> Tag {
+pub(super) fn join(items: Vec<Tag>) -> Tag {
     let mut parts = Vec::new();
     for (i, t) in items.into_iter().enumerate() {
         if i > 0 {
@@ -687,7 +694,7 @@ fn save_toggle(r: &mut Run, on: bool) -> Result<i32> {
 }
 
 /// The source's name as messages show it.
-fn source_name(r: &Run) -> Tag {
+pub(super) fn source_name(r: &Run) -> Tag {
     match r.src.who {
         Who::Player(u) => player_name(&r.src.name, u),
         _ => str_tag(&r.src.name),
@@ -737,7 +744,7 @@ fn msg(r: &mut Run) -> Result<i32> {
 }
 
 /// Adds styles (`italic` with an empty value means true).
-fn style(t: &mut Tag, styles: &[(&str, &str)]) {
+pub(super) fn style(t: &mut Tag, styles: &[(&str, &str)]) {
     if let Tag::Compound(c) = t {
         for (k, v) in styles {
             if v.is_empty() {
@@ -1659,7 +1666,7 @@ fn teleport(r: &mut Run, path: &[&str]) -> Result<i32> {
 }
 
 /// An item as messages show it: `[Diamond]` with a hover card.
-fn item_display(ctx: &ServerContext, name: &str) -> Tag {
+pub(super) fn item_display(ctx: &ServerContext, name: &str) -> Tag {
     let short = name.trim_start_matches("minecraft:");
     let key = if ctx.data.blocks.get(name).is_some() {
         format!("block.minecraft.{short}")
@@ -1858,7 +1865,7 @@ fn kill(r: &mut Run) -> Result<i32> {
     Ok(targets.len() as i32)
 }
 
-fn tag_f64(tag: Option<&Tag>) -> Option<f64> {
+pub(super) fn tag_f64(tag: Option<&Tag>) -> Option<f64> {
     match tag? {
         Tag::Double(v) => Some(*v),
         Tag::Float(v) => Some(f64::from(*v)),
@@ -1867,7 +1874,7 @@ fn tag_f64(tag: Option<&Tag>) -> Option<f64> {
     }
 }
 
-fn tag_i32(tag: Option<&Tag>) -> Option<i32> {
+pub(super) fn tag_i32(tag: Option<&Tag>) -> Option<i32> {
     match tag? {
         Tag::Byte(v) => Some(i32::from(*v)),
         Tag::Short(v) => Some(i32::from(*v)),
@@ -2373,7 +2380,7 @@ fn worldborder(r: &mut Run, rest: &[&str]) -> Result<i32> {
     Ok(result.1)
 }
 
-fn direct(r: &mut Run, uuid: u128, packet: crate::context::Direct) {
+pub(super) fn direct(r: &mut Run, uuid: u128, packet: crate::context::Direct) {
     r.out.events.push(Event::Direct { uuid, packet });
 }
 
