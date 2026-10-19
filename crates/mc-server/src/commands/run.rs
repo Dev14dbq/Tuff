@@ -326,12 +326,14 @@ pub fn modify(ctx: &ServerContext, c: &Context, s: &Src) -> Result<Vec<Src>> {
                 Ok(Vec::new())
             }
         }
-        _ => Err(CommandError::new("command.failed", Vec::new())),
+        _ => functions::modify(ctx, c, s, &path)
+            .or_else(|| scores::modify(ctx, c, s, &path))
+            .unwrap_or_else(|| Err(CommandError::new("command.failed", Vec::new()))),
     }
 }
 
 /// `execute if ...`: whether the test passes.
-fn condition(ctx: &ServerContext, c: &Context, s: &Src, rest: &[&str]) -> Result<bool> {
+pub(super) fn condition(ctx: &ServerContext, c: &Context, s: &Src, rest: &[&str]) -> Result<bool> {
     match rest {
         ["entity", "entities"] => Ok(match c.arg("entities") {
             Some(Arg::Entity(sel)) => !target::resolve(ctx, sel, s).is_empty(),
@@ -361,13 +363,30 @@ fn condition(ctx: &ServerContext, c: &Context, s: &Src, rest: &[&str]) -> Result
                     .iter()
                     .all(|(k, v)| ctx.data.blocks.with_property(state, k, v) == Some(state)))
         }
-        _ => Err(CommandError::new("command.failed", Vec::new())),
+        _ => scores::condition(ctx, c, s, rest)
+            .or_else(|| functions::condition(ctx, c, s, rest))
+            .unwrap_or_else(|| Err(CommandError::new("command.failed", Vec::new()))),
     }
 }
 
 /// Runs the command at `path`; `None` when it is not done yet.
 pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
     Some(match path {
+        // `execute if|unless ...` as the whole command: say whether it held.
+        ["execute", kind @ ("if" | "unless"), rest @ ..] => {
+            let pass = condition(r.ctx, r.c, &r.src, rest).map(|p| p == (*kind == "if"));
+            match pass {
+                Ok(true) => {
+                    r.success(
+                        translate("commands.execute.conditional.pass", Vec::new()),
+                        false,
+                    );
+                    Ok(1)
+                }
+                Ok(false) => Err(err("commands.execute.conditional.fail", Vec::new())),
+                Err(e) => Err(e),
+            }
+        }
         ["help"] => help(r, None),
         ["help", "command"] => help(r, r.string("command")),
         ["list"] => list(r, false),

@@ -101,6 +101,44 @@ pub struct Src {
     pub level: u8,
     /// `execute anchored eyes`.
     pub eyes: bool,
+    /// `execute store`: where the command's result goes.
+    pub stores: Vec<Store>,
+}
+
+/// Where `execute store result|success ...` puts what a command returned.
+#[derive(Clone, Debug)]
+pub struct Store {
+    /// `success` (1 or 0) instead of the result.
+    pub success: bool,
+    pub target: StoreTarget,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub enum StoreTarget {
+    /// `score <targets> <objective>` (holder names already resolved).
+    Score {
+        holders: Vec<String>,
+        objective: String,
+    },
+    /// `block|entity|storage ... <path> <type> <scale>`.
+    Data {
+        target: DataTarget,
+        path: String,
+        /// `byte`, `short`, `int`, `long`, `float`, `double`.
+        kind: String,
+        scale: f64,
+    },
+    /// `bossbar <id> value|max`.
+    Bossbar { id: String, max: bool },
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub enum DataTarget {
+    Block(mc_protocol::Position),
+    Entity(u128),
+    Storage(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +160,7 @@ impl Src {
                     rot: [0.0, 0.0],
                     level: 4,
                     eyes: false,
+                    stores: Vec::new(),
                 }
             }
             Source::Player { uuid, name, pose } => Src {
@@ -131,6 +170,7 @@ impl Src {
                 rot: [pose.yaw, pose.pitch],
                 level: level(ctx, *uuid, name),
                 eyes: false,
+                stores: Vec::new(),
             },
         }
     }
@@ -268,6 +308,21 @@ fn run_chain(
         };
         let result = run::run(&mut r, &path);
         admin.append(&mut r.admin);
+        let stores = std::mem::take(&mut r.src.stores);
+        if !stores.is_empty() {
+            let (ok, value) = match &result {
+                Some(Ok(n)) => (true, *n),
+                _ => (false, 0),
+            };
+            for store in &stores {
+                let v = if store.success { i32::from(ok) } else { value };
+                match &store.target {
+                    StoreTarget::Score { .. } => scores::store(ctx, store, v),
+                    StoreTarget::Data { .. } => functions::store(ctx, store, v),
+                    StoreTarget::Bossbar { .. } => places::store(ctx, store, v),
+                }
+            }
+        }
         match result {
             Some(Ok(n)) => total += n,
             Some(Err(e)) if many => r.out.lines.extend(e.lines()),
