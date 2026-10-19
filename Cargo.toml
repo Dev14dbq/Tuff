@@ -20,6 +20,7 @@ mc-entity = { path = "crates/mc-entity" }
 mc-tick = { path = "crates/mc-tick" }
 mc-storage = { path = "crates/mc-storage" }
 mc-features = { path = "crates/mc-features" }
+mc-command = { path = "crates/mc-command" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -1,0 +1,189 @@
+# Lines for `cargo xtask observe-commands`: run by an operator in a flat
+# creative world; `>` lines ask for suggestions instead. No signed-message
+# commands (say, me, msg...) and nothing that ends the session.
+
+# Errors from the parser
+nosuchcommand
+time
+time set
+time set abc
+time set 10q
+time set -5
+gamemode wrongmode
+tp 1 2
+tp ~ ~ ~ extra
+give @a minecraft:nosuchitem
+setblock 0 400 0 stone
+setblock 0 -64 0 nosuchblock
+setblock 0 70 0 stone[nosuch=1]
+effect give @s minecraft:speed 99999999
+xp add @s 1 nothing
+kill @e[type=nosuch]
+kill @z
+weather clear 1x
+
+# Suggestions
+>/
+>/t
+>/time
+>/time s
+>/time set 
+>/gamemode 
+>/gamemode c
+>/give @s minecraft:dia
+>/give @
+>/tp @s ~
+>/setblock ~ ~ ~ minecraft:oak_st
+>/setblock ~ ~ ~ minecraft:oak_stairs[
+>/effect give @s minecraft:
+>/gamerule 
+>/difficulty 
+>/weather 
+>/kill @e[
+>/kill @e[type=
+>/summon 
+>/particle 
+>/playsound 
+>/locate structure 
+>/execute 
+>/execute as @s run 
+>/scoreboard objectives add x 
+>/team add t 
+>/enchant @s 
+>/item replace entity @s 
+>/attribute @s 
+
+# Feedback
+seed
+list
+list uuids
+help
+help time
+help gamemode
+time set 1000
+time set day
+time add 100
+time query daytime
+time query gametime
+time query day
+gamemode survival
+gamemode creative
+gamemode adventure @s
+defaultgamemode creative
+difficulty
+difficulty hard
+difficulty peaceful
+weather clear
+weather rain 100
+weather thunder
+weather clear
+gamerule doDaylightCycle
+gamerule doDaylightCycle false
+gamerule keepInventory true
+gamerule randomTickSpeed
+gamerule randomTickSpeed 3
+tp ~ ~1 ~
+tp @s 0 -60 0
+teleport 0 -60 0 90 0
+tp @s @s
+setblock 2 -60 2 stone
+setblock 2 -60 2 stone
+setblock 2 -60 2 air destroy
+fill 0 -61 0 3 -61 3 glass
+fill 0 -61 0 3 -61 3 glass
+fill 0 -61 0 100 -50 100 stone
+fill 0 -61 0 3 -61 3 grass_block replace glass
+clone 0 -61 0 3 -61 3 10 -61 10
+give @s diamond
+give @s diamond 64
+give @s minecraft:stone 1000
+clear @s diamond
+clear @s
+clear @s diamond
+kill @e[type=item]
+summon minecraft:pig ~ ~ ~
+summon minecraft:pig 0 1000 0
+kill @e[type=pig]
+effect give @s minecraft:speed 10 1
+effect clear @s minecraft:speed
+effect clear @s
+enchant @s minecraft:sharpness
+xp add @s 10
+xp add @s 3 levels
+xp query @s points
+xp query @s levels
+xp set @s 0
+experience set @s 0 levels
+spawnpoint
+spawnpoint @s 0 -60 0
+setworldspawn 0 -60 0
+setworldspawn
+locate structure minecraft:village_plains
+locate biome minecraft:plains
+playsound minecraft:block.note_block.pling master @s
+stopsound @s
+title @s title "hi"
+title @s clear
+title @s reset
+title @s times 10 70 20
+tellraw @s "hello"
+tellraw @s {"text":"hi","color":"red"}
+particle minecraft:flame ~ ~ ~
+scoreboard objectives add obj dummy
+scoreboard objectives add obj dummy
+scoreboard objectives list
+scoreboard players set @s obj 5
+scoreboard players add @s obj 2
+scoreboard players get @s obj
+scoreboard players list
+scoreboard objectives remove obj
+team add red
+team add red
+team list
+team join red @s
+team leave @s
+team remove red
+tag @s add t1
+tag @s list
+tag @s remove t1
+bossbar add b "Boss"
+bossbar list
+bossbar remove b
+worldborder get
+worldborder set 1000
+worldborder center 0 0
+worldborder set 59999968
+forceload add 0 0
+forceload query
+forceload remove all
+data get entity @s Pos
+data get block 0 -61 0
+schedule clear foo:bar
+function foo:bar
+random value 1..6
+random roll 1..6
+tick query
+tick rate 20
+whitelist list
+whitelist on
+whitelist off
+banlist
+ban-ip 10.0.0.1
+pardon-ip 10.0.0.1
+pardon nobody
+op nobody
+deop nobody
+datapack list
+recipe give @s *
+recipe take @s *
+advancement grant @s everything
+advancement revoke @s everything
+attribute @s minecraft:max_health get
+ride @s dismount
+spreadplayers 0 0 1 10 false @s
+damage @s 1
+rotate @s 0 0
+save-all
+save-on
+version
+setidletimeout 0

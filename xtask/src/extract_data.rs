@@ -69,7 +69,10 @@ pub fn run(args: &[String]) -> Result<()> {
 
     let inner_jar = read_bundled_server_jar(&server_jar, &version)?;
     let (files, bytes) = extract_matching(&inner_jar, &staging, |name| {
-        name == "version.json" || name.starts_with("data/")
+        // The English names the server's console prints.
+        name == "version.json"
+            || name.starts_with("data/")
+            || name == "assets/minecraft/lang/en_us.json"
     })?;
     println!(
         "  data pack: {files} files, {:.1} MB",
@@ -102,6 +105,10 @@ pub fn run(args: &[String]) -> Result<()> {
         serde_json::to_string_pretty(&manifest)? + "\n",
     )?;
 
+    // What was observed from a vanilla server stays.
+    if out.join("observed").is_dir() {
+        fs::rename(out.join("observed"), staging.join("observed"))?;
+    }
     remove_dir_if_exists(&out)?;
     fs::rename(&staging, &out)?;
     println!("  -> {}", out.strip_prefix(&root).unwrap_or(&out).display());

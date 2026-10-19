@@ -442,6 +442,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-command"
+version = "0.0.0"
+dependencies = [
+ "mc-nbt",
+ "mc-protocol",
+ "serde_json",
+]
+
+[[package]]
 name = "mc-data"
 version = "0.0.0"
 dependencies = [

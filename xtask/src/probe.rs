@@ -315,7 +315,8 @@ pub(crate) fn join_player_with(
             }
             "minecraft:login_finished" => break,
             other if other.contains("disconnect") || other == "minecraft:hello" => {
-                bail!("{name} refused ({other})")
+                let why = Reader::new(&body).string(32767).unwrap_or_default();
+                bail!("{name} refused ({other}): {why}")
             }
             _ => {}
         }

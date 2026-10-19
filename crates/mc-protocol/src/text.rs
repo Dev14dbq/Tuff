@@ -20,9 +20,32 @@ pub fn translate(key: &str, args: Vec<Tag>) -> Tag {
     let mut compound = Compound::new();
     compound.insert("translate", key);
     if !args.is_empty() {
-        compound.insert("with", Tag::List(args));
+        compound.insert("with", list(args));
     }
     Tag::Compound(compound)
+}
+
+/// A list of components or arguments. NBT lists hold one tag type, so when
+/// the types differ every element that is not a compound is wrapped as
+/// `{"": value}`, as vanilla writes them.
+pub fn list(items: Vec<Tag>) -> Tag {
+    let same = items.windows(2).all(|w| w[0].type_id() == w[1].type_id());
+    if same {
+        return Tag::List(items);
+    }
+    Tag::List(
+        items
+            .into_iter()
+            .map(|t| match t {
+                Tag::Compound(_) => t,
+                other => {
+                    let mut c = Compound::new();
+                    c.insert("", other);
+                    Tag::Compound(c)
+                }
+            })
+            .collect(),
+    )
 }
 
 /// The same with a color.
