@@ -31,6 +31,7 @@ pub enum Kind {
     Built(Built),
     Mineshaft(super::mineshaft::Part),
     Stronghold(super::stronghold::Part),
+    Monument(super::observed::Monument),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -47,6 +48,7 @@ pub enum Post {
         large: bool,
         warm: bool,
     },
+    Mansion,
     Portal {
         placement: u8,
         air_pocket: bool,
@@ -99,7 +101,7 @@ fn chunk_center(ground: &mut dyn Ground, x: i32, z: i32, ocean_floor: bool) -> P
     P::new(mx, ground.height(mx, mz, ocean_floor) - 1, mz)
 }
 
-fn template_piece(
+pub(super) fn template_piece(
     s: &Structures,
     id: &str,
     pos: P,
@@ -305,6 +307,10 @@ pub fn generate(
         }
         "mineshaft" => super::mineshaft::generate(v, r, x, z, h, ground),
         "stronghold" => super::stronghold::generate(seed, x, z, h),
+        "ocean_monument" => {
+            super::observed::monument(s.observed(), &s.monument_biomes, r, x, z, h, ground)
+        }
+        "woodland_mansion" => super::observed::mansion(s, r, x, z, h, ground),
         _ => None,
     }
 }
@@ -581,6 +587,7 @@ pub fn place(
         Kind::Built(b) => super::built::place(facts, region, r, b, chunk),
         Kind::Mineshaft(part) => super::mineshaft::place(facts, region, r, part, chunk),
         Kind::Stronghold(part) => super::stronghold::place(facts, region, r, part, chunk),
+        Kind::Monument(m) => super::observed::place_monument(s.observed(), facts, region, m, chunk),
     }
 }
 
@@ -621,7 +628,7 @@ fn place_template(
     let mut settings = t.settings.clone();
     settings.bbox = Some(chunk);
     let pos = *t.fixed.get_or_init(|| match t.post {
-        Post::Plain | Post::Portal { .. } => t.pos,
+        Post::Plain | Post::Mansion | Post::Portal { .. } => t.pos,
         Post::Igloo { offset, .. } => {
             let rel = transform(
                 P::new(3 - offset.x, 0, -offset.z),
@@ -706,6 +713,24 @@ fn place_template(
                         "minecraft:chests/underwater_ruin_small"
                     };
                     loot_chest(facts, region, r, mp, table);
+                }
+            }
+            (Post::Mansion, m) if m.starts_with("Chest") => {
+                let facing = match m {
+                    "ChestWest" => "west",
+                    "ChestEast" => "east",
+                    "ChestNorth" => "north",
+                    _ => "south",
+                };
+                if let Some(chest) = facts.state("minecraft:chest", &[("facing", facing)]) {
+                    let chest = super::template::transform_state(
+                        facts,
+                        chest,
+                        settings.mirror,
+                        settings.rotation,
+                    );
+                    region.set(mp, chest);
+                    loot_chest(facts, region, r, mp, "minecraft:chests/woodland_mansion");
                 }
             }
             _ => {

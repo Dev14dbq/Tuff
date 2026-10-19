@@ -311,6 +311,30 @@ impl Server {
         Ok(())
     }
 
+    /// Sends a console command and waits for a console line containing
+    /// `needle` (without the log prefix).
+    pub(crate) fn wait_for(
+        &mut self,
+        command: &str,
+        needle: &str,
+        timeout: Duration,
+    ) -> Result<String> {
+        if !command.is_empty() {
+            writeln!(self.stdin, "{command}")?;
+        }
+        self.stdin.flush()?;
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if let Ok(line) = self.lines.recv_timeout(Duration::from_millis(200)) {
+                let text = strip_log_prefix(&line);
+                if text.contains(needle) {
+                    return Ok(text.to_owned());
+                }
+            }
+        }
+        bail!("no `{needle}` from the server after `{command}`")
+    }
+
     /// Sends a console command and, with `echo`, prints what the server said
     /// about it.
     pub(crate) fn command(&mut self, command: &str, echo: bool) -> Result<()> {

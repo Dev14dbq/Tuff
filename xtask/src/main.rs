@@ -7,6 +7,7 @@ mod chunk_info;
 mod chunk_speed;
 mod extract_data;
 mod observe;
+mod observe_structures;
 mod parity;
 mod probe;
 mod registry_diff;
@@ -49,6 +50,9 @@ Tasks:
   observe attach [--first <state>] [--count <n>]
       Learn from vanilla which faces of every block state fences attach to
       (cache/mcdata/<version>/observed/fence_attach.json).
+  observe-structures [--seed <n>] [--monuments <n>] [--mansions <n>]
+      Record ocean monuments and woodland mansions as vanilla builds them
+      (observed/monuments.json, observed/mansions.json).
   chunk-info <region dir> <chunk x> <chunk z> [--depth <n>] [--all]
       Print the NBT structure of one stored chunk.
   chunk-speed [--addr <host:port>] [--view-distance <n>] [--runs <n>] [--version <id>]
@@ -72,6 +76,7 @@ fn main() -> ExitCode {
         Some("watch") => watch::run(&args[1..]),
         Some("parity") => parity::run(&args[1..]),
         Some("observe") => observe::run(&args[1..]),
+        Some("observe-structures") => observe_structures::run(&args[1..]),
         Some("worldgen-ref") => worldgen_ref::run(&args[1..]),
         Some("worldgen-diff") => worldgen_diff::run(&args[1..]),
         Some("worldgen-compare") => worldgen_compare::run(&args[1..]),

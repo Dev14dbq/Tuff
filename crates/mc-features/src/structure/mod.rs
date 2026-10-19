@@ -8,6 +8,7 @@ pub mod built;
 pub mod jigsaw;
 pub mod legacy;
 pub mod mineshaft;
+pub mod observed;
 pub mod stronghold;
 pub mod template;
 
@@ -156,6 +157,11 @@ pub struct Structures {
     pub cold_biomes: HashSet<u32>,
     /// Stronghold positions per set, worked out once.
     rings: Mutex<HashMap<String, Vec<(i32, i32)>>>,
+    /// The biomes around a monument (ocean or river); the middle is checked
+    /// as for any structure.
+    pub monument_biomes: HashSet<u32>,
+    observed_dir: PathBuf,
+    observed: std::sync::OnceLock<observed::Observed>,
 }
 
 impl std::fmt::Debug for Structures {
@@ -379,6 +385,12 @@ impl Structures {
                 placement,
             });
         }
+        let monument_biomes = biome_set(
+            &Value::String("#minecraft:required_ocean_monument_surrounding".into()),
+            &tags,
+            biome_ids,
+            0,
+        );
         let cold_biomes = read_dir_json(&worldgen.join("biome"))
             .into_iter()
             .filter(|(_, v)| v["temperature"].as_f64().unwrap_or(0.5) < 0.15)
@@ -394,7 +406,30 @@ impl Structures {
             sets,
             by_step,
             rings: Mutex::new(HashMap::new()),
+            monument_biomes,
+            observed_dir: data
+                .parent()
+                .and_then(Path::parent)
+                .map(|d| d.join("observed"))
+                .unwrap_or_default(),
+            observed: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The monuments and mansions a vanilla server was seen building,
+    /// read the first time one is needed.
+    pub fn observed(&self) -> &observed::Observed {
+        self.observed.get_or_init(|| {
+            let o = observed::Observed::load(&self.observed_dir, &self.facts);
+            if o.monuments.is_empty() || o.mansions.is_empty() {
+                eprintln!(
+                    "no recorded monuments or mansions in {} (cargo xtask observe-structures); \
+                     they will be missing",
+                    self.observed_dir.display()
+                );
+            }
+            o
+        })
     }
 
     pub fn facts(&self) -> &Facts {
@@ -732,6 +767,25 @@ impl Structures {
                     }
                 }
                 Piece::Legacy(p) => legacy::place(&cx2, region, r, p, chunk, start),
+            }
+        }
+        if matches!(&self.structures[start.structure].kind, Kind::Legacy(ty, _) if ty == "woodland_mansion")
+        {
+            let mut floor: Option<BBox> = None;
+            for piece in &start.pieces {
+                if let Piece::Legacy(p) = piece
+                    && let legacy::Kind::Template(t) = &*p.kind
+                {
+                    let b = p.bbox;
+                    let here = BBox::from_corners(
+                        P::new(b.min.x, t.pos.y, b.min.z),
+                        P::new(b.max.x, t.pos.y, b.max.z),
+                    );
+                    floor = Some(floor.map_or(here, |f| f.union(here)));
+                }
+            }
+            if let Some(floor) = floor {
+                observed::mansion_foundation(self.facts(), region, floor, chunk);
             }
         }
     }

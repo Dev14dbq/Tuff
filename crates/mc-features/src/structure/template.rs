@@ -16,6 +16,7 @@ use crate::predicate::{BlockSet, RuleTest};
 use crate::rand::WorldgenRandom;
 use crate::value::IntProvider;
 use crate::{Heightmap, P, Region};
+use mc_tick::Dir;
 
 /// A box of blocks, both corners included.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -260,16 +261,9 @@ pub fn transform_state(facts: &Facts, state: u32, mirror: Mirror, rot: Rotation)
                 if h == "left" { "right" } else { "left" }.to_owned(),
             );
         }
-        if name.ends_with("chest")
-            && let Some(t) = get(&props, "type")
-        {
-            let o = match t.as_str() {
-                "left" => "right",
-                "right" => "left",
-                o => o,
-            };
-            set(&mut props, "type", o.to_owned());
-        }
+        // A chest keeps its `type` when mirrored, so a mirrored double
+        // chest no longer pairs up and falls apart once placed (see
+        // `settle`), as vanilla mansions show.
         if let Some(r) = get(&props, "rotation").and_then(|r| r.parse::<i32>().ok()) {
             let j = if r > 8 { r - 16 } else { r };
             let v = match mirror {
@@ -582,6 +576,7 @@ impl Template {
             p.finalize(facts, region, settings, &mut infos);
         }
         let mut placed = false;
+        let mut settled = Vec::new();
         for (_, info) in infos {
             if let Some(b) = &settings.bbox
                 && !b.inside(info.pos)
@@ -599,6 +594,11 @@ impl Template {
                 continue;
             }
             placed = true;
+            let name = facts.block_name(state);
+            if name.ends_with("chest") || name == "minecraft:ladder" || name.ends_with("wall_torch")
+            {
+                settled.push(info.pos);
+            }
             if let Some(mut nbt) = info.nbt {
                 for k in ["x", "y", "z"] {
                     nbt.remove(k);
@@ -614,7 +614,52 @@ impl Template {
                 region.set_block_entity(info.pos, nbt);
             }
         }
+        settle(facts, region, &settled);
         placed
+    }
+}
+
+/// What the shape update after placing a template does: the half of a
+/// double chest whose partner is not there becomes single, and a ladder
+/// or wall torch with nothing behind it drops. Blocks of the piece in a
+/// chunk not decorated yet are not there, so these split at chunk edges
+/// too, as in vanilla mansions.
+fn settle(facts: &Facts, region: &mut dyn Region, placed: &[P]) {
+    let facing = |state: u32| {
+        facts
+            .blocks
+            .property(state, "facing")
+            .and_then(Dir::from_name)
+    };
+    let partner = |state: u32| -> Option<Dir> {
+        let f = facing(state)?;
+        match facts.blocks.property(state, "type")? {
+            "left" => Some(f.cw()),
+            "right" => Some(f.ccw()),
+            _ => None,
+        }
+    };
+    let at = |p: P, d: Dir| {
+        let (x, y, z) = d.offset();
+        P::new(p.x + x, p.y + y, p.z + z)
+    };
+    for &pos in placed {
+        let state = region.block(pos);
+        let name = facts.block_name(state);
+        if let Some(d) = partner(state) {
+            let o = region.block(at(pos, d));
+            let paired = facts.block_name(o) == name
+                && facing(o) == facing(state)
+                && partner(o) == Some(d.opposite());
+            if !paired {
+                region.set(pos, facts.with(state, "type", "single"));
+            }
+        } else if (name == "minecraft:ladder" || name.ends_with("wall_torch"))
+            && let Some(f) = facing(state)
+            && !facts.sturdy(region.block(at(pos, f.opposite())), f)
+        {
+            region.set(pos, facts.air);
+        }
     }
 }
 
