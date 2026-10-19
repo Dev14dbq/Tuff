@@ -55,6 +55,66 @@ pub enum Metric {
     Chebyshev,
 }
 
+fn unary(op: Unary, v: f64) -> f64 {
+    match op {
+        Unary::Abs => v.abs(),
+        Unary::Square => v * v,
+        Unary::Cube => v * v * v,
+        Unary::HalfNegative => {
+            if v > 0.0 {
+                v
+            } else {
+                v * 0.5
+            }
+        }
+        Unary::QuarterNegative => {
+            if v > 0.0 {
+                v
+            } else {
+                v * 0.25
+            }
+        }
+        Unary::Squeeze => {
+            let c = v.clamp(-1.0, 1.0);
+            c / 2.0 - c * c * c / 24.0
+        }
+        Unary::Negate => -v,
+        Unary::Sqrt => v.sqrt(),
+        Unary::Log => v.ln(),
+        Unary::Sign => {
+            if v > 0.0 {
+                1.0
+            } else if v < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        }
+        Unary::Reciprocal => 1.0 / v,
+    }
+}
+
+/// `b` is only asked for when it can matter.
+fn binary(op: Binary, a: f64, b: impl FnOnce() -> f64) -> f64 {
+    match op {
+        // The game skips the second side when it cannot matter;
+        // the result is the same.
+        Binary::Mul if a == 0.0 => 0.0,
+        _ => {
+            let b = b();
+            match op {
+                Binary::Add => a + b,
+                Binary::Sub => a - b,
+                Binary::Mul => a * b,
+                Binary::Div => a / b,
+                Binary::Min => a.min(b),
+                Binary::Max => a.max(b),
+                Binary::Pow => a.powf(b),
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unary {
     Abs,
@@ -209,65 +269,8 @@ impl Df {
         match self {
             Df::Constant(c) => *c,
             Df::Ref(f, _) => f.eval(x, y, z),
-            Df::Unary(op, input) => {
-                let v = input.eval(x, y, z);
-                match op {
-                    Unary::Abs => v.abs(),
-                    Unary::Square => v * v,
-                    Unary::Cube => v * v * v,
-                    Unary::HalfNegative => {
-                        if v > 0.0 {
-                            v
-                        } else {
-                            v * 0.5
-                        }
-                    }
-                    Unary::QuarterNegative => {
-                        if v > 0.0 {
-                            v
-                        } else {
-                            v * 0.25
-                        }
-                    }
-                    Unary::Squeeze => {
-                        let c = v.clamp(-1.0, 1.0);
-                        c / 2.0 - c * c * c / 24.0
-                    }
-                    Unary::Negate => -v,
-                    Unary::Sqrt => v.sqrt(),
-                    Unary::Log => v.ln(),
-                    Unary::Sign => {
-                        if v > 0.0 {
-                            1.0
-                        } else if v < 0.0 {
-                            -1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                    Unary::Reciprocal => 1.0 / v,
-                }
-            }
-            Df::Binary(op, a, b) => {
-                let a = a.eval(x, y, z);
-                match op {
-                    // The game skips the second side when it cannot matter;
-                    // the result is the same.
-                    Binary::Mul if a == 0.0 => 0.0,
-                    _ => {
-                        let b = b.eval(x, y, z);
-                        match op {
-                            Binary::Add => a + b,
-                            Binary::Sub => a - b,
-                            Binary::Mul => a * b,
-                            Binary::Div => a / b,
-                            Binary::Min => a.min(b),
-                            Binary::Max => a.max(b),
-                            Binary::Pow => a.powf(b),
-                        }
-                    }
-                }
-            }
+            Df::Unary(op, input) => unary(*op, input.eval(x, y, z)),
+            Df::Binary(op, a, b) => binary(*op, a.eval(x, y, z), || b.eval(x, y, z)),
             Df::Round(mode, input, multiple) => {
                 let (v, m) = (input.eval(x, y, z), multiple.eval(x, y, z));
                 let q = v / m;
@@ -411,6 +414,44 @@ impl Df {
     }
 }
 
+/// A quick hash for the per-chunk caches (keys are addresses and
+/// coordinates, nothing an outsider chooses).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fast;
+
+#[derive(Debug, Default)]
+pub struct FastHasher(u64);
+
+impl std::hash::Hasher for FastHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(u64::from(b));
+        }
+    }
+    fn write_u64(&mut self, v: u64) {
+        self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+    fn write_usize(&mut self, v: usize) {
+        self.write_u64(v as u64);
+    }
+    fn write_i32(&mut self, v: i32) {
+        self.write_u64(v as u32 as u64);
+    }
+    fn write_u32(&mut self, v: u32) {
+        self.write_u64(u64::from(v));
+    }
+}
+
+impl std::hash::BuildHasher for Fast {
+    type Hasher = FastHasher;
+    fn build_hasher(&self) -> FastHasher {
+        FastHasher(0)
+    }
+}
+
 /// Per-chunk evaluation state: interpolation grids and column caches.
 #[derive(Debug, Default)]
 pub struct Ctx {
@@ -419,12 +460,13 @@ pub struct Ctx {
     pub z0: i32,
     pub min_y: i32,
     pub height: i32,
-    grids: HashMap<usize, Grid>,
-    columns: HashMap<(usize, i32, i32), f64>,
+    grids: HashMap<usize, Grid, Fast>,
+    columns: HashMap<(usize, i32, i32), f64, Fast>,
 }
 
 #[derive(Debug)]
 struct Grid {
+    flat: bool,
     xz: i32,
     y: i32,
     nx: usize,
@@ -493,9 +535,9 @@ impl Df {
             }
             Df::Interpolated { input, xz, y: cy } => {
                 let key = self as *const Df as usize;
-                // Something flat needs one layer only.
-                let flat = input.is_2d();
                 if !ctx.grids.contains_key(&key) {
+                    // Something flat needs one layer only.
+                    let flat = input.is_2d();
                     let nx = (16 / xz) as usize + 1;
                     let ny = if flat {
                         1
@@ -522,11 +564,13 @@ impl Df {
                             y: *cy,
                             nx,
                             ny,
+                            flat,
                             values,
                         },
                     );
                 }
                 let g = &ctx.grids[&key];
+                let flat = g.flat;
                 let (lx, ly, lz) = (x - ctx.x0, if flat { 0 } else { y - ctx.min_y }, z - ctx.z0);
                 let (i, j, k) = (
                     (lx.div_euclid(g.xz) as usize).min(g.nx - 2),
@@ -553,18 +597,10 @@ impl Df {
                 );
                 l(ty, y0, y1)
             }
-            Df::Unary(op, input) => {
-                let v = input.eval_in(x, y, z, ctx);
-                Df::Unary(*op, Box::new(Df::Constant(v))).eval(x, y, z)
-            }
+            Df::Unary(op, input) => unary(*op, input.eval_in(x, y, z, ctx)),
             Df::Binary(op, a, b) => {
                 let av = a.eval_in(x, y, z, ctx);
-                if *op == Binary::Mul && av == 0.0 {
-                    return 0.0;
-                }
-                let bv = b.eval_in(x, y, z, ctx);
-                Df::Binary(*op, Box::new(Df::Constant(av)), Box::new(Df::Constant(bv)))
-                    .eval(x, y, z)
+                binary(*op, av, || b.eval_in(x, y, z, ctx))
             }
             Df::Clamp(input, lo, hi) => input.eval_in(x, y, z, ctx).clamp(*lo, *hi),
             Df::Lerp(alpha, first, second) => {

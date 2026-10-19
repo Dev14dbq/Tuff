@@ -11,16 +11,18 @@
 //! it goes as ordinary fluid ticks.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use mc_features::structure::{Beard, Start};
 use mc_features::{Facts, Features, Heightmap, Heights, P, Region};
 use mc_tick::{BlockPos, Dir, TickQueue};
 use mc_world::{BlockEntity, Chunk, Section};
+use mc_worldgen::density::Fast;
 use mc_worldgen::generator::NoiseGenerator;
 use mc_worldgen::materials::{zoom_seed, zoomed_cell};
 
 /// A chunk being generated.
+#[derive(Clone)]
 struct Proto {
     chunk: Chunk,
     /// First free y per column, per [`Heightmap::ALL`] entry. Until the
@@ -48,14 +50,27 @@ pub struct Pipeline {
     heights: Heights,
     air: u32,
     biome_fallback: u32,
-    protos: Mutex<HashMap<(i32, i32), Proto>>,
+    protos: Mutex<HashMap<(i32, i32), Proto, Fast>>,
     finished: Mutex<HashSet<(i32, i32)>>,
+    /// Bare terrain, made once and kept while a chunk near it may still
+    /// need it; a chunk asked for twice at once is made by one thread while
+    /// the other waits.
+    terrain: Mutex<HashMap<(i32, i32), TerrainCell, Fast>>,
     /// Structures starting in each chunk looked at so far.
     starts: Mutex<StartMap>,
+    /// Stronghold rings, placed once before any start is looked for.
+    rings: OnceLock<()>,
 }
 
+/// A chunk's bare terrain, made once.
+type TerrainCell = Arc<OnceLock<Proto>>;
+
+/// The structures starting in one chunk, worked out once by whichever
+/// thread asks first; the others wait.
+type StartCell = Arc<OnceLock<Vec<Arc<Start>>>>;
+
 /// Structures starting in each chunk.
-type StartMap = HashMap<(i32, i32), Vec<Arc<Start>>>;
+type StartMap = HashMap<(i32, i32), StartCell, Fast>;
 
 /// The ground as the density alone gives it, for starting structures.
 struct Columns<'a> {
@@ -120,36 +135,70 @@ impl Pipeline {
             heights,
             air,
             biome_fallback,
-            protos: Mutex::new(HashMap::new()),
+            protos: Mutex::new(HashMap::default()),
             finished: Mutex::new(HashSet::new()),
-            starts: Mutex::new(HashMap::new()),
+            terrain: Mutex::new(HashMap::default()),
+            starts: Mutex::new(HashMap::default()),
+            rings: OnceLock::new(),
         }
     }
 
     /// Works out which structures start in the chunks around `x, z` (within
     /// `radius`) that were not looked at yet.
-    fn ensure_starts(&self, x: i32, z: i32, radius: i32) {
-        let mut starts = self.starts.lock().expect("starts lock");
+    /// Places the stronghold rings, as the game does when the world loads;
+    /// structure starts wait for it.
+    pub fn prepare(&self) {
+        let mut g = Columns {
+            sampler: self.generator.columns(),
+        };
+        self.ensure_rings(&mut g);
+    }
+
+    fn ensure_rings(&self, g: &mut Columns) {
+        self.rings.get_or_init(|| {
+            self.features.structures.prepare_rings(self.seed, g);
+        });
+    }
+
+    /// The structure starts of the chunks within `radius` of chunk `x, z`,
+    /// row by row.
+    fn starts_in(
+        &self,
+        x: i32,
+        z: i32,
+        radius: i32,
+    ) -> Vec<((i32, i32), StartCell)> {
+        let cells: Vec<_> = {
+            let mut starts = self.starts.lock().expect("starts lock");
+            (z - radius..=z + radius)
+                .flat_map(|cz| (x - radius..=x + radius).map(move |cx| (cx, cz)))
+                .map(|p| (p, starts.entry(p).or_default().clone()))
+                .collect()
+        };
+        // Threads asking for overlapping areas start at different places so
+        // they share the work rather than wait on each other.
+        let n = cells.len();
+        let first = (x.wrapping_mul(31).wrapping_add(z) as u32 as usize) % n;
         let mut ground: Option<Columns> = None;
-        for cz in z - radius..=z + radius {
-            for cx in x - radius..=x + radius {
-                if starts.contains_key(&(cx, cz)) {
-                    continue;
-                }
+        for i in 0..n {
+            let ((cx, cz), cell) = &cells[(first + i) % n];
+            if cell.get().is_some() {
+                continue;
+            }
+            cell.get_or_init(|| {
                 let g = ground.get_or_insert_with(|| {
                     let mut g = Columns {
                         sampler: self.generator.columns(),
                     };
-                    self.features.structures.prepare_rings(self.seed, &mut g);
+                    self.ensure_rings(&mut g);
                     g
                 });
-                let found = self
-                    .features
+                self.features
                     .structures
-                    .starts(self.seed, cx, cz, self.heights, g);
-                starts.insert((cx, cz), found);
-            }
+                    .starts(self.seed, *cx, *cz, self.heights, g)
+            });
         }
+        cells
     }
 
     /// Structures that start within `radius` chunks of chunk `x, z`
@@ -161,12 +210,10 @@ impl Pipeline {
         radius: i32,
         name: Option<&str>,
     ) -> Vec<(String, (i32, i32), P)> {
-        self.ensure_starts(x, z, radius);
-        let starts = self.starts.lock().expect("starts lock");
         let mut out = Vec::new();
-        for cz in z - radius..=z + radius {
-            for cx in x - radius..=x + radius {
-                for s in starts.get(&(cx, cz)).into_iter().flatten() {
+        for ((cx, cz), cell) in self.starts_in(x, z, radius) {
+            {
+                for s in cell.get().into_iter().flatten() {
                     let id = &self.features.structures.structures[s.structure].id;
                     if name.is_some_and(|n| n != id && Some(n) != id.strip_prefix("minecraft:")) {
                         continue;
@@ -181,15 +228,9 @@ impl Pipeline {
 
     /// Structures whose pieces may reach chunk `x, z`.
     fn starts_near(&self, x: i32, z: i32) -> Vec<Arc<Start>> {
-        self.ensure_starts(x, z, STRUCTURE_REACH);
-        let starts = self.starts.lock().expect("starts lock");
         let mut out = Vec::new();
-        for cz in z - STRUCTURE_REACH..=z + STRUCTURE_REACH {
-            for cx in x - STRUCTURE_REACH..=x + STRUCTURE_REACH {
-                if let Some(list) = starts.get(&(cx, cz)) {
-                    out.extend(list.iter().cloned());
-                }
-            }
+        for (_, cell) in self.starts_in(x, z, STRUCTURE_REACH) {
+            out.extend(cell.get().into_iter().flatten().cloned());
         }
         out
     }
@@ -320,7 +361,7 @@ impl Pipeline {
     /// Generates chunk `x, z` with everything around it it needs.
     pub fn finish(&self, x: i32, z: i32, world: &dyn Finished) -> Done {
         let mut protos = self.protos.lock().expect("protos lock");
-        let mut finished = self.finished.lock().expect("finished lock");
+        let finished = self.finished.lock().expect("finished lock");
         let is_final = |cx: i32, cz: i32, finished: &HashSet<(i32, i32)>| {
             (cx, cz) != (x, z) && (finished.contains(&(cx, cz)) || world.is_finished(cx, cz))
         };
@@ -344,8 +385,18 @@ impl Pipeline {
                 None => true,
             }
         });
+        // Terrain needs nothing shared: make it without holding the locks so
+        // other chunks can be finished meanwhile.
+        drop(finished);
+        drop(protos);
         let made = self.terrain_parallel(&missing);
+        let mut protos = self.protos.lock().expect("protos lock");
+        let mut finished = self.finished.lock().expect("finished lock");
         for (pos, mut proto) in made {
+            // Someone else may have made (and since changed) it meanwhile.
+            if protos.contains_key(&pos) {
+                continue;
+            }
             proto.readonly = is_final(pos.0, pos.1, &finished);
             if proto.readonly {
                 finished.insert(pos);
@@ -403,6 +454,19 @@ impl Pipeline {
         settle_falling(facts, &mut proto);
         bubble_columns(facts, &mut proto);
         finished.insert((x, z));
+        // Terrain no unfinished chunk can ask for any more.
+        {
+            let mut terrain = self.terrain.lock().expect("terrain lock");
+            for dz in -2..=2 {
+                for dx in -2..=2 {
+                    let (px, pz) = (x + dx, z + dz);
+                    if (-2..=2).all(|nz| (-2..=2).all(|nx| finished.contains(&(px + nx, pz + nz))))
+                    {
+                        terrain.remove(&(px, pz));
+                    }
+                }
+            }
+        }
         // Copies nobody can need any more: every neighbour is finished.
         protos.retain(|&(px, pz), p| {
             !p.readonly
@@ -433,17 +497,28 @@ impl Pipeline {
     }
 
     fn terrain_parallel(&self, list: &[(i32, i32)]) -> Vec<((i32, i32), Proto)> {
-        if list.len() <= 1 {
-            return list
-                .iter()
-                .map(|&(x, z)| ((x, z), self.terrain(x, z, &self.starts_near(x, z))))
-                .collect();
+        let cells: Vec<TerrainCell> = {
+            let mut terrain = self.terrain.lock().expect("terrain lock");
+            list.iter()
+                .map(|p| terrain.entry(*p).or_default().clone())
+                .collect()
+        };
+        let make = |i: usize| {
+            let (x, z) = list[i];
+            cells[i]
+                .get_or_init(|| {
+                    let near = self.starts_near(x, z);
+                    self.terrain(x, z, &near)
+                })
+                .clone()
+        };
+        let todo = cells.iter().filter(|c| c.get().is_none()).count();
+        if todo <= 1 {
+            return (0..list.len()).map(|i| (list[i], make(i))).collect();
         }
-        let near: Vec<Vec<Arc<Start>>> =
-            list.iter().map(|&(x, z)| self.starts_near(x, z)).collect();
         let threads = std::thread::available_parallelism()
             .map_or(4, |n| n.get())
-            .min(list.len());
+            .min(todo);
         let next = std::sync::atomic::AtomicUsize::new(0);
         let out = Mutex::new(Vec::with_capacity(list.len()));
         std::thread::scope(|s| {
@@ -451,9 +526,11 @@ impl Pipeline {
                 s.spawn(|| {
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(&(x, z)) = list.get(i) else { break };
-                        let proto = self.terrain(x, z, &near[i]);
-                        out.lock().expect("terrain lock").push(((x, z), proto));
+                        if i >= list.len() {
+                            break;
+                        }
+                        let proto = make(i);
+                        out.lock().expect("terrain lock").push((list[i], proto));
                     }
                 });
             }
@@ -563,7 +640,7 @@ impl Proto {
 
 /// The region a chunk's features see.
 struct Gen<'a> {
-    protos: &'a mut HashMap<(i32, i32), Proto>,
+    protos: &'a mut HashMap<(i32, i32), Proto, Fast>,
     center: (i32, i32),
     pipeline: &'a Pipeline,
 }
@@ -733,7 +810,7 @@ fn bubble_columns(facts: &Facts, proto: &mut Proto) {
 
 /// Fluids flowing to rest, as scheduled ticks run instantly.
 struct Sim<'a> {
-    protos: &'a mut HashMap<(i32, i32), Proto>,
+    protos: &'a mut HashMap<(i32, i32), Proto, Fast>,
     center: (i32, i32),
     pipeline: &'a Pipeline,
     world: &'a dyn Finished,
@@ -748,7 +825,7 @@ const SIM_STEPS: usize = 400_000;
 
 impl<'a> Sim<'a> {
     fn new(
-        protos: &'a mut HashMap<(i32, i32), Proto>,
+        protos: &'a mut HashMap<(i32, i32), Proto, Fast>,
         center: (i32, i32),
         pipeline: &'a Pipeline,
         world: &'a dyn Finished,

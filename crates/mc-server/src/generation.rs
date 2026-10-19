@@ -336,3 +336,38 @@ pub fn features(
     );
     Ok(features)
 }
+
+#[cfg(test)]
+mod speed {
+    /// `cargo test --release -p mc-server terrain_speed -- --ignored --nocapture`
+    #[test]
+    #[ignore = "a timing, not a check"]
+    fn terrain_speed() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let data = mc_data::McData::load(&root).unwrap();
+        let report: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                root.join("reports/biome_parameters/minecraft/overworld.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut biomes = std::collections::HashMap::new();
+        for b in report["biomes"].as_array().unwrap() {
+            let n = biomes.len() as u32;
+            biomes
+                .entry(b["biome"].as_str().unwrap().to_owned())
+                .or_insert(n);
+        }
+        let g = super::overworld(&data, -1294266004, &biomes).unwrap();
+        let t = std::time::Instant::now();
+        let n = 16;
+        for i in 0..n {
+            std::hint::black_box(g.generate(i % 4, i / 4));
+        }
+        println!(
+            "terrain: {:.1} ms a chunk",
+            t.elapsed().as_secs_f64() * 1000.0 / f64::from(n)
+        );
+    }
+}

@@ -6,6 +6,7 @@ mod chunk_diff;
 mod chunk_info;
 mod chunk_speed;
 mod extract_data;
+mod gen_speed;
 mod observe;
 mod observe_commands;
 mod observe_structures;
@@ -77,6 +78,7 @@ fn main() -> ExitCode {
         Some("chunk-info") => chunk_info::run(&args[1..]),
         Some("chunk-diff") => chunk_diff::run(&args[1..]),
         Some("chunk-speed") => chunk_speed::run(&args[1..]),
+        Some("gen-speed") => gen_speed::run(&args[1..]),
         Some("watch") => watch::run(&args[1..]),
         Some("parity") => parity::run(&args[1..]),
         Some("observe") => observe::run(&args[1..]),

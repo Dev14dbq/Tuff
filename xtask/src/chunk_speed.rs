@@ -33,59 +33,77 @@ pub fn run(args: &[String]) -> Result<()> {
     let ids = load_packet_ids(version)?;
     println!("{addr}, view distance {view_distance}");
     for run in 1..=runs {
-        let begin = Instant::now();
-        let (mut client, _) =
-            join_player_with(&addr, ids.clone(), &format!("Speed{run}"), view_distance)?;
-        let joined = begin.elapsed();
-        client.set_read_timeout(Duration::from_millis(100))?;
-        let mut arrivals: Vec<Duration> = Vec::new();
-        let mut bytes = 0usize;
-        let mut last = Instant::now();
-        while last.elapsed() < Duration::from_secs(3) {
-            let (packet, body) = match client.recv() {
-                Ok(p) => p,
-                Err(err) if is_timeout(&err) => continue,
-                Err(err) => return Err(err),
-            };
-            match packet.as_str() {
-                "minecraft:level_chunk_with_light" => {
-                    arrivals.push(begin.elapsed());
-                    bytes += body.len();
-                    last = Instant::now();
-                }
-                "minecraft:chunk_batch_finished" => {
-                    let mut received = Vec::new();
-                    received.put_f32(1000.0); // chunks per tick we could take
-                    client.send("minecraft:chunk_batch_received", received)?;
-                }
-                "minecraft:keep_alive" => client.send("minecraft:keep_alive", body)?,
-                "minecraft:player_position" => client.send(
-                    "minecraft:accept_teleportation",
-                    teleport_confirmation(&body)?,
-                )?,
-                _ => {}
-            }
-        }
-        let Some(&all) = arrivals.last() else {
-            bail!("run {run}: no chunks");
-        };
-        let at = |fraction: f64| {
-            let i = ((arrivals.len() as f64 * fraction).ceil() as usize).clamp(1, arrivals.len());
-            arrivals[i - 1].as_millis()
-        };
         println!(
-            "run {run}: login {} ms, {} chunks ({:.1} MB) — first {} ms, 50% {} ms, 90% {} ms, all {} ms ({:.0} chunks/s)",
-            joined.as_millis(),
-            arrivals.len(),
-            bytes as f64 / 1e6,
-            arrivals[0].as_millis(),
-            at(0.5),
-            at(0.9),
-            all.as_millis(),
-            arrivals.len() as f64 / all.as_secs_f64()
+            "run {run}: {}",
+            measure(&addr, ids.clone(), &format!("Speed{run}"), view_distance)?
         );
-        drop(client);
         std::thread::sleep(Duration::from_millis(500));
     }
     Ok(())
+}
+
+/// Joins as `name` and times the chunks until none arrive for 3 s.
+pub(crate) fn measure(
+    addr: &str,
+    ids: mc_protocol::PacketIds,
+    name: &str,
+    view_distance: i8,
+) -> Result<String> {
+    let begin = Instant::now();
+    let (mut client, _) = join_player_with(addr, ids, name, view_distance)?;
+    let joined = begin.elapsed();
+    client.set_read_timeout(Duration::from_millis(100))?;
+    let mut arrivals: Vec<Duration> = Vec::new();
+    let mut bytes = 0usize;
+    let mut last = Instant::now();
+    // The first chunk may take long (a new world); then quiet for 3 s ends it.
+    while last.elapsed()
+        < if arrivals.is_empty() {
+            Duration::from_secs(300)
+        } else {
+            Duration::from_secs(30)
+        }
+    {
+        let (packet, body) = match client.recv() {
+            Ok(p) => p,
+            Err(err) if is_timeout(&err) => continue,
+            Err(err) => return Err(err),
+        };
+        match packet.as_str() {
+            "minecraft:level_chunk_with_light" => {
+                arrivals.push(begin.elapsed());
+                bytes += body.len();
+                last = Instant::now();
+            }
+            "minecraft:chunk_batch_finished" => {
+                let mut received = Vec::new();
+                received.put_f32(1000.0); // chunks per tick we could take
+                client.send("minecraft:chunk_batch_received", received)?;
+            }
+            "minecraft:keep_alive" => client.send("minecraft:keep_alive", body)?,
+            "minecraft:player_position" => client.send(
+                "minecraft:accept_teleportation",
+                teleport_confirmation(&body)?,
+            )?,
+            _ => {}
+        }
+    }
+    let Some(&all) = arrivals.last() else {
+        bail!("no chunks");
+    };
+    let at = |fraction: f64| {
+        let i = ((arrivals.len() as f64 * fraction).ceil() as usize).clamp(1, arrivals.len());
+        arrivals[i - 1].as_millis()
+    };
+    Ok(format!(
+        "login {} ms, {} chunks ({:.1} MB) — first {} ms, 50% {} ms, 90% {} ms, all {} ms ({:.0} chunks/s)",
+        joined.as_millis(),
+        arrivals.len(),
+        bytes as f64 / 1e6,
+        arrivals[0].as_millis(),
+        at(0.5),
+        at(0.9),
+        all.as_millis(),
+        arrivals.len() as f64 / all.as_secs_f64()
+    ))
 }

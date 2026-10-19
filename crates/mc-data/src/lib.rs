@@ -248,6 +248,8 @@ pub struct Blocks {
     by_key: HashMap<String, u32>,
     /// State id → its `name[k=v,...]` key.
     keys: Vec<String>,
+    /// State id → how long the name in its key is.
+    name_len: Vec<u16>,
 }
 
 /// `minecraft:oak_log[axis=y]`; properties must be sorted by name.
@@ -291,6 +293,7 @@ impl Blocks {
         let (mut air, mut fluid) = (Vec::new(), Vec::new());
         let mut by_key = HashMap::new();
         let mut keys = Vec::new();
+        let mut name_len = Vec::new();
         for (name, block) in blocks {
             let states = block["states"]
                 .as_array()
@@ -320,7 +323,9 @@ impl Blocks {
                     air.resize(id + 1, false);
                     fluid.resize(id + 1, false);
                     keys.resize(id + 1, String::new());
+                    name_len.resize(id + 1, 0);
                 }
+                name_len[id] = name.len() as u16;
                 air[id] = is_air;
                 fluid[id] =
                     is_fluid_block || state["properties"]["waterlogged"].as_str() == Some("true");
@@ -354,6 +359,7 @@ impl Blocks {
             fluid,
             by_key,
             keys,
+            name_len,
         })
     }
 
@@ -369,7 +375,7 @@ impl Blocks {
     /// Block name of a state: `minecraft:oak_log`.
     pub fn block_name(&self, state: u32) -> Option<&str> {
         let key = self.describe(state)?;
-        Some(&key[..key.find('[').unwrap_or(key.len())])
+        Some(&key[..self.name_len[state as usize] as usize])
     }
 
     /// Value of one property of a state.

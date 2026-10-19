@@ -40,7 +40,7 @@ pub struct World {
     /// Shown to players on join.
     pub description: String,
     source: Source,
-    chunks: Mutex<HashMap<(i32, i32), Slot>>,
+    chunks: Mutex<HashMap<(i32, i32), Slot, mc_worldgen::density::Fast>>,
     /// Sent where a world folder has no finished chunk: air with full daylight.
     empty: Chunk,
     biome_count: u32,
@@ -87,7 +87,7 @@ struct Anvil {
 
 /// The world's generator, with what turning its output into chunks needs.
 struct Generation {
-    pipeline: crate::pipeline::Pipeline,
+    pipeline: Arc<crate::pipeline::Pipeline>,
     /// Per state: which heightmaps count it (a bit per [`HEIGHTMAPS`] entry).
     counts: Vec<u8>,
 }
@@ -232,7 +232,7 @@ impl World {
         Ok(Self {
             empty: Chunk::new(0, 0, dim.min_y, dim.height, generator.air, generator.biome),
             source: Source::Flat(Box::new(chunk)),
-            chunks: Mutex::new(HashMap::new()),
+            chunks: Mutex::new(HashMap::default()),
             biome_count: biomes.len() as u32,
             biome_names: biome_names(synced),
             data_version: data.version.world_version,
@@ -290,9 +290,12 @@ impl World {
                 let features = crate::generation::features(data, shapes, &biome_ids, &generator)?;
                 let air = state(data, "minecraft:air")?;
                 let plains = biome_ids.get("minecraft:plains").copied().unwrap_or(0);
-                Some(crate::pipeline::Pipeline::new(
+                let pipeline = Arc::new(crate::pipeline::Pipeline::new(
                     generator, features, seed, air, plains,
-                ))
+                ));
+                let early = Arc::clone(&pipeline);
+                std::thread::spawn(move || early.prepare());
+                Some(pipeline)
             }
             None => None,
         };
@@ -338,7 +341,7 @@ impl World {
                 air,
                 unresolved_reported: AtomicU32::new(0),
             })),
-            chunks: Mutex::new(HashMap::new()),
+            chunks: Mutex::new(HashMap::default()),
             empty: Chunk::new(0, 0, dim.min_y, dim.height, air, fallback_biome),
             biome_count: biomes.len() as u32,
             biome_names: biome_names(synced),
@@ -1092,7 +1095,7 @@ fn light_alone(chunk: &mut Chunk, tables: &mc_light::Tables) {
     let (x, z) = (chunk.x, chunk.z);
     let min_y = chunk.min_y;
     let top = min_y + chunk.height() as i32;
-    let mut slot = HashMap::new();
+    let mut slot = HashMap::default();
     slot.insert(
         (x, z),
         Slot {
@@ -1122,7 +1125,7 @@ fn light_alone(chunk: &mut Chunk, tables: &mc_light::Tables) {
 
 /// The loaded chunks as the light engine sees them.
 struct LightView<'a> {
-    chunks: &'a mut HashMap<(i32, i32), Slot>,
+    chunks: &'a mut HashMap<(i32, i32), Slot, mc_worldgen::density::Fast>,
     min_y: i32,
     top: i32,
     touched: Vec<(i32, i32)>,
