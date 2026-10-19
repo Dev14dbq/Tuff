@@ -425,7 +425,7 @@ pub fn tick(ctx: &ServerContext) {
                 v.food_timer = 0;
             } else if v.food <= 0 && v.food_timer >= 80 {
                 v.food_timer = 0;
-                let floor = match ctx.difficulty {
+                let floor = match ctx.difficulty() {
                     1 => 10.0,
                     2 => 1.0,
                     3 => 0.0,

@@ -524,8 +524,15 @@ pub mod play {
         Chat {
             message: String,
         },
+        /// A command; also the signed kind, its signatures ignored.
         ChatCommand {
             command: String,
+        },
+        /// The client asks the server to complete `text` (`ask_server`
+        /// nodes).
+        CommandSuggestion {
+            id: i32,
+            text: String,
         },
         /// Digging, dropping items, swapping hands (`status`, see [`dig`]).
         PlayerAction {
@@ -725,8 +732,16 @@ pub mod play {
                 "minecraft:chat" => Serverbound::Chat {
                     message: r.string(256)?,
                 },
-                "minecraft:chat_command" => Serverbound::ChatCommand {
-                    command: r.string(32767)?,
+                "minecraft:chat_command" | "minecraft:chat_command_signed" => {
+                    let command = r.string(32767)?;
+                    // Timestamp, salt, argument signatures, acknowledged
+                    // messages: not checked.
+                    let _ = r.bytes(r.remaining());
+                    Serverbound::ChatCommand { command }
+                }
+                "minecraft:command_suggestion" => Serverbound::CommandSuggestion {
+                    id: r.varint()?,
+                    text: r.string(32500)?,
                 },
                 "minecraft:player_action" => Serverbound::PlayerAction {
                     status: r.varint()?,
@@ -956,6 +971,59 @@ pub mod play {
             out.put_varint(self.window);
             out.put_i16(self.property);
             out.put_i16(self.value);
+        }
+    }
+
+    /// Commands: the command tree the client completes and checks against
+    /// (the body is built by `mc_command`).
+    #[derive(Clone, Debug)]
+    pub struct Commands {
+        pub body: Vec<u8>,
+    }
+    packet!(Commands, Play, "minecraft:commands");
+    impl Encode for Commands {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.extend_from_slice(&self.body);
+        }
+    }
+
+    /// Command Suggestions Response: completions for the text from `start`
+    /// (`length` characters), each with an optional tooltip.
+    #[derive(Clone, Debug)]
+    pub struct CommandSuggestions {
+        pub id: i32,
+        pub start: i32,
+        pub length: i32,
+        pub matches: Vec<(String, Option<Tag>)>,
+    }
+    packet!(CommandSuggestions, Play, "minecraft:command_suggestions");
+    impl Encode for CommandSuggestions {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.id);
+            out.put_varint(self.start);
+            out.put_varint(self.length);
+            out.put_varint(self.matches.len() as i32);
+            for (text, tooltip) in &self.matches {
+                out.put_string(text);
+                out.put_bool(tooltip.is_some());
+                if let Some(t) = tooltip {
+                    crate::codec::put_nbt(out, t);
+                }
+            }
+        }
+    }
+
+    /// Change Difficulty.
+    #[derive(Clone, Debug)]
+    pub struct ChangeDifficulty {
+        pub difficulty: u8,
+        pub locked: bool,
+    }
+    packet!(ChangeDifficulty, Play, "minecraft:change_difficulty");
+    impl Encode for ChangeDifficulty {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_u8(self.difficulty);
+            out.put_bool(self.locked);
         }
     }
 

@@ -56,6 +56,8 @@ pub struct World {
     live_ticks: Mutex<Vec<(mc_tick::BlockPos, u32)>>,
     /// Loaded chunks whose light a new neighbour changed.
     relit: Mutex<Vec<(i32, i32)>>,
+    /// `/save-off`.
+    no_autosave: std::sync::atomic::AtomicBool,
 }
 
 /// What one save did.
@@ -188,6 +190,11 @@ fn block_entity_types(data: &McData) -> Result<HashMap<String, i32>> {
 }
 
 impl World {
+    /// The world folder (`None` for the flat test world).
+    pub fn folder(&self) -> Option<&Path> {
+        self.folder.as_deref()
+    }
+
     /// Classic superflat: bedrock, two dirt, grass.
     pub fn flat(
         data: &McData,
@@ -234,6 +241,7 @@ impl World {
             light,
             live_ticks: Mutex::new(Vec::new()),
             relit: Mutex::new(Vec::new()),
+            no_autosave: std::sync::atomic::AtomicBool::new(false),
             dimension: dim.name,
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
@@ -340,6 +348,7 @@ impl World {
             light,
             live_ticks: Mutex::new(Vec::new()),
             relit: Mutex::new(Vec::new()),
+            no_autosave: std::sync::atomic::AtomicBool::new(false),
             dimension: dim.name,
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
@@ -739,6 +748,8 @@ impl World {
                 id,
                 ticks: 0,
                 running: true,
+                rate: 1.0,
+                fraction: 0.0,
             })
             .collect();
         clocks.sort_by_key(|c| c.id);
@@ -861,6 +872,33 @@ impl World {
             Some("hard") => 3,
             _ => 1,
         }
+    }
+
+    /// Changes level.dat's `Data` (keeping the previous file as
+    /// level.dat_old).
+    pub fn update_level(&self, change: impl FnOnce(&mut mc_nbt::Compound)) -> Result<()> {
+        let Some(dir) = &self.folder else {
+            return Ok(());
+        };
+        let path = dir.join("level.dat");
+        let mut level = read_gz(&path)?;
+        if let Some(Tag::Compound(data)) = level.get_mut("Data") {
+            change(data);
+        }
+        let _ = std::fs::copy(&path, dir.join("level.dat_old"));
+        write_gz(&path, &level)
+    }
+
+    /// Turns automatic saving on or off (`/save-on`, `/save-off`);
+    /// whether it was on.
+    pub fn autosave(&self, on: bool) -> bool {
+        !self
+            .no_autosave
+            .swap(!on, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn autosaving(&self) -> bool {
+        !self.no_autosave.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Whether changes are written anywhere.
@@ -1270,6 +1308,10 @@ pub(crate) fn read_nbt_gz(path: &Path) -> Result<mc_nbt::Compound> {
 
 pub(crate) fn write_nbt_gz(path: &Path, root: &mc_nbt::Compound) -> Result<()> {
     write_gz(path, root)
+}
+
+pub(crate) fn read_nbt_gz_compound(path: &Path) -> Result<mc_nbt::Compound> {
+    read_gz(path)
 }
 
 fn read_gz(path: &Path) -> Result<mc_nbt::Compound> {

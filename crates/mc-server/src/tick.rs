@@ -48,6 +48,9 @@ pub struct Clock {
     pub id: i32,
     pub ticks: i64,
     pub running: bool,
+    /// Ticks per tick (`/time rate`), and the part of a tick gathered.
+    pub rate: f32,
+    pub fraction: f32,
 }
 
 impl WorldTime {
@@ -60,8 +63,8 @@ impl WorldTime {
                     .map(|c| ClockState {
                         clock: c.id,
                         ticks: c.ticks,
-                        fraction: 0.0,
-                        rate: if c.running { 1.0 } else { 0.0 },
+                        fraction: c.fraction,
+                        rate: if c.running { c.rate } else { 0.0 },
                     })
                     .collect()
             } else {
@@ -73,7 +76,10 @@ impl WorldTime {
     fn advance(&mut self) {
         self.age += 1;
         for clock in self.clocks.iter_mut().filter(|c| c.running) {
-            clock.ticks += 1;
+            clock.fraction += clock.rate;
+            let whole = clock.fraction.floor();
+            clock.ticks += whole as i64;
+            clock.fraction -= whole;
         }
     }
 }
@@ -190,7 +196,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
                 );
             }
         }
-        if count.is_multiple_of(autosave) {
+        if count.is_multiple_of(autosave) && ctx.world.autosaving() {
             crate::save(&ctx);
         }
         *lock(&ctx.ticking) = mc_protocol::packets::play::TickingState {
@@ -638,12 +644,16 @@ mod tests {
                     id: 0,
                     ticks: 100,
                     running: true,
+                    rate: 1.0,
+                    fraction: 0.0,
                 },
                 Clock {
                     name: "minecraft:the_end".into(),
                     id: 1,
                     ticks: 7,
                     running: false,
+                    rate: 1.0,
+                    fraction: 0.0,
                 },
             ],
         };

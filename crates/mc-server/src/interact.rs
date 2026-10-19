@@ -172,7 +172,7 @@ pub struct Outcome {
     pub ack: Option<i32>,
     pub events: Vec<Event>,
     /// Lines of text for the player (command feedback).
-    pub messages: Vec<String>,
+    pub messages: Vec<mc_nbt::Tag>,
     /// Items to drop into the world, at block positions.
     pub drops: Vec<(Position, crate::loot::Drop)>,
     /// A container the player opened.

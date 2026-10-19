@@ -218,12 +218,13 @@ async fn login(
         profile,
         game_mode: saved
             .as_ref()
-            .map_or(ctx.default_game_mode, |s| s.game_mode),
+            .map_or(ctx.default_game_mode(), |s| s.game_mode),
         entity_id: ctx.next_entity_id(),
         skin_parts: 0,
         pose: None,
         main_hand: None,
         flying: saved.as_ref().is_some_and(|s| s.flying),
+        address: Some(peer.ip().to_string()),
     };
     let uuid = player.profile.uuid;
     // Bans and the whitelist (operators are always let in).
@@ -500,6 +501,7 @@ async fn play(
     })?;
     let mut flying = me.flying || me.game_mode == 3;
     writer.queue(&abilities(me.game_mode, flying))?;
+    send_permissions(writer, &ctx, uuid, &me.profile.name, entity_id)?;
     let mut awaiting_teleport = Some(1);
     let mut next_teleport = 1;
     writer.queue(&play::PlayerPosition {
@@ -685,18 +687,16 @@ async fn play(
                         let _ = ctx.events.send(Event::Chat(line));
                     }
                     play::Serverbound::ChatCommand { command } => {
-                        let op = ctx.lists.lock().expect("lists lock").op(uuid, &me.profile.name).is_some();
-                        if op {
-                            info!("{} issued server command: /{command}", me.profile.name);
-                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                            let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
-                            let action = Action::Command { line: command, source };
-                            let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
-                        } else {
-                            writer.queue(&play::SystemChat {
-                                content: text::colored("You do not have permission to use commands", "red"),
-                                overlay: false,
-                            })?;
+                        info!("{} issued server command: /{command}", me.profile.name);
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
+                        let action = Action::Command { line: command, source };
+                        let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                    }
+                    play::Serverbound::CommandSuggestion { id, text } => {
+                        let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
+                        if let Some(answer) = crate::commands::suggest(&ctx, &source, id, &text) {
+                            writer.queue(&answer)?;
                         }
                     }
                     play::Serverbound::SetCreativeModeSlot { slot, item } if game_mode == CREATIVE => {
@@ -995,6 +995,20 @@ async fn play(
                         }
                     }
                     Ok(Event::TickingStep(packet)) => writer.queue(&packet)?,
+                    Ok(Event::Permissions { uuid: who }) if who == uuid => {
+                        send_permissions(writer, &ctx, uuid, &me.profile.name, entity_id)?;
+                    }
+                    Ok(Event::Message { uuid: who, line, overlay }) if who == uuid => {
+                        writer.queue(&play::SystemChat { content: line, overlay })?;
+                    }
+                    Ok(Event::AdminFeedback { from, line }) if from != uuid => {
+                        if crate::commands::level(&ctx, uuid, &me.profile.name) >= 2 {
+                            writer.queue(&play::SystemChat { content: line, overlay: false })?;
+                        }
+                    }
+                    Ok(Event::Difficulty(d)) => {
+                        writer.queue(&play::ChangeDifficulty { difficulty: d as u8, locked: false })?;
+                    }
                     Ok(Event::Kick { uuid: who, reason }) if who == uuid => {
                         let said = match &reason {
                             mc_nbt::Tag::String(s) => s.clone(),
@@ -1131,6 +1145,28 @@ fn set_position(pose: &mut Pose, x: f64, y: f64, z: f64, flags: u8) -> bool {
     true
 }
 
+/// The player's permission level (Entity Event 24 + level) and the
+/// commands they may use.
+fn send_permissions(
+    writer: &mut PacketWriter,
+    ctx: &ServerContext,
+    uuid: u128,
+    name: &str,
+    entity_id: i32,
+) -> Result<()> {
+    let level = crate::commands::level(ctx, uuid, name);
+    writer.queue(&play::EntityEvent {
+        entity_id,
+        status: 24 + level as i8,
+    })?;
+    if let Some(body) = ctx.commands.packet(level) {
+        writer.queue(&play::Commands {
+            body: body.to_vec(),
+        })?;
+    }
+    Ok(())
+}
+
 /// Sends the player what changed for them and tells everyone else.
 fn answer(writer: &mut PacketWriter, ctx: &ServerContext, outcome: Outcome) -> Result<()> {
     for (position, state) in outcome.updates {
@@ -1141,7 +1177,7 @@ fn answer(writer: &mut PacketWriter, ctx: &ServerContext, outcome: Outcome) -> R
     }
     for line in outcome.messages {
         writer.queue(&play::SystemChat {
-            content: text::plain(&line),
+            content: line,
             overlay: false,
         })?;
     }

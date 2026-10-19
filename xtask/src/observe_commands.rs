@@ -25,10 +25,12 @@ const NAME: &str = "Probe";
 pub fn run(args: &[String]) -> Result<()> {
     let root = crate::workspace_root();
     let mut lines_file = root.join("xtask/commands.txt");
+    let mut ours = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--lines" => lines_file = it.next().context("--lines needs a file")?.into(),
+            "--ours" => ours = true,
             other => bail!("unknown option `{other}`"),
         }
     }
@@ -51,17 +53,41 @@ pub fn run(args: &[String]) -> Result<()> {
          pause-when-empty-seconds=0\nenable-status=true\nsync-chunk-writes=false\n\
          level-seed=1\nwhite-list=false\nenforce-whitelist=false\n"
     );
+    if ours {
+        let dir = root.join("cache/ours-commands");
+        let mut server = Server::ours_in(&root, &dir, &properties)?;
+        let result = observe(
+            &mut server,
+            &lines,
+            &dir.join("world/data/minecraft/game_rules.dat"),
+        );
+        server.stop();
+        let (tree, _, replies, _) = result?;
+        let out = root.join("cache/mcdata/26.3/observed/commands-ours.json");
+        std::fs::write(
+            &out,
+            serde_json::to_string_pretty(&json!({ "tree": tree, "lines": replies }))?,
+        )?;
+        println!("{} lines → {}", replies.len(), out.display());
+        return Ok(());
+    }
     Server::prepare(&root, &dir, &properties)?;
     let mut server = Server::start_java(&root, &dir)?;
-    let result = observe(&mut server, &lines);
+    let result = observe(
+        &mut server,
+        &lines,
+        &dir.join("world/data/minecraft/game_rules.dat"),
+    );
     server.stop();
-    let (tree, raw, replies) = result?;
+    let (tree, raw, replies, rules) = result?;
     let out = root.join("cache/mcdata/26.3/observed");
     std::fs::create_dir_all(&out)?;
     std::fs::write(out.join("commands.bin"), &raw)?;
     std::fs::write(
         out.join("commands.json"),
-        serde_json::to_string_pretty(&json!({ "tree": tree, "lines": replies }))?,
+        serde_json::to_string_pretty(
+            &json!({ "tree": tree, "lines": replies, "game_rules": rules }),
+        )?,
     )?;
     println!(
         "{} nodes, {} lines → {}",
@@ -72,9 +98,13 @@ pub fn run(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-type Observed = (Value, Vec<u8>, Vec<Value>);
+type Observed = (Value, Vec<u8>, Vec<Value>, Value);
 
-fn observe(server: &mut Server, lines: &[String]) -> Result<Observed> {
+fn observe(
+    server: &mut Server,
+    lines: &[String],
+    rules_file: &std::path::Path,
+) -> Result<Observed> {
     let ids = load_packet_ids(None)?;
     let (mut client, _) = join_player(&format!("127.0.0.1:{PORT}"), ids, NAME)?;
     client.set_read_timeout(Duration::from_millis(100))?;
@@ -91,6 +121,14 @@ fn observe(server: &mut Server, lines: &[String]) -> Result<Observed> {
     }
     let raw = raw.context("no commands packet after op")?;
     let tree = decode_tree(&raw)?;
+    // The game rules as a new world has them, before any line changes one.
+    server.wait_for("save-all flush", "Saved the game", Duration::from_secs(30))?;
+    let rules = game_rules(rules_file).unwrap_or(Value::Null);
+    // What the save said to operators is not a reply to the first line.
+    let until = Instant::now() + Duration::from_millis(800);
+    while Instant::now() < until {
+        next(&mut client)?;
+    }
     let mut replies = Vec::new();
     for (n, line) in lines.iter().enumerate() {
         let mut entry = json!({ "line": line });
@@ -139,7 +177,22 @@ fn observe(server: &mut Server, lines: &[String]) -> Result<Observed> {
         entry["replies"] = Value::Array(got);
         replies.push(entry);
     }
-    Ok((tree, raw, replies))
+    Ok((tree, raw, replies, rules))
+}
+
+/// `game_rules.dat` as `{name: value}`.
+fn game_rules(path: &std::path::Path) -> Result<Value> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    flate2::read::GzDecoder::new(std::fs::File::open(path)?).read_to_end(&mut bytes)?;
+    let (_, tag, _) = mc_nbt::read_named(&bytes)?;
+    let Tag::Compound(root) = tag else {
+        bail!("game_rules.dat is not a compound");
+    };
+    Ok(match root.get("data") {
+        Some(data) => component(data),
+        None => Value::Null,
+    })
 }
 
 /// The next packet, answering keep-alives; `None` when nothing came.

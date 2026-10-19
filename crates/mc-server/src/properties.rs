@@ -176,6 +176,20 @@ impl Properties {
     }
 }
 
+/// Changes one key of the folder's `server.properties` (`/whitelist on`).
+pub fn set(dir: &Path, key: &str, value: &str) {
+    let path = dir.join("server.properties");
+    match Properties::load(&path) {
+        Ok(mut p) => {
+            p.set(key, value);
+            if let Err(e) = p.save() {
+                tracing::warn!("saving {}: {e:#}", path.display());
+            }
+        }
+        Err(e) => tracing::warn!("reading {}: {e:#}", path.display()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

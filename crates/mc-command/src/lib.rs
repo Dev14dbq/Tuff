@@ -11,6 +11,7 @@ pub mod lang;
 pub mod reader;
 pub mod text;
 pub mod tree;
+pub mod usage;
 
 pub use error::CommandError;
 pub use tree::Tree;
@@ -33,6 +34,45 @@ mod tests {
         let ours = tree.packet(4);
         assert_eq!(ours.len(), vanilla.len());
         assert!(ours == vanilla, "packets differ");
+    }
+
+    /// `/help` prints what vanilla prints.
+    #[test]
+    fn help_matches_vanilla() {
+        let Some(d) = data() else { return };
+        let tree = crate::Tree::load(&d).unwrap();
+        let observed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(d.join("observed/commands.json")).unwrap(),
+        )
+        .unwrap();
+        for l in observed["lines"].as_array().unwrap() {
+            let line = l["line"].as_str().unwrap();
+            let Some(rest) = line.strip_prefix("help") else {
+                continue;
+            };
+            let want: Vec<&str> = l["replies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|r| r["chat"].as_str())
+                .collect();
+            let rest = rest.trim();
+            let node = if rest.is_empty() {
+                crate::tree::ROOT
+            } else {
+                tree.path(&rest.split(' ').collect::<Vec<_>>()).unwrap()
+            };
+            let prefix = if rest.is_empty() {
+                "/".to_owned()
+            } else {
+                format!("/{rest} ")
+            };
+            let got: Vec<String> = crate::usage::smart_usage(&tree, node, 4)
+                .into_iter()
+                .map(|(_, u)| format!("{prefix}{u}"))
+                .collect();
+            assert_eq!(got, want, "{line}");
+        }
     }
 
     /// Lines vanilla could not parse fail here with the same two lines.

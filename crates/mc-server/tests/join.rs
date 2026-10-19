@@ -737,7 +737,8 @@ async fn operators_run_commands_from_chat() {
         .await;
     loop {
         let (_, message) = guest.recv_until("minecraft:system_chat").await;
-        if chat_text(&message).contains("permission") {
+        // Commands an operator may use do not exist for a guest.
+        if chat_text(&message).contains("command.unknown.command") {
             break;
         }
     }
@@ -766,7 +767,8 @@ async fn operators_run_commands_from_chat() {
     );
     loop {
         let (_, feedback) = admin.recv_until("minecraft:system_chat").await;
-        if chat_text(&feedback).contains("Successfully filled 3") {
+        let text = chat_text(&feedback);
+        if text.contains("commands.fill.success") && text.contains("Int(3)") {
             break;
         }
     }

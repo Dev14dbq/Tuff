@@ -36,6 +36,8 @@ pub struct OnlinePlayer {
     pub main_hand: Option<ItemStack>,
     /// Flying (creative players who double-jumped, and spectators).
     pub flying: bool,
+    /// The address they connected from (for `/ban-ip`).
+    pub address: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -193,6 +195,24 @@ pub enum Event {
         uuid: u128,
         reason: Tag,
     },
+    /// Command feedback for the operators other than `from` (who ran it).
+    AdminFeedback {
+        from: u128,
+        line: Tag,
+    },
+    /// A player's permission level changed: they get the commands they may
+    /// use now.
+    Permissions {
+        uuid: u128,
+    },
+    /// The difficulty changed (0–3).
+    Difficulty(i32),
+    /// A message for one player (`tellraw`, `msg`...).
+    Message {
+        uuid: u128,
+        line: Tag,
+        overlay: bool,
+    },
     /// A player's arm swings (`times` in a row, as vanilla does on placing).
     Swing {
         uuid: u128,
@@ -253,13 +273,13 @@ pub struct ServerContext {
     /// Players eating or drinking (tick thread counts down).
     pub using: Mutex<HashMap<u128, crate::vitals::Using>>,
     /// 0 peaceful, 1 easy, 2 normal, 3 hard (level.dat).
-    pub difficulty: i32,
+    pub difficulty: AtomicI32,
     /// `minecraft:damage_type` entries in Registry Data order.
     damage_types: Vec<String>,
     /// Player files of the world folder (none for the flat test world).
     pub player_files: Option<crate::players::Store>,
     /// Game mode of players who never played here (level.dat `GameType`).
-    pub default_game_mode: i32,
+    pub default_game_mode: AtomicI32,
     /// `ops.json`, `whitelist.json`, bans and the user cache.
     pub lists: Mutex<crate::lists::Lists>,
     /// Whether only listed players may join (`white-list`).
@@ -283,6 +303,9 @@ pub struct ServerContext {
     pub ticking: Mutex<TickingState>,
     /// Notified by `/stop`.
     pub shutdown: tokio::sync::Notify,
+    /// The command tree and what commands are checked against.
+    pub commands: crate::commands::Commands,
+    pub game_rules: Mutex<crate::rules::GameRules>,
     next_entity_id: AtomicI32,
 }
 
@@ -453,6 +476,12 @@ impl ServerContext {
             lists.add_op_name(name);
         }
         let white_list = config.white_list;
+        let config_data_dir = config.data_dir.clone();
+        let game_rules = crate::rules::GameRules::load(
+            &config.data_dir,
+            world.folder(),
+            data.version.world_version,
+        );
         Ok(Self {
             core_pack: KnownPack {
                 namespace: "minecraft".into(),
@@ -481,10 +510,10 @@ impl ServerContext {
             furnaces: Mutex::new(HashMap::new()),
             block_events: Mutex::new(Vec::new()),
             moving: Mutex::new(Vec::new()),
-            difficulty,
+            difficulty: AtomicI32::new(difficulty),
             damage_types,
             player_files,
-            default_game_mode,
+            default_game_mode: AtomicI32::new(default_game_mode),
             lists: Mutex::new(lists),
             white_list: std::sync::atomic::AtomicBool::new(white_list),
             entity_types: EntityTypes {
@@ -505,8 +534,23 @@ impl ServerContext {
             }),
             shutdown: tokio::sync::Notify::new(),
             next_entity_id: AtomicI32::new(1),
+            commands: crate::commands::Commands::load(&config_data_dir),
+            game_rules: Mutex::new(game_rules),
             data,
         })
+    }
+
+    pub fn difficulty(&self) -> i32 {
+        self.difficulty.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn default_game_mode(&self) -> i32 {
+        self.default_game_mode
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn game_rule_bool(&self, name: &str) -> bool {
+        self.game_rules.lock().expect("game rules lock").bool(name)
     }
 
     /// Network id of a damage type.

@@ -171,6 +171,7 @@ async fn run() -> Result<()> {
     };
     config.online_mode = props.bool("online-mode") && !offline;
     config.white_list = props.bool("white-list");
+    config.op_permission_level = props.int("op-permission-level").unwrap_or(4).clamp(0, 4) as i32;
     config.new_world_game_mode = game_mode(props.get("gamemode"));
     config.new_world_difficulty = difficulty(props.get("difficulty"));
     config.seed = seed(seed_arg.as_deref().unwrap_or(props.get("level-seed")));

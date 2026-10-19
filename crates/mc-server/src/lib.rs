@@ -23,6 +23,7 @@ mod loot;
 mod pipeline;
 mod players;
 pub mod properties;
+mod rules;
 mod tick;
 mod util;
 mod vitals;
@@ -74,6 +75,8 @@ pub struct Config {
     /// Game mode (0–3) and difficulty (0–3) of a new world.
     pub new_world_game_mode: i32,
     pub new_world_difficulty: i32,
+    /// The level `/op` gives (`op-permission-level`).
+    pub op_permission_level: i32,
 }
 
 impl Config {
@@ -98,6 +101,7 @@ impl Config {
             white_list: false,
             new_world_game_mode: 0,
             new_world_difficulty: 2,
+            op_permission_level: 4,
         }
     }
 }
@@ -300,11 +304,8 @@ fn console(ctx: &Arc<ServerContext>) {
         if ctx.actions.send(request).is_err() {
             break;
         }
-        if let Some(outcome) = replies.blocking_recv() {
-            for line in outcome.messages {
-                info!("{line}");
-            }
-        }
+        // The feedback is logged by the command itself.
+        let _ = replies.blocking_recv();
     }
 }
 
