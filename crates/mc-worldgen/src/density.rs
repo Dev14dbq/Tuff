@@ -199,9 +199,9 @@ impl Spline {
 #[derive(Debug)]
 pub enum Df {
     Constant(f64),
-    /// A shared function; `true` when it does not depend on y (cached per
-    /// column while generating a chunk).
-    Ref(Arc<Df>, bool),
+    /// A shared function; with a cache slot when it does not depend on y
+    /// (cached per column while generating a chunk).
+    Ref(Arc<Df>, Option<u32>),
     Unary(Unary, Box<Df>),
     Binary(Binary, Box<Df>, Box<Df>),
     Round(Rounding, Box<Df>, Box<Df>),
@@ -244,6 +244,8 @@ pub enum Df {
         input: Box<Df>,
         xz: i32,
         y: i32,
+        /// Its grid in [`Ctx`].
+        slot: u32,
     },
     OldBlended(Arc<BlendedNoise>),
     FindTopSurface {
@@ -452,7 +454,8 @@ impl std::hash::BuildHasher for Fast {
     }
 }
 
-/// Per-chunk evaluation state: interpolation grids and column caches.
+/// Per-chunk evaluation state: interpolation grids and column caches,
+/// found by the slot their node got when it was built.
 #[derive(Debug, Default)]
 pub struct Ctx {
     /// Lowest block of the chunk (x, z) and the world's height range.
@@ -460,8 +463,11 @@ pub struct Ctx {
     pub z0: i32,
     pub min_y: i32,
     pub height: i32,
-    grids: HashMap<usize, Grid, Fast>,
-    columns: HashMap<(usize, i32, i32), f64, Fast>,
+    grids: Vec<Option<Grid>>,
+    /// 256 columns of the chunk per slot; NaN where not worked out yet.
+    columns: Vec<f64>,
+    /// Columns outside the chunk.
+    far: HashMap<(u32, i32, i32), f64, Fast>,
 }
 
 #[derive(Debug)]
@@ -472,6 +478,9 @@ struct Grid {
     nx: usize,
     ny: usize,
     values: Vec<f64>,
+    /// Which corners are worked out, and which cells have all theirs.
+    known: Vec<bool>,
+    cells: Vec<bool>,
 }
 
 impl Ctx {
@@ -491,7 +500,7 @@ impl Df {
     pub fn is_2d(&self) -> bool {
         match self {
             Df::Constant(_) | Df::FindTopSurface { .. } | Df::EndIslands(_) => true,
-            Df::Ref(_, flat) => *flat,
+            Df::Ref(_, slot) => slot.is_some(),
             Df::Unary(_, a) | Df::Clamp(a, ..) => a.is_2d(),
             Df::Binary(_, a, b) | Df::Round(_, a, b) => a.is_2d() && b.is_2d(),
             Df::Gradient { axis, .. } => *axis != Axis::Y,
@@ -516,26 +525,76 @@ impl Df {
         }
     }
 
+    /// Whether an interpolated node is somewhere inside, so that
+    /// [`Df::eval_in`] may give other values than [`Df::eval`].
+    pub fn interpolates(&self) -> bool {
+        match self {
+            Df::Interpolated { .. } => true,
+            Df::Ref(f, _) => f.interpolates(),
+            Df::Unary(_, a) | Df::Clamp(a, ..) => a.interpolates(),
+            Df::Binary(_, a, b) | Df::Round(_, a, b) => a.interpolates() || b.interpolates(),
+            Df::Lerp(a, b, c) => a.interpolates() || b.interpolates() || c.interpolates(),
+            Df::Noise { shift, .. } => shift.iter().flatten().any(|s| s.interpolates()),
+            Df::RangeChoice {
+                input,
+                inside,
+                outside,
+                ..
+            } => input.interpolates() || inside.interpolates() || outside.interpolates(),
+            Df::IntervalSelect {
+                input, functions, ..
+            } => input.interpolates() || functions.iter().any(Df::interpolates),
+            Df::Spline(s) => s.interpolates(),
+            Df::FindTopSurface { density, upper, .. } => {
+                density.interpolates() || upper.interpolates()
+            }
+            Df::Slice { input, .. } => input.interpolates(),
+            Df::Constant(_)
+            | Df::Gradient { .. }
+            | Df::Shift { .. }
+            | Df::OldBlended(_)
+            | Df::Distance { .. }
+            | Df::EndIslands(_) => false,
+        }
+    }
+
     /// The value inside a chunk: interpolated nodes from their cell
     /// corners, column-independent of y ones once per column.
     pub fn eval_in(&self, x: i32, y: i32, z: i32, ctx: &mut Ctx) -> f64 {
         match self {
-            Df::Ref(f, flat) => {
-                if *flat {
-                    let key = (Arc::as_ptr(f) as usize, x, z);
-                    if let Some(&v) = ctx.columns.get(&key) {
+            Df::Ref(f, None) => f.eval_in(x, y, z, ctx),
+            Df::Ref(f, Some(slot)) => {
+                let (lx, lz) = (x.wrapping_sub(ctx.x0) as u32, z.wrapping_sub(ctx.z0) as u32);
+                if lx >= 16 || lz >= 16 {
+                    let key = (*slot, x, z);
+                    if let Some(&v) = ctx.far.get(&key) {
                         return v;
                     }
                     let v = f.eval_in(x, y, z, ctx);
-                    ctx.columns.insert(key, v);
-                    v
-                } else {
-                    f.eval_in(x, y, z, ctx)
+                    ctx.far.insert(key, v);
+                    return v;
                 }
+                let i = *slot as usize * 256 + (lz * 16 + lx) as usize;
+                if let Some(&v) = ctx.columns.get(i)
+                    && !v.is_nan()
+                {
+                    return v;
+                }
+                let v = f.eval_in(x, y, z, ctx);
+                if ctx.columns.len() <= i {
+                    ctx.columns.resize((*slot as usize + 1) * 256, f64::NAN);
+                }
+                ctx.columns[i] = v;
+                v
             }
-            Df::Interpolated { input, xz, y: cy } => {
-                let key = self as *const Df as usize;
-                if !ctx.grids.contains_key(&key) {
+            Df::Interpolated {
+                input,
+                xz,
+                y: cy,
+                slot,
+            } => {
+                let key = *slot as usize;
+                if ctx.grids.get(key).is_none_or(Option::is_none) {
                     // Something flat needs one layer only.
                     let flat = input.is_2d();
                     let nx = (16 / xz) as usize + 1;
@@ -544,32 +603,21 @@ impl Df {
                     } else {
                         (ctx.height / cy) as usize + 1
                     };
-                    let mut values = Vec::with_capacity(nx * ny * nx);
-                    for k in 0..nx {
-                        for j in 0..ny {
-                            for i in 0..nx {
-                                let (px, py, pz) = (
-                                    ctx.x0 + i as i32 * xz,
-                                    ctx.min_y + j as i32 * cy,
-                                    ctx.z0 + k as i32 * xz,
-                                );
-                                values.push(input.eval_in(px, py, pz, ctx));
-                            }
-                        }
+                    if ctx.grids.len() <= key {
+                        ctx.grids.resize_with(key + 1, || None);
                     }
-                    ctx.grids.insert(
-                        key,
-                        Grid {
-                            xz: *xz,
-                            y: *cy,
-                            nx,
-                            ny,
-                            flat,
-                            values,
-                        },
-                    );
+                    ctx.grids[key] = Some(Grid {
+                        xz: *xz,
+                        y: *cy,
+                        nx,
+                        ny,
+                        flat,
+                        values: vec![0.0; nx * ny * nx],
+                        known: vec![false; nx * ny * nx],
+                        cells: vec![false; nx * ny.max(2) * nx],
+                    });
                 }
-                let g = &ctx.grids[&key];
+                let g = ctx.grids[key].as_ref().expect("grid made above");
                 let flat = g.flat;
                 let (lx, ly, lz) = (x - ctx.x0, if flat { 0 } else { y - ctx.min_y }, z - ctx.z0);
                 let (i, j, k) = (
@@ -577,6 +625,33 @@ impl Df {
                     (ly.div_euclid(g.y) as usize).min(g.ny.saturating_sub(2)),
                     (lz.div_euclid(g.xz) as usize).min(g.nx - 2),
                 );
+                // Corners are worked out when a cell first needs them (a
+                // single column needs few), each once.
+                let cell = (k * g.ny.max(2) + j) * g.nx + i;
+                if !g.cells[cell] {
+                    let (nx, ny, gxz, gy) = (g.nx, g.ny, g.xz, g.y);
+                    let top = if flat { 0 } else { 1 };
+                    for (di, dj, dk) in (0..=1).flat_map(|dk| {
+                        (0..=top).flat_map(move |dj| (0..=1).map(move |di| (di, dj, dk)))
+                    }) {
+                        let (ci, cj, ck) = (i + di, j + dj, k + dk);
+                        let c = (ck * ny + cj) * nx + ci;
+                        if ctx.grids[key].as_ref().expect("grid").known[c] {
+                            continue;
+                        }
+                        let v = input.eval_in(
+                            ctx.x0 + ci as i32 * gxz,
+                            ctx.min_y + cj as i32 * gy,
+                            ctx.z0 + ck as i32 * gxz,
+                            ctx,
+                        );
+                        let g = ctx.grids[key].as_mut().expect("grid");
+                        g.values[c] = v;
+                        g.known[c] = true;
+                    }
+                    ctx.grids[key].as_mut().expect("grid").cells[cell] = true;
+                }
+                let g = ctx.grids[key].as_ref().expect("grid made above");
                 let at = |i: usize, j: usize, k: usize| g.values[(k * g.ny + j) * g.nx + i];
                 let tx = f64::from(lx - i as i32 * g.xz) / f64::from(g.xz);
                 let ty = f64::from(ly - j as i32 * g.y) / f64::from(g.y);
@@ -665,6 +740,14 @@ impl Df {
 }
 
 impl Spline {
+    fn interpolates(&self) -> bool {
+        self.coordinate.interpolates()
+            || self.points.iter().any(|(_, v, _)| match v {
+                SplineValue::Const(_) => false,
+                SplineValue::Spline(s) => s.interpolates(),
+            })
+    }
+
     fn is_2d(&self) -> bool {
         self.coordinate.is_2d()
             && self.points.iter().all(|(_, v, _)| match v {
@@ -704,6 +787,9 @@ pub struct Builder<'a> {
     noises: HashMap<String, Arc<FbmNoise>>,
     blended: Option<Arc<BlendedNoise>>,
     seed: i64,
+    /// Cache slots handed out so far, and those of shared functions.
+    slots: u32,
+    ref_slots: HashMap<usize, u32>,
 }
 
 impl std::fmt::Debug for Builder<'_> {
@@ -729,6 +815,8 @@ impl<'a> Builder<'a> {
             noises: HashMap::new(),
             blended: None,
             seed,
+            slots: 0,
+            ref_slots: HashMap::new(),
         }
     }
 
@@ -755,12 +843,33 @@ impl<'a> Builder<'a> {
             Value::Number(n) => Ok(Df::Constant(n.as_f64().unwrap_or(0.0))),
             Value::String(id) => {
                 let f = self.named(id)?;
-                let flat = f.is_2d();
-                Ok(Df::Ref(f, flat))
+                Ok(self.reference(f))
             }
             Value::Object(_) => self.object(v),
             other => Err(format!("not a density function: {other}")),
         }
+    }
+
+    /// A reference to a shared function, with a column cache slot (one per
+    /// function) when it does not depend on y.
+    fn reference(&mut self, f: Arc<Df>) -> Df {
+        if !f.is_2d() {
+            return Df::Ref(f, None);
+        }
+        let next = &mut self.slots;
+        let slot = *self
+            .ref_slots
+            .entry(Arc::as_ptr(&f) as usize)
+            .or_insert_with(|| {
+                *next += 1;
+                *next - 1
+            });
+        Df::Ref(f, Some(slot))
+    }
+
+    fn slot(&mut self) -> u32 {
+        self.slots += 1;
+        self.slots - 1
     }
 
     pub fn named(&mut self, id: &str) -> Result<Arc<Df>, String> {
@@ -932,12 +1041,12 @@ impl<'a> Builder<'a> {
                 input: self.boxed(&v["input"])?,
                 xz: v["cell_size_xz"].as_i64().unwrap_or(4).max(1) as i32,
                 y: v["cell_size_y"].as_i64().unwrap_or(8).max(1) as i32,
+                slot: self.slot(),
             },
             "cache" | "cache_once" | "cache_2d" | "flat_cache" | "cache_all_in_cell"
             | "blend_density" => {
                 let f = Arc::new(self.build(&v["input"])?);
-                let flat = f.is_2d();
-                Df::Ref(f, flat)
+                self.reference(f)
             }
             "blend_alpha" => Df::Constant(1.0),
             "blend_offset" | "beardifier" => Df::Constant(0.0),

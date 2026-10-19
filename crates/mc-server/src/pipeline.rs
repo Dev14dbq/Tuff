@@ -380,30 +380,29 @@ impl Pipeline {
                 .filter(|p| !protos.contains_key(p))
                 .collect()
         };
-        // Chunks saved half way come back as they were.
-        let mut missing = Vec::new();
-        let mut stored = Vec::new();
-        for (p, is_final) in absent.iter().zip(finals(&absent)) {
-            match (!is_final).then(|| world.stored_proto(p.0, p.1)).flatten() {
-                Some(chunk) => stored.push((*p, self.stored(chunk))),
-                None => missing.push(*p),
+        // Chunks saved half way come back as they were; the rest is made.
+        // Terrain needs nothing shared: it is made without holding the
+        // locks so other chunks can be finished meanwhile.
+        let gather = |list: &[(i32, i32)]| -> Vec<((i32, i32), Proto)> {
+            let mut missing = Vec::new();
+            let mut got = Vec::new();
+            for (p, is_final) in list.iter().zip(finals(list)) {
+                match (!is_final).then(|| world.stored_proto(p.0, p.1)).flatten() {
+                    Some(chunk) => got.push((*p, self.stored(chunk))),
+                    None => missing.push(*p),
+                }
             }
-        }
-        if !stored.is_empty() {
-            let mut protos = self.protos.lock().expect("protos lock");
-            for (p, proto) in stored {
-                protos.entry(p).or_insert(proto);
-            }
-        }
-        // Terrain needs nothing shared: make it without holding the locks so
-        // other chunks can be finished meanwhile.
-        let made = self.terrain_parallel(&missing);
+            got.extend(self.terrain_parallel(&missing));
+            got
+        };
+        let mut made = gather(&absent);
         let _claim = self.claims.claim(area.clone());
-        // Nothing in the area gets finished while we hold it.
-        let made_pos: Vec<(i32, i32)> = made.iter().map(|(p, _)| *p).collect();
-        let made_final = finals(&made_pos);
-        // The area is ours: take its chunks out to work on them unlocked.
-        let mut protos: HashMap<(i32, i32), Proto, Fast> = {
+        // Nothing in the area gets finished while we hold it. What was there
+        // when we looked may have been finished and let go since (the same
+        // chunk asked for twice at once): that is made again now.
+        let mut protos: HashMap<(i32, i32), Proto, Fast> = loop {
+            let made_pos: Vec<(i32, i32)> = made.iter().map(|(p, _)| *p).collect();
+            let made_final = finals(&made_pos);
             let mut shared = self.protos.lock().expect("protos lock");
             let finished = self.finished.lock().expect("finished lock");
             for ((pos, mut proto), is_final) in made.into_iter().zip(made_final) {
@@ -414,9 +413,22 @@ impl Pipeline {
                 proto.readonly = is_final || finished.contains(&pos) && pos != (x, z);
                 shared.insert(pos, proto);
             }
-            area.iter()
-                .filter_map(|p| shared.remove(p).map(|proto| (*p, proto)))
-                .collect()
+            let late: Vec<(i32, i32)> = area
+                .iter()
+                .copied()
+                .filter(|p| !shared.contains_key(p))
+                .collect();
+            if late.is_empty() {
+                // The area is ours: take its chunks out to work on them
+                // unlocked.
+                break area
+                    .iter()
+                    .filter_map(|p| shared.remove(p).map(|proto| (*p, proto)))
+                    .collect();
+            }
+            drop(finished);
+            drop(shared);
+            made = gather(&late);
         };
         // Features for the 3×3.
         for dz in -1..=1 {

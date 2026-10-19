@@ -576,38 +576,76 @@ pub fn use_item_on(
     outcome
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn pose(x: f64, y: f64, z: f64) -> Pose {
-        Pose {
-            x,
-            y,
-            z,
-            yaw: 0.0,
-            pitch: 0.0,
-            on_ground: true,
+/// Text written in the sign editor. Returns what viewers must be told.
+pub fn sign_update(
+    ctx: &ServerContext,
+    actor: Actor,
+    position: Position,
+    front: bool,
+    lines: [String; 4],
+) -> Option<Event> {
+    if actor.game_mode == 3 {
+        return None;
+    }
+    let blocks = &ctx.data.blocks;
+    let (dx, dy, dz) = (
+        f64::from(position.x) + 0.5 - actor.pose.x,
+        f64::from(position.y) + 0.5 - actor.pose.y - 1.62,
+        f64::from(position.z) + 0.5 - actor.pose.z,
+    );
+    if dx * dx + dy * dy + dz * dz > 64.0 {
+        return None;
+    }
+    let id = ctx
+        .world
+        .block(position, blocks)
+        .and_then(|s| blocks.block_name(s))
+        .and_then(sign_entity)?;
+    let mut be = ctx
+        .world
+        .block_entity(position, blocks)
+        .filter(|be| be.id == id)
+        .unwrap_or_else(|| mc_world::BlockEntity {
+            x: position.x,
+            y: position.y,
+            z: position.z,
+            id: id.to_owned(),
+            data: blank_sign(),
+        });
+    if matches!(be.data.get("is_waxed"), Some(mc_nbt::Tag::Byte(1))) {
+        return None;
+    }
+    // Formatting codes do not survive, as in the game.
+    let lines = lines.map(|l| {
+        let mut out = String::new();
+        let mut chars = l.chars();
+        while let Some(c) = chars.next() {
+            if c == '\u{a7}' {
+                chars.next();
+            } else {
+                out.push(c);
+            }
         }
-    }
-
-    #[test]
-    fn player_box() {
-        let me = pose(-9.5, -60.0, 10.5);
-        assert!(intersects(&me, Position::new(-10, -60, 10)));
-        assert!(intersects(&me, Position::new(-10, -59, 10)));
-        assert!(!intersects(&me, Position::new(-10, -61, 10)));
-        assert!(!intersects(&me, Position::new(-8, -60, 10)));
-        assert!(!intersects(&me, Position::new(-10, -58, 10)));
-    }
-
-    #[test]
-    fn reach() {
-        let me = pose(0.5, 0.0, 0.5);
-        assert!(in_reach(&me, Position::new(2, -1, 0)));
-        assert!(in_reach(&me, Position::new(5, 1, 0)));
-        assert!(!in_reach(&me, Position::new(30, -1, 0)));
-    }
+        out
+    });
+    let key = if front { "front_text" } else { "back_text" };
+    let mut side = match be.data.get(key) {
+        Some(mc_nbt::Tag::Compound(c)) => c.clone(),
+        _ => sign_side(Default::default()),
+    };
+    side.insert(
+        "messages",
+        mc_nbt::Tag::List(lines.into_iter().map(mc_nbt::Tag::String).collect()),
+    );
+    be.data.insert(key, mc_nbt::Tag::Compound(side));
+    let kind = ctx.world.block_entity_kind(&be.id)?;
+    let data = crate::world::client_data(&be.id, &be.data)?;
+    ctx.world.set_block_entity(be, blocks);
+    Some(Event::BlockEntity {
+        position,
+        kind,
+        data,
+    })
 }
 
 /// The item pick block gives for a block (`minecraft:` names), if any:
@@ -698,74 +736,36 @@ fn blank_sign() -> mc_nbt::Compound {
     data
 }
 
-/// Text written in the sign editor. Returns what viewers must be told.
-pub fn sign_update(
-    ctx: &ServerContext,
-    actor: Actor,
-    position: Position,
-    front: bool,
-    lines: [String; 4],
-) -> Option<Event> {
-    if actor.game_mode == 3 {
-        return None;
-    }
-    let blocks = &ctx.data.blocks;
-    let (dx, dy, dz) = (
-        f64::from(position.x) + 0.5 - actor.pose.x,
-        f64::from(position.y) + 0.5 - actor.pose.y - 1.62,
-        f64::from(position.z) + 0.5 - actor.pose.z,
-    );
-    if dx * dx + dy * dy + dz * dz > 64.0 {
-        return None;
-    }
-    let id = ctx
-        .world
-        .block(position, blocks)
-        .and_then(|s| blocks.block_name(s))
-        .and_then(sign_entity)?;
-    let mut be = ctx
-        .world
-        .block_entity(position, blocks)
-        .filter(|be| be.id == id)
-        .unwrap_or_else(|| mc_world::BlockEntity {
-            x: position.x,
-            y: position.y,
-            z: position.z,
-            id: id.to_owned(),
-            data: blank_sign(),
-        });
-    if matches!(be.data.get("is_waxed"), Some(mc_nbt::Tag::Byte(1))) {
-        return None;
-    }
-    // Formatting codes do not survive, as in the game.
-    let lines = lines.map(|l| {
-        let mut out = String::new();
-        let mut chars = l.chars();
-        while let Some(c) = chars.next() {
-            if c == '\u{a7}' {
-                chars.next();
-            } else {
-                out.push(c);
-            }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pose(x: f64, y: f64, z: f64) -> Pose {
+        Pose {
+            x,
+            y,
+            z,
+            yaw: 0.0,
+            pitch: 0.0,
+            on_ground: true,
         }
-        out
-    });
-    let key = if front { "front_text" } else { "back_text" };
-    let mut side = match be.data.get(key) {
-        Some(mc_nbt::Tag::Compound(c)) => c.clone(),
-        _ => sign_side(Default::default()),
-    };
-    side.insert(
-        "messages",
-        mc_nbt::Tag::List(lines.into_iter().map(mc_nbt::Tag::String).collect()),
-    );
-    be.data.insert(key, mc_nbt::Tag::Compound(side));
-    let kind = ctx.world.block_entity_kind(&be.id)?;
-    let data = crate::world::client_data(&be.id, &be.data)?;
-    ctx.world.set_block_entity(be, blocks);
-    Some(Event::BlockEntity {
-        position,
-        kind,
-        data,
-    })
+    }
+
+    #[test]
+    fn player_box() {
+        let me = pose(-9.5, -60.0, 10.5);
+        assert!(intersects(&me, Position::new(-10, -60, 10)));
+        assert!(intersects(&me, Position::new(-10, -59, 10)));
+        assert!(!intersects(&me, Position::new(-10, -61, 10)));
+        assert!(!intersects(&me, Position::new(-8, -60, 10)));
+        assert!(!intersects(&me, Position::new(-10, -58, 10)));
+    }
+
+    #[test]
+    fn reach() {
+        let me = pose(0.5, 0.0, 0.5);
+        assert!(in_reach(&me, Position::new(2, -1, 0)));
+        assert!(in_reach(&me, Position::new(5, 1, 0)));
+        assert!(!in_reach(&me, Position::new(30, -1, 0)));
+    }
 }

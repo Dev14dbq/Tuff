@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-use crate::density::{Builder, Df};
+use crate::density::{Builder, Ctx, Df};
 
 /// Climate values are compared ×10000, as whole numbers.
 pub fn quantize(v: f64) -> i64 {
@@ -255,18 +255,45 @@ pub struct Climate {
     pub erosion: Df,
     pub depth: Df,
     pub ridges: Df,
+    /// None of them interpolates: inside a chunk they may use its column
+    /// caches and give the same values.
+    cacheable: bool,
 }
 
 impl Climate {
     pub fn from_router(builder: &mut Builder, router: &Value) -> Result<Self, String> {
-        Ok(Self {
+        let mut c = Self {
             temperature: builder.build(&router["temperature"])?,
             vegetation: builder.build(&router["vegetation"])?,
             continents: builder.build(&router["continents"])?,
             erosion: builder.build(&router["erosion"])?,
             depth: builder.build(&router["depth"])?,
             ridges: builder.build(&router["ridges"])?,
-        })
+            cacheable: false,
+        };
+        c.cacheable = !c.all().iter().any(|f| f.interpolates());
+        Ok(c)
+    }
+
+    fn all(&self) -> [&Df; 6] {
+        [
+            &self.temperature,
+            &self.vegetation,
+            &self.continents,
+            &self.erosion,
+            &self.depth,
+            &self.ridges,
+        ]
+    }
+
+    /// [`Climate::sample`] inside a chunk: what does not depend on y is
+    /// worked out once per column.
+    pub fn sample_in(&self, qx: i32, qy: i32, qz: i32, ctx: &mut Ctx) -> [i64; 6] {
+        if !self.cacheable {
+            return self.sample(qx, qy, qz);
+        }
+        let (x, y, z) = (qx * 4, qy * 4, qz * 4);
+        self.all().map(|f| quantize(f.eval_in(x, y, z, ctx)))
     }
 
     /// Climate at a quart position (4×4×4 biome cell), sampled at its

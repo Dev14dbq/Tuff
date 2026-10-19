@@ -153,6 +153,12 @@ impl NoiseGenerator {
         self.biome_ids.get(name).copied().unwrap_or(0)
     }
 
+    /// [`NoiseGenerator::noise_biome`] with a chunk's caches.
+    fn noise_biome_in(&self, qx: i32, qy: i32, qz: i32, ctx: &mut Ctx) -> u32 {
+        let name = self.biomes.find(self.climate.sample_in(qx, qy, qz, ctx));
+        self.biome_ids.get(name).copied().unwrap_or(0)
+    }
+
     pub fn generate(&self, cx: i32, cz: i32) -> Generated {
         self.generate_with(cx, cz, &|_, _, _| 0.0)
     }
@@ -178,6 +184,7 @@ impl NoiseGenerator {
         let (min_y, height) = (self.min_y, self.height);
         let sections = (height / 16) as usize;
         // Biomes.
+        let mut ctx = Ctx::new(x0, z0, min_y, height);
         let mut biomes = Vec::with_capacity(sections * 64);
         let mut cell_biomes: HashMap<(i32, i32, i32), u32> = HashMap::new();
         for s in 0..sections as i32 {
@@ -185,7 +192,7 @@ impl NoiseGenerator {
                 for qz in 0..4 {
                     for qx in 0..4 {
                         let q = (cx * 4 + qx, min_y / 4 + s * 4 + qy, cz * 4 + qz);
-                        let b = self.noise_biome(q.0, q.1, q.2);
+                        let b = self.noise_biome_in(q.0, q.1, q.2, &mut ctx);
                         cell_biomes.insert(q, b);
                         biomes.push(b);
                     }
@@ -193,7 +200,6 @@ impl NoiseGenerator {
             }
         }
         // Shape, water and lava.
-        let mut ctx = Ctx::new(x0, z0, min_y, height);
         let global = Global {
             sea_level: self.sea_level,
             sea: self.default_fluid,
@@ -318,10 +324,9 @@ impl NoiseGenerator {
                     }
                     let cell = zoomed_cell(self.zoom, x, y, z);
                     let biome = *zoom_cache.entry(cell).or_insert_with(|| {
-                        cell_biomes
-                            .get(&cell)
-                            .copied()
-                            .unwrap_or_else(|| self.noise_biome(cell.0, cell.1, cell.2))
+                        cell_biomes.get(&cell).copied().unwrap_or_else(|| {
+                            self.noise_biome_in(cell.0, cell.1, cell.2, &mut ctx)
+                        })
                     });
                     let column = Column {
                         x,

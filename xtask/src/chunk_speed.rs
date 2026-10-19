@@ -55,6 +55,8 @@ pub(crate) fn measure(
     client.set_read_timeout(Duration::from_millis(100))?;
     let mut arrivals: Vec<Duration> = Vec::new();
     let mut bytes = 0usize;
+    let mut seen = std::collections::HashSet::new();
+    let mut forgotten = 0usize;
     let mut last = Instant::now();
     // The first chunk may take long (a new world); then quiet for 3 s ends it.
     while last.elapsed()
@@ -73,6 +75,12 @@ pub(crate) fn measure(
             "minecraft:level_chunk_with_light" => {
                 arrivals.push(begin.elapsed());
                 bytes += body.len();
+                if body.len() >= 8 {
+                    let at = |i: usize| {
+                        i32::from_be_bytes([body[i], body[i + 1], body[i + 2], body[i + 3]])
+                    };
+                    seen.insert((at(0), at(4)));
+                }
                 last = Instant::now();
             }
             "minecraft:chunk_batch_finished" => {
@@ -80,6 +88,7 @@ pub(crate) fn measure(
                 received.put_f32(1000.0); // chunks per tick we could take
                 client.send("minecraft:chunk_batch_received", received)?;
             }
+            "minecraft:forget_level_chunk" => forgotten += 1,
             "minecraft:keep_alive" => client.send("minecraft:keep_alive", body)?,
             "minecraft:player_position" => client.send(
                 "minecraft:accept_teleportation",
@@ -95,8 +104,20 @@ pub(crate) fn measure(
         let i = ((arrivals.len() as f64 * fraction).ceil() as usize).clamp(1, arrivals.len());
         arrivals[i - 1].as_millis()
     };
+    // A view is a square: anything short of that is a chunk that never came.
+    let side = 2 * i64::from(view_distance) + 1;
+    let gaps = if seen.len() as i64 == side * side && forgotten == 0 {
+        String::new()
+    } else {
+        format!(
+            " [{} distinct of {}, {} forgotten]",
+            seen.len(),
+            side * side,
+            forgotten
+        )
+    };
     Ok(format!(
-        "login {} ms, {} chunks ({:.1} MB) — first {} ms, 50% {} ms, 90% {} ms, all {} ms ({:.0} chunks/s)",
+        "login {} ms, {} chunks{gaps} ({:.1} MB) — first {} ms, 50% {} ms, 90% {} ms, all {} ms ({:.0} chunks/s)",
         joined.as_millis(),
         arrivals.len(),
         bytes as f64 / 1e6,

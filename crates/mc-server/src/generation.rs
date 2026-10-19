@@ -361,12 +361,40 @@ mod speed {
         }
         let g = super::overworld(&data, -1294266004, &biomes).unwrap();
         let t = std::time::Instant::now();
-        let n = 16;
+        let n: i32 = std::env::var("TERRAIN_N").map_or(16, |v| v.parse().unwrap());
+        // A checksum of what was made: optimisations must not change it.
+        let mut sum = 0u64;
         for i in 0..n {
-            std::hint::black_box(g.generate(i % 4, i / 4));
+            let made = g.generate(i % 16 - 8, i / 16 - 8);
+            for v in made.blocks.iter().chain(&made.biomes) {
+                sum = (sum.rotate_left(5) ^ u64::from(*v)).wrapping_mul(0x100_0000_01b3);
+            }
+        }
+        // The same on every core at once: what the server gets.
+        let threads: i32 = std::env::var("TERRAIN_THREADS").map_or(0, |v| v.parse().unwrap());
+        if threads > 0 {
+            let t = std::time::Instant::now();
+            let next = std::sync::atomic::AtomicI32::new(0);
+            std::thread::scope(|s| {
+                for _ in 0..threads {
+                    s.spawn(|| {
+                        loop {
+                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if i >= n * 4 {
+                                break;
+                            }
+                            std::hint::black_box(g.generate(i % 32 + 40, i / 32 + 40));
+                        }
+                    });
+                }
+            });
+            println!(
+                "{threads} threads: {:.0} chunks/s",
+                f64::from(n * 4) / t.elapsed().as_secs_f64()
+            );
         }
         println!(
-            "terrain: {:.1} ms a chunk",
+            "terrain: {:.1} ms a chunk, checksum {sum:016x}",
             t.elapsed().as_secs_f64() * 1000.0 / f64::from(n)
         );
     }

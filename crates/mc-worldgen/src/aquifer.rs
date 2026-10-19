@@ -103,7 +103,17 @@ pub struct Aquifer<'a> {
     size_z: usize,
     centers: Vec<Option<(i32, i32, i32)>>,
     statuses: Vec<Option<Status>>,
+    /// Per cell, whether it and the other eleven a block near it may take
+    /// its status from all have the same status (then that is the answer).
+    uniform: Vec<Uniform>,
     surfaces: std::collections::HashMap<(i32, i32), i32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Uniform {
+    Unknown,
+    No,
+    Yes(Status),
 }
 
 impl std::fmt::Debug for Aquifer<'_> {
@@ -159,6 +169,7 @@ impl<'a> Aquifer<'a> {
             size_z,
             centers: vec![None; n],
             statuses: vec![None; n],
+            uniform: vec![Uniform::Unknown; n],
             surfaces: std::collections::HashMap::new(),
         }
     }
@@ -331,6 +342,35 @@ impl<'a> Aquifer<'a> {
         2.0 * (s + q)
     }
 
+    fn uniform_at(&mut self, l: i32, m: i32, n: i32) -> Uniform {
+        let at = self.index(l, m, n);
+        if self.uniform[at] != Uniform::Unknown {
+            return self.uniform[at];
+        }
+        let mut first = None;
+        let mut u = Uniform::No;
+        'cells: {
+            for dx in 0..=1 {
+                for dy in -1..=1 {
+                    for dz in 0..=1 {
+                        let i = self.index(l + dx, m + dy, n + dz);
+                        // Only statuses worked out already: the long way
+                        // works out just the ones it needs.
+                        let Some(s) = self.statuses[i] else {
+                            return Uniform::Unknown;
+                        };
+                        if *first.get_or_insert(s) != s {
+                            break 'cells;
+                        }
+                    }
+                }
+            }
+            u = Uniform::Yes(first.expect("twelve cells"));
+        }
+        self.uniform[at] = u;
+        u
+    }
+
     /// What fills an empty block (`density` ≤ 0) at a position: `None` for
     /// stone (a barrier), else air, water or lava.
     pub fn substance(
@@ -349,6 +389,11 @@ impl<'a> Aquifer<'a> {
             return Some(Fluid::Lava);
         }
         let (l, m, n) = (grid_x(x - 5), grid_y(y + 1), grid_x(z - 5));
+        // Where all twelve cells agree, pressures are all 0 and the nearest
+        // one's status is the answer, as it is for the long way below.
+        if let Uniform::Yes(s) = self.uniform_at(l, m, n) {
+            return Some(s.at(y));
+        }
         let mut best = [(i64::MAX, 0usize, (0, 0, 0)); 4];
         for dx in 0..=1 {
             for dy in -1..=1 {
