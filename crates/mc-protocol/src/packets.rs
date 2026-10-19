@@ -542,6 +542,34 @@ pub mod play {
             face: i8,
             sequence: i32,
         },
+        /// F3+F4 and F3+N: 0 survival, 1 creative, 2 adventure, 3 spectator.
+        ChangeGameMode {
+            mode: i32,
+        },
+        /// Middle click on a block; `include_data` with Ctrl held.
+        PickItemFromBlock {
+            position: Position,
+            include_data: bool,
+        },
+        PickItemFromEntity {
+            entity_id: i32,
+            include_data: bool,
+        },
+        /// F3+I on a block entity: its data, for operators.
+        BlockEntityTagQuery {
+            transaction: i32,
+            position: Position,
+        },
+        /// A spectator teleports to a player.
+        TeleportToEntity {
+            target: u128,
+        },
+        /// The text written on a sign.
+        SignUpdate {
+            position: Position,
+            front: bool,
+            lines: [String; 4],
+        },
         /// Right click on a block.
         UseItemOn {
             /// 0 main hand, 1 off hand.
@@ -803,6 +831,32 @@ pub mod play {
                     action: r.varint()?,
                 },
                 "minecraft:player_input" => Serverbound::PlayerInput { flags: r.u8()? },
+                "minecraft:change_game_mode" => Serverbound::ChangeGameMode { mode: r.varint()? },
+                "minecraft:pick_item_from_block" => Serverbound::PickItemFromBlock {
+                    position: r.position()?,
+                    include_data: r.bool()?,
+                },
+                "minecraft:pick_item_from_entity" => Serverbound::PickItemFromEntity {
+                    entity_id: r.varint()?,
+                    include_data: r.bool()?,
+                },
+                "minecraft:block_entity_tag_query" => Serverbound::BlockEntityTagQuery {
+                    transaction: r.varint()?,
+                    position: r.position()?,
+                },
+                "minecraft:teleport_to_entity" => {
+                    Serverbound::TeleportToEntity { target: r.uuid()? }
+                }
+                "minecraft:sign_update" => Serverbound::SignUpdate {
+                    position: r.position()?,
+                    front: r.bool()?,
+                    lines: [
+                        r.string(384)?,
+                        r.string(384)?,
+                        r.string(384)?,
+                        r.string(384)?,
+                    ],
+                },
                 "minecraft:player_abilities" => Serverbound::PlayerAbilities { flags: r.u8()? },
                 other => Serverbound::Other(other.to_owned()),
             })
@@ -971,6 +1025,71 @@ pub mod play {
             out.put_u8(self.action);
             out.put_u8(self.param);
             out.put_varint(self.block);
+        }
+    }
+
+    /// Statistics (the menu asks for them); `(category, stat, value)`.
+    #[derive(Clone, Debug, Default)]
+    pub struct AwardStats {
+        pub stats: Vec<(i32, i32, i32)>,
+    }
+    packet!(AwardStats, Play, "minecraft:award_stats");
+    impl Encode for AwardStats {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_len(self.stats.len());
+            for &(category, stat, value) in &self.stats {
+                out.put_varint(category);
+                out.put_varint(stat);
+                out.put_varint(value);
+            }
+        }
+    }
+
+    /// The answer to a tag query (F3+I).
+    #[derive(Clone, Debug)]
+    pub struct TagQuery {
+        pub transaction: i32,
+        pub data: Option<mc_nbt::Compound>,
+    }
+    packet!(TagQuery, Play, "minecraft:tag_query");
+    impl Encode for TagQuery {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.transaction);
+            match &self.data {
+                Some(d) => put_nbt(out, &mc_nbt::Tag::Compound(d.clone())),
+                None => out.put_u8(mc_nbt::tag_type::END),
+            }
+        }
+    }
+
+    /// Opens the sign editor for the sign at `position`.
+    #[derive(Clone, Debug)]
+    pub struct OpenSignEditor {
+        pub position: Position,
+        pub front: bool,
+    }
+    packet!(OpenSignEditor, Play, "minecraft:open_sign_editor");
+    impl Encode for OpenSignEditor {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_position(self.position);
+            out.put_bool(self.front);
+        }
+    }
+
+    /// Block Entity Data: what a block entity shows changed (sign text).
+    #[derive(Clone, Debug)]
+    pub struct BlockEntityData {
+        pub position: Position,
+        /// `minecraft:block_entity_type` registry id.
+        pub kind: i32,
+        pub data: mc_nbt::Compound,
+    }
+    packet!(BlockEntityData, Play, "minecraft:block_entity_data");
+    impl Encode for BlockEntityData {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_position(self.position);
+            out.put_varint(self.kind);
+            put_nbt(out, &mc_nbt::Tag::Compound(self.data.clone()));
         }
     }
 

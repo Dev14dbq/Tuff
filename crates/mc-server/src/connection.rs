@@ -655,6 +655,9 @@ async fn play(
                 if let Some((position, kind)) = outcome.open.take() {
                     windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
                 }
+                if let Some(position) = outcome.open_sign.take() {
+                    writer.queue(&play::OpenSignEditor { position, front: true })?;
+                }
                 if std::mem::take(&mut outcome.open_crafting) {
                     windows.open_crafting(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose })?;
                 }
@@ -854,6 +857,76 @@ async fn play(
                         writer.queue(&play::BlockChangedAck { sequence })?;
                         crate::vitals::start_using(&ctx, uuid, entity_id, hand, game_mode);
                     }
+                    play::Serverbound::ChangeGameMode { mode: mode @ 0..=3 } => {
+                        // As `/gamemode`, for those allowed to use it; the
+                        // others are ignored.
+                        if crate::commands::level(&ctx, uuid, &me.profile.name) >= 2 {
+                            let name = ["survival", "creative", "adventure", "spectator"][mode as usize];
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
+                            let action = Action::Command { line: format!("gamemode {name}"), source };
+                            let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                        } else {
+                            warn!("Player {} tried to change game mode without required permissions", me.profile.name);
+                        }
+                    }
+                    play::Serverbound::PickItemFromBlock { position, .. } if game_mode != 3 => {
+                        let reach = if game_mode == CREATIVE { 5.0 } else { 4.5 } + 1.0 + 0.87;
+                        let (dx, dy, dz) = (
+                            f64::from(position.x) + 0.5 - pose.x,
+                            f64::from(position.y) + 0.5 - pose.y - 1.62,
+                            f64::from(position.z) + 0.5 - pose.z,
+                        );
+                        let item = (dx * dx + dy * dy + dz * dz <= reach * reach)
+                            .then(|| ctx.world.block(position, &ctx.data.blocks))
+                            .flatten()
+                            .and_then(|state| ctx.data.blocks.block_name(state))
+                            .and_then(|name| crate::interact::clone_item(name, &ctx.items));
+                        if let Some(item) = item {
+                            let mut changed = Vec::new();
+                            let mut selected = None;
+                            change_hands(&ctx, uuid, entity_id, |hands| {
+                                let was = hands.selected;
+                                changed = hands
+                                    .pick(item, game_mode == CREATIVE)
+                                    .into_iter()
+                                    .map(|i| (i, hands.slots[i].clone()))
+                                    .collect();
+                                if hands.selected != was {
+                                    selected = Some(hands.selected);
+                                }
+                            });
+                            for (slot, stack) in changed {
+                                windows.inventory_slot(writer, slot as i16, stack)?;
+                            }
+                            if let Some(slot) = selected {
+                                writer.queue(&play::SetHeldSlot { slot: slot as i32 })?;
+                            }
+                        }
+                    }
+                    play::Serverbound::ClientCommand { action: 1 } => {
+                        // No statistics are kept yet: an empty list, so the
+                        // menu opens instead of waiting.
+                        writer.queue(&play::AwardStats::default())?;
+                    }
+                    play::Serverbound::BlockEntityTagQuery { transaction, position } => {
+                        if crate::commands::level(&ctx, uuid, &me.profile.name) >= 2 {
+                            let data = ctx.world.block_entity(position, &ctx.data.blocks).map(|be| be.data);
+                            writer.queue(&play::TagQuery { transaction, data })?;
+                        }
+                    }
+                    play::Serverbound::TeleportToEntity { target } if game_mode == 3 => {
+                        let to = ctx.players.lock().expect("players lock").get(&target).and_then(|p| p.pose);
+                        if let Some(to) = to {
+                            let _ = ctx.events.send(Event::Teleport { uuid, pose: to });
+                        }
+                    }
+                    play::Serverbound::SignUpdate { position, front, lines } => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        if let Some(event) = crate::interact::sign_update(&ctx, actor, position, front, lines) {
+                            let _ = ctx.events.send(event);
+                        }
+                    }
                     play::Serverbound::ClientInformation(info) => {
                         writer.queue(&skin_parts_metadata(entity_id, info.skin_parts))?;
                         update_player(&ctx, uuid, |p| p.skin_parts = info.skin_parts);
@@ -989,6 +1062,9 @@ async fn play(
                         windows.container_slots(writer, position, slots)?;
                     }
                     Ok(Event::ContainerGone { position }) => windows.container_gone(writer, position)?,
+                    Ok(Event::BlockEntity { position, kind, data }) if view.has_block(position) => {
+                        writer.queue(&play::BlockEntityData { position, kind, data })?;
+                    }
                     Ok(Event::BlockAction { position, action, param, block }) if view.has_block(position) => {
                         writer.queue(&play::BlockEvent { position, action, param, block })?;
                     }

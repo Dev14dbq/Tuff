@@ -138,6 +138,12 @@ pub enum Event {
         hand: Option<i32>,
     },
     /// A block event clients play (a piston moving).
+    /// A block entity's client-visible data changed (sign text).
+    BlockEntity {
+        position: mc_protocol::Position,
+        kind: i32,
+        data: mc_nbt::Compound,
+    },
     BlockAction {
         position: mc_protocol::Position,
         action: u8,

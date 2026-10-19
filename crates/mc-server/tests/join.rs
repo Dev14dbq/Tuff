@@ -2277,3 +2277,85 @@ async fn whitelist_and_bans_keep_players_out_as_vanilla() {
     let _ = running.await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn game_mode_switcher_pick_block_and_signs() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Admin".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut admin, at) = join_offline(addr, ctx.ids.clone(), "Admin").await;
+    let chat_text = |body: &[u8]| format!("{:?}", Reader::new(body).nbt().unwrap());
+
+    // F3+F4: as `/gamemode`.
+    for mode in [0, 1] {
+        let mut body = Vec::new();
+        body.put_varint(mode);
+        admin.send("minecraft:change_game_mode", body).await;
+        loop {
+            let (_, message) = admin.recv_until("minecraft:system_chat").await;
+            if chat_text(&message).contains("commands.gamemode.success.self") {
+                break;
+            }
+        }
+    }
+
+    // Middle click on a wall torch next to the player gives a torch.
+    let (x, y, z) = (
+        at.0.floor() as i32 + 1,
+        at.1.floor() as i32,
+        at.2.floor() as i32,
+    );
+    let mut command = Vec::new();
+    command.put_string(&format!("setblock {x} {y} {z} wall_torch[facing=east]"));
+    admin.send("minecraft:chat_command", command).await;
+    admin.recv_until("minecraft:block_update").await;
+    let mut pick = Vec::new();
+    pick.put_position(mc_protocol::Position::new(x, y, z));
+    pick.put_bool(false);
+    admin.send("minecraft:pick_item_from_block", pick).await;
+    let (_, slot) = admin.recv_until("minecraft:container_set_slot").await;
+    let mut r = Reader::new(&slot);
+    assert_eq!(r.varint().unwrap(), 0, "the inventory");
+    r.varint().unwrap();
+    assert_eq!(r.i16().unwrap(), 36, "the selected hotbar slot");
+    assert_eq!(r.varint().unwrap(), 1);
+    assert_eq!(
+        r.varint().unwrap(),
+        ctx.items.id("minecraft:torch").unwrap()
+    );
+
+    // What is written on a sign is kept and shown.
+    let mut command = Vec::new();
+    command.put_string(&format!("setblock {x} {y} {z} oak_sign"));
+    admin.send("minecraft:chat_command", command).await;
+    admin.recv_until("minecraft:block_update").await;
+    let mut sign = Vec::new();
+    sign.put_position(mc_protocol::Position::new(x, y, z));
+    sign.put_bool(true);
+    for line in ["Hello", "", "world", ""] {
+        sign.put_string(line);
+    }
+    admin.send("minecraft:sign_update", sign).await;
+    let (_, data) = admin.recv_until("minecraft:block_entity_data").await;
+    let text = format!("{data:?}");
+    assert!(!text.is_empty());
+    let be = ctx
+        .world
+        .block_entity(mc_protocol::Position::new(x, y, z), &ctx.data.blocks)
+        .unwrap();
+    assert!(format!("{:?}", be.data).contains("Hello"));
+    let _ = stop.send(());
+}

@@ -109,6 +109,74 @@ impl Hands {
         thrown
     }
 
+    /// Pick block (middle click) for `item`: selects it in the hotbar,
+    /// brings it there from the inventory, or (in creative) makes one.
+    /// Returns the container slots that changed; the selected slot may
+    /// change too.
+    pub fn pick(&mut self, item: i32, creative: bool) -> Vec<usize> {
+        let holds = |s: &Option<ItemStack>| s.as_ref().is_some_and(|s| s.item == item);
+        if let Some(i) = (36..45).find(|&i| holds(&self.slots[i])) {
+            self.selected = i - 36;
+            return Vec::new();
+        }
+        let target = 36 + self.suitable_hotbar_slot();
+        if let Some(from) = (9..36).find(|&i| holds(&self.slots[i])) {
+            self.slots.swap(from, target);
+            let (a, b) = (
+                self.components.remove(&from),
+                self.components.remove(&target),
+            );
+            if let Some(c) = a {
+                self.components.insert(target, c);
+            }
+            if let Some(c) = b {
+                self.components.insert(from, c);
+            }
+            self.selected = target - 36;
+            return vec![from, target];
+        }
+        if !creative {
+            return Vec::new();
+        }
+        let mut changed = vec![target];
+        // What was there moves into the inventory when there is room.
+        if self.slots[target].is_some()
+            && let Some(free) = (9..36).find(|&i| self.slots[i].is_none())
+        {
+            self.slots[free] = self.slots[target].take();
+            if let Some(c) = self.components.remove(&target) {
+                self.components.insert(free, c);
+            }
+            changed.push(free);
+        }
+        self.components.remove(&target);
+        self.slots[target] = Some(ItemStack {
+            count: 1,
+            item,
+            has_component_changes: false,
+        });
+        self.selected = target - 36;
+        changed
+    }
+
+    /// Where a picked item goes: the first empty hotbar slot from the
+    /// selected one on, else the first without enchantments, else the
+    /// selected one.
+    fn suitable_hotbar_slot(&self) -> usize {
+        let at = |i: usize| (self.selected + i) % 9;
+        if let Some(i) = (0..9).map(at).find(|&i| self.slots[36 + i].is_none()) {
+            return i;
+        }
+        let enchanted = |slot: usize| match self.components.get(&slot) {
+            Some(mc_nbt::Tag::Compound(c)) => c.get("minecraft:enchantments").is_some(),
+            _ => false,
+        };
+        (0..9)
+            .map(at)
+            .find(|&i| !enchanted(36 + i))
+            .unwrap_or(self.selected)
+    }
+
     /// Container slot of a hand.
     pub fn hand_slot(&self, hand: i32) -> usize {
         if hand == 1 { 45 } else { 36 + self.selected }
@@ -179,6 +247,8 @@ pub struct Outcome {
     pub open: Option<(Position, crate::containers::Kind)>,
     /// The player opened a crafting table.
     pub open_crafting: bool,
+    /// The player placed a sign: its editor opens.
+    pub open_sign: Option<Position>,
 }
 
 /// Who is acting.
@@ -456,6 +526,19 @@ pub fn use_item_on(
     // Containers get their (empty) block entity.
     for &(p, state) in &placed.blocks {
         crate::containers::placed(ctx, p, state);
+        if let Some(id) = ctx.data.blocks.block_name(state).and_then(sign_entity) {
+            ctx.world.set_block_entity(
+                mc_world::BlockEntity {
+                    x: p.x,
+                    y: p.y,
+                    z: p.z,
+                    id: id.to_owned(),
+                    data: blank_sign(),
+                },
+                &ctx.data.blocks,
+            );
+            outcome.open_sign = Some(p);
+        }
     }
     // The answer: the clicked block, then the placed ones.
     for p in std::iter::once(clicked).chain(placed.blocks.iter().map(|&(p, _)| p)) {
@@ -525,4 +608,164 @@ mod tests {
         assert!(in_reach(&me, Position::new(5, 1, 0)));
         assert!(!in_reach(&me, Position::new(30, -1, 0)));
     }
+}
+
+/// The item pick block gives for a block (`minecraft:` names), if any:
+/// usually the block's own item; wall-mounted variants give the standing
+/// one, crops their seeds, potted plants the plant.
+pub fn clone_item(block: &str, items: &crate::items::Items) -> Option<i32> {
+    let name = block.strip_prefix("minecraft:").unwrap_or(block);
+    let special = match name {
+        "wall_torch" => Some("torch"),
+        "soul_wall_torch" => Some("soul_torch"),
+        "redstone_wall_torch" => Some("redstone_torch"),
+        "copper_wall_torch" => Some("copper_torch"),
+        "redstone_wire" => Some("redstone"),
+        "tripwire" => Some("string"),
+        "wheat" => Some("wheat_seeds"),
+        "carrots" => Some("carrot"),
+        "potatoes" => Some("potato"),
+        "beetroots" => Some("beetroot_seeds"),
+        "cocoa" => Some("cocoa_beans"),
+        "melon_stem" | "attached_melon_stem" => Some("melon_seeds"),
+        "pumpkin_stem" | "attached_pumpkin_stem" => Some("pumpkin_seeds"),
+        "torchflower_crop" => Some("torchflower_seeds"),
+        "pitcher_crop" => Some("pitcher_pod"),
+        "sweet_berry_bush" => Some("sweet_berries"),
+        "cave_vines" | "cave_vines_plant" => Some("glow_berries"),
+        "kelp_plant" => Some("kelp"),
+        "bamboo_sapling" => Some("bamboo"),
+        "twisting_vines_plant" => Some("twisting_vines"),
+        "weeping_vines_plant" => Some("weeping_vines"),
+        "big_dripleaf_stem" => Some("big_dripleaf"),
+        "tall_seagrass" => Some("seagrass"),
+        "water_cauldron" | "lava_cauldron" | "powder_snow_cauldron" => Some("cauldron"),
+        "powder_snow" => Some("powder_snow_bucket"),
+        "piston_head" => Some("piston"),
+        "candle_cake" => Some("cake"),
+        "potted_azalea_bush" => Some("azalea"),
+        "potted_flowering_azalea_bush" => Some("flowering_azalea"),
+        "skeleton_wall_skull" => Some("skeleton_skull"),
+        "wither_skeleton_wall_skull" => Some("wither_skeleton_skull"),
+        "frosted_ice" | "fire" | "soul_fire" | "water" | "lava" | "bubble_column"
+        | "moving_piston" | "nether_portal" | "end_portal" | "end_gateway" | "air" | "cave_air"
+        | "void_air" => return None,
+        _ => None,
+    };
+    let candidate = match special {
+        Some(s) => s.to_owned(),
+        None if name.ends_with("_candle_cake") => "cake".to_owned(),
+        None if name.starts_with("potted_") => name["potted_".len()..].to_owned(),
+        None if name.contains("_wall_") => name.replacen("_wall_", "_", 1),
+        None => name.to_owned(),
+    };
+    items.id(&format!("minecraft:{candidate}"))
+}
+
+/// The block entity of a sign block, if it is one.
+fn sign_entity(block: &str) -> Option<&'static str> {
+    if block.ends_with("_hanging_sign") {
+        Some("minecraft:hanging_sign")
+    } else if block.ends_with("_sign") {
+        Some("minecraft:sign")
+    } else {
+        None
+    }
+}
+
+fn sign_side(lines: [String; 4]) -> mc_nbt::Compound {
+    let mut side = mc_nbt::Compound::new();
+    side.insert(
+        "messages",
+        mc_nbt::Tag::List(lines.into_iter().map(mc_nbt::Tag::String).collect()),
+    );
+    side.insert("color", mc_nbt::Tag::String("black".into()));
+    side.insert("has_glowing_text", mc_nbt::Tag::Byte(0));
+    side
+}
+
+fn blank_sign() -> mc_nbt::Compound {
+    let mut data = mc_nbt::Compound::new();
+    data.insert(
+        "front_text",
+        mc_nbt::Tag::Compound(sign_side(Default::default())),
+    );
+    data.insert(
+        "back_text",
+        mc_nbt::Tag::Compound(sign_side(Default::default())),
+    );
+    data.insert("is_waxed", mc_nbt::Tag::Byte(0));
+    data
+}
+
+/// Text written in the sign editor. Returns what viewers must be told.
+pub fn sign_update(
+    ctx: &ServerContext,
+    actor: Actor,
+    position: Position,
+    front: bool,
+    lines: [String; 4],
+) -> Option<Event> {
+    if actor.game_mode == 3 {
+        return None;
+    }
+    let blocks = &ctx.data.blocks;
+    let (dx, dy, dz) = (
+        f64::from(position.x) + 0.5 - actor.pose.x,
+        f64::from(position.y) + 0.5 - actor.pose.y - 1.62,
+        f64::from(position.z) + 0.5 - actor.pose.z,
+    );
+    if dx * dx + dy * dy + dz * dz > 64.0 {
+        return None;
+    }
+    let id = ctx
+        .world
+        .block(position, blocks)
+        .and_then(|s| blocks.block_name(s))
+        .and_then(sign_entity)?;
+    let mut be = ctx
+        .world
+        .block_entity(position, blocks)
+        .filter(|be| be.id == id)
+        .unwrap_or_else(|| mc_world::BlockEntity {
+            x: position.x,
+            y: position.y,
+            z: position.z,
+            id: id.to_owned(),
+            data: blank_sign(),
+        });
+    if matches!(be.data.get("is_waxed"), Some(mc_nbt::Tag::Byte(1))) {
+        return None;
+    }
+    // Formatting codes do not survive, as in the game.
+    let lines = lines.map(|l| {
+        let mut out = String::new();
+        let mut chars = l.chars();
+        while let Some(c) = chars.next() {
+            if c == '\u{a7}' {
+                chars.next();
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    });
+    let key = if front { "front_text" } else { "back_text" };
+    let mut side = match be.data.get(key) {
+        Some(mc_nbt::Tag::Compound(c)) => c.clone(),
+        _ => sign_side(Default::default()),
+    };
+    side.insert(
+        "messages",
+        mc_nbt::Tag::List(lines.into_iter().map(mc_nbt::Tag::String).collect()),
+    );
+    be.data.insert(key, mc_nbt::Tag::Compound(side));
+    let kind = ctx.world.block_entity_kind(&be.id)?;
+    let data = crate::world::client_data(&be.id, &be.data)?;
+    ctx.world.set_block_entity(be, blocks);
+    Some(Event::BlockEntity {
+        position,
+        kind,
+        data,
+    })
 }

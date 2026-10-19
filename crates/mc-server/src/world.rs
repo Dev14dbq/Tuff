@@ -606,6 +606,11 @@ impl World {
         })
     }
 
+    /// The `minecraft:block_entity_type` registry id of a block entity id.
+    pub fn block_entity_kind(&self, id: &str) -> Option<i32> {
+        self.block_entity_types.get(id).copied()
+    }
+
     /// Stores a block entity (replacing the one at its position).
     pub fn set_block_entity(&self, be: mc_world::BlockEntity, blocks: &Blocks) {
         self.with_slot(be.x >> 4, be.z >> 4, blocks, |slot| {
@@ -1058,7 +1063,7 @@ impl Anvil {
 /// Observed against vanilla 26.3 (`cargo xtask chunk-diff`): chests get no data
 /// at all, spawners get their data without `SpawnPotentials` and `components`.
 /// The other rules are assumptions until checked the same way.
-fn client_data(id: &str, data: &mc_nbt::Compound) -> Option<mc_nbt::Compound> {
+pub(crate) fn client_data(id: &str, data: &mc_nbt::Compound) -> Option<mc_nbt::Compound> {
     const CONTAINERS: &[&str] = &[
         "minecraft:barrel",
         "minecraft:blast_furnace",

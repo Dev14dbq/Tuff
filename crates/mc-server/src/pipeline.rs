@@ -162,12 +162,7 @@ impl Pipeline {
 
     /// The structure starts of the chunks within `radius` of chunk `x, z`,
     /// row by row.
-    fn starts_in(
-        &self,
-        x: i32,
-        z: i32,
-        radius: i32,
-    ) -> Vec<((i32, i32), StartCell)> {
+    fn starts_in(&self, x: i32, z: i32, radius: i32) -> Vec<((i32, i32), StartCell)> {
         let cells: Vec<_> = {
             let mut starts = self.starts.lock().expect("starts lock");
             (z - radius..=z + radius)
