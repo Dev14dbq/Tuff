@@ -141,7 +141,10 @@ impl IntProvider {
                 let span = max - min;
                 let a = (span - plateau) / 2;
                 let b = span - a;
-                min + r.next_int_bound(b + 1) + r.next_int_bound(a + 1)
+                // As `nextInt(n) - nextInt(n)` for a symmetric spread.
+                let u = r.next_int_bound(b + 1);
+                let v = r.next_int_bound(a + 1);
+                min + a + u - v
             }
         }
     }

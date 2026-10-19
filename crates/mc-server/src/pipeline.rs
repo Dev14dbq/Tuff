@@ -362,7 +362,17 @@ impl Pipeline {
                 if proto.decorated || proto.readonly {
                     continue;
                 }
-                let biomes = chunk_biomes(&proto.chunk);
+                // The biomes of the chunk and its neighbours, as the game
+                // gathers them: a position near the edge may read a
+                // neighbour's biome.
+                let mut biomes = BTreeSet::new();
+                for nz in -1..=1 {
+                    for nx in -1..=1 {
+                        if let Some(n) = protos.get(&(pos.0 + nx, pos.1 + nz)) {
+                            biomes.extend(chunk_biomes(&n.chunk));
+                        }
+                    }
+                }
                 if let Some(p) = protos.get_mut(&pos) {
                     p.prime_final(self.facts());
                 }

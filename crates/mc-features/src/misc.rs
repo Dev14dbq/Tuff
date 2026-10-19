@@ -1282,6 +1282,7 @@ fn patch(cx: &Ctx, region: &mut dyn Region, r: &mut WorldgenRandom, p: P, m: &Mi
             }
         }
     }
+    let mut set = java_hash_order(&set);
     if *waterlogged {
         let exposed = |region: &dyn Region, q: P| {
             [Dir::North, Dir::East, Dir::South, Dir::West, Dir::Down]
@@ -1296,13 +1297,13 @@ fn patch(cx: &Ctx, region: &mut dyn Region, r: &mut WorldgenRandom, p: P, m: &Mi
         for q in &kept {
             region.set(*q, facts.water);
         }
-        set = kept;
+        set = java_hash_order(&kept);
     }
     for q in &set {
         if *chance > 0.0 && r.next_float() < *chance {
             if *waterlogged {
-                let target = q.rel(opp);
-                if vegetation.place(cx, region, r, target, None) {
+                // The plant goes where the ground was, now water.
+                if vegetation.place(cx, region, r, *q, None) {
                     let s = region.block(*q);
                     if facts.property(s, "waterlogged") == Some("false") {
                         region.set(*q, facts.with(s, "waterlogged", "true"));
@@ -1314,6 +1315,30 @@ fn patch(cx: &Ctx, region: &mut dyn Region, r: &mut WorldgenRandom, p: P, m: &Mi
         }
     }
     !set.is_empty()
+}
+
+/// The order a `java.util.HashSet` of block positions, filled in this
+/// order, hands them back: by bucket of the position's hash, then as
+/// added.
+pub(crate) fn java_hash_order(list: &[P]) -> Vec<P> {
+    let mut cap = 16usize;
+    while list.len() * 4 > cap * 3 {
+        cap *= 2;
+    }
+    let bucket = |p: &P| {
+        let h =
+            p.y.wrapping_add(p.z.wrapping_mul(31))
+                .wrapping_mul(31)
+                .wrapping_add(p.x);
+        ((h ^ ((h as u32) >> 16) as i32) as u32 as usize) & (cap - 1)
+    };
+    let mut out: Vec<(usize, usize, P)> = list
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (bucket(p), i, *p))
+        .collect();
+    out.sort_by_key(|&(b, i, _)| (b, i));
+    out.into_iter().map(|(_, _, p)| p).collect()
 }
 
 #[allow(clippy::too_many_arguments)]
