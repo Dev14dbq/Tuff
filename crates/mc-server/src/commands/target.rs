@@ -18,6 +18,7 @@ pub enum Target {
         pose: Pose,
         game_mode: i32,
         tags: Vec<String>,
+        team: Option<Box<Decor>>,
     },
     Entity {
         uuid: u128,
@@ -28,7 +29,23 @@ pub enum Target {
         /// The translation key of its name.
         name_key: String,
         tags: Vec<String>,
+        team: Option<Box<Decor>>,
     },
+}
+
+/// The team a target is in, and how it decorates their name.
+#[derive(Clone, Debug)]
+pub struct Decor {
+    pub team: String,
+    pub name: Compound,
+}
+
+fn decor(board: &crate::scoreboard::Scoreboard, holder: &str, name: Tag) -> Option<Box<Decor>> {
+    let team = board.team_of(holder)?;
+    Some(Box::new(Decor {
+        team: team.name.clone(),
+        name: team.decorate(name),
+    }))
 }
 
 impl Target {
@@ -65,14 +82,77 @@ impl Target {
         }
     }
 
+    /// The name the scoreboard knows them by: a player's name, or an
+    /// entity's UUID.
+    pub fn holder(&self) -> String {
+        match self {
+            Target::Player { name, .. } => name.clone(),
+            Target::Entity { uuid, .. } => crate::util::uuid_string(*uuid),
+        }
+    }
+
+    /// The team they are in.
+    pub fn team(&self) -> Option<&str> {
+        match self {
+            Target::Player { team, .. } | Target::Entity { team, .. } => {
+                team.as_ref().map(|d| d.team.as_str())
+            }
+        }
+    }
+
     pub fn is_player(&self) -> bool {
         matches!(self, Target::Player { .. })
     }
 
     /// The name as messages show it: clickable for players, with a hover
     /// card for everything.
+    /// The name as scoreboard and team commands show it: as `display`,
+    /// but hovering shows the name.
+    pub fn feedback(&self) -> Tag {
+        let mut shown = self.display();
+        if let Tag::Compound(c) = &mut shown {
+            let text = match self {
+                Target::Player { name, .. } => name.clone(),
+                Target::Entity { uuid, .. } => crate::util::uuid_string(*uuid),
+            };
+            c.insert("hover_event", show_text(&text));
+        }
+        shown
+    }
+
     pub fn display(&self) -> Tag {
         match self {
+            Target::Player {
+                name,
+                uuid,
+                team: Some(d),
+                ..
+            } => {
+                let mut c = d.name.clone();
+                if let Tag::Compound(plain) = player_name(name, *uuid) {
+                    for (k, v) in plain.iter() {
+                        if k != "text" {
+                            c.insert(k, v.clone());
+                        }
+                    }
+                }
+                Tag::Compound(c)
+            }
+            Target::Entity { team: Some(d), .. } => {
+                let mut plain = self.clone();
+                if let Target::Entity { team, .. } = &mut plain {
+                    *team = None;
+                }
+                let mut c = d.name.clone();
+                if let Tag::Compound(p) = plain.display() {
+                    for (k, v) in p.iter() {
+                        if k != "translate" {
+                            c.insert(k, v.clone());
+                        }
+                    }
+                }
+                Tag::Compound(c)
+            }
             Target::Player { uuid, name, .. } => player_name(name, *uuid),
             Target::Entity {
                 uuid,
@@ -98,6 +178,13 @@ impl Target {
 }
 
 /// A UUID as the four ints of an int array.
+fn show_text(text: &str) -> Tag {
+    let mut hover = Compound::new();
+    hover.insert("action", "show_text");
+    hover.insert("value", text);
+    Tag::Compound(hover)
+}
+
 pub fn uuid_ints(u: u128) -> Vec<i32> {
     (0..4).map(|i| (u >> (96 - 32 * i)) as u32 as i32).collect()
 }
@@ -141,6 +228,7 @@ fn item_key(ctx: &ServerContext, item: i32) -> String {
 
 /// Every player and entity, players first in join order.
 pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
+    let board = lock(&ctx.scoreboard);
     let mut out: Vec<Target> = lock(&ctx.players)
         .values()
         .filter_map(|p| {
@@ -150,6 +238,7 @@ pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
                 pose: p.pose?,
                 game_mode: p.game_mode,
                 tags: p.extra.tags.clone(),
+                team: decor(&board, &p.profile.name, Tag::from(p.profile.name.as_str())),
             })
         })
         .collect();
@@ -163,7 +252,15 @@ pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
                 "entity.minecraft.falling_block".to_owned(),
             ),
         };
+        let mut key = Compound::new();
+        key.insert("translate", name_key.as_str());
+        let team = decor(
+            &board,
+            &crate::util::uuid_string(e.uuid),
+            Tag::Compound(key),
+        );
         out.push(Target::Entity {
+            team,
             uuid: e.uuid,
             id: e.id,
             kind,
@@ -208,14 +305,17 @@ pub fn resolve(ctx: &ServerContext, s: &Selector, src: &Src) -> Vec<Target> {
         return all.into_iter().filter(|t| t.uuid() == u).collect();
     }
     let kind = s.kind.unwrap_or('e');
-    if kind == 's' {
-        return match src.who {
+    // `@s` is the source, if the rest of the selector fits it.
+    let all: Vec<Target> = if kind == 's' {
+        match src.who {
             super::Who::Player(u) | super::Who::Entity(u) => {
                 all.into_iter().filter(|t| t.uuid() == u).collect()
             }
             super::Who::Console => Vec::new(),
-        };
-    }
+        }
+    } else {
+        all
+    };
     let base = [
         s.x.unwrap_or(src.pos[0]),
         s.y.unwrap_or(src.pos[1]),
@@ -256,8 +356,24 @@ pub fn resolve(ctx: &ServerContext, s: &Selector, src: &Src) -> Vec<Target> {
                 has != *neg
             })
         })
-        // No entity is in a team yet.
-        .filter(|_| s.teams.iter().all(|(neg, want)| *neg != want.is_empty()))
+        .filter(|t| {
+            s.teams.iter().all(|(neg, want)| match t.team() {
+                _ if want.is_empty() => t.team().is_some() == *neg,
+                team => (team == Some(want.as_str())) != *neg,
+            })
+        })
+        .filter(|t| {
+            if s.scores.is_empty() {
+                return true;
+            }
+            let board = lock(&ctx.scoreboard);
+            let holder = t.holder();
+            s.scores.iter().all(|(objective, range)| {
+                board
+                    .score(&holder, objective)
+                    .is_some_and(|sc| range.contains(f64::from(sc.value)))
+            })
+        })
         .filter(|t| {
             let p = t.pos();
             in_range(&s.distance, dist2(p, base).sqrt())

@@ -10,9 +10,11 @@ mod living;
 mod places;
 mod rare;
 mod run;
+mod scoreboard;
 mod scores;
 mod suggest;
 mod target;
+mod team;
 mod world;
 
 use mc_command::dispatch::{self, Context};
@@ -312,6 +314,17 @@ fn run_chain(
         admin.append(&mut r.admin);
         let stores = std::mem::take(&mut r.src.stores);
         if !stores.is_empty() {
+            // The reply comes before what storing the result changes.
+            if let (Who::Player(uuid), Some(Ok(_))) = (r.src.who, &result) {
+                let lines: Vec<Tag> = r.out.lines.drain(..).collect();
+                for line in lines {
+                    r.out.events.push(Event::Message {
+                        uuid,
+                        line,
+                        overlay: false,
+                    });
+                }
+            }
             let (ok, value) = match &result {
                 Some(Ok(n)) => (true, *n),
                 _ => (false, 0),
@@ -319,7 +332,7 @@ fn run_chain(
             for store in &stores {
                 let v = if store.success { i32::from(ok) } else { value };
                 match &store.target {
-                    StoreTarget::Score { .. } => scores::store(ctx, store, v),
+                    StoreTarget::Score { .. } => scoreboard::store(ctx, store, v, r.out),
                     StoreTarget::Data { .. } => functions::store(ctx, store, v),
                     StoreTarget::Bossbar { .. } => bossbar::store(ctx, store, v),
                 }

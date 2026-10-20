@@ -645,6 +645,14 @@ async fn play(
     for p in bars {
         writer.queue(&p)?;
     }
+    let scores = ctx
+        .scoreboard
+        .lock()
+        .expect("scoreboard lock")
+        .join_packets();
+    for p in &scores {
+        send_scoreboard(writer, p)?;
+    }
     let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
     // Non-player entities this client has been told about.
     let mut seen_entities: HashSet<i32> = HashSet::new();
@@ -1131,6 +1139,7 @@ async fn play(
                             Direct::Boss(p) => writer.queue(&p)?,
                         }
                     }
+                    Ok(Event::Scoreboard(p)) => send_scoreboard(writer, &p)?,
                     Ok(Event::Border) => {
                         let packet = ctx.border.lock().expect("border lock").packet();
                         writer.queue(&packet)?;
@@ -1316,6 +1325,17 @@ fn send_permissions(
         })?;
     }
     Ok(())
+}
+
+fn send_scoreboard(writer: &mut PacketWriter, p: &crate::scoreboard::Packet) -> Result<()> {
+    use crate::scoreboard::Packet;
+    match p {
+        Packet::Objective(p) => writer.queue(p),
+        Packet::Display(p) => writer.queue(p),
+        Packet::Score(p) => writer.queue(p),
+        Packet::Reset(p) => writer.queue(p),
+        Packet::Team(p) => writer.queue(p),
+    }
 }
 
 /// Sends the player what changed for them and tells everyone else.

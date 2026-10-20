@@ -251,6 +251,8 @@ pub enum Event {
     Weather(crate::weather::Changes),
     /// The world border changed.
     Border,
+    /// A scoreboard or team change, for everyone.
+    Scoreboard(crate::scoreboard::Packet),
     /// The difficulty changed (0–3).
     Difficulty(i32),
     /// A message for one player (`tellraw`, `msg`...).
@@ -358,6 +360,8 @@ pub struct ServerContext {
     pub forced: Mutex<crate::forced::Forced>,
     /// Boss bars made with `/bossbar`.
     pub bossbars: Mutex<crate::bossbars::BossBars>,
+    /// Objectives, scores and teams.
+    pub scoreboard: Mutex<crate::scoreboard::Scoreboard>,
     /// The world spawn (`/setworldspawn` moves it).
     pub spawn: Mutex<crate::players::Respawn>,
     next_entity_id: AtomicI32,
@@ -539,6 +543,8 @@ impl ServerContext {
         let weather = crate::weather::Weather::load(world.folder(), data.version.world_version);
         let border = crate::border::Border::load(world.folder(), data.version.world_version);
         let forced = crate::forced::Forced::load(world.folder(), data.version.world_version);
+        let scoreboard =
+            crate::scoreboard::Scoreboard::load(world.folder(), data.version.world_version);
         let bossbars = crate::bossbars::BossBars::load(world.folder(), data.version.world_version);
         let spawn = crate::players::Respawn {
             dimension: world.dimension.clone(),
@@ -610,6 +616,7 @@ impl ServerContext {
             spawn: Mutex::new(spawn),
             forced: Mutex::new(forced),
             bossbars: Mutex::new(bossbars),
+            scoreboard: Mutex::new(scoreboard),
             data,
         })
     }

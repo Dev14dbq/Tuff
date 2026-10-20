@@ -35,3 +35,26 @@ pub fn to_json(tag: &Tag) -> serde_json::Value {
         Tag::LongArray(a) => json!(a),
     }
 }
+
+/// A list of components: NBT lists hold one tag type, so when the types
+/// differ every part that is not a compound is wrapped as `{"": value}`, as
+/// vanilla writes them.
+pub fn list_of(items: Vec<Tag>) -> Tag {
+    let mixed = items.windows(2).any(|w| w[0].type_id() != w[1].type_id());
+    if !mixed {
+        return Tag::List(items);
+    }
+    Tag::List(
+        items
+            .into_iter()
+            .map(|t| match t {
+                Tag::Compound(_) => t,
+                other => {
+                    let mut c = mc_nbt::Compound::new();
+                    c.insert("", other);
+                    Tag::Compound(c)
+                }
+            })
+            .collect(),
+    )
+}

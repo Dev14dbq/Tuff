@@ -15,6 +15,10 @@ pub trait Known {
     fn players(&self) -> Vec<String>;
     /// Completions for an `ask_server` argument at `path`.
     fn ask(&self, path: &[String], typed: &str) -> Vec<String>;
+    /// The scoreboard's objectives or teams (`kind` "objective", "team").
+    fn names(&self, _kind: &str) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Completions for `input` (without `/`): where they start and the texts
@@ -46,7 +50,10 @@ pub fn complete(
             Kind::Argument { parser, properties } => {
                 let mut path = tree.names(parent);
                 path.push(n.name.clone());
-                let found = if n.suggestions.as_deref() == Some("minecraft:ask_server") {
+                // Score holders are suggested as entities are.
+                let asks = n.suggestions.as_deref() == Some("minecraft:ask_server")
+                    && parser != "minecraft:score_holder";
+                let found = if asks {
                     known
                         .ask(&path, typed)
                         .into_iter()
@@ -219,6 +226,48 @@ fn tip(key: &str) -> Option<Tag> {
     Some(translate(key, Vec::new()))
 }
 
+/// Every objective criterion: the simple ones, team kill counts and
+/// statistics.
+fn criteria(data: &crate::env::DataEnv) -> Vec<String> {
+    let mut out: Vec<String> = [
+        "dummy",
+        "trigger",
+        "deathCount",
+        "playerKillCount",
+        "totalKillCount",
+        "health",
+        "xp",
+        "level",
+        "food",
+        "air",
+        "armor",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect();
+    for c in crate::args::COLORS {
+        out.push(format!("teamkill.{c}"));
+        out.push(format!("killedByTeam.{c}"));
+    }
+    let stats = [
+        ("broken", "minecraft:item"),
+        ("crafted", "minecraft:item"),
+        ("custom", "minecraft:custom_stat"),
+        ("dropped", "minecraft:item"),
+        ("killed", "minecraft:entity_type"),
+        ("killed_by", "minecraft:entity_type"),
+        ("mined", "minecraft:block"),
+        ("picked_up", "minecraft:item"),
+        ("used", "minecraft:item"),
+    ];
+    for (kind, registry) in stats {
+        for id in data.ids(registry) {
+            out.push(format!("minecraft.{kind}:{}", id.replacen(':', ".", 1)));
+        }
+    }
+    out
+}
+
 fn selector(
     typed: &str,
     data: &crate::env::DataEnv,
@@ -272,6 +321,10 @@ fn selector(
                 .collect(),
             _ => Vec::new(),
         };
+    }
+    // A whole selector: its options may follow.
+    if SELECTORS.iter().any(|(s, _)| *s == typed) {
+        return vec![(typed.len(), "[".to_owned(), None)];
     }
     let mut out: Vec<(usize, String, Option<Tag>)> = Vec::new();
     for (s, key) in SELECTORS {
@@ -399,6 +452,37 @@ fn argument(
     }
     match parser {
         "brigadier:bool" => words(&["false", "true"], typed),
+        "minecraft:objective" | "minecraft:team" => {
+            let kind = parser.trim_start_matches("minecraft:");
+            known
+                .names(kind)
+                .into_iter()
+                .filter(|n| n.to_lowercase().starts_with(&typed.to_lowercase()))
+                .map(|n| (0, n, None))
+                .collect()
+        }
+        "minecraft:scoreboard_slot" => {
+            let mut slots = vec![
+                "list".to_owned(),
+                "sidebar".to_owned(),
+                "below_name".to_owned(),
+            ];
+            slots.extend(
+                crate::args::COLORS
+                    .iter()
+                    .map(|c| format!("sidebar.team.{c}")),
+            );
+            slots
+                .into_iter()
+                .filter(|s| s.starts_with(typed))
+                .map(|s| (0, s, None))
+                .collect()
+        }
+        "minecraft:objective_criteria" => criteria(data)
+            .into_iter()
+            .filter(|s| s.starts_with(typed))
+            .map(|s| (0, s, None))
+            .collect(),
         "minecraft:block_pos" | "minecraft:vec3" => coordinates(3, typed),
         "minecraft:column_pos" | "minecraft:vec2" => coordinates(2, typed),
         "minecraft:gamemode" => words(&["adventure", "creative", "spectator", "survival"], typed),

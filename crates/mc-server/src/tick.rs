@@ -193,10 +193,11 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             let mut outcome = handle(&ctx, &mut control, request.actor, request.action);
             // Packets sent to the player come before the reply, as in
             // vanilla, so the reply then goes the same way.
-            let after = outcome
-                .events
-                .iter()
-                .any(|e| matches!(e, Event::Direct { uuid, .. } if *uuid == actor));
+            let after = outcome.events.iter().any(|e| match e {
+                Event::Direct { uuid, .. } | Event::Message { uuid, .. } => *uuid == actor,
+                Event::Scoreboard(_) => true,
+                _ => false,
+            });
             for event in std::mem::take(&mut outcome.events) {
                 let _ = ctx.events.send(event);
             }
@@ -503,6 +504,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         })
         .collect();
     let (mut moved, mut removed) = (Vec::new(), Vec::new());
+    let mut gone = Vec::new();
     // Plates see entities where they are at that moment of the tick.
     level.entity_boxes = Some(entities.iter().map(|e| e.aabb()).collect());
     for (i, entity) in entities.iter_mut().enumerate() {
@@ -570,12 +572,21 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         }
         if entity.removed {
             removed.push(entity.id);
+            gone.push(entity.uuid);
         } else if (entity.pos, entity.on_ground) != before {
             moved.push((entity.id, entity.pos, entity.on_ground));
         }
     }
     level.entity_boxes = None;
     entities.retain(|e| !e.removed);
+    if !gone.is_empty() {
+        let mut board = lock(&ctx.scoreboard);
+        for uuid in gone {
+            for p in board.forget(&crate::util::uuid_string(uuid)) {
+                let _ = ctx.events.send(Event::Scoreboard(p));
+            }
+        }
+    }
     let mut stored = lock(&ctx.entities);
     entities.append(&mut stored);
     *stored = entities;

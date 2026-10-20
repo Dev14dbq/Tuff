@@ -12,7 +12,8 @@ v=json.load(open(base+f'commands{area}.json')); o=json.load(open(base+f'commands
 def norm(x):
     # uuids and random numbers differ by nature
     if isinstance(x,dict):
-        return {k:norm(val) for k,val in x.items() if k not in ('uuid','insertion')}
+        # Older observations call a packet's bytes "hex".
+        return {('body' if k=='hex' else k):norm(val) for k,val in x.items() if k not in ('uuid','insertion')}
     if isinstance(x,list): return [norm(i) for i in x]
     return x
 same=0; diffs=[]

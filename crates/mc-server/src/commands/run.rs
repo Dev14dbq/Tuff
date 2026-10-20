@@ -12,7 +12,7 @@ use mc_protocol::packets::play::{ItemStack, TickingState, TickingStep};
 use super::target::{self, Target, player_name};
 use super::world::{apply, in_world, put_block_data};
 use super::{Result, Run, Src, Who};
-use super::{bossbar, functions, living, places, rare, scores};
+use super::{bossbar, functions, living, places, rare, scoreboard, scores, team};
 use crate::context::{Event, ServerContext};
 use crate::rules;
 use crate::tick::lock;
@@ -241,7 +241,11 @@ pub fn resolve(p: &Pos, src: &Src) -> [f64; 3] {
 /// `execute` subcommands: the sources the rest of the line runs for.
 pub fn modify(ctx: &ServerContext, c: &Context, s: &Src) -> Result<Vec<Src>> {
     let tree = &ctx.commands.tree;
-    let path = c.path(tree);
+    let mut path = c.path(tree);
+    // After `execute ... <redirect>`, the path starts below `execute`.
+    if path.first().is_some_and(|p| *p != "execute") && path.len() > 1 {
+        path.insert(0, "execute");
+    }
     let entities = |name: &str| -> Result<Vec<Target>> {
         match c.arg(name) {
             Some(Arg::Entity(sel)) => Ok(target::resolve(ctx, sel, s)),
@@ -349,7 +353,11 @@ pub fn modify(ctx: &ServerContext, c: &Context, s: &Src) -> Result<Vec<Src>> {
         _ => functions::modify(ctx, c, s, &path)
             .or_else(|| scores::modify(ctx, c, s, &path))
             .or_else(|| bossbar::modify(ctx, c, s, &path))
-            .unwrap_or_else(|| Err(CommandError::new("command.failed", Vec::new()))),
+            .or_else(|| scoreboard::modify(ctx, c, s, &path))
+            .unwrap_or_else(|| {
+                tracing::warn!("execute {} is not implemented yet", path.join(" "));
+                Err(CommandError::new("command.failed", Vec::new()))
+            }),
     }
 }
 
@@ -384,7 +392,8 @@ pub(super) fn condition(ctx: &ServerContext, c: &Context, s: &Src, rest: &[&str]
                     .iter()
                     .all(|(k, v)| ctx.data.blocks.with_property(state, k, v) == Some(state)))
         }
-        _ => scores::condition(ctx, c, s, rest)
+        _ => scoreboard::condition(ctx, c, s, rest)
+            .or_else(|| scores::condition(ctx, c, s, rest))
             .or_else(|| functions::condition(ctx, c, s, rest))
             .unwrap_or_else(|| Err(CommandError::new("command.failed", Vec::new()))),
     }
@@ -396,7 +405,22 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         // `execute if|unless ...` as the whole command: say whether it held.
         ["execute", kind @ ("if" | "unless"), rest @ ..] => {
             let pass = condition(r.ctx, r.c, &r.src, rest).map(|p| p == (*kind == "if"));
+            // `if entity` counts what it found.
+            let count = match (*kind, rest, r.arg("entities")) {
+                ("if", ["entity", "entities"], Some(Arg::Entity(sel))) => {
+                    Some(target::resolve(r.ctx, sel, &r.src).len() as i32)
+                }
+                _ => None,
+            };
             match pass {
+                Ok(true) if count.is_some() => {
+                    let n = count.unwrap_or(1);
+                    r.success(
+                        translate("commands.execute.conditional.pass_count", vec![Tag::Int(n)]),
+                        false,
+                    );
+                    Ok(n)
+                }
                 Ok(true) => {
                     r.success(
                         translate("commands.execute.conditional.pass", Vec::new()),
@@ -513,6 +537,8 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
             return scores::run(r, path)
                 .or_else(|| places::run(r, path))
                 .or_else(|| bossbar::run(r, path))
+                .or_else(|| scoreboard::run(r, path))
+                .or_else(|| team::run(r, path))
                 .or_else(|| functions::run(r, path))
                 .or_else(|| living::run(r, path))
                 .or_else(|| rare::run(r, path));
@@ -1955,6 +1981,11 @@ fn kill(r: &mut Run) -> Result<i32> {
                     e.removed = true;
                 }
                 entities.retain(|e| !e.removed);
+                drop(entities);
+                let packets = lock(&r.ctx.scoreboard).forget(&crate::util::uuid_string(*uuid));
+                r.out
+                    .events
+                    .extend(packets.into_iter().map(Event::Scoreboard));
                 gone.push(*id);
             }
         }
@@ -2783,6 +2814,7 @@ fn experience_change(r: &mut Run, op: &str, levels: bool) -> Result<i32> {
         let Some(v) = all.get_mut(&t.uuid()) else {
             continue;
         };
+        let before = (v.xp_total, v.xp_level);
         match (op, levels) {
             ("add", false) => v.add_xp_points(amount),
             ("add", true) => v.add_xp_levels(amount),
@@ -2801,8 +2833,17 @@ fn experience_change(r: &mut Run, op: &str, levels: bool) -> Result<i32> {
             }
         }
         let packet = v.experience_packet();
+        let after = (v.xp_total, v.xp_level);
         drop(all);
         direct(r, t.uuid(), crate::context::Direct::Experience(packet));
+        let mut changed = Vec::new();
+        if after.0 != before.0 {
+            changed.push(("xp", after.0));
+        }
+        if after.1 != before.1 {
+            changed.push(("level", after.1));
+        }
+        super::scoreboard::criteria(r.ctx, &t.holder(), &changed, r.out);
         done += 1;
     }
     let kind = if levels { "levels" } else { "points" };

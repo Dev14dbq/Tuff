@@ -15,6 +15,7 @@ mod containers;
 mod context;
 mod crafting;
 mod effects;
+mod fastmap;
 mod forced;
 mod furnaces;
 mod generation;
@@ -28,6 +29,7 @@ mod pipeline;
 mod players;
 pub mod properties;
 mod rules;
+mod scoreboard;
 mod tick;
 mod util;
 mod vitals;
@@ -326,6 +328,7 @@ fn save(ctx: &ServerContext) {
     ctx.weather.lock().expect("weather lock").save();
     ctx.border.lock().expect("border lock").save();
     ctx.bossbars.lock().expect("bossbars lock").save();
+    ctx.scoreboard.lock().expect("scoreboard lock").save();
     if let Err(err) = ctx.world.save_time(&time) {
         tracing::warn!("saving the time: {err:#}");
     }

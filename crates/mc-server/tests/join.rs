@@ -2518,6 +2518,76 @@ async fn boss_bars_are_shown_and_store_results() {
 }
 
 #[tokio::test]
+async fn scoreboard_and_teams_work_as_vanilla() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Admin".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let (mut admin, _) = join_offline(addr, ctx.ids.clone(), "Admin").await;
+
+    // Once "command.failed": /scoreboard and /team had no handler.
+    let (text, _) = chat_command(&mut admin, "scoreboard objectives add obj dummy").await;
+    assert!(
+        text.contains("commands.scoreboard.objectives.add.success"),
+        "{text}"
+    );
+    let (_, seen) = chat_command(&mut admin, "scoreboard objectives setdisplay sidebar obj").await;
+    packet(&mut admin, &seen, "minecraft:set_display_objective").await;
+    // The score's packet comes before the reply.
+    let (text, seen) = chat_command(&mut admin, "scoreboard players set @s obj 5").await;
+    assert!(
+        text.contains("commands.scoreboard.players.set.success.single"),
+        "{text}"
+    );
+    assert!(
+        seen.iter().any(|(n, _)| n == "minecraft:set_score"),
+        "score first"
+    );
+    let (text, _) = chat_command(
+        &mut admin,
+        "execute store result score @s obj store success score fake obj run scoreboard objectives list",
+    )
+    .await;
+    assert!(
+        text.contains("commands.scoreboard.objectives.list.success"),
+        "{text}"
+    );
+    let (text, _) = chat_command(&mut admin, "scoreboard players get fake obj").await;
+    assert!(text.contains("Int(1)"), "{text}");
+    let (text, _) = chat_command(
+        &mut admin,
+        "scoreboard players operation fake obj /= @s obj",
+    )
+    .await;
+    assert!(
+        text.contains("commands.scoreboard.players.operation.success.single"),
+        "{text}"
+    );
+    let (text, _) = chat_command(&mut admin, "execute if score @s obj >= fake obj").await;
+    assert!(text.contains("commands.execute.conditional.pass"), "{text}");
+    let (text, _) = chat_command(&mut admin, "team add red").await;
+    assert!(text.contains("commands.team.add.success"), "{text}");
+    let (text, seen) = chat_command(&mut admin, "team join red").await;
+    assert!(text.contains("commands.team.join.success.single"), "{text}");
+    assert!(
+        seen.iter().any(|(n, _)| n == "minecraft:set_player_team"),
+        "team first"
+    );
+    let (text, _) = chat_command(&mut admin, "execute if entity @s[team=red]").await;
+    assert!(
+        text.contains("commands.execute.conditional.pass_count"),
+        "{text}"
+    );
+    let _ = stop.send(());
+}
+
+#[tokio::test]
 async fn locate_finds_what_vanilla_finds() {
     let Some(data_dir) = data_dir() else {
         eprintln!("skipped: no extracted data (cargo xtask extract-data)");

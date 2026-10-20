@@ -488,6 +488,14 @@ fn selector_options(r: &mut Reader, s: &mut Selector, env: &dyn Env) -> Result<(
             r.cursor = start;
             return Err(r.error(builtin::invalid("argument.entity.options.unknown", &name)));
         }
+        // Once a team is required, no other team test may follow.
+        if name == "team" && s.teams.iter().any(|(neg, _)| !neg) {
+            r.cursor = start;
+            return Err(r.error(builtin::invalid(
+                "argument.entity.options.inapplicable",
+                &name,
+            )));
+        }
         r.skip_whitespace();
         if !r.can_read() || r.peek() != '=' {
             r.cursor = start;
@@ -956,7 +964,11 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
         }
         "minecraft:score_holder" => {
             if r.can_read() && r.peek() == '@' {
-                Arg::Entity(Box::new(read_selector(r, env)?))
+                let s = read_selector(r, env)?;
+                if props["flags"].as_u64().unwrap_or(0) & 1 == 0 && !s.single() {
+                    return Err(r.error(builtin::expected("argument.entity.toomany")));
+                }
+                Arg::Entity(Box::new(s))
             } else {
                 let s = r.cursor;
                 while r.can_read() && r.peek() != ' ' {
@@ -1074,7 +1086,8 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
             }
             Arg::Nbt(t)
         }
-        "minecraft:nbt_tag" | "minecraft:component" | "minecraft:style" => Arg::Nbt(read_nbt(r)?),
+        "minecraft:component" => Arg::Nbt(plain_text(read_nbt(r)?)),
+        "minecraft:nbt_tag" | "minecraft:style" => Arg::Nbt(read_nbt(r)?),
         "minecraft:message" => {
             let s = r.remaining().to_owned();
             r.cursor = r.input.len();
@@ -1100,8 +1113,59 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
             }
             Arg::Str(v.to_owned())
         }
-        "minecraft:objective" | "minecraft:team" | "minecraft:team_color" => {
-            Arg::Str(r.read_unquoted().to_owned())
+        "minecraft:objective" | "minecraft:team" => Arg::Str(r.read_unquoted().to_owned()),
+        "minecraft:team_color" => {
+            let name = r.read_unquoted().to_owned();
+            if !COLORS.contains(&name.as_str()) {
+                return Err(r.error(CommandError::new(
+                    "argument.color.invalid",
+                    vec![string(&name)],
+                )));
+            }
+            Arg::Str(name)
+        }
+        "minecraft:scoreboard_slot" => {
+            let name = r.read_unquoted().to_owned();
+            let ok = matches!(name.as_str(), "list" | "sidebar" | "below_name")
+                || name
+                    .strip_prefix("sidebar.team.")
+                    .is_some_and(|c| COLORS.contains(&c));
+            if !ok {
+                return Err(r.error(CommandError::new(
+                    "argument.scoreboardDisplaySlot.invalid",
+                    vec![string(&name)],
+                )));
+            }
+            Arg::Str(name)
+        }
+        "minecraft:operation" => {
+            let s = r.cursor;
+            while r.can_read() && r.peek() != ' ' {
+                r.skip();
+            }
+            let op = &r.input[s..r.cursor];
+            if !matches!(
+                op,
+                "+=" | "-=" | "*=" | "/=" | "%=" | "=" | "<" | ">" | "><"
+            ) {
+                return Err(CommandError::new("arguments.operation.invalid", Vec::new()));
+            }
+            Arg::Str(op.to_owned())
+        }
+        "minecraft:objective_criteria" => {
+            let s = r.cursor;
+            while r.can_read() && r.peek() != ' ' {
+                r.skip();
+            }
+            let name = &r.input[s..r.cursor];
+            if !criteria_exist(env, name) {
+                r.cursor = s;
+                return Err(r.error(CommandError::new(
+                    "argument.criteria.invalid",
+                    vec![string(name)],
+                )));
+            }
+            Arg::Str(name.to_owned())
         }
         "minecraft:uuid" => {
             let s = r.cursor;
@@ -1130,4 +1194,92 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
 /// Whether a character may follow an unquoted word (for literal matching).
 pub fn word_char(c: char) -> bool {
     is_unquoted(c)
+}
+
+/// Chat colours, as team colours and display slots name them.
+pub const COLORS: [&str; 16] = [
+    "black",
+    "dark_blue",
+    "dark_green",
+    "dark_aqua",
+    "dark_red",
+    "dark_purple",
+    "gold",
+    "gray",
+    "dark_gray",
+    "blue",
+    "green",
+    "aqua",
+    "red",
+    "light_purple",
+    "yellow",
+    "white",
+];
+
+/// Whether an objective may count `name`: a simple criterion, a team kill
+/// count, or a statistic (`minecraft.mined:minecraft.stone`).
+fn criteria_exist(env: &dyn Env, name: &str) -> bool {
+    const SIMPLE: [&str; 11] = [
+        "dummy",
+        "trigger",
+        "deathCount",
+        "playerKillCount",
+        "totalKillCount",
+        "health",
+        "xp",
+        "level",
+        "food",
+        "air",
+        "armor",
+    ];
+    if SIMPLE.contains(&name) {
+        return true;
+    }
+    for prefix in ["teamkill.", "killedByTeam."] {
+        if let Some(c) = name.strip_prefix(prefix) {
+            return COLORS.contains(&c);
+        }
+    }
+    let Some((kind, id)) = name.split_once(':') else {
+        return false;
+    };
+    let dotted = |s: &str| match s.split_once('.') {
+        Some((ns, path)) => format!("{ns}:{path}"),
+        None => format!("minecraft:{s}"),
+    };
+    let registry = match dotted(kind).as_str() {
+        "minecraft:mined" => "minecraft:block",
+        "minecraft:crafted"
+        | "minecraft:used"
+        | "minecraft:broken"
+        | "minecraft:picked_up"
+        | "minecraft:dropped" => "minecraft:item",
+        "minecraft:killed" | "minecraft:killed_by" => "minecraft:entity_type",
+        "minecraft:custom" => "minecraft:custom_stat",
+        _ => return false,
+    };
+    env.exists(registry, &dotted(id))
+}
+
+/// A text component as vanilla stores it: one that is only `{text: ...}`
+/// becomes the string, in it and in its `extra` and `with` parts.
+pub fn plain_text(t: Tag) -> Tag {
+    match t {
+        Tag::Compound(mut c) => {
+            if c.len() == 1
+                && let Some(Tag::String(s)) = c.get("text")
+            {
+                return Tag::String(s.clone());
+            }
+            for key in ["extra", "with"] {
+                if let Some(Tag::List(l)) = c.get(key) {
+                    let parts: Vec<Tag> = l.iter().cloned().map(plain_text).collect();
+                    c.insert(key, crate::text::list_of(parts));
+                }
+            }
+            Tag::Compound(c)
+        }
+        Tag::List(l) => crate::text::list_of(l.into_iter().map(plain_text).collect()),
+        other => other,
+    }
 }

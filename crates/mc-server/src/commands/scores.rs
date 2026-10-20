@@ -9,7 +9,7 @@ use mc_protocol::text::translate;
 
 use super::run::err;
 use super::target::Target;
-use super::{Result, Run, Src, Store};
+use super::{Result, Run, Src};
 use crate::context::ServerContext;
 use crate::tick::lock;
 
@@ -85,7 +85,7 @@ fn tag_change(r: &mut Run, add: bool) -> Result<i32> {
 }
 
 /// Names in green, separated by gray commas, as vanilla lists them.
-fn green_list(names: &[String]) -> Tag {
+pub(super) fn green_list(names: &[String]) -> Tag {
     let green = |n: &String| {
         let mut c = Compound::new();
         c.insert("color", "green");
@@ -167,6 +167,3 @@ pub fn modify(
 ) -> Option<Result<Vec<Src>>> {
     None
 }
-
-/// Puts a stored result into scores.
-pub fn store(_ctx: &ServerContext, _store: &Store, _value: i32) {}

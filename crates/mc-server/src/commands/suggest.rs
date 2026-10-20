@@ -117,6 +117,15 @@ impl mc_command::suggest::Known for Known<'_> {
         names
     }
 
+    fn names(&self, kind: &str) -> Vec<String> {
+        let board = lock(&self.0.scoreboard);
+        match kind {
+            "objective" => board.objective_names(),
+            "team" => board.team_names(),
+            _ => Vec::new(),
+        }
+    }
+
     fn ask(&self, path: &[String], typed: &str) -> Vec<String> {
         candidates(self.0, path)
             .into_iter()

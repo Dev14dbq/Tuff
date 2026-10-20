@@ -1118,6 +1118,172 @@ pub mod play {
         }
     }
 
+    /// How a score shows its number (`numberformat`).
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum NumberFormat {
+        Blank,
+        /// A style compound for the number.
+        Styled(Tag),
+        /// A component shown instead of the number.
+        Fixed(Tag),
+    }
+
+    fn put_number_format(out: &mut Vec<u8>, f: &Option<NumberFormat>) {
+        match f {
+            None => out.put_bool(false),
+            Some(f) => {
+                out.put_bool(true);
+                match f {
+                    NumberFormat::Blank => out.put_varint(0),
+                    NumberFormat::Styled(style) => {
+                        out.put_varint(1);
+                        put_nbt(out, style);
+                    }
+                    NumberFormat::Fixed(text) => {
+                        out.put_varint(2);
+                        put_nbt(out, text);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Set Objective: adds (0), removes (1) or changes (2) an objective.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct SetObjective {
+        pub name: String,
+        pub mode: u8,
+        pub display: Tag,
+        pub hearts: bool,
+        pub format: Option<NumberFormat>,
+    }
+    packet!(SetObjective, Play, "minecraft:set_objective");
+    impl Encode for SetObjective {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.name);
+            out.put_u8(self.mode);
+            if self.mode != 1 {
+                put_nbt(out, &self.display);
+                out.put_varint(i32::from(self.hearts));
+                put_number_format(out, &self.format);
+            }
+        }
+    }
+
+    /// Set Display Objective: shows an objective in a slot ("" clears it).
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct SetDisplayObjective {
+        pub slot: i32,
+        pub name: String,
+    }
+    packet!(SetDisplayObjective, Play, "minecraft:set_display_objective");
+    impl Encode for SetDisplayObjective {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.slot);
+            out.put_string(&self.name);
+        }
+    }
+
+    /// Set Score: a holder's score in an objective.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct SetScore {
+        pub holder: String,
+        pub objective: String,
+        pub value: i32,
+        pub display: Option<Tag>,
+        pub format: Option<NumberFormat>,
+    }
+    packet!(SetScore, Play, "minecraft:set_score");
+    impl Encode for SetScore {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.holder);
+            out.put_string(&self.objective);
+            out.put_varint(self.value);
+            match &self.display {
+                Some(d) => {
+                    out.put_bool(true);
+                    put_nbt(out, d);
+                }
+                None => out.put_bool(false),
+            }
+            put_number_format(out, &self.format);
+        }
+    }
+
+    /// Reset Score: forgets a holder's score in one objective, or in all.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ResetScore {
+        pub holder: String,
+        pub objective: Option<String>,
+    }
+    packet!(ResetScore, Play, "minecraft:reset_score");
+    impl Encode for ResetScore {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.holder);
+            match &self.objective {
+                Some(o) => {
+                    out.put_bool(true);
+                    out.put_string(o);
+                }
+                None => out.put_bool(false),
+            }
+        }
+    }
+
+    /// A team's look and rules, as Set Player Team sends them.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct TeamParams {
+        pub display: Tag,
+        pub prefix: Tag,
+        pub suffix: Tag,
+        /// 0 always, 1 never, 2 hide for other teams, 3 hide for own team.
+        pub nametag: i32,
+        /// 0 always, 1 never, 2 push other teams, 3 push own team.
+        pub collision: i32,
+        /// A chat colour id; `None` for none.
+        pub color: Option<i32>,
+        /// 1 friendly fire, 2 sees invisible teammates.
+        pub flags: u8,
+    }
+
+    /// Set Player Team: creates (0), removes (1) or changes (2) a team, or
+    /// adds (3) or removes (4) members.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct SetPlayerTeam {
+        pub name: String,
+        pub method: u8,
+        pub params: Option<TeamParams>,
+        pub players: Vec<String>,
+    }
+    packet!(SetPlayerTeam, Play, "minecraft:set_player_team");
+    impl Encode for SetPlayerTeam {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.name);
+            out.put_u8(self.method);
+            if let (0 | 2, Some(p)) = (self.method, &self.params) {
+                put_nbt(out, &p.display);
+                put_nbt(out, &p.prefix);
+                put_nbt(out, &p.suffix);
+                out.put_varint(p.nametag);
+                out.put_varint(p.collision);
+                match p.color {
+                    Some(c) => {
+                        out.put_bool(true);
+                        out.put_varint(c);
+                    }
+                    None => out.put_bool(false),
+                }
+                out.put_u8(p.flags);
+            }
+            if matches!(self.method, 0 | 3 | 4) {
+                out.put_varint(self.players.len() as i32);
+                for p in &self.players {
+                    out.put_string(p);
+                }
+            }
+        }
+    }
+
     /// Boss Event: adds, changes or removes a boss bar on the client.
     #[derive(Clone, Debug, PartialEq)]
     pub struct BossEvent {
