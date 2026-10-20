@@ -120,6 +120,7 @@ pub enum Action {
     Dig {
         status: i32,
         position: Position,
+        face: i8,
         sequence: i32,
     },
     UseItemOn {
@@ -129,6 +130,12 @@ pub enum Action {
         face: i32,
         cursor: [f32; 3],
         sequence: i32,
+    },
+    /// Using the held item without a block (buckets).
+    UseItem {
+        hand: i32,
+        yaw: f32,
+        pitch: f32,
     },
 }
 
@@ -660,8 +667,9 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
         Action::Dig {
             status,
             position,
+            face,
             sequence,
-        } => interact::dig(ctx, actor, status, position, sequence),
+        } => interact::dig(ctx, actor, status, position, face, sequence),
         Action::UseItemOn {
             hand,
             position,
@@ -669,6 +677,7 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             cursor,
             sequence,
         } => interact::use_item_on(ctx, actor, hand, position, face, cursor, sequence),
+        Action::UseItem { hand, yaw, pitch } => interact::use_item(ctx, actor, hand, yaw, pitch),
     }
 }
 

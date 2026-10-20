@@ -857,9 +857,9 @@ async fn play(
                     }
                     // Block changes happen on the tick thread; the answer comes back
                     // through `replies`.
-                    play::Serverbound::PlayerAction { status, position, sequence, .. } => {
+                    play::Serverbound::PlayerAction { status, position, face, sequence } => {
                         let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                        let action = Action::Dig { status, position, sequence };
+                        let action = Action::Dig { status, position, face, sequence };
                         let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::UseItemOn { hand, position, face, cursor, sequence, .. } => {
@@ -867,9 +867,12 @@ async fn play(
                         let action = Action::UseItemOn { hand, position, face, cursor, sequence };
                         let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                     }
-                    play::Serverbound::UseItem { hand, sequence, .. } => {
+                    play::Serverbound::UseItem { hand, sequence, yaw, pitch } => {
                         writer.queue(&play::BlockChangedAck { sequence })?;
                         crate::vitals::start_using(&ctx, uuid, entity_id, hand, game_mode);
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::UseItem { hand, yaw, pitch };
+                        let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::ChangeGameMode { mode: mode @ 0..=3 } => {
                         // As `/gamemode`, for those allowed to use it; the

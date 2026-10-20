@@ -52,7 +52,11 @@ fn setup() -> Option<(mc_data::McData, Shapes, BlockRules)> {
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         .and_then(|v| serde_json::from_value(v["states"].clone()).ok());
-    let shapes = Shapes::new(&data, attach, conductor);
+    let support = std::fs::read_to_string(dir.join("observed/support.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| serde_json::from_value(v["states"].clone()).ok());
+    let shapes = Shapes::new(&data, attach, conductor).with_support(support);
     let rules = BlockRules::new(&data).ok()?;
     Some((data, shapes, rules))
 }
@@ -315,4 +319,49 @@ fn lamp_set_beside_powered_dust_stays_off() {
         }
         eprintln!();
     }
+}
+
+fn run_block_ticks(world: &mut World, ctx: Ctx, n: i64) {
+    for _ in 0..n {
+        world.time += 1;
+        for (p, kind) in world.ticks.blocks.take_due(world.time) {
+            mc_tick::block_tick(world, ctx, p, kind);
+        }
+    }
+}
+
+#[test]
+fn fire_burns_planks_and_dies_on_stone() {
+    let Some((data, shapes, rules)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |name: &str| data.blocks.default_state(name).unwrap();
+    let mut world = World {
+        blocks: HashMap::new(),
+        air: state("minecraft:air"),
+        time: 0,
+        ticks: ScheduledTicks::default(),
+    };
+    for x in -3..=3 {
+        for z in -3..=3 {
+            world.blocks.insert(BlockPos::new(x, 0, z), state("minecraft:oak_planks"));
+        }
+    }
+    world.blocks.insert(BlockPos::new(20, 0, 0), state("minecraft:stone"));
+    let fire = mc_tick::fire::can_light(&world, ctx, BlockPos::new(0, 1, 0)).unwrap();
+    mc_tick::set_block(&mut world, ctx, BlockPos::new(0, 1, 0), fire, Flags::ALL);
+    let lone = mc_tick::fire::can_light(&world, ctx, BlockPos::new(20, 1, 0)).unwrap();
+    mc_tick::set_block(&mut world, ctx, BlockPos::new(20, 1, 0), lone, Flags::ALL);
+    // In the air beside nothing that burns: no fire.
+    assert!(mc_tick::fire::can_light(&world, ctx, BlockPos::new(40, 5, 0)).is_none());
+    run_block_ticks(&mut world, ctx, 6000);
+    let planks = state("minecraft:oak_planks");
+    let left = world.blocks.values().filter(|&&s| s == planks).count();
+    assert!(left < 49, "fire burnt no planks");
+    assert_eq!(world.block(BlockPos::new(20, 1, 0)), world.air, "fire on stone went out");
 }

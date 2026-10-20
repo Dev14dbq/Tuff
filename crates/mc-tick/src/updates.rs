@@ -67,6 +67,7 @@ fn set_with_limit(
     }
     // The new block reacts to being placed before its neighbours hear of it.
     fluids::on_place(level, ctx, p, state);
+    crate::fire::on_place(level, ctx, p, old, state);
     redstone::on_place(level, ctx, p, old, state);
     gravity::wake(level, ctx, p, state);
     if flags.neighbors {
@@ -135,6 +136,7 @@ pub fn update_neighbor_shapes(
             }
             _ => {}
         }
+        new = crate::fire::update_shape(level, ctx, np, new);
         // Something that lost what held it up breaks (or looks again next
         // tick).
         let from = dir.opposite();
@@ -188,6 +190,7 @@ pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: Blo
 pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     redstone::block_tick(level, ctx, p, kind);
     gravity::block_tick(level, ctx, p, kind);
+    crate::fire::block_tick(level, ctx, p, kind);
     let state = level.block(p);
     if ctx.shapes.block_index(state) == kind
         && crate::support::check(ctx, state) == crate::support::Check::Tick

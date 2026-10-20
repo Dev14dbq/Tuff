@@ -310,6 +310,7 @@ pub fn dig(
     actor: Actor,
     status: i32,
     position: Position,
+    face: i8,
     sequence: i32,
 ) -> Outcome {
     let mut outcome = Outcome {
@@ -317,6 +318,24 @@ pub fn dig(
         ..Outcome::default()
     };
     let (world, blocks) = (&ctx.world, &ctx.data.blocks);
+    // Hitting a block puts out fire on the face hit.
+    if status == dig::START
+        && actor.game_mode != SPECTATOR
+        && let Ok(face @ 0..=5) = usize::try_from(face)
+    {
+        let at = offset(position, face);
+        let fire = world
+            .block(at, blocks)
+            .is_some_and(|s| matches!(blocks.block_name(s), Some("minecraft:fire" | "minecraft:soul_fire")));
+        if fire {
+            let mut level = WorldLevel::new(ctx);
+            level.set_block(at, ctx.shapes.air());
+            let changes = level.into_changes();
+            outcome.updates.extend(changes.iter().copied());
+            outcome.events.push(Event::BlocksChanged { by: 0, changes });
+            return outcome;
+        }
+    }
     let Some(state) = world.block(position, blocks) else {
         return outcome;
     };
@@ -469,6 +488,22 @@ pub fn use_item_on(
         }
         outcome
     };
+    // Flint and steel and fire charges light fire.
+    let held_name = held.and_then(|item| ctx.items.name(item.item));
+    if let Some(tool @ ("minecraft:flint_and_steel" | "minecraft:fire_charge")) = held_name {
+        if !light(ctx, &mut outcome, clicked, face) {
+            return refuse(outcome);
+        }
+        if tool == "minecraft:fire_charge" && actor.game_mode != CREATIVE {
+            replace_held(ctx, &mut outcome, actor, hand, None);
+        }
+        outcome.events.push(Event::Swing {
+            uuid: actor.uuid,
+            entity_id: actor.entity_id,
+            times: 1,
+        });
+        return outcome;
+    }
     let Some(block) = held.and_then(|item| ctx.rules.block_for_item(item.item)) else {
         return refuse(outcome);
     };
@@ -572,6 +607,211 @@ pub fn use_item_on(
         uuid: actor.uuid,
         entity_id: actor.entity_id,
         times: 2,
+    });
+    outcome
+}
+
+/// Lights the clicked campfire or candle, or sets fire against `face`.
+/// Returns whether anything caught.
+fn light(ctx: &ServerContext, outcome: &mut Outcome, clicked: Position, face: usize) -> bool {
+    let mut level = WorldLevel::new(ctx);
+    let logic = level.logic();
+    let state = ctx.world.block(clicked, &ctx.data.blocks).unwrap_or(0);
+    let name = ctx.data.blocks.block_name(state).unwrap_or("");
+    let lightable = (name.ends_with("campfire") || name.ends_with("candle") || name.ends_with("candle_cake"))
+        && ctx.data.blocks.property(state, "lit") == Some("false")
+        && ctx.data.blocks.property(state, "waterlogged") != Some("true");
+    let (at, new) = if lightable {
+        (clicked, ctx.shapes.with(state, "lit", "true"))
+    } else {
+        let at = offset(clicked, face);
+        let Some(fire) = mc_tick::fire::can_light(&level, logic, to_pos(at)) else {
+            return false;
+        };
+        (at, fire)
+    };
+    if !level.set_block(at, new) {
+        return false;
+    }
+    let changes = level.into_changes();
+    outcome.updates.extend(changes.iter().copied());
+    outcome.events.push(Event::BlocksChanged { by: 0, changes });
+    true
+}
+
+/// Puts `item` (or nothing) in place of one of the held stack; a stack of
+/// several keeps the rest and `item` goes elsewhere in the inventory.
+fn replace_held(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, hand: i32, item: Option<i32>) {
+    let mut inventories = ctx.inventories.lock().expect("inventories lock");
+    let Some(hands) = inventories.get_mut(&actor.uuid) else {
+        return;
+    };
+    let slot = hands.hand_slot(hand);
+    let mut changed = vec![slot];
+    let many = hands.slots[slot].as_ref().is_some_and(|s| s.count > 1);
+    if many {
+        if let Some(stack) = &mut hands.slots[slot] {
+            stack.count -= 1;
+        }
+        if let Some(item) = item {
+            let max = ctx.items.max_stack(item);
+            changed.extend(hands.insert(item, 1, max).1);
+        }
+    } else {
+        hands.slots[slot] = item.map(|item| ItemStack {
+            count: 1,
+            item,
+            has_component_changes: false,
+        });
+        hands.components.remove(&slot);
+    }
+    for slot in changed {
+        outcome.events.push(Event::InventorySlot {
+            uuid: actor.uuid,
+            slot: slot as i16,
+            item: hands.slots[slot].clone(),
+        });
+    }
+}
+
+/// The first block the player looks at within reach, and the face the look
+/// enters it through. Blocks count as full cubes; fluids are looked through
+/// unless `sources` (then only source blocks stop the look).
+fn look_at(ctx: &ServerContext, actor: Actor, yaw: f32, pitch: f32, sources: bool) -> Option<(Position, usize)> {
+    let pose = actor.pose;
+    let eye = [pose.x, pose.y + if actor.sneaking { 1.27 } else { 1.62 }, pose.z];
+    let (yaw, pitch) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
+    let dir = [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()];
+    let reach = if actor.game_mode == CREATIVE { 5.0 } else { 4.5 };
+    let mut cell = [eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32];
+    let step = dir.map(|d| if d > 0.0 { 1 } else { -1 });
+    let mut next = [0.0f64; 3];
+    let mut delta = [f64::INFINITY; 3];
+    for a in 0..3 {
+        if dir[a] != 0.0 {
+            delta[a] = (1.0 / dir[a]).abs();
+            let edge = f64::from(cell[a]) + if dir[a] > 0.0 { 1.0 } else { 0.0 };
+            next[a] = (edge - eye[a]) / dir[a];
+        } else {
+            next[a] = f64::INFINITY;
+        }
+    }
+    // Faces entered when stepping along x, y, z (down/up, north/south,
+    // west/east by the sign of the step).
+    let mut face = 0;
+    let mut travelled = 0.0;
+    loop {
+        if travelled > 0.0 || face != 0 {
+            let p = Position::new(cell[0], cell[1], cell[2]);
+            if let Some(state) = ctx.world.block(p, &ctx.data.blocks) {
+                let name = ctx.data.blocks.block_name(state).unwrap_or("");
+                let fluid = matches!(name, "minecraft:water" | "minecraft:lava");
+                let source = ctx.data.blocks.property(state, "level") == Some("0");
+                let air = ctx.shapes.is_air(state);
+                if !air && (!fluid || (sources && source)) {
+                    return Some((p, face));
+                }
+            }
+        }
+        let a = (0..3).min_by(|&i, &j| next[i].total_cmp(&next[j])).unwrap_or(0);
+        travelled = next[a];
+        if travelled > reach {
+            return None;
+        }
+        cell[a] += step[a];
+        next[a] += delta[a];
+        face = match (a, step[a] > 0) {
+            (0, true) => 4,
+            (0, false) => 5,
+            (1, true) => 0,
+            (1, false) => 1,
+            (2, true) => 2,
+            _ => 3,
+        };
+    }
+}
+
+/// Using the held item in the air (or at a block out of `use_item_on`'s
+/// reach): buckets scoop up and pour fluids.
+pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f32) -> Outcome {
+    let mut outcome = Outcome::default();
+    if actor.game_mode == SPECTATOR {
+        return outcome;
+    }
+    let held = ctx
+        .inventories
+        .lock()
+        .expect("inventories lock")
+        .get(&actor.uuid)
+        .and_then(|h| h.held(hand).cloned());
+    let Some(name) = held.and_then(|h| ctx.items.name(h.item)).map(str::to_owned) else {
+        return outcome;
+    };
+    let fluid = match name.as_str() {
+        "minecraft:bucket" => None,
+        "minecraft:water_bucket" => Some("minecraft:water"),
+        "minecraft:lava_bucket" => Some("minecraft:lava"),
+        _ => return outcome,
+    };
+    let Some((hit, face)) = look_at(ctx, actor, yaw, pitch, fluid.is_none()) else {
+        return outcome;
+    };
+    let blocks = &ctx.data.blocks;
+    let state_at = |p: Position| ctx.world.block(p, blocks).unwrap_or(0);
+    let mut level = WorldLevel::new(ctx);
+    let (changed, result) = match fluid {
+        // Scooping up a source, water out of a waterlogged block, or powder snow.
+        None => {
+            let state = state_at(hit);
+            let name = blocks.block_name(state).unwrap_or("");
+            let (new, bucket) = if blocks.property(state, "waterlogged") == Some("true") {
+                (ctx.shapes.with(state, "waterlogged", "false"), "minecraft:water_bucket")
+            } else {
+                match name {
+                    "minecraft:water" => (ctx.shapes.air(), "minecraft:water_bucket"),
+                    "minecraft:lava" => (ctx.shapes.air(), "minecraft:lava_bucket"),
+                    "minecraft:powder_snow" => (ctx.shapes.air(), "minecraft:powder_snow_bucket"),
+                    _ => return outcome,
+                }
+            };
+            (level.set_block(hit, new), ctx.items.id(bucket))
+        }
+        // Pouring: into a waterloggable block, over something replaceable,
+        // or against the face looked at.
+        Some(fluid) => {
+            let source = ctx.shapes.default_state(fluid).unwrap_or(0);
+            let state = state_at(hit);
+            let placed = if fluid == "minecraft:water"
+                && blocks.property(state, "waterlogged") == Some("false")
+            {
+                level.set_block(hit, ctx.shapes.with(state, "waterlogged", "true"))
+            } else {
+                let fits = |s: u32| ctx.shapes.is_air(s) || ctx.rules.is_replaceable(s);
+                let at = if fits(state) { hit } else { offset(hit, face) };
+                let there = state_at(at);
+                let same = blocks.block_name(there) == Some(fluid) && blocks.property(there, "level") == Some("0");
+                if !fits(there) || same {
+                    false
+                } else {
+                    level.set_block(at, source)
+                }
+            };
+            (placed, ctx.items.id("minecraft:bucket"))
+        }
+    };
+    if !changed {
+        return outcome;
+    }
+    let changes = level.into_changes();
+    outcome.updates.extend(changes.iter().copied());
+    outcome.events.push(Event::BlocksChanged { by: 0, changes });
+    if actor.game_mode != CREATIVE {
+        replace_held(ctx, &mut outcome, actor, hand, result);
+    }
+    outcome.events.push(Event::Swing {
+        uuid: actor.uuid,
+        entity_id: actor.entity_id,
+        times: 1,
     });
     outcome
 }

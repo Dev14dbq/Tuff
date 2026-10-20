@@ -3,6 +3,7 @@
 
 pub mod dir;
 pub mod facts;
+pub mod fire;
 pub mod fluids;
 pub mod gravity;
 pub mod level;
