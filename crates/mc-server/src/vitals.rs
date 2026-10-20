@@ -47,6 +47,10 @@ pub struct Vitals {
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
+    /// Mob effects (`active_effects`).
+    pub effects: crate::effects::Effects,
+    /// Extra hearts from absorption (`AbsorptionAmount`).
+    pub absorption: f32,
 }
 
 /// Points from one experience level to the next (wiki, "Experience").
@@ -118,11 +122,20 @@ impl Default for Vitals {
             xp_level: 0,
             xp_progress: 0.0,
             xp_total: 0,
+            effects: crate::effects::Effects::default(),
+            absorption: 0.0,
         }
     }
 }
 
 impl Vitals {
+    /// Maximum health, with health boost.
+    pub fn max_health(&self) -> f32 {
+        self.effects
+            .value(crate::effects::Attr::MaxHealth)
+            .min(f64::from(f32::MAX)) as f32
+    }
+
     pub fn packet(&self) -> SetHealth {
         SetHealth {
             health: self.health,
@@ -131,7 +144,7 @@ impl Vitals {
         }
     }
 
-    fn exhaust(&mut self, amount: f32) {
+    pub(crate) fn exhaust(&mut self, amount: f32) {
         self.exhaustion += amount;
         while self.exhaustion >= 4.0 {
             self.exhaustion -= 4.0;
@@ -391,6 +404,25 @@ pub fn hurt_by(
         if v.dead || v.immune > 0 {
             return false;
         }
+        let amount = crate::effects::reduce_damage(&v.effects, amount, damage_type);
+        if amount <= 0.0 {
+            return false;
+        }
+        let absorbed = amount.min(v.absorption);
+        if absorbed > 0.0 {
+            v.absorption -= absorbed;
+            let _ = ctx.events.send(Event::EntityData {
+                uuid,
+                packet: mc_protocol::packets::play::SetEntityData {
+                    entity_id,
+                    entries: vec![(
+                        mc_protocol::packets::play::metadata::PLAYER_ABSORPTION,
+                        mc_protocol::packets::play::MetadataValue::Float(v.absorption),
+                    )],
+                },
+            });
+        }
+        let amount = amount - absorbed;
         v.health = (v.health - amount).max(0.0);
         v.immune = IMMUNE_TICKS;
         v.exhaust(0.1);
@@ -480,10 +512,11 @@ pub fn tick(ctx: &ServerContext) {
             let before = (v.health, v.food, v.saturation);
             v.food_timer += 1;
             let full = v.food >= 20 && v.saturation > 0.0;
-            if v.health < MAX_HEALTH
+            let max_health = v.max_health();
+            if v.health < max_health
                 && (full && v.food_timer >= 10 || v.food >= 18 && v.food_timer >= 80)
             {
-                v.health = (v.health + 1.0).min(MAX_HEALTH);
+                v.health = (v.health + 1.0).min(max_health);
                 v.exhaust(6.0);
                 v.food_timer = 0;
             } else if v.food <= 0 && v.food_timer >= 80 {

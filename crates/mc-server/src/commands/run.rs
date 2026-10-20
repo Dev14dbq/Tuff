@@ -28,7 +28,7 @@ pub(super) fn block_limit(ctx: &ServerContext) -> i64 {
     )
 }
 
-pub(super) fn err(key: &str, args: Vec<Tag>) -> CommandError {
+pub(crate) fn err(key: &str, args: Vec<Tag>) -> CommandError {
     CommandError::new(key, args)
 }
 

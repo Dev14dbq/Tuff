@@ -2363,3 +2363,105 @@ async fn game_mode_switcher_pick_block_and_signs() {
     assert!(format!("{:?}", be.data).contains("Hello"));
     let _ = stop.send(());
 }
+
+/// Starts a server with `config`; returns it running, its context and a
+/// way to stop it.
+async fn running(
+    config: Config,
+) -> (
+    std::net::SocketAddr,
+    std::sync::Arc<mc_server::ServerContext>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    (addr, ctx, stop)
+}
+
+/// Runs a command from chat; returns its message (as NBT debug text) and
+/// the packets that came before it.
+async fn chat_command(bot: &mut Bot, line: &str) -> (String, Vec<(String, Vec<u8>)>) {
+    let mut body = Vec::new();
+    body.put_string(line);
+    bot.send("minecraft:chat_command", body).await;
+    let mut before = Vec::new();
+    loop {
+        let (name, body) = bot.recv().await;
+        if name == "minecraft:system_chat" {
+            let text = format!("{:?}", Reader::new(&body).nbt().unwrap());
+            // Not the welcome or join lines.
+            if text.contains("\"commands.") || text.contains("\"argument.") {
+                return (text, before);
+            }
+        }
+        before.push((name, body));
+    }
+}
+
+/// The packet `name` among `seen`, or the next one to come.
+async fn packet(bot: &mut Bot, seen: &[(String, Vec<u8>)], name: &str) -> Vec<u8> {
+    match seen.iter().find(|(n, _)| n == name) {
+        Some((_, body)) => body.clone(),
+        None => bot.recv_until(name).await.1,
+    }
+}
+
+#[tokio::test]
+async fn effects_are_given_shown_and_cleared() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Admin".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let (mut admin, _) = join_offline(addr, ctx.ids.clone(), "Admin").await;
+
+    // Once "command.failed": /effect had no handler.
+    let (text, seen) = chat_command(&mut admin, "effect give @s minecraft:speed 10 1").await;
+    assert!(
+        text.contains("commands.effect.give.success.single") && text.contains("Int(10)"),
+        "{text}"
+    );
+    let effect = packet(&mut admin, &seen, "minecraft:update_mob_effect").await;
+    let mut r = Reader::new(&effect);
+    r.varint().unwrap();
+    // Speed (0), level II, 10 s, with particles and icon, blending in.
+    let got = (
+        r.varint().unwrap(),
+        r.varint().unwrap(),
+        r.varint().unwrap(),
+        r.u8().unwrap(),
+    );
+    assert_eq!(got, (0, 1, 200, 0x0e));
+    let attributes = packet(&mut admin, &seen, "minecraft:update_attributes").await;
+    assert!(
+        attributes
+            .windows(22)
+            .any(|w| w == b"minecraft:effect.speed".as_slice()),
+        "the speed modifier"
+    );
+
+    let (text, _) = chat_command(&mut admin, "effect give @s minecraft:speed 5 0").await;
+    assert!(text.contains("commands.effect.give.failed"), "{text}");
+    let (text, seen) = chat_command(&mut admin, "effect clear @s minecraft:speed").await;
+    assert!(
+        text.contains("commands.effect.clear.specific.success.single"),
+        "{text}"
+    );
+    packet(&mut admin, &seen, "minecraft:remove_mob_effect").await;
+    let (text, _) = chat_command(&mut admin, "effect clear @s").await;
+    assert!(
+        text.contains("commands.effect.clear.everything.failed"),
+        "{text}"
+    );
+    let _ = stop.send(());
+}

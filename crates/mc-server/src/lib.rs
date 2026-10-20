@@ -13,6 +13,7 @@ mod connection;
 mod containers;
 mod context;
 mod crafting;
+mod effects;
 mod furnaces;
 mod generation;
 mod interact;

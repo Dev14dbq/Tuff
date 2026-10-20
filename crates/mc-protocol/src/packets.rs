@@ -994,6 +994,83 @@ pub mod play {
         }
     }
 
+    /// Update Mob Effect: an effect a living entity has now. `flags`: 1
+    /// ambient, 2 particles, 4 icon, 8 blend (newly added).
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct UpdateMobEffect {
+        pub entity_id: i32,
+        pub effect: i32,
+        pub amplifier: i32,
+        /// Ticks; -1 for ever.
+        pub duration: i32,
+        pub flags: u8,
+    }
+    packet!(UpdateMobEffect, Play, "minecraft:update_mob_effect");
+    impl Encode for UpdateMobEffect {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            out.put_varint(self.effect);
+            out.put_varint(self.amplifier);
+            out.put_varint(self.duration);
+            out.put_u8(self.flags);
+        }
+    }
+
+    /// Remove Mob Effect.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct RemoveMobEffect {
+        pub entity_id: i32,
+        pub effect: i32,
+    }
+    packet!(RemoveMobEffect, Play, "minecraft:remove_mob_effect");
+    impl Encode for RemoveMobEffect {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            out.put_varint(self.effect);
+        }
+    }
+
+    /// One attribute modifier: its id, amount and operation (0 add value,
+    /// 1 add multiplied base, 2 add multiplied total).
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct AttributeModifier {
+        pub id: String,
+        pub amount: f64,
+        pub operation: i32,
+    }
+
+    /// One attribute of an entity: its registry id, base and modifiers.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct AttributeSnapshot {
+        pub attribute: i32,
+        pub base: f64,
+        pub modifiers: Vec<AttributeModifier>,
+    }
+
+    /// Update Attributes: the changed attributes of an entity.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct UpdateAttributes {
+        pub entity_id: i32,
+        pub attributes: Vec<AttributeSnapshot>,
+    }
+    packet!(UpdateAttributes, Play, "minecraft:update_attributes");
+    impl Encode for UpdateAttributes {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            out.put_len(self.attributes.len());
+            for a in &self.attributes {
+                out.put_varint(a.attribute);
+                out.put_f64(a.base);
+                out.put_len(a.modifiers.len());
+                for m in &a.modifiers {
+                    out.put_string(&m.id);
+                    out.put_f64(m.amount);
+                    out.put_varint(m.operation);
+                }
+            }
+        }
+    }
+
     /// Combat Death: the death screen.
     #[derive(Clone, Debug)]
     pub struct PlayerCombatKill {
@@ -1597,8 +1674,16 @@ pub mod play {
         pub const ITEM: u8 = 8;
         /// Living entity: hand states (Byte): 1 using an item, 2 the off hand.
         pub const HAND_STATES: u8 = 8;
+        /// Entity flags (Byte): 0x20 invisible, 0x40 glowing...
+        pub const FLAGS: u8 = 0;
         /// Living entity health (Float).
         pub const HEALTH: u8 = 9;
+        /// Living entity: the particles of its visible effects (Particles).
+        pub const EFFECT_PARTICLES: u8 = 10;
+        /// Living entity: whether all its visible effects are ambient (Boolean).
+        pub const EFFECT_AMBIENCE: u8 = 11;
+        /// Player: absorption hearts (Float).
+        pub const PLAYER_ABSORPTION: u8 = 17;
         /// Player: displayed skin parts (Byte), the bit mask from Client Information.
         pub const PLAYER_SKIN_PARTS: u8 = 16;
     }
@@ -1611,6 +1696,9 @@ pub mod play {
         Float(f32),
         Item(Option<ItemStack>),
         Boolean(bool),
+        /// A list of particles: (particle type id, the ARGB colour for those
+        /// that take one).
+        Particles(Vec<(i32, Option<i32>)>),
     }
 
     impl MetadataValue {
@@ -1635,6 +1723,16 @@ pub mod play {
                 MetadataValue::Boolean(v) => {
                     out.put_varint(8);
                     out.put_bool(*v);
+                }
+                MetadataValue::Particles(list) => {
+                    out.put_varint(17);
+                    out.put_len(list.len());
+                    for (kind, color) in list {
+                        out.put_varint(*kind);
+                        if let Some(c) = color {
+                            out.put_i32(*c);
+                        }
+                    }
                 }
             }
         }

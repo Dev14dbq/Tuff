@@ -195,6 +195,10 @@ impl Store {
         if let Some(Tag::Int(t)) = root.get("XpTotal") {
             vitals.xp_total = *t;
         }
+        vitals.effects = crate::effects::Effects::from_nbt(root.get("active_effects"));
+        if let Some(Tag::Float(a)) = root.get("AbsorptionAmount") {
+            vitals.absorption = *a;
+        }
         vitals.dead = vitals.health <= 0.0;
         Ok(Some(Saved {
             pose,
@@ -269,6 +273,12 @@ impl Store {
         root.insert("XpLevel", Tag::Int(saved.vitals.xp_level));
         root.insert("XpP", Tag::Float(saved.vitals.xp_progress));
         root.insert("XpTotal", Tag::Int(saved.vitals.xp_total));
+        root.insert("AbsorptionAmount", Tag::Float(saved.vitals.absorption));
+        if saved.vitals.effects.is_empty() {
+            root.remove("active_effects");
+        } else {
+            root.insert("active_effects", saved.vitals.effects.to_nbt());
+        }
         root.insert("SelectedItemSlot", Tag::Int(saved.hands.selected as i32));
         let mut inventory = Vec::new();
         for index in 0..36 {

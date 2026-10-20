@@ -170,6 +170,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         if runs {
             lock(&ctx.time).advance();
             run_scheduled_ticks(&ctx);
+            crate::effects::tick(&ctx, count as i64);
             crate::vitals::tick(&ctx);
             crate::vitals::tick_using(&ctx);
             crate::furnaces::tick(&ctx);

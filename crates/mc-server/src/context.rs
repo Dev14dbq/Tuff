@@ -51,6 +51,8 @@ pub enum Direct {
     Sound(mc_protocol::packets::play::Sound),
     Experience(mc_protocol::packets::play::SetExperience),
     StopSound(mc_protocol::packets::play::StopSound),
+    MobEffect(mc_protocol::packets::play::UpdateMobEffect),
+    RemoveMobEffect(mc_protocol::packets::play::RemoveMobEffect),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -223,6 +225,16 @@ pub enum Event {
     /// use now.
     Permissions {
         uuid: u128,
+    },
+    /// A player's entity data changed (for them and who sees them).
+    EntityData {
+        uuid: u128,
+        packet: mc_protocol::packets::play::SetEntityData,
+    },
+    /// A player's attributes changed (for them and who sees them).
+    Attributes {
+        uuid: u128,
+        packet: mc_protocol::packets::play::UpdateAttributes,
     },
     /// A packet for one player only.
     Direct {

@@ -637,6 +637,17 @@ async fn play(
         .unwrap_or_default();
     writer.queue(&vitals.packet())?;
     writer.queue(&vitals.experience_packet())?;
+    let (effects, effect_data, attributes) =
+        crate::effects::join_packets(&ctx, &vitals, me.entity_id);
+    for p in effects {
+        writer.queue(&p)?;
+    }
+    if let Some(p) = effect_data {
+        writer.queue(&p)?;
+    }
+    if let Some(p) = attributes {
+        writer.queue(&p)?;
+    }
     ctx.vitals.lock().expect("vitals lock").insert(uuid, vitals);
     let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
     // Non-player entities this client has been told about.
@@ -1008,6 +1019,16 @@ async fn play(
                     }
                     Ok(Event::TickingState(packet)) => writer.queue(&packet)?,
                     Ok(Event::Health { uuid: who, health }) if who == uuid => writer.queue(&health)?,
+                    Ok(Event::EntityData { uuid: who, packet })
+                        if who == uuid || visible.contains(&who) =>
+                    {
+                        writer.queue(&packet)?;
+                    }
+                    Ok(Event::Attributes { uuid: who, packet })
+                        if who == uuid || visible.contains(&who) =>
+                    {
+                        writer.queue(&packet)?;
+                    }
                     Ok(Event::Hurt { uuid: who, entity_id: hurt, damage_type }) if who == uuid || visible.contains(&who) => {
                         writer.queue(&play::DamageEvent { entity_id: hurt, damage_type })?;
                     }
@@ -1107,6 +1128,8 @@ async fn play(
                             Direct::Sound(p) => writer.queue(&p)?,
                             Direct::Experience(p) => writer.queue(&p)?,
                             Direct::StopSound(p) => writer.queue(&p)?,
+                            Direct::MobEffect(p) => writer.queue(&p)?,
+                            Direct::RemoveMobEffect(p) => writer.queue(&p)?,
                         }
                     }
                     Ok(Event::Border) => {
