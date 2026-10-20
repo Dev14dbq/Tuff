@@ -1169,10 +1169,7 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
             let name = &r.input[s..r.cursor];
             match slot_range(name) {
                 None => {
-                    return Err(r.error(CommandError::new(
-                        "slot.unknown",
-                        vec![string(name)],
-                    )));
+                    return Err(r.error(CommandError::new("slot.unknown", vec![string(name)])));
                 }
                 Some(v) if v.len() != 1 => {
                     return Err(r.error(CommandError::new(
@@ -1556,7 +1553,6 @@ pub fn plain_text(t: Tag) -> Tag {
     }
 }
 
-
 /// What makes a context provider written out in a command fail to parse
 /// (vanilla's codec complaint), or `None` when it is shaped right. Only
 /// the top level is checked.
@@ -1610,12 +1606,31 @@ fn provider_error(t: &Tag, float: bool) -> Option<String> {
         _ => String::new(),
     };
     let short = name.trim_start_matches("minecraft:");
-    let float_only = ["sqrt", "sin", "floor", "round", "length", "from_int", "enchantment_level", "ceil", "cos", "tan"];
+    let float_only = [
+        "sqrt",
+        "sin",
+        "floor",
+        "round",
+        "length",
+        "from_int",
+        "enchantment_level",
+        "ceil",
+        "cos",
+        "tan",
+    ];
     let allowed = NEEDS.iter().find(|(k, _)| *k == short).filter(|(k, _)| {
-        if float { *k != "from_float" } else { !float_only.contains(k) }
+        if float {
+            *k != "from_float"
+        } else {
+            !float_only.contains(k)
+        }
     });
     let Some((_, needs)) = allowed else {
-        let registry = if float { "context_float_provider_type" } else { "context_int_provider_type" };
+        let registry = if float {
+            "context_float_provider_type"
+        } else {
+            "context_int_provider_type"
+        };
         return Some(format!(
             "{prefix}Unknown registry key in ResourceKey[minecraft:root / minecraft:{registry}]: {name}"
         ));

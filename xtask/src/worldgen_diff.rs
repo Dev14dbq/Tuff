@@ -1,6 +1,7 @@
-//! `cargo xtask worldgen-diff [--seed <n>] [--radius <chunks>]`: compares
-//! our generator with the vanilla reference world (`worldgen-ref`): biomes
-//! per 4×4×4 cell for now.
+//! `cargo xtask worldgen-diff [--seed <n>] [--radius <chunks>]
+//! [--dimension nether|end]`: compares our generator with the vanilla
+//! reference world (`worldgen-ref`): biomes per 4×4×4 cell, or blocks with
+//! `WORLDGEN_BLOCKS` set.
 
 use std::collections::HashMap;
 
@@ -8,11 +9,14 @@ use anyhow::{Context, Result, bail};
 use mc_storage::chunk::{Decoded, Palettes, decode_chunk};
 use mc_worldgen::climate::{BiomeList, Climate, DataDir};
 use mc_worldgen::density::Builder;
+use mc_worldgen::generator::{BiomeSource, Dimension};
 
 use crate::probe::load_data;
 
 pub fn run(args: &[String]) -> Result<()> {
     let (mut seed, mut radius) = (12345i64, 3i32);
+    let mut dimension = Dimension::Overworld;
+    let (mut ox, mut oz) = (0i32, 0i32);
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = || {
@@ -23,6 +27,15 @@ pub fn run(args: &[String]) -> Result<()> {
         match arg.as_str() {
             "--seed" => seed = value()?.parse()?,
             "--radius" => radius = value()?.parse()?,
+            "--center" => {
+                ox = value()?.parse()?;
+                oz = it.next().context("--center needs x and z")?.parse()?;
+            }
+            "--dimension" => {
+                let name = value()?;
+                dimension =
+                    Dimension::parse(&name).with_context(|| format!("no dimension {name}"))?;
+            }
             other => bail!("unknown option `{other}`"),
         }
     }
@@ -30,15 +43,29 @@ pub fn run(args: &[String]) -> Result<()> {
     let data = load_data(None)?;
     let data_dir = root.join("cache/mcdata").join(&data.version.name);
     let source = DataDir(data_dir.clone());
-    let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
-        data_dir.join("data/minecraft/worldgen/noise_settings/overworld.json"),
-    )?)?;
-    let mut builder = Builder::new(&source, seed, false);
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(data_dir.join(format!(
+            "data/minecraft/worldgen/noise_settings/{}.json",
+            dimension.settings().trim_start_matches("minecraft:")
+        )))?)?;
+    let legacy = settings["legacy_random_source"].as_bool().unwrap_or(false);
+    let (min_y, height) = (
+        settings["noise"]["min_y"].as_i64().unwrap_or(-64) as i32,
+        settings["noise"]["height"].as_i64().unwrap_or(384) as i32,
+    );
+    let mut builder = Builder::new(&source, seed, legacy);
     let climate = Climate::from_router(&mut builder, &settings["noise_router"])
         .map_err(anyhow::Error::msg)?;
-    let list = BiomeList::from_json(&serde_json::from_str(&std::fs::read_to_string(
-        data_dir.join("reports/biome_parameters/minecraft/overworld.json"),
-    )?)?);
+    let biome_source = match dimension.preset() {
+        Some(preset) => BiomeSource::MultiNoise(serde_json::from_str(&std::fs::read_to_string(
+            data_dir.join(format!("reports/biome_parameters/minecraft/{preset}.json")),
+        )?)?),
+        None => BiomeSource::TheEnd,
+    };
+    let list = match &biome_source {
+        BiomeSource::MultiNoise(parameters) => BiomeList::from_json(parameters),
+        BiomeSource::TheEnd => BiomeList::from_json(&serde_json::Value::Null),
+    };
     let mut names: Vec<String> = std::fs::read_dir(data_dir.join("data/minecraft/worldgen/biome"))?
         .filter_map(|e| e.ok())
         .filter_map(|e| {
@@ -53,8 +80,19 @@ pub fn run(args: &[String]) -> Result<()> {
         .enumerate()
         .map(|(i, n)| (n.clone(), i as u32))
         .collect();
+    let suffix = match dimension {
+        Dimension::Overworld => "",
+        Dimension::Nether => "-nether",
+        Dimension::End => "-end",
+    };
     let region = root.join(format!(
-        "cache/vanilla-server/26.3-worldgen/{seed}/world/dimensions/minecraft/overworld/region"
+        "cache/vanilla-server/26.3-worldgen/{seed}{suffix}{}/world/dimensions/{}/region",
+        if (ox, oz) == (0, 0) {
+            String::new()
+        } else {
+            format!("-at-{ox}-{oz}")
+        },
+        dimension.id().replace(':', "/")
     ));
     let mut storage = mc_storage::region::RegionStorage::new(region);
     let air = data.blocks.default_state("minecraft:air").unwrap_or(0);
@@ -105,16 +143,14 @@ pub fn run(args: &[String]) -> Result<()> {
         blocks: &data.blocks,
         biomes: &index,
     };
-    let generator = if full {
+    let mut generator = if full || dimension != Dimension::Overworld {
         let state = |n: &str| data.blocks.default_state(n).unwrap_or(0);
         Some(
             mc_worldgen::generator::NoiseGenerator::new(
                 &source,
                 seed,
                 &settings,
-                &serde_json::from_str(&std::fs::read_to_string(
-                    data_dir.join("reports/biome_parameters/minecraft/overworld.json"),
-                )?)?,
+                &biome_source,
                 &game_names,
                 index.clone(),
                 mc_worldgen::generator::Blocks {
@@ -129,12 +165,27 @@ pub fn run(args: &[String]) -> Result<()> {
     } else {
         None
     };
+    // The reference world has no carvers (unless made with `--carvers`).
+    if std::env::var_os("WORLDGEN_CARVERS").is_none()
+        && let Some(g) = &mut generator
+    {
+        g.clear_carvers();
+    }
     let mut block_pairs: HashMap<(String, String), usize> = HashMap::new();
     let (mut blocks_same, mut blocks_total) = (0usize, 0usize);
+    // Differences per band of 8 y (`WORLDGEN_BY_Y`).
+    let mut by_y = vec![0usize; (height / 8) as usize];
     let final_density = builder
         .build(&settings["noise_router"]["final_density"])
         .map_err(anyhow::Error::msg)?;
-    let aq = &settings["aquifers"];
+    if terrain && dimension != Dimension::Overworld {
+        bail!("WORLDGEN_TERRAIN is for the overworld (its aquifers)");
+    }
+    let aq = if dimension == Dimension::Overworld {
+        &settings["aquifers"]
+    } else {
+        &settings_overworld(&data_dir)?["aquifers"]
+    };
     let functions = mc_worldgen::aquifer::Functions {
         barrier: builder.build(&aq["barrier"]).map_err(anyhow::Error::msg)?,
         floodedness: builder
@@ -163,28 +214,56 @@ pub fn run(args: &[String]) -> Result<()> {
         sea: mc_worldgen::aquifer::Fluid::Water,
         lava_level: -54,
     };
+    if std::env::var_os("WORLDGEN_DENSITY").is_some() {
+        let base = builder
+            .named("minecraft:nether/base_3d_noise")
+            .map_err(anyhow::Error::msg)?;
+        for y in (min_y..min_y + height).step_by(8) {
+            println!(
+                "y {y}: final {:.4} base {:.4}",
+                final_density.eval(0, y, 0),
+                base.eval(0, y, 0)
+            );
+        }
+    }
     let mut kinds: HashMap<(char, char), usize> = HashMap::new();
     let (mut solid_same, mut solid_total, mut too_much, mut too_little) =
         (0usize, 0usize, 0usize, 0usize);
-    for cx in -radius..=radius {
-        for cz in -radius..=radius {
+    for cx in ox - radius..=ox + radius {
+        for cz in oz - radius..=oz + radius {
             let Some(tag) = storage.read_chunk(cx, cz)? else {
                 continue;
             };
-            let Decoded::Chunk(chunk) =
-                decode_chunk(&tag, -64, 384, &palettes).map_err(|e| anyhow::anyhow!("{e:?}"))?
+            let Decoded::Chunk(chunk) = decode_chunk(&tag, min_y, height as u32, &palettes)
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?
             else {
                 continue;
             };
             let before = total - same;
-            if let Some(generator) = &generator {
+            if let Some(generator) = generator.as_ref().filter(|_| full) {
                 let ours = generator.generate(cx, cz);
-                for y in -64..320 {
+                if std::env::var_os("WORLDGEN_COLUMN").is_some() && (cx, cz) == (ox, oz) {
+                    // The corner column, bottom up: s solid, . air, ~ fluid.
+                    let kind = |s: u32| match data.blocks.block_name(s).unwrap_or("") {
+                        "minecraft:air" | "minecraft:cave_air" => '.',
+                        "minecraft:water" | "minecraft:lava" => '~',
+                        _ => 's',
+                    };
+                    let column = |f: &dyn Fn(i32) -> u32| -> String {
+                        (min_y..min_y + height).map(|y| kind(f(y))).collect()
+                    };
+                    println!("vanilla {}", column(&|y| chunk.block(0, y, 0)));
+                    println!(
+                        "ours    {}",
+                        column(&|y| ours.blocks[((y - min_y) * 256) as usize])
+                    );
+                }
+                for y in min_y..min_y + height {
                     for lz in 0..16 {
                         for lx in 0..16 {
                             let theirs = chunk.block(lx, y, lz);
                             let mine = ours.blocks
-                                [(((y + 64) * 16 + lz as i32) * 16 + lx as i32) as usize];
+                                [(((y - min_y) * 16 + lz as i32) * 16 + lx as i32) as usize];
                             blocks_total += 1;
                             if theirs == mine {
                                 blocks_same += 1;
@@ -197,6 +276,7 @@ pub fn run(args: &[String]) -> Result<()> {
                                         .replace("[]", "")
                                 };
                                 *block_pairs.entry((name(theirs), name(mine))).or_default() += 1;
+                                by_y[((y - min_y) / 8) as usize] += 1;
                             }
                         }
                     }
@@ -273,9 +353,13 @@ pub fn run(args: &[String]) -> Result<()> {
                 for i in 0..64 {
                     let (lx, ly, lz) = (i & 3, (i >> 4) & 3, (i >> 2) & 3);
                     let theirs = names[section.biomes.get(i) as usize].clone();
-                    let qy = (-64 / 4) + (s as i32) * 4 + ly as i32;
-                    let target = climate.sample(cx * 4 + lx as i32, qy, cz * 4 + lz as i32);
-                    let ours = list.find(target).to_owned();
+                    let qy = (min_y / 4) + (s as i32) * 4 + ly as i32;
+                    let (qx, qz) = (cx * 4 + lx as i32, cz * 4 + lz as i32);
+                    let target = climate.sample(qx, qy, qz);
+                    let ours = match &generator {
+                        Some(g) => names[g.noise_biome(qx, qy, qz) as usize].clone(),
+                        None => list.find(target).to_owned(),
+                    };
                     total += 1;
                     if ours == theirs {
                         same += 1;
@@ -298,8 +382,8 @@ pub fn run(args: &[String]) -> Result<()> {
         }
     }
     if std::env::var_os("WORLDGEN_MAP").is_some() {
-        for cz in -radius..=radius {
-            let row: String = (-radius..=radius)
+        for cz in oz - radius..=oz + radius {
+            let row: String = (ox - radius..=ox + radius)
                 .map(|cx| {
                     let n = per_chunk
                         .iter()
@@ -322,6 +406,11 @@ pub fn run(args: &[String]) -> Result<()> {
             100.0 * blocks_same as f64 / blocks_total.max(1) as f64,
             started.elapsed().as_secs_f64()
         );
+        if std::env::var_os("WORLDGEN_BY_Y").is_some() {
+            for (i, n) in by_y.iter().enumerate() {
+                println!("  y {:4}..: {n}", min_y + i as i32 * 8);
+            }
+        }
         let mut pairs: Vec<_> = block_pairs.into_iter().collect();
         pairs.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
         for ((theirs, ours), n) in pairs.into_iter().take(25) {
@@ -360,4 +449,12 @@ fn depth_offset(climate: &Climate, x: i32, z: i32) -> f64 {
     let y = 0;
     let gradient = 1.5 - 3.0 * f64::from(y + 64) / 384.0;
     climate.depth.eval(x, y, z) - gradient
+}
+
+/// The overworld's noise settings (for the aquifer functions the terrain
+/// check builds).
+fn settings_overworld(data_dir: &std::path::Path) -> Result<serde_json::Value> {
+    Ok(serde_json::from_str(&std::fs::read_to_string(
+        data_dir.join("data/minecraft/worldgen/noise_settings/overworld.json"),
+    )?)?)
 }

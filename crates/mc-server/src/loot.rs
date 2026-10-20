@@ -180,7 +180,10 @@ impl BlockLoot {
 
     /// Drops for breaking `block` whose state has `properties`, bare-handed.
     pub fn drops(&self, block: &str, properties: &dyn Fn(&str) -> Option<String>) -> Vec<Drop> {
-        let Some(table) = self.tables.get(&format!("minecraft:blocks/{}", block.trim_start_matches("minecraft:"))) else {
+        let Some(table) = self.tables.get(&format!(
+            "minecraft:blocks/{}",
+            block.trim_start_matches("minecraft:")
+        )) else {
             return Vec::new();
         };
         let props = BLOCK_PROPS
@@ -217,10 +220,37 @@ impl BlockLoot {
 
 /// Properties blocks' loot conditions test.
 pub const BLOCK_PROPS: &[&str] = &[
-    "facing", "half", "type", "part", "waterlogged", "age", "bites", "candles", "eggs", "layers", "level", "pickles", "hatch", "distance",
-    "persistent", "open", "lit", "powered", "short", "extended", "double_block_half", "slot_0_occupied",
-    "slot_1_occupied", "slot_2_occupied", "slot_3_occupied", "slot_4_occupied", "slot_5_occupied",
-    "honey_level", "flower_amount", "segment_amount", "leaf_litter_amount",
+    "facing",
+    "half",
+    "type",
+    "part",
+    "waterlogged",
+    "age",
+    "bites",
+    "candles",
+    "eggs",
+    "layers",
+    "level",
+    "pickles",
+    "hatch",
+    "distance",
+    "persistent",
+    "open",
+    "lit",
+    "powered",
+    "short",
+    "extended",
+    "double_block_half",
+    "slot_0_occupied",
+    "slot_1_occupied",
+    "slot_2_occupied",
+    "slot_3_occupied",
+    "slot_4_occupied",
+    "slot_5_occupied",
+    "honey_level",
+    "flower_amount",
+    "segment_amount",
+    "leaf_litter_amount",
 ];
 
 struct Plain;
@@ -287,7 +317,8 @@ impl Eval<'_> {
         if !self.cond(&pool["condition"]) {
             return;
         }
-        let rolls = self.int(&pool["rolls"]) + (self.float(&pool["bonus_rolls"]) * self.cx.luck).floor() as i32;
+        let rolls = self.int(&pool["rolls"])
+            + (self.float(&pool["bonus_rolls"]) * self.cx.luck).floor() as i32;
         let mut mine = Vec::new();
         for _ in 0..rolls.max(0) {
             let mut choices = Vec::new();
@@ -361,7 +392,10 @@ impl Eval<'_> {
                     .collect();
                 if entry["expand"].as_bool().unwrap_or(false) {
                     if !members.is_empty() {
-                        mine.push(drop_of(members[rand_int(0, members.len() as i32 - 1) as usize], 1));
+                        mine.push(drop_of(
+                            members[rand_int(0, members.len() as i32 - 1) as usize],
+                            1,
+                        ));
                     }
                 } else {
                     mine.extend(members.into_iter().map(|i| drop_of(i, 1)));
@@ -389,7 +423,10 @@ impl Eval<'_> {
         if let Some(n) = v.as_f64() {
             return n as f32;
         }
-        match v["type"].as_str().map(|t| t.trim_start_matches("minecraft:")) {
+        match v["type"]
+            .as_str()
+            .map(|t| t.trim_start_matches("minecraft:"))
+        {
             Some("constant") => self.float(&v["value"]),
             Some("uniform") => {
                 let (lo, hi) = (self.float(&v["min"]), self.float(&v["max"]));
@@ -404,12 +441,17 @@ impl Eval<'_> {
         if let Some(n) = v.as_f64() {
             return n as i32;
         }
-        match v["type"].as_str().map(|t| t.trim_start_matches("minecraft:")) {
+        match v["type"]
+            .as_str()
+            .map(|t| t.trim_start_matches("minecraft:"))
+        {
             Some("constant") => self.int(&v["value"]),
             Some("uniform") => rand_int(self.int(&v["min"]), self.int(&v["max"])),
             Some("binomial") => {
                 let p = f64::from(self.float(&v["p"]));
-                (0..self.int(&v["n"]).max(0)).filter(|_| random() < p).count() as i32
+                (0..self.int(&v["n"]).max(0))
+                    .filter(|_| random() < p)
+                    .count() as i32
             }
             _ => 0,
         }
@@ -430,17 +472,16 @@ impl Eval<'_> {
         match c {
             Value::Null => true,
             Value::Array(a) => a.iter().all(|c| self.cond(c)),
-            Value::String(name) => self
-                .loot
-                .predicates
-                .get(name)
-                .is_some_and(|p| self.cond(p)),
+            Value::String(name) => self.loot.predicates.get(name).is_some_and(|p| self.cond(p)),
             _ => self.cond_one(c),
         }
     }
 
     fn cond_one(&self, c: &Value) -> bool {
-        let kind = c["type"].as_str().or_else(|| c["condition"].as_str()).unwrap_or("");
+        let kind = c["type"]
+            .as_str()
+            .or_else(|| c["condition"].as_str())
+            .unwrap_or("");
         match kind.trim_start_matches("minecraft:") {
             "survives_explosion" => true,
             "match_block" => self.block_matches(&c["blocks"], &c["state"]),
@@ -449,9 +490,15 @@ impl Eval<'_> {
                     return false;
                 };
                 c["block"].as_str().is_some_and(|b| b == name)
-                    && c["properties"].as_object().into_iter().flatten().all(|(k, v)| {
-                        props.iter().any(|(pk, pv)| pk == k && Some(pv.as_str()) == v.as_str())
-                    })
+                    && c["properties"]
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .all(|(k, v)| {
+                            props
+                                .iter()
+                                .any(|(pk, pv)| pk == k && Some(pv.as_str()) == v.as_str())
+                        })
             }
             "match_tool" => self.tool_matches(&c["predicate"]),
             "random_chance" => random() < f64::from(self.float(&c["chance"])),
@@ -471,14 +518,17 @@ impl Eval<'_> {
             "any_of" | "alternative" => list(&c["terms"]).into_iter().any(|t| self.cond(t)),
             "all_of" => list(&c["terms"]).into_iter().all(|t| self.cond(t)),
             "killed_by_player" => self.cx.player_kill,
-            "reference" => c["name"].as_str().is_some_and(|n| self.cond(&Value::String(n.to_owned()))),
+            "reference" => c["name"]
+                .as_str()
+                .is_some_and(|n| self.cond(&Value::String(n.to_owned()))),
             "entity_properties" => {
                 let who = match c["entity"].as_str().unwrap_or("this") {
                     "this" => &self.cx.this,
                     "attacker" | "direct_attacker" | "attacking_player" => &self.cx.killer,
                     _ => &None,
                 };
-                who.as_ref().is_some_and(|e| self.entity_matches(e, &c["predicate"]))
+                who.as_ref()
+                    .is_some_and(|e| self.entity_matches(e, &c["predicate"]))
             }
             "value_check" => {
                 let v = self.float(&c["value"]);
@@ -492,10 +542,13 @@ impl Eval<'_> {
     }
 
     fn matches_id(&self, registry: &str, spec: &Value, name: &str) -> bool {
-        list(spec).into_iter().filter_map(Value::as_str).any(|s| match s.strip_prefix('#') {
-            Some(tag) => self.env.tag(registry, tag).iter().any(|n| n == name),
-            None => full(s) == name,
-        })
+        list(spec)
+            .into_iter()
+            .filter_map(Value::as_str)
+            .any(|s| match s.strip_prefix('#') {
+                Some(tag) => self.env.tag(registry, tag).iter().any(|n| n == name),
+                None => full(s) == name,
+            })
     }
 
     fn block_matches(&self, blocks: &Value, state: &Value) -> bool {
@@ -504,7 +557,9 @@ impl Eval<'_> {
         };
         (blocks.is_null() || self.matches_id("minecraft:block", blocks, name))
             && state.as_object().into_iter().flatten().all(|(k, v)| {
-                props.iter().any(|(pk, pv)| pk == k && Some(pv.as_str()) == v.as_str())
+                props
+                    .iter()
+                    .any(|(pk, pv)| pk == k && Some(pv.as_str()) == v.as_str())
             })
     }
 
@@ -555,7 +610,10 @@ impl Eval<'_> {
     }
 
     fn function(&self, f: &Value, drops: &mut Vec<Drop>) {
-        let kind = f["type"].as_str().or_else(|| f["function"].as_str()).unwrap_or("");
+        let kind = f["type"]
+            .as_str()
+            .or_else(|| f["function"].as_str())
+            .unwrap_or("");
         match kind.trim_start_matches("minecraft:") {
             "set_count" => {
                 let add = f["add"].as_bool().unwrap_or(false);
@@ -566,8 +624,12 @@ impl Eval<'_> {
             }
             "limit_count" => {
                 let l = &f["limit"];
-                let lo = l.as_f64().or_else(|| l.get("min").map(|v| f64::from(self.float(v))));
-                let hi = l.as_f64().or_else(|| l.get("max").map(|v| f64::from(self.float(v))));
+                let lo = l
+                    .as_f64()
+                    .or_else(|| l.get("min").map(|v| f64::from(self.float(v))));
+                let hi = l
+                    .as_f64()
+                    .or_else(|| l.get("max").map(|v| f64::from(self.float(v))));
                 for d in drops.iter_mut() {
                     if let Some(lo) = lo {
                         d.count = d.count.max(lo as i32);
@@ -581,7 +643,11 @@ impl Eval<'_> {
                 let level = self.tool_level(f["enchantment"].as_str().unwrap_or(""));
                 let p = &f["parameters"];
                 for d in drops.iter_mut() {
-                    match f["formula"].as_str().unwrap_or("").trim_start_matches("minecraft:") {
+                    match f["formula"]
+                        .as_str()
+                        .unwrap_or("")
+                        .trim_start_matches("minecraft:")
+                    {
                         "ore_drops" if level > 0 => {
                             d.count *= (rand_int(0, level + 1) - 1).max(0) + 1;
                         }
@@ -592,7 +658,8 @@ impl Eval<'_> {
                         "binomial_with_bonus_count" => {
                             let extra = p["extra"].as_i64().unwrap_or(0) as i32;
                             let chance = p["probability"].as_f64().unwrap_or(0.5);
-                            d.count += (0..level + extra).filter(|_| random() < chance).count() as i32;
+                            d.count +=
+                                (0..level + extra).filter(|_| random() < chance).count() as i32;
                         }
                         _ => {}
                     }
@@ -603,15 +670,18 @@ impl Eval<'_> {
                     let max = self.env.max_damage(d.item);
                     if max > 0 {
                         let left = 1.0 - f64::from(self.float(&f["damage"])).clamp(0.0, 1.0);
-                        d.components
-                            .insert("minecraft:damage", Tag::Int((left * f64::from(max)).floor() as i32));
+                        d.components.insert(
+                            "minecraft:damage",
+                            Tag::Int((left * f64::from(max)).floor() as i32),
+                        );
                     }
                 }
             }
             "set_name" => {
                 if !f["name"].is_null() {
                     for d in drops.iter_mut() {
-                        d.components.insert("minecraft:custom_name", json_tag(&f["name"]));
+                        d.components
+                            .insert("minecraft:custom_name", json_tag(&f["name"]));
                     }
                 }
             }
@@ -637,7 +707,8 @@ impl Eval<'_> {
             }
             "set_custom_data" => {
                 for d in drops.iter_mut() {
-                    d.components.insert("minecraft:custom_data", json_tag(&f["tag"]));
+                    d.components
+                        .insert("minecraft:custom_data", json_tag(&f["tag"]));
                 }
             }
             "set_enchantments" => {
@@ -664,7 +735,9 @@ impl Eval<'_> {
                     Some(tag) => self
                         .env
                         .tag("minecraft:enchantment", tag.trim_start_matches('#')),
-                    None => self.env.tag("minecraft:enchantment", "minecraft:on_random_loot"),
+                    None => self
+                        .env
+                        .tag("minecraft:enchantment", "minecraft:on_random_loot"),
                 };
                 for d in drops.iter_mut() {
                     if pool.is_empty() {
@@ -692,7 +765,8 @@ impl Eval<'_> {
                 for d in drops.iter_mut() {
                     let mut c = Compound::new();
                     c.insert("potion", f["id"].as_str().unwrap_or("minecraft:water"));
-                    d.components.insert("minecraft:potion_contents", Tag::Compound(c));
+                    d.components
+                        .insert("minecraft:potion_contents", Tag::Compound(c));
                 }
             }
             "set_instrument" | "set_ominous_bottle_amplifier" | "set_stew_effect" => {}
@@ -752,10 +826,18 @@ mod tests {
 
     fn roll(table: &str) -> Vec<Drop> {
         let loot = BlockLoot {
-            items: [("minecraft:apple".to_owned(), 1), ("minecraft:stick".to_owned(), 2)].into(),
+            items: [
+                ("minecraft:apple".to_owned(), 1),
+                ("minecraft:stick".to_owned(), 2),
+            ]
+            .into(),
             ..BlockLoot::default()
         };
-        loot.roll(&Plain, &serde_json::from_str(table).unwrap(), &LootCtx::default())
+        loot.roll(
+            &Plain,
+            &serde_json::from_str(table).unwrap(),
+            &LootCtx::default(),
+        )
     }
 
     #[test]

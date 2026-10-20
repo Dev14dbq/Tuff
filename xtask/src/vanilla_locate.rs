@@ -1,7 +1,7 @@
 //! `cargo xtask vanilla-locate --seed <n> <structure>...`: asks a vanilla
 //! server (a new world with that seed) where the nearest of each structure
 //! is from 0, 0 (or `name@x,z`), to compare structure placement with ours;
-//! `--ours` asks our server the same.
+//! `--ours` asks our server the same; `--dimension the_nether` asks there.
 
 use std::time::Duration;
 
@@ -15,11 +15,20 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut seed = 0i64;
     let mut names = Vec::new();
     let mut ours = false;
+    let mut dimension = String::from("minecraft:overworld");
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--seed" => seed = it.next().context("--seed needs a value")?.parse()?,
             "--ours" => ours = true,
+            "--dimension" => {
+                let d = it.next().context("--dimension needs a value")?;
+                dimension = if d.contains(':') {
+                    d.to_owned()
+                } else {
+                    format!("minecraft:{d}")
+                };
+            }
             n => names.push(n.to_owned()),
         }
     }
@@ -51,12 +60,15 @@ pub fn run(args: &[String]) -> Result<()> {
         } else {
             format!("minecraft:{n}")
         };
-        server.command(
-            &format!("execute positioned {ax} 0 {az} run locate structure {id}"),
-            false,
-        )?;
-        std::thread::sleep(Duration::from_secs(10));
-        server.command("", true)?;
+        // Locating can take a while; wait for the answer.
+        match server.wait_for(
+            &format!("execute in {dimension} positioned {ax} 0 {az} run locate structure {id}"),
+            "nearest",
+            Duration::from_secs(120),
+        ) {
+            Ok(line) => println!("{}", line.trim()),
+            Err(e) => println!("{id}: {e:#}"),
+        }
     }
     server.stop();
     Ok(())

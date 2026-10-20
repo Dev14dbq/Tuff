@@ -8,8 +8,8 @@ mod bossbar;
 #[cfg(test)]
 mod coverage;
 mod data;
-mod execute;
 mod devtools;
+mod execute;
 mod functions;
 mod gear;
 mod item;

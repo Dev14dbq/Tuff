@@ -1,8 +1,8 @@
 //! `/enchant`.
 
 use mc_command::args::full_id;
-use mc_protocol::packets::play::{AttributeModifier, AttributeSnapshot, UpdateAttributes};
 use mc_nbt::{Compound, Tag};
+use mc_protocol::packets::play::{AttributeModifier, AttributeSnapshot, UpdateAttributes};
 use mc_protocol::text::translate;
 
 use super::item::entity_place;
@@ -27,7 +27,9 @@ fn ids_of(r: &Run, registry: &str, v: &serde_json::Value) -> Vec<String> {
             Some(tag) => r.ctx.commands.env.tag(registry, tag),
             None => vec![full_id(s)],
         },
-        serde_json::Value::Array(list) => list.iter().flat_map(|e| ids_of(r, registry, e)).collect(),
+        serde_json::Value::Array(list) => {
+            list.iter().flat_map(|e| ids_of(r, registry, e)).collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -45,7 +47,13 @@ fn hover_name(r: &Run, item: i32, comps: &Compound) -> String {
     if let Some(Tag::String(n)) = comps.get("minecraft:custom_name") {
         return n.clone();
     }
-    let name = r.ctx.items.name(item).unwrap_or("").trim_start_matches("minecraft:").to_owned();
+    let name = r
+        .ctx
+        .items
+        .name(item)
+        .unwrap_or("")
+        .trim_start_matches("minecraft:")
+        .to_owned();
     let lang = &r.ctx.commands.lang;
     for kind in ["item", "block"] {
         let key = format!("{kind}.minecraft.{name}");
@@ -114,7 +122,10 @@ fn enchant(r: &mut Run) -> Result<i32> {
         if !supported.contains(&item) || !compatible {
             if targets.len() == 1 {
                 let name = hover_name(r, stack.item, &comps);
-                return Err(err("commands.enchant.failed.incompatible", vec![Tag::String(name)]));
+                return Err(err(
+                    "commands.enchant.failed.incompatible",
+                    vec![Tag::String(name)],
+                ));
             }
             continue;
         }
@@ -134,9 +145,17 @@ fn enchant(r: &mut Run) -> Result<i32> {
     if done == 0 {
         return Err(err("commands.enchant.failed", Vec::new()));
     }
-    let mut full = translate(&format!("enchantment.{}", id.replacen(':', ".", 1)), Vec::new());
+    let mut full = translate(
+        &format!("enchantment.{}", id.replacen(':', ".", 1)),
+        Vec::new(),
+    );
     if let Tag::Compound(c) = &mut full {
-        let cursed = r.ctx.commands.env.tag("minecraft:enchantment", "minecraft:curse").contains(&id);
+        let cursed = r
+            .ctx
+            .commands
+            .env
+            .tag("minecraft:enchantment", "minecraft:curse")
+            .contains(&id);
         c.insert("color", if cursed { "red" } else { "gray" });
         if level != 1 || max != 1 {
             let mut sp = Compound::new();
@@ -151,9 +170,15 @@ fn enchant(r: &mut Run) -> Result<i32> {
         }
     }
     let msg = if targets.len() == 1 {
-        translate("commands.enchant.success.single", vec![full, targets[0].display()])
+        translate(
+            "commands.enchant.success.single",
+            vec![full, targets[0].display()],
+        )
     } else {
-        translate("commands.enchant.success.multiple", vec![full, Tag::Int(done)])
+        translate(
+            "commands.enchant.success.multiple",
+            vec![full, Tag::Int(done)],
+        )
     };
     r.success(msg, true);
     Ok(done)
@@ -215,21 +240,39 @@ fn all_modifiers(r: &Run, uuid: u128, name: &str, game_mode: i32) -> Vec<Attribu
             _ => None,
         };
         if let Some((id, amount)) = creative {
-            mods.push(AttributeModifier { id: id.into(), amount, operation: 0 });
+            mods.push(AttributeModifier {
+                id: id.into(),
+                amount,
+                operation: 0,
+            });
         }
     }
-    if let Some(state) = lock(&r.ctx.rare).attributes.get(&uuid).and_then(|a| a.get(name)) {
-        mods.extend(state.modifiers.iter().map(|(id, amount, operation)| AttributeModifier {
-            id: id.clone(),
-            amount: *amount,
-            operation: *operation,
-        }));
+    if let Some(state) = lock(&r.ctx.rare)
+        .attributes
+        .get(&uuid)
+        .and_then(|a| a.get(name))
+    {
+        mods.extend(
+            state
+                .modifiers
+                .iter()
+                .map(|(id, amount, operation)| AttributeModifier {
+                    id: id.clone(),
+                    amount: *amount,
+                    operation: *operation,
+                }),
+        );
     }
     mods
 }
 
 fn compute(base: f64, mods: &[AttributeModifier], max: f64, min: f64) -> f64 {
-    let v: f64 = base + mods.iter().filter(|m| m.operation == 0).map(|m| m.amount).sum::<f64>();
+    let v: f64 = base
+        + mods
+            .iter()
+            .filter(|m| m.operation == 0)
+            .map(|m| m.amount)
+            .sum::<f64>();
     let mut x = v;
     for m in mods.iter().filter(|m| m.operation == 1) {
         x += v * m.amount;
@@ -253,7 +296,10 @@ fn attribute(r: &mut Run, path: &[&str]) -> Result<i32> {
         return Err(err("commands.attribute.failed.entity", vec![t.display()]));
     }
     let Some(&(_, default, max, min)) = ATTRIBUTES.iter().find(|a| a.0 == name) else {
-        return Err(err("commands.attribute.failed.no_attribute", vec![t.display(), label()]));
+        return Err(err(
+            "commands.attribute.failed.no_attribute",
+            vec![t.display(), label()],
+        ));
     };
     let uuid = t.uuid();
     let mode = match &t {
@@ -278,7 +324,10 @@ fn attribute(r: &mut Run, path: &[&str]) -> Result<i32> {
         ["get", ..] => {
             let v = compute(base(r), &all_modifiers(r, uuid, &name, mode), max, min);
             r.success(
-                translate("commands.attribute.value.get.success", vec![label(), t.display(), d(v)]),
+                translate(
+                    "commands.attribute.value.get.success",
+                    vec![label(), t.display(), d(v)],
+                ),
                 false,
             );
             v * scale(r)
@@ -286,7 +335,10 @@ fn attribute(r: &mut Run, path: &[&str]) -> Result<i32> {
         ["base", "get", ..] => {
             let v = base(r);
             r.success(
-                translate("commands.attribute.base_value.get.success", vec![label(), t.display(), d(v)]),
+                translate(
+                    "commands.attribute.base_value.get.success",
+                    vec![label(), t.display(), d(v)],
+                ),
                 false,
             );
             v * scale(r)
@@ -296,19 +348,35 @@ fn attribute(r: &mut Run, path: &[&str]) -> Result<i32> {
                 Some(mc_command::args::Arg::Double(v)) => *v,
                 _ => 0.0,
             };
-            lock(&r.ctx.rare).attributes.entry(uuid).or_default().entry(name.clone()).or_default().base = Some(v);
+            lock(&r.ctx.rare)
+                .attributes
+                .entry(uuid)
+                .or_default()
+                .entry(name.clone())
+                .or_default()
+                .base = Some(v);
             r.success(
-                translate("commands.attribute.base_value.set.success", vec![label(), t.display(), d(v)]),
+                translate(
+                    "commands.attribute.base_value.set.success",
+                    vec![label(), t.display(), d(v)],
+                ),
                 true,
             );
             1.0
         }
         ["base", "reset"] => {
-            if let Some(s) = lock(&r.ctx.rare).attributes.get_mut(&uuid).and_then(|a| a.get_mut(&name)) {
+            if let Some(s) = lock(&r.ctx.rare)
+                .attributes
+                .get_mut(&uuid)
+                .and_then(|a| a.get_mut(&name))
+            {
                 s.base = None;
             }
             r.success(
-                translate("commands.attribute.base_value.reset.success", vec![label(), t.display(), d(default)]),
+                translate(
+                    "commands.attribute.base_value.reset.success",
+                    vec![label(), t.display(), d(default)],
+                ),
                 true,
             );
             1.0
@@ -323,7 +391,9 @@ fn attribute(r: &mut Run, path: &[&str]) -> Result<i32> {
                 .iter()
                 .position(|o| path.last() == Some(o))
                 .unwrap_or(0) as i32;
-            let have = all_modifiers(r, uuid, &name, mode).iter().any(|m| m.id == id);
+            let have = all_modifiers(r, uuid, &name, mode)
+                .iter()
+                .any(|m| m.id == id);
             if have {
                 return Err(err(
                     "commands.attribute.failed.modifier_already_present",
@@ -377,7 +447,10 @@ fn attribute(r: &mut Run, path: &[&str]) -> Result<i32> {
         }
         ["modifier", "value", "get", ..] => {
             let id = full_id(&r.string("id").unwrap_or_default());
-            let Some(m) = all_modifiers(r, uuid, &name, mode).into_iter().find(|m| m.id == id) else {
+            let Some(m) = all_modifiers(r, uuid, &name, mode)
+                .into_iter()
+                .find(|m| m.id == id)
+            else {
                 return Err(err(
                     "commands.attribute.failed.no_modifier",
                     vec![label(), t.display(), Tag::from(id.as_str())],
@@ -394,7 +467,10 @@ fn attribute(r: &mut Run, path: &[&str]) -> Result<i32> {
         }
         _ => return Err(err("command.failed", Vec::new())),
     };
-    if rest[0] != "get" && !(rest[0] == "base" && rest[1] == "get") && !(rest[0] == "modifier" && rest[1] == "value") {
+    if rest[0] != "get"
+        && !(rest[0] == "base" && rest[1] == "get")
+        && !(rest[0] == "modifier" && rest[1] == "value")
+    {
         send_attribute(r, uuid, &name, default, mode);
     }
     Ok(result as i32)
@@ -411,13 +487,22 @@ fn send_attribute(r: &mut Run, uuid: u128, name: &str, default: f64, mode: i32) 
     let Some(entity_id) = lock(&r.ctx.players).get(&uuid).map(|p| p.entity_id) else {
         return;
     };
-    let attribute = r.ctx.data.builtin.id("minecraft:attribute", &format!("minecraft:{name}")).unwrap_or(0);
+    let attribute = r
+        .ctx
+        .data
+        .builtin
+        .id("minecraft:attribute", &format!("minecraft:{name}"))
+        .unwrap_or(0);
     let modifiers = all_modifiers(r, uuid, name, mode);
     r.out.events.push(Event::Attributes {
         uuid,
         packet: UpdateAttributes {
             entity_id,
-            attributes: vec![AttributeSnapshot { attribute, base, modifiers }],
+            attributes: vec![AttributeSnapshot {
+                attribute,
+                base,
+                modifiers,
+            }],
         },
     });
 }

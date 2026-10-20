@@ -1,9 +1,11 @@
-//! `cargo xtask worldgen-ref [--seed <n>] [--radius <chunks>]`: has a
+//! `cargo xtask worldgen-ref [--seed <n>] [--radius <chunks>]
+//! [--dimension nether|end] [--features] [--carvers] [--structures]`: has a
 //! vanilla server generate a world to compare our generator with. A data
 //! pack in the world takes every feature and carver out of every biome (and
 //! structures are off), so what is left is the terrain shape, aquifers, ore
 //! veins, surface and biomes. The chunks around 0, 0 are force-loaded, then
-//! the world is saved to `cache/vanilla-server/26.3-worldgen/<seed>/world`.
+//! the world is saved to `cache/vanilla-server/26.3-worldgen/<seed>/world`
+//! (`<seed>-nether`, `<seed>-end` for the other dimensions).
 
 use std::time::{Duration, Instant};
 
@@ -17,7 +19,9 @@ pub fn run(args: &[String]) -> Result<()> {
     let (mut seed, mut radius) = (12345i64, 7i32);
     let mut features = false;
     let mut structures = false;
+    let mut carvers = false;
     let (mut cx, mut cz) = (0i32, 0i32);
+    let mut dimension = String::from("overworld");
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = || {
@@ -30,6 +34,8 @@ pub fn run(args: &[String]) -> Result<()> {
             "--radius" => radius = value()?.parse()?,
             "--features" => features = true,
             "--structures" => structures = true,
+            "--carvers" => carvers = true,
+            "--dimension" => dimension = value()?,
             "--center" => {
                 cx = value()?.parse()?;
                 cz = it.next().context("--center needs x and z")?.parse()?;
@@ -39,10 +45,22 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     let root = crate::workspace_root();
     let data_root = root.join("cache/mcdata/26.3/data/minecraft/worldgen/biome");
+    let (dim_id, suffix) = match dimension.as_str() {
+        "overworld" => ("minecraft:overworld", ""),
+        "nether" | "the_nether" => ("minecraft:the_nether", "-nether"),
+        "end" | "the_end" => ("minecraft:the_end", "-end"),
+        other => bail!("unknown dimension `{other}`"),
+    };
     let dir = root.join(format!(
-        "cache/vanilla-server/26.3-worldgen/{seed}{}{}",
+        "cache/vanilla-server/26.3-worldgen/{seed}{}{}{}{suffix}{}",
         if features { "-features" } else { "" },
-        if structures { "-structures" } else { "" }
+        if carvers { "-carvers" } else { "" },
+        if structures { "-structures" } else { "" },
+        if (cx, cz) == (0, 0) {
+            String::new()
+        } else {
+            format!("-at-{cx}-{cz}")
+        }
     ));
     let world = dir.join("world");
     let _ = std::fs::remove_dir_all(&world);
@@ -60,7 +78,9 @@ pub fn run(args: &[String]) -> Result<()> {
         if !features {
             biome["features"] = serde_json::json!([]);
         }
-        biome["carvers"] = serde_json::json!([]);
+        if !carvers {
+            biome["carvers"] = serde_json::json!([]);
+        }
         std::fs::write(
             biomes.join(path.file_name().context("biome file")?),
             serde_json::to_string(&biome)?,
@@ -78,7 +98,13 @@ pub fn run(args: &[String]) -> Result<()> {
     let result = (|| -> Result<()> {
         let (x0, x1) = ((cx - radius) * 16, (cx + radius) * 16 + 15);
         let (z0, z1) = ((cz - radius) * 16, (cz + radius) * 16 + 15);
-        server.command(&format!("forceload add {x0} {z0} {x1} {z1}"), true)?;
+        // No random ticks: plants would grow and nylium decay while the
+        // chunks wait, which is not generation.
+        server.command("gamerule random_tick_speed 0", true)?;
+        server.command(
+            &format!("execute in {dim_id} run forceload add {x0} {z0} {x1} {z1}"),
+            true,
+        )?;
         // Let the chunks generate.
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(20 + (radius as u64) * 6) {

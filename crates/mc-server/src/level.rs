@@ -1,7 +1,6 @@
 //! The world as block logic (`mc_tick`) sees it, collecting what changed so
 //! it can be sent to players.
 
-
 use mc_protocol::Position;
 use mc_tick::{BlockPos, Level};
 
@@ -98,7 +97,10 @@ impl<'a> WorldLevel<'a> {
     /// What changed and the entities block logic created.
     pub fn finish(mut self) -> (Vec<(Position, u32)>, Vec<mc_entity::Entity>) {
         self.send_light();
-        (std::mem::take(&mut self.changes), std::mem::take(&mut self.spawned))
+        (
+            std::mem::take(&mut self.changes),
+            std::mem::take(&mut self.spawned),
+        )
     }
 }
 

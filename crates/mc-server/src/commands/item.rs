@@ -28,7 +28,11 @@ pub(super) enum Place {
     Window { uuid: u128, idx: usize },
     /// The stack on a player's cursor.
     Carried(u128),
-    Block { pos: Position, kind: Kind, idx: usize },
+    Block {
+        pos: Position,
+        kind: Kind,
+        idx: usize,
+    },
     /// The item of an item entity.
     ItemEntity(u128),
     /// A slot that exists but is not kept (a mob's equipment).
@@ -116,7 +120,12 @@ impl Place {
                 true
             }
             Place::Block { pos, kind, idx } => {
-                containers::put_with(ctx, *pos, *kind, &[(*idx, stack, Some(Tag::Compound(comps)))]);
+                containers::put_with(
+                    ctx,
+                    *pos,
+                    *kind,
+                    &[(*idx, stack, Some(Tag::Compound(comps)))],
+                );
                 true
             }
             Place::ItemEntity(uuid) => {
@@ -143,17 +152,52 @@ impl Place {
 /// Entity kinds that hold nothing in equipment slots.
 fn is_living(kind: &str) -> bool {
     const NOT: &[&str] = &[
-        "item", "marker", "area_effect_cloud", "tnt", "falling_block", "arrow", "spectral_arrow",
-        "trident", "experience_orb", "painting", "item_frame", "glow_item_frame", "text_display",
-        "block_display", "item_display", "interaction", "lightning_bolt", "snowball", "egg",
-        "ender_pearl", "fireball", "small_fireball", "wind_charge", "breeze_wind_charge",
-        "fishing_bobber", "end_crystal", "eye_of_ender", "firework_rocket", "llama_spit",
-        "shulker_bullet", "wither_skull", "dragon_fireball", "experience_bottle", "potion",
-        "splash_potion", "lingering_potion", "evoker_fangs", "leash_knot", "oak_boat",
+        "item",
+        "marker",
+        "area_effect_cloud",
+        "tnt",
+        "falling_block",
+        "arrow",
+        "spectral_arrow",
+        "trident",
+        "experience_orb",
+        "painting",
+        "item_frame",
+        "glow_item_frame",
+        "text_display",
+        "block_display",
+        "item_display",
+        "interaction",
+        "lightning_bolt",
+        "snowball",
+        "egg",
+        "ender_pearl",
+        "fireball",
+        "small_fireball",
+        "wind_charge",
+        "breeze_wind_charge",
+        "fishing_bobber",
+        "end_crystal",
+        "eye_of_ender",
+        "firework_rocket",
+        "llama_spit",
+        "shulker_bullet",
+        "wither_skull",
+        "dragon_fireball",
+        "experience_bottle",
+        "potion",
+        "splash_potion",
+        "lingering_potion",
+        "evoker_fangs",
+        "leash_knot",
+        "oak_boat",
     ];
     let short = kind.trim_start_matches("minecraft:");
-    !NOT.contains(&short) && !short.ends_with("_boat") && !short.ends_with("_raft")
-        && !short.ends_with("_minecart") && short != "minecart"
+    !NOT.contains(&short)
+        && !short.ends_with("_boat")
+        && !short.ends_with("_raft")
+        && !short.ends_with("_minecart")
+        && short != "minecart"
 }
 
 /// The place vanilla's slot number `n` is for this entity, if it has one.
@@ -251,10 +295,15 @@ pub(super) fn shown(ctx: &ServerContext, name: &str, comps: &Compound) -> Tag {
 }
 
 /// Runs the items through an inline modifier; the first stack that comes out.
-pub(super) fn modified(ctx: &ServerContext, modifier: &serde_json::Value, held: &Held) -> Option<Held> {
+pub(super) fn modified(
+    ctx: &ServerContext,
+    modifier: &serde_json::Value,
+    held: &Held,
+) -> Option<Held> {
     let mut drops = vec![to_drop(held)];
     let cx = LootCtx::default();
-    ctx.loot.modify(&super::loot::Env(ctx), &cx, modifier, &mut drops);
+    ctx.loot
+        .modify(&super::loot::Env(ctx), &cx, modifier, &mut drops);
     drops.iter().find_map(from_drop)
 }
 
@@ -303,7 +352,9 @@ pub(super) fn tag_json(t: &Tag) -> serde_json::Value {
         Tag::Double(v) => Value::from(*v),
         Tag::String(s) => Value::from(s.clone()),
         Tag::List(l) => Value::Array(l.iter().map(tag_json).collect()),
-        Tag::Compound(c) => Value::Object(c.iter().map(|(k, v)| (k.to_owned(), tag_json(v))).collect()),
+        Tag::Compound(c) => {
+            Value::Object(c.iter().map(|(k, v)| (k.to_owned(), tag_json(v))).collect())
+        }
         Tag::ByteArray(a) => Value::Array(a.iter().map(|v| Value::from(*v)).collect()),
         Tag::IntArray(a) => Value::Array(a.iter().map(|v| Value::from(*v)).collect()),
         Tag::LongArray(a) => Value::Array(a.iter().map(|v| Value::from(*v)).collect()),
@@ -439,10 +490,18 @@ fn item(r: &mut Run, mode: Mode, block: bool, rest: &[&str]) -> Result<i32> {
         last_places = places;
     }
     if touched.is_empty() {
-        let places = if targets.len() == 1 { last_places } else { Vec::new() };
+        let places = if targets.len() == 1 {
+            last_places
+        } else {
+            Vec::new()
+        };
         return Err(failure(r, mode, with_known, &slots, &places, &known));
     }
-    let word = if mode == Mode::Modify { "modify" } else { "replace" };
+    let word = if mode == Mode::Modify {
+        "modify"
+    } else {
+        "replace"
+    };
     let msg = if touched.len() == 1 {
         let mut args = vec![Tag::Int(touched[0].1), touched[0].0.display()];
         let key = if with_known && mode != Mode::Modify {
@@ -483,7 +542,10 @@ fn failure(
             Some(Some((s, _))) => format!("{} {}", s.count, r.ctx.items.name(s.item).unwrap_or("")),
             _ => "0 minecraft:air".to_owned(),
         };
-        return err("commands.item.target.failed.known_item", vec![str_tag(&text)]);
+        return err(
+            "commands.item.target.failed.known_item",
+            vec![str_tag(&text)],
+        );
     }
     err("commands.item.target.failed", Vec::new())
 }
@@ -499,12 +561,17 @@ fn source_stacks(r: &mut Run, rest: &[&str]) -> Result<Vec<Option<Held>>> {
         }
         _ => {
             let sources = r.targets("source", false)?;
-            let t = sources.first().ok_or_else(|| err("argument.entity.notfound.entity", Vec::new()))?;
+            let t = sources
+                .first()
+                .ok_or_else(|| err("argument.entity.notfound.entity", Vec::new()))?;
             entity_places(r.ctx, t, &slots)
         }
     };
     if places.is_empty() {
-        return Err(err("commands.item.source.no_such_slot", vec![str_tag(&slots)]));
+        return Err(err(
+            "commands.item.source.no_such_slot",
+            vec![str_tag(&slots)],
+        ));
     }
     Ok(places.iter().map(|p| p.get(r.ctx)).collect())
 }

@@ -57,9 +57,15 @@ fn features(ctx: &ServerContext) -> Option<&Features> {
                 height: ctx.world.height as i32,
                 sea_level: 63,
             };
-            crate::generation::features_with(&ctx.data, shapes, &biomes, heights)
-                .map_err(|e| tracing::warn!("no features for /place: {e}"))
-                .ok()
+            crate::generation::features_with(
+                &ctx.data,
+                shapes,
+                &biomes,
+                heights,
+                mc_worldgen::generator::Dimension::Overworld,
+            )
+            .map_err(|e| tracing::warn!("no features for /place: {e}"))
+            .ok()
         })
         .as_ref()
 }
@@ -373,7 +379,10 @@ fn jigsaw(r: &mut Run) -> Result<i32> {
     };
     let features = features(r.ctx);
     let Some(features) = features.filter(|f| f.structures.has_pool(&pool)) else {
-        return Err(err("commands.place.jigsaw.invalid", vec![Tag::String(pool)]));
+        return Err(err(
+            "commands.place.jigsaw.invalid",
+            vec![Tag::String(pool)],
+        ));
     };
     let mut live = Live {
         ctx: r.ctx,

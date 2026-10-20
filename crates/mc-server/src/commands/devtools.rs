@@ -62,7 +62,11 @@ fn world_age(r: &Run) -> i64 {
 fn profiler(r: &mut Run, name: &str, start: bool) -> Result<i32> {
     let age = world_age(r);
     let mut d = lock(dev());
-    let slot = if name == "debug" { &mut d.debug } else { &mut d.perf };
+    let slot = if name == "debug" {
+        &mut d.debug
+    } else {
+        &mut d.perf
+    };
     if start {
         if slot.is_some() {
             return Err(err(&format!("commands.{name}.alreadyRunning"), Vec::new()));
@@ -90,7 +94,11 @@ fn profiler(r: &mut Run, name: &str, start: bool) -> Result<i32> {
     );
     if name == "perf" {
         let file = chrono::Local::now().format("%Y-%m-%d_%H_%M_%S-world-26_3.zip");
-        plain(r, "commands.perf.reportSaved", vec![str_tag(&file.to_string())]);
+        plain(
+            r,
+            "commands.perf.reportSaved",
+            vec![str_tag(&file.to_string())],
+        );
     }
     Ok(ticks as i32)
 }
@@ -121,7 +129,11 @@ fn jfr(r: &mut Run, start: bool) -> Result<i32> {
 
 fn block_pos(r: &Run) -> [i32; 3] {
     let p = r.src.pos;
-    [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32]
+    [
+        p[0].floor() as i32,
+        p[1].floor() as i32,
+        p[2].floor() as i32,
+    ]
 }
 
 /// The registered test instances a selector names.
@@ -284,7 +296,11 @@ fn test(r: &mut Run, rest: &[&str]) -> Result<i32> {
                     false,
                 );
             }
-            plain(r, "commands.test.locate.done", vec![Tag::Int(found.len() as i32)]);
+            plain(
+                r,
+                "commands.test.locate.done",
+                vec![Tag::Int(found.len() as i32)],
+            );
             Ok(found.len() as i32)
         }
         ["pos", ..] => {
@@ -304,7 +320,10 @@ fn test(r: &mut Run, rest: &[&str]) -> Result<i32> {
             let var = r.string("var").unwrap_or_else(|| "pos".into());
             let mut copy = Compound::new();
             copy.insert("action", "copy_to_clipboard");
-            copy.insert("value", Tag::String(format!("final BlockPos {var} = new BlockPos(0, 0, 0);")));
+            copy.insert(
+                "value",
+                Tag::String(format!("final BlockPos {var} = new BlockPos(0, 0, 0);")),
+            );
             let mut tip = Compound::new();
             tip.insert("translate", "commands.test.coordinates.copy");
             let mut hover = Compound::new();
@@ -312,7 +331,10 @@ fn test(r: &mut Run, rest: &[&str]) -> Result<i32> {
             hover.insert("value", Tag::Compound(tip));
             let mut c = Compound::new();
             c.insert("translate", "commands.test.coordinates");
-            c.insert("with", Tag::List(vec![Tag::Int(0), Tag::Int(0), Tag::Int(0)]));
+            c.insert(
+                "with",
+                Tag::List(vec![Tag::Int(0), Tag::Int(0), Tag::Int(0)]),
+            );
             c.insert("color", "green");
             c.insert("bold", Tag::Byte(1));
             c.insert("click_event", Tag::Compound(copy));
@@ -422,7 +444,11 @@ fn batch(r: &mut Run, rotation: i32) {
 /// Every test passes at once. `times` 0 repeats for ever in vanilla; once
 /// is done here.
 fn run_tests(r: &mut Run, ids: &[String], times: i32, until_failed: bool) -> Result<i32> {
-    plain(r, "commands.test.run.running", vec![Tag::Int(ids.len() as i32)]);
+    plain(
+        r,
+        "commands.test.run.running",
+        vec![Tag::Int(ids.len() as i32)],
+    );
     let looped = times != 1 || until_failed;
     let rounds = if times > 0 { times } else { 1 };
     if !looped {

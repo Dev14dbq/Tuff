@@ -67,7 +67,10 @@ fn book(ctx: &ServerContext) -> Arc<Book> {
     }
     let pack = ctx.data.data_pack();
     let mut b = Book::default();
-    for id in pack.registry_entries("minecraft:advancement").unwrap_or_default() {
+    for id in pack
+        .registry_entries("minecraft:advancement")
+        .unwrap_or_default()
+    {
         let Ok(v) = pack.read_entry("minecraft:advancement", &id) else {
             continue;
         };
@@ -87,7 +90,16 @@ fn book(ctx: &ServerContext) -> Arc<Book> {
             .into_iter()
             .flatten()
             .filter(|(_, c)| c["trigger"].as_str() == Some("minecraft:recipe_unlocked"))
-            .filter_map(|(k, c)| Some((k.clone(), full_id(c["conditions"]["recipe"].as_str().or(c["conditions"]["recipes"].as_str())?))))
+            .filter_map(|(k, c)| {
+                Some((
+                    k.clone(),
+                    full_id(
+                        c["conditions"]["recipe"]
+                            .as_str()
+                            .or(c["conditions"]["recipes"].as_str())?,
+                    ),
+                ))
+            })
             .collect();
         let requirements = match v["requirements"].as_array() {
             Some(groups) => groups
@@ -127,7 +139,10 @@ fn book(ctx: &ServerContext) -> Arc<Book> {
         }
         b.advs.insert(id, adv);
     }
-    for id in pack.registry_entries("minecraft:recipe").unwrap_or_default() {
+    for id in pack
+        .registry_entries("minecraft:recipe")
+        .unwrap_or_default()
+    {
         let kind = pack
             .read_entry("minecraft:recipe", &id)
             .ok()
@@ -158,7 +173,11 @@ fn name(id: &str, adv: &Adv) -> Tag {
     let (Some(title), Some(description)) = (&adv.title, &adv.description) else {
         return Tag::String(id.to_owned());
     };
-    let color = if adv.frame == "challenge" { "dark_purple" } else { "green" };
+    let color = if adv.frame == "challenge" {
+        "dark_purple"
+    } else {
+        "green"
+    };
     let mut hover_value = title.clone();
     if let Tag::Compound(c) = &mut hover_value {
         c.insert("color", color);
@@ -195,7 +214,10 @@ fn rewarded(r: &mut Run, b: &Book, p: &Target, id: &str, adv: &Adv) {
             })
         };
         if let Some(packet) = packet {
-            r.out.events.push(Event::Direct { uuid, packet: Direct::Experience(packet) });
+            r.out.events.push(Event::Direct {
+                uuid,
+                packet: Direct::Experience(packet),
+            });
         }
     }
     if adv.title.is_some() && adv.announce && r.ctx.game_rule_bool("show_advancement_messages") {
@@ -210,7 +232,11 @@ fn rewarded(r: &mut Run, b: &Book, p: &Target, id: &str, adv: &Adv) {
         );
         let everyone: Vec<u128> = lock(&r.ctx.players).keys().copied().collect();
         for u in everyone {
-            r.out.events.push(Event::Message { uuid: u, line: line.clone(), overlay: false });
+            r.out.events.push(Event::Message {
+                uuid: u,
+                line: line.clone(),
+                overlay: false,
+            });
         }
     }
 }
@@ -243,7 +269,13 @@ fn tick_awards(r: &mut Run, b: &Book, p: &Target) {
         }
         let (was, now) = {
             let mut st = lock(&r.ctx.rare);
-            let have = st.progress.done.entry(p.uuid()).or_default().entry(id.clone()).or_default();
+            let have = st
+                .progress
+                .done
+                .entry(p.uuid())
+                .or_default()
+                .entry(id.clone())
+                .or_default();
             let was = adv.complete(Some(have));
             have.extend(adv.ticks.iter().cloned());
             (was, adv.complete(Some(have)))
@@ -258,7 +290,13 @@ fn grant(r: &mut Run, b: &Book, p: &Target, id: &str, only: Option<&str>) -> boo
     let adv = &b.advs[id];
     let (was, changed) = {
         let mut st = lock(&r.ctx.rare);
-        let have = st.progress.done.entry(p.uuid()).or_default().entry(id.to_owned()).or_default();
+        let have = st
+            .progress
+            .done
+            .entry(p.uuid())
+            .or_default()
+            .entry(id.to_owned())
+            .or_default();
         let was = adv.complete(Some(have));
         let before = have.len();
         match only {
@@ -285,7 +323,12 @@ fn grant(r: &mut Run, b: &Book, p: &Target, id: &str, only: Option<&str>) -> boo
 fn revoke(r: &mut Run, b: &Book, p: &Target, id: &str, only: Option<&str>) -> bool {
     let _ = b;
     let mut st = lock(&r.ctx.rare);
-    let Some(have) = st.progress.done.get_mut(&p.uuid()).and_then(|d| d.get_mut(id)) else {
+    let Some(have) = st
+        .progress
+        .done
+        .get_mut(&p.uuid())
+        .and_then(|d| d.get_mut(id))
+    else {
         return false;
     };
     let before = have.len();
@@ -300,7 +343,9 @@ fn revoke(r: &mut Run, b: &Book, p: &Target, id: &str, only: Option<&str>) -> bo
 
 pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
     Some(match path {
-        ["advancement", action @ ("grant" | "revoke"), ..] => advancement(r, path, *action == "grant"),
+        ["advancement", action @ ("grant" | "revoke"), ..] => {
+            advancement(r, path, *action == "grant")
+        }
         ["recipe", action @ ("give" | "take"), ..] => recipe(r, *action == "give"),
         _ => return None,
     })
@@ -342,7 +387,10 @@ fn advancement(r: &mut Run, path: &[&str], giving: bool) -> Result<i32> {
     if let Some(id) = &id
         && !b.advs.contains_key(id)
     {
-        return Err(err("advancement.advancementNotFound", vec![Tag::from(id.as_str())]));
+        return Err(err(
+            "advancement.advancementNotFound",
+            vec![Tag::from(id.as_str())],
+        ));
     }
     let criterion = r.string("criterion");
     if let (Some(id), Some(c)) = (&id, &criterion)
@@ -370,9 +418,16 @@ fn advancement(r: &mut Run, path: &[&str], giving: bool) -> Result<i32> {
             count += i32::from(changed);
         }
     }
-    let who = if players.len() == 1 { ("one", players[0].display()) } else { ("many", Tag::Int(players.len() as i32)) };
+    let who = if players.len() == 1 {
+        ("one", players[0].display())
+    } else {
+        ("many", Tag::Int(players.len() as i32))
+    };
     let (shape, mut args) = match (&id, &criterion) {
-        (Some(id), Some(c)) => ("criterion", vec![Tag::from(c.as_str()), name(id, &b.advs[id])]),
+        (Some(id), Some(c)) => (
+            "criterion",
+            vec![Tag::from(c.as_str()), name(id, &b.advs[id])],
+        ),
         (Some(id), None) if mode == "only" => ("one", vec![name(id, &b.advs[id])]),
         _ => ("many", vec![Tag::Int(ids.len() as i32)]),
     };
@@ -407,7 +462,12 @@ fn recipe(r: &mut Run, giving: bool) -> Result<i32> {
             let changed = if giving {
                 unlock_recipe(r, &b, p, &id)
             } else {
-                lock(&r.ctx.rare).progress.known.entry(p.uuid()).or_default().remove(&id)
+                lock(&r.ctx.rare)
+                    .progress
+                    .known
+                    .entry(p.uuid())
+                    .or_default()
+                    .remove(&id)
             };
             count += i32::from(changed);
         }
@@ -417,7 +477,10 @@ fn recipe(r: &mut Run, giving: bool) -> Result<i32> {
         return Err(err(&format!("commands.recipe.{verb}.failed"), Vec::new()));
     }
     let msg = if players.len() == 1 {
-        translate(&format!("commands.recipe.{verb}.success.single"), vec![Tag::Int(count), players[0].display()])
+        translate(
+            &format!("commands.recipe.{verb}.success.single"),
+            vec![Tag::Int(count), players[0].display()],
+        )
     } else {
         translate(
             &format!("commands.recipe.{verb}.success.multiple"),

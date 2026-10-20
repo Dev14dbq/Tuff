@@ -48,7 +48,11 @@ fn commands_reach_a_handler() {
             unhandled.push(path.to_owned());
         }
     }
-    eprintln!("COVERAGE total {total}, unhandled {}, unparsed {}", unhandled.len(), unparsed.len());
+    eprintln!(
+        "COVERAGE total {total}, unhandled {}, unparsed {}",
+        unhandled.len(),
+        unparsed.len()
+    );
     for p in &unhandled {
         eprintln!("UNHANDLED {p}");
     }

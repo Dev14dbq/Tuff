@@ -86,9 +86,7 @@ fn n(v: usize) -> Tag {
 /// The player entity id of a target.
 fn entity_id(r: &Run, t: &Target) -> i32 {
     match t {
-        Target::Player { uuid, .. } => lock(&r.ctx.players)
-            .get(uuid)
-            .map_or(0, |p| p.entity_id),
+        Target::Player { uuid, .. } => lock(&r.ctx.players).get(uuid).map_or(0, |p| p.entity_id),
         Target::Entity { id, .. } => *id,
     }
 }
@@ -126,7 +124,11 @@ fn teammsg(r: &mut Run) -> Result<i32> {
     let mut sends = Vec::new();
     for p in lock(&r.ctx.players).values() {
         if members.contains(&p.profile.name) {
-            let kind = if p.profile.uuid == me { outgoing } else { incoming };
+            let kind = if p.profile.uuid == me {
+                outgoing
+            } else {
+                incoming
+            };
             sends.push((p.profile.uuid, kind));
         }
     }
@@ -346,10 +348,17 @@ fn posteffect(r: &mut Run, rest: &[&str]) -> Result<i32> {
         }
     }
     if changed.is_empty() {
-        return Err(err(&format!("commands.posteffect.{kind}.failed"), Vec::new()));
+        return Err(err(
+            &format!("commands.posteffect.{kind}.failed"),
+            Vec::new(),
+        ));
     }
     for (p, ids) in &changed {
-        direct(r, p.uuid(), Direct::PostEffects(PostEffects { ids: ids.clone() }));
+        direct(
+            r,
+            p.uuid(),
+            Direct::PostEffects(PostEffects { ids: ids.clone() }),
+        );
     }
     let who = if changed.len() == 1 {
         ("single", changed[0].0.display())
@@ -362,7 +371,10 @@ fn posteffect(r: &mut Run, rest: &[&str]) -> Result<i32> {
     }
     args.push(who.1);
     r.success(
-        translate(&format!("commands.posteffect.{kind}.success.{}", who.0), args),
+        translate(
+            &format!("commands.posteffect.{kind}.success.{}", who.0),
+            args,
+        ),
         true,
     );
     Ok(changed.len() as i32)
@@ -401,9 +413,16 @@ fn waypoint_list(r: &mut Run) -> Result<i32> {
                 .waypoints
                 .get(&t.uuid())
                 .and_then(|w| w.color.as_deref())
-                .map_or_else(|| "#FFFFFF".to_owned(), |c| {
-                    if c.starts_with('#') { c.to_owned() } else { color_rgb(c) }
-                });
+                .map_or_else(
+                    || "#FFFFFF".to_owned(),
+                    |c| {
+                        if c.starts_with('#') {
+                            c.to_owned()
+                        } else {
+                            color_rgb(c)
+                        }
+                    },
+                );
             let [x, y, z] = t.pos().map(|v| v.floor() as i32);
             let mut click = Compound::new();
             click.insert("action", "suggest_command");
@@ -720,7 +739,11 @@ fn resolve_named(r: &Run, registry: &str, v: &serde_json::Value, depth: u32) -> 
                 .map(|(k, e)| (k.clone(), resolve_named(r, registry, e, depth + 1)))
                 .collect(),
         ),
-        Value::Array(a) => Value::Array(a.iter().map(|e| resolve_named(r, registry, e, depth + 1)).collect()),
+        Value::Array(a) => Value::Array(
+            a.iter()
+                .map(|e| resolve_named(r, registry, e, depth + 1))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }

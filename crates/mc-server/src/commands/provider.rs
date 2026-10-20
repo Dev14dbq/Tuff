@@ -45,9 +45,16 @@ fn check(f: f32) -> Out {
 /// Evaluates `v`; `float` says which kind the provider is.
 pub fn eval(v: &Value, float: bool) -> Out {
     if let Some(n) = v.as_f64() {
-        return Ok(if float { Num::Float(n as f32) } else { Num::Int(n as i32) });
+        return Ok(if float {
+            Num::Float(n as f32)
+        } else {
+            Num::Int(n as i32)
+        });
     }
-    let Some(kind) = v["type"].as_str().map(|t| t.trim_start_matches("minecraft:")) else {
+    let Some(kind) = v["type"]
+        .as_str()
+        .map(|t| t.trim_start_matches("minecraft:"))
+    else {
         return Err(Failure::Unknown);
     };
     let sub = |k: &str| eval(&v[k], float);
@@ -60,7 +67,9 @@ pub fn eval(v: &Value, float: bool) -> Out {
     };
     let int2 = |f: &dyn Fn(i32, i32) -> Option<i32>, g: &dyn Fn(f32, f32) -> f32| -> Out {
         match (sub("left")?, sub("right")?) {
-            (Num::Int(a), Num::Int(b)) => f(a, b).map(Num::Int).map_or_else(|| invalid("/ by zero"), Ok),
+            (Num::Int(a), Num::Int(b)) => f(a, b)
+                .map(Num::Int)
+                .map_or_else(|| invalid("/ by zero"), Ok),
             (a, b) => check(g(float_of(a), float_of(b))),
         }
     };
@@ -73,14 +82,22 @@ pub fn eval(v: &Value, float: bool) -> Out {
                 let mut acc: i32 = if add { 0 } else { 1 };
                 for n in items {
                     if let Num::Int(i) = n {
-                        acc = if add { acc.wrapping_add(i) } else { acc.wrapping_mul(i) };
+                        acc = if add {
+                            acc.wrapping_add(i)
+                        } else {
+                            acc.wrapping_mul(i)
+                        };
                     }
                 }
                 Num::Int(acc)
             } else {
                 let mut acc: f32 = if add { 0.0 } else { 1.0 };
                 for n in items {
-                    acc = if add { acc + float_of(n) } else { acc * float_of(n) };
+                    acc = if add {
+                        acc + float_of(n)
+                    } else {
+                        acc * float_of(n)
+                    };
                 }
                 return check(acc);
             }
@@ -92,15 +109,18 @@ pub fn eval(v: &Value, float: bool) -> Out {
         "mod" => return int2(&|a, b| (b != 0).then(|| a.wrapping_rem(b)), &|a, b| a % b),
         "floor_div" => {
             return int2(
-                &|a, b| (b != 0).then(|| a.wrapping_div_euclid(b) - i32::from(b < 0 && a.rem_euclid(b) != 0)),
+                &|a, b| {
+                    (b != 0).then(|| {
+                        a.wrapping_div_euclid(b) - i32::from(b < 0 && a.rem_euclid(b) != 0)
+                    })
+                },
                 &|a, b| (a / b).floor(),
             );
         }
         "floor_mod" => {
-            return int2(
-                &|a, b| (b != 0).then(|| ((a % b) + b) % b),
-                &|a, b| a - (a / b).floor() * b,
-            );
+            return int2(&|a, b| (b != 0).then(|| ((a % b) + b) % b), &|a, b| {
+                a - (a / b).floor() * b
+            });
         }
         "min" | "max" => {
             let items = list("inputs")?;
@@ -118,7 +138,11 @@ pub fn eval(v: &Value, float: bool) -> Out {
             }
             let sum: f32 = items.iter().map(|n| float_of(*n)).sum();
             let avg = sum / items.len() as f32;
-            if float { Num::Float(avg) } else { Num::Int(avg as i32) }
+            if float {
+                Num::Float(avg)
+            } else {
+                Num::Int(avg as i32)
+            }
         }
         "abs" => match sub("input")? {
             Num::Int(i) => Num::Int(i.wrapping_abs()),
@@ -130,7 +154,11 @@ pub fn eval(v: &Value, float: bool) -> Out {
         },
         "pow" => {
             let r = f64::from(float_of(sub("base")?)).powf(f64::from(float_of(sub("exponent")?)));
-            if float { return check(r as f32) } else { Num::Int(r as i32) }
+            if float {
+                return check(r as f32);
+            } else {
+                Num::Int(r as i32)
+            }
         }
         "sqrt" => return check(float_of(sub("input")?).sqrt()),
         "sin" => return check(float_of(sub("input")?).sin()),
@@ -164,7 +192,11 @@ pub fn eval(v: &Value, float: bool) -> Out {
             let hits = (0..n.max(0))
                 .filter(|_| (random_u64() as f64 / u64::MAX as f64) < p)
                 .count() as i32;
-            if float { Num::Float(hits as f32) } else { Num::Int(hits) }
+            if float {
+                Num::Float(hits as f32)
+            } else {
+                Num::Int(hits)
+            }
         }
         _ => return Err(Failure::Unknown),
     })

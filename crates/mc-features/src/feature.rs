@@ -12,13 +12,13 @@ use mc_worldgen::random::RandomSource;
 use serde_json::Value;
 
 use crate::blocks::Facts;
-use crate::misc;
 use crate::placement::{Modifier, Placed};
 use crate::rand::WorldgenRandom;
 use crate::registry::Features;
 use crate::state::{Named, StateProvider};
 use crate::tree::{FallenTree, Tree};
 use crate::{P, Region};
+use crate::{end, misc, nether};
 
 /// What placing needs besides the region.
 #[derive(Clone, Copy, Debug)]
@@ -46,6 +46,8 @@ pub enum Feature {
     Tree(Box<Tree>),
     FallenTree(Box<FallenTree>),
     Other(Box<misc::Misc>),
+    Nether(Box<nether::Nether>),
+    End(Box<end::End>),
     /// A type we do not generate yet.
     Unsupported(String),
 }
@@ -253,7 +255,12 @@ impl<'a> Loader<'a> {
             "overlay" => Some(Feature::Overlay(list("features"))),
             "tree" => Tree::parse(v, self).map(|t| Feature::Tree(Box::new(t))),
             "fallen_tree" => FallenTree::parse(v, self).map(|t| Feature::FallenTree(Box::new(t))),
-            _ => misc::Misc::parse(ty, v, self).map(|m| Feature::Other(Box::new(m))),
+            _ => misc::Misc::parse(ty, v, self)
+                .map(|m| Feature::Other(Box::new(m)))
+                .or_else(|| {
+                    nether::Nether::parse(ty, v, self).map(|m| Feature::Nether(Box::new(m)))
+                })
+                .or_else(|| end::End::parse(ty, v, self).map(|m| Feature::End(Box::new(m)))),
         };
         parsed.unwrap_or_else(|| {
             self.note(ty);
@@ -351,6 +358,8 @@ impl Feature {
             Feature::Tree(t) => t.place(cx, region, r, p),
             Feature::FallenTree(t) => t.place(cx, region, r, p),
             Feature::Other(m) => m.place(cx, region, r, p),
+            Feature::Nether(m) => m.place(cx, region, r, p),
+            Feature::End(m) => m.place(cx, region, r, p),
         }
     }
 }

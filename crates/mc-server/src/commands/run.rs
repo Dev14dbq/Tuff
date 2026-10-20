@@ -12,7 +12,9 @@ use mc_protocol::packets::play::{ItemStack, TickingState, TickingStep};
 use super::target::{self, Target, player_name};
 use super::world::{apply, in_world, put_block_data};
 use super::{Result, Run, Src, Who, data, execute};
-use super::{bossbar, functions, gear, living, place, places, progress, rare, scoreboard, scores, team};
+use super::{
+    bossbar, functions, gear, living, place, places, progress, rare, scoreboard, scores, team,
+};
 use crate::context::{Event, ServerContext};
 use crate::rules;
 use crate::tick::lock;

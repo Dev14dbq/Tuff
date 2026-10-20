@@ -507,7 +507,17 @@ pub fn assemble_at(
     );
     let mut pieces = vec![start];
     if max_depth > 0 {
-        expand(s, r, ground, &mut pieces, max_depth, false, 128, (min_y, max_y), center);
+        expand(
+            s,
+            r,
+            ground,
+            &mut pieces,
+            max_depth,
+            false,
+            128,
+            (min_y, max_y),
+            center,
+        );
     }
     Ok(pieces)
 }

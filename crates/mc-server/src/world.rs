@@ -303,9 +303,14 @@ impl World {
                 let features = crate::generation::features(data, shapes, &biome_ids, &generator)?;
                 let air = state(data, "minecraft:air")?;
                 let plains = biome_ids.get("minecraft:plains").copied().unwrap_or(0);
-                let pipeline = Arc::new(crate::pipeline::Pipeline::new(
-                    generator, features, seed, air, plains,
-                ));
+                let fast_lava = crate::generation::fast_lava(
+                    data,
+                    mc_worldgen::generator::Dimension::Overworld,
+                );
+                let pipeline = Arc::new(
+                    crate::pipeline::Pipeline::new(generator, features, seed, air, plains)
+                        .with_fast_lava(fast_lava),
+                );
                 let early = Arc::clone(&pipeline);
                 std::thread::spawn(move || early.prepare());
                 Some(pipeline)
@@ -689,12 +694,17 @@ impl World {
             return Vec::new();
         }
         // Light moves at most 15 blocks from a change: one chunk around.
-        let min = ps.iter().fold((i32::MAX, i32::MAX), |m, (p, _)| (m.0.min((p.x >> 4) - 1), m.1.min((p.z >> 4) - 1)));
-        let max = ps.iter().fold((i32::MIN, i32::MIN), |m, (p, _)| (m.0.max((p.x >> 4) + 1), m.1.max((p.z >> 4) + 1)));
+        let min = ps.iter().fold((i32::MAX, i32::MAX), |m, (p, _)| {
+            (m.0.min((p.x >> 4) - 1), m.1.min((p.z >> 4) - 1))
+        });
+        let max = ps.iter().fold((i32::MIN, i32::MIN), |m, (p, _)| {
+            (m.0.max((p.x >> 4) + 1), m.1.max((p.z >> 4) + 1))
+        });
         let mut chunks = self.chunks.lock().expect("chunks lock");
         let top = self.min_y + self.height as i32;
         let mut view = LightView::around(&mut chunks, self.min_y, top, min, max);
-        let ps: Vec<(mc_light::Pos, u32)> = ps.iter().map(|&(p, old)| ((p.x, p.y, p.z), old)).collect();
+        let ps: Vec<(mc_light::Pos, u32)> =
+            ps.iter().map(|&(p, old)| ((p.x, p.y, p.z), old)).collect();
         mc_light::blocks_changed(&mut view, &self.light, &ps);
         view.finish()
     }
@@ -766,7 +776,8 @@ impl World {
         for &(cx, cz) in chunks {
             // Only chunks with all eight neighbours in memory: what ticks
             // looks a few blocks around and must not load anything.
-            let surrounded = (-1..=1).all(|dx| (-1..=1).all(|dz| all.contains_key(&(cx + dx, cz + dz))));
+            let surrounded =
+                (-1..=1).all(|dx| (-1..=1).all(|dz| all.contains_key(&(cx + dx, cz + dz))));
             if !surrounded {
                 continue;
             }
@@ -781,10 +792,21 @@ impl World {
                 for _ in 0..speed {
                     *lcg = lcg.wrapping_mul(3).wrapping_add(1_013_904_223);
                     let r = *lcg >> 2;
-                    let (x, y, z) = ((r & 15) as usize, ((r >> 16) & 15) as usize, ((r >> 8) & 15) as usize);
+                    let (x, y, z) = (
+                        (r & 15) as usize,
+                        ((r >> 16) & 15) as usize,
+                        ((r >> 8) & 15) as usize,
+                    );
                     let state = section.blocks.get(mc_world::Section::index(x, y, z));
                     if ticks(state) {
-                        picks.push((Position::new(cx * 16 + x as i32, base_y + y as i32, cz * 16 + z as i32), state));
+                        picks.push((
+                            Position::new(
+                                cx * 16 + x as i32,
+                                base_y + y as i32,
+                                cz * 16 + z as i32,
+                            ),
+                            state,
+                        ));
                     }
                 }
             }
@@ -794,7 +816,10 @@ impl World {
 
     /// Whether the chunk is in memory (nothing is loaded to answer).
     pub fn chunk_loaded(&self, x: i32, z: i32) -> bool {
-        self.chunks.lock().expect("chunks lock").contains_key(&(x, z))
+        self.chunks
+            .lock()
+            .expect("chunks lock")
+            .contains_key(&(x, z))
     }
 
     /// Light Data of a chunk as it is now (for Update Light).

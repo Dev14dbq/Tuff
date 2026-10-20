@@ -782,6 +782,117 @@ pub enum Processor {
         map: Heightmap,
         offset: i32,
     },
+    /// Stone bricks crack or turn to stairs, stairs to slabs, obsidian
+    /// cries; moss by `mossiness` (ruined portals).
+    BlockAge(f32),
+    /// Where the world has lava, blocks that are not full keep it.
+    LavaSubmerged,
+    /// Stone kinds become blackstone kinds, keeping their properties
+    /// (ruined portals in the Nether): block id → its replacement's
+    /// default state.
+    Blackstone(HashMap<u32, u32>),
+}
+
+/// [`Processor::BlockAge`] for one block.
+fn block_age(facts: &Facts, s: u32, mossiness: f32, r: &mut WorldgenRandom) -> Option<u32> {
+    let state = |n: &str| facts.default_state(&format!("minecraft:{n}"));
+    let pick = |r: &mut WorldgenRandom, plain: &[Option<u32>], mossy: &[Option<u32>]| {
+        let list = if r.next_float() < mossiness {
+            mossy
+        } else {
+            plain
+        };
+        list[r.next_int_bound(list.len() as i32) as usize]
+    };
+    let stairs = |r: &mut WorldgenRandom, n: &str| {
+        let facing = ["north", "east", "south", "west"][r.next_int_bound(4) as usize];
+        let half = ["top", "bottom"][r.next_int_bound(2) as usize];
+        state(n).map(|s| facts.with(facts.with(s, "facing", facing), "half", half))
+    };
+    if facts.is(s, "minecraft:stone_bricks")
+        || facts.is(s, "minecraft:stone")
+        || facts.is(s, "minecraft:chiseled_stone_bricks")
+    {
+        if r.next_float() >= 0.5 {
+            return None;
+        }
+        let plain = [
+            state("cracked_stone_bricks"),
+            stairs(r, "stone_brick_stairs"),
+        ];
+        let mossy = [
+            state("mossy_stone_bricks"),
+            stairs(r, "mossy_stone_brick_stairs"),
+        ];
+        pick(r, &plain, &mossy)
+    } else if facts.in_named(s, "minecraft:stairs") {
+        if r.next_float() >= 0.5 {
+            return None;
+        }
+        let (facing, half) = (facts.property(s, "facing")?, facts.property(s, "half")?);
+        let plain = [state("stone_slab"), state("stone_brick_slab")];
+        let mossy = [
+            state("mossy_stone_brick_stairs")
+                .map(|m| facts.with(facts.with(m, "facing", facing), "half", half)),
+            state("mossy_stone_brick_slab"),
+        ];
+        pick(r, &plain, &mossy)
+    } else if facts.in_named(s, "minecraft:slabs") {
+        (r.next_float() < mossiness).then(|| state("mossy_stone_brick_slab"))?
+    } else if facts.in_named(s, "minecraft:walls") {
+        (r.next_float() < mossiness).then(|| state("mossy_stone_brick_wall"))?
+    } else if facts.is(s, "minecraft:obsidian") {
+        (r.next_float() < 0.15).then(|| state("crying_obsidian"))?
+    } else {
+        None
+    }
+}
+
+/// What [`Processor::Blackstone`] turns into what.
+const BLACKSTONE: [(&str, &str); 23] = [
+    ("cobblestone", "blackstone"),
+    ("mossy_cobblestone", "blackstone"),
+    ("stone", "polished_blackstone"),
+    ("stone_bricks", "polished_blackstone_bricks"),
+    ("mossy_stone_bricks", "polished_blackstone_bricks"),
+    ("cobblestone_stairs", "blackstone_stairs"),
+    ("mossy_cobblestone_stairs", "blackstone_stairs"),
+    ("stone_stairs", "polished_blackstone_stairs"),
+    ("stone_brick_stairs", "polished_blackstone_brick_stairs"),
+    (
+        "mossy_stone_brick_stairs",
+        "polished_blackstone_brick_stairs",
+    ),
+    ("cobblestone_slab", "blackstone_slab"),
+    ("mossy_cobblestone_slab", "blackstone_slab"),
+    ("smooth_stone_slab", "polished_blackstone_slab"),
+    ("stone_slab", "polished_blackstone_slab"),
+    ("stone_brick_slab", "polished_blackstone_brick_slab"),
+    ("mossy_stone_brick_slab", "polished_blackstone_brick_slab"),
+    ("stone_brick_wall", "polished_blackstone_brick_wall"),
+    ("mossy_stone_brick_wall", "polished_blackstone_brick_wall"),
+    ("cobblestone_wall", "blackstone_wall"),
+    ("mossy_cobblestone_wall", "blackstone_wall"),
+    ("chiseled_stone_bricks", "chiseled_polished_blackstone"),
+    ("cracked_stone_bricks", "cracked_polished_blackstone_bricks"),
+    ("iron_bars", "iron_chain"),
+];
+
+impl Processor {
+    /// The blackstone replacement of ruined portals in the Nether.
+    pub fn blackstone(facts: &Facts) -> Self {
+        Processor::Blackstone(
+            BLACKSTONE
+                .iter()
+                .filter_map(|(from, to)| {
+                    Some((
+                        facts.block_id(&format!("minecraft:{from}"))?,
+                        facts.default_state(&format!("minecraft:{to}"))?,
+                    ))
+                })
+                .collect(),
+        )
+    }
 }
 
 fn parse_rule(v: &Value, facts: &Facts) -> Option<Rule> {
@@ -1000,6 +1111,35 @@ impl Processor {
                     nbt: current.nbt,
                 })
             }
+            Processor::BlockAge(mossiness) => {
+                let p = current.pos;
+                let mut r = WorldgenRandom::legacy(position_seed(p.x, p.y, p.z));
+                match block_age(facts, current.state, *mossiness, &mut r) {
+                    Some(state) => Some(TBlock { state, ..current }),
+                    None => Some(current),
+                }
+            }
+            Processor::LavaSubmerged => {
+                if facts.is(region.block(current.pos), "minecraft:lava")
+                    && !facts.solid_render(current.state)
+                {
+                    Some(TBlock {
+                        state: facts
+                            .default_state("minecraft:lava")
+                            .unwrap_or(current.state),
+                        ..current
+                    })
+                } else {
+                    Some(current)
+                }
+            }
+            Processor::Blackstone(map) => match map.get(&facts.block(current.state)) {
+                Some(&to) => Some(TBlock {
+                    state: facts.copy_properties(current.state, to),
+                    ..current
+                }),
+                None => Some(current),
+            },
         }
     }
 

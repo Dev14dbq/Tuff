@@ -284,7 +284,10 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
 
 /// Rain on `p` or beside it.
 fn near_rain(level: &dyn Level, p: BlockPos) -> bool {
-    level.raining_at(p) || Dir::HORIZONTAL.iter().any(|&d| level.raining_at(p.offset(d)))
+    level.raining_at(p)
+        || Dir::HORIZONTAL
+            .iter()
+            .any(|&d| level.raining_at(p.offset(d)))
 }
 
 fn schedule_again(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut Rng) {

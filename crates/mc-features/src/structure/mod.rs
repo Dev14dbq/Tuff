@@ -5,6 +5,8 @@
 //! decoration, and the terrain shaped around them (the beardifier).
 
 pub mod built;
+pub mod end_city;
+pub mod fortress;
 pub mod jigsaw;
 pub mod legacy;
 pub mod mineshaft;
@@ -128,6 +130,12 @@ pub trait Ground {
     fn height(&mut self, x: i32, z: i32, ocean_floor: bool) -> i32;
     /// The biome of a 4×4×4 cell.
     fn biome(&mut self, qx: i32, qy: i32, qz: i32) -> u32;
+    /// Whether the bare terrain (stone, sea or air from the noise) has
+    /// something at `y` that the heightmap counts: anything but air, or
+    /// only what blocks motion for `ocean_floor`.
+    fn occupied(&mut self, x: i32, y: i32, z: i32, ocean_floor: bool) -> bool {
+        y < self.height(x, z, ocean_floor)
+    }
 }
 
 /// What placing structure pieces needs.

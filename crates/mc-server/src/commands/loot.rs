@@ -157,7 +157,10 @@ fn roll(r: &mut Run, source: &[&str]) -> Result<Rolled> {
             }
             let state = r.ctx.world.block(p, &r.ctx.data.blocks).unwrap_or(0);
             let blocks = &r.ctx.data.blocks;
-            let name = blocks.block_name(state).unwrap_or("minecraft:air").to_owned();
+            let name = blocks
+                .block_name(state)
+                .unwrap_or("minecraft:air")
+                .to_owned();
             let id = format!("minecraft:blocks/{}", name.trim_start_matches("minecraft:"));
             let Some(table) = r.ctx.loot.table(&id).cloned() else {
                 let key = format!("block.{}", name.replacen(':', ".", 1));
@@ -170,7 +173,11 @@ fn roll(r: &mut Run, source: &[&str]) -> Result<Rolled> {
                 .iter()
                 .filter_map(|k| Some((k.to_string(), blocks.property(state, k)?.to_owned())))
                 .collect();
-            cx.origin = Some([f64::from(p.x) + 0.5, f64::from(p.y) + 0.5, f64::from(p.z) + 0.5]);
+            cx.origin = Some([
+                f64::from(p.x) + 0.5,
+                f64::from(p.y) + 0.5,
+                f64::from(p.z) + 0.5,
+            ]);
             cx.block = Some((name, props));
             cx.tool = tool_arg(r, source);
             Ok(Rolled {
@@ -181,7 +188,10 @@ fn roll(r: &mut Run, source: &[&str]) -> Result<Rolled> {
         ["kill", ..] => {
             let found = r.targets("target", false)?;
             let t = &found[0];
-            let id = format!("minecraft:entities/{}", t.kind().trim_start_matches("minecraft:"));
+            let id = format!(
+                "minecraft:entities/{}",
+                t.kind().trim_start_matches("minecraft:")
+            );
             cx.origin = Some(t.pos());
             cx.this = Some(Ent {
                 kind: t.kind().to_owned(),
@@ -211,7 +221,10 @@ fn report(r: &mut Run, held: &[Held], table: &Option<String>) -> Result<i32> {
                     "commands.drop.success.single_with_table",
                     vec![Tag::Int(s.count), item, str_tag(t)],
                 ),
-                None => translate("commands.drop.success.single", vec![Tag::Int(s.count), item]),
+                None => translate(
+                    "commands.drop.success.single",
+                    vec![Tag::Int(s.count), item],
+                ),
             }
         }
         (list, Some(t)) => translate(
@@ -355,7 +368,9 @@ fn insert(r: &mut Run, rolled: Rolled) -> Result<i32> {
 
 fn replace(r: &mut Run, rolled: Rolled, block: bool) -> Result<i32> {
     let slot = r.string("slot").unwrap_or_default();
-    let first = slot_range(&slot).and_then(|v| v.first().copied()).unwrap_or(0);
+    let first = slot_range(&slot)
+        .and_then(|v| v.first().copied())
+        .unwrap_or(0);
     let count = r.int("count").unwrap_or(1);
     let mut held = held_of(&rolled);
     held.truncate(count.max(0) as usize);
@@ -404,7 +419,11 @@ fn replace(r: &mut Run, rolled: Rolled, block: bool) -> Result<i32> {
     }
     // Empty padding is counted as a stack but shown as nothing.
     let n = shown_list.len();
-    let real: Vec<Held> = shown_list.iter().filter(|h| h.0.count > 0).cloned().collect();
+    let real: Vec<Held> = shown_list
+        .iter()
+        .filter(|h| h.0.count > 0)
+        .cloned()
+        .collect();
     if n == 1 && real.len() == 1 {
         return report(r, &real, &rolled.table);
     }

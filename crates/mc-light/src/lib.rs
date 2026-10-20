@@ -238,7 +238,9 @@ fn relight(world: &mut dyn LightWorld, tables: &Tables, kind: Kind, changes: &[(
         }
     }
     for &(p, _) in changes {
-        let Some(state) = world.state(p) else { continue };
+        let Some(state) = world.state(p) else {
+            continue;
+        };
         // The cell's own light (an emitting block).
         let own = own_light(world, tables, kind, p, state);
         if own > world.light(kind, p) {

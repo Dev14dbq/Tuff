@@ -831,8 +831,24 @@ impl<'a> Builder<'a> {
             return Some(n.clone());
         }
         let params = FbmParameters::from_json(&self.source.read("noise", &id)?)?;
-        let mut random = self.factory.from_hash_of(&id);
-        let noise = Arc::new(FbmNoise::new(&mut random, &params, self.legacy));
+        // With the legacy source the Nether's biome noises keep their old
+        // seeding: their own source from the world seed (plus 1 for
+        // vegetation), octaves made one after another.
+        let nether_biome = match id.as_str() {
+            "minecraft:nether/temperature" => Some(0),
+            "minecraft:nether/vegetation" => Some(1),
+            _ => None,
+        };
+        let noise = match nether_biome {
+            Some(offset) if self.legacy => {
+                let mut random = crate::random::Legacy::new(self.seed.wrapping_add(offset));
+                Arc::new(FbmNoise::new(&mut random, &params, true))
+            }
+            _ => {
+                let mut random = self.factory.from_hash_of(&id);
+                Arc::new(FbmNoise::new(&mut random, &params, false))
+            }
+        };
         self.noises.insert(id, noise.clone());
         Some(noise)
     }
@@ -896,7 +912,7 @@ impl<'a> Builder<'a> {
             Value::Object(_) => {
                 let params = FbmParameters::from_json(v).ok_or("bad inline noise")?;
                 let mut random = self.factory.from_hash_of("minecraft:inline");
-                Ok(Arc::new(FbmNoise::new(&mut random, &params, self.legacy)))
+                Ok(Arc::new(FbmNoise::new(&mut random, &params, false)))
             }
             _ => Err("bad noise".into()),
         }
@@ -1054,9 +1070,14 @@ impl<'a> Builder<'a> {
                 let noise = match &self.blended {
                     Some(n) => n.clone(),
                     None => {
-                        let mut random = self.factory.from_hash_of("minecraft:terrain");
+                        // The legacy source seeds it from the world seed.
+                        let mut random: Box<dyn crate::random::RandomSource> = if self.legacy {
+                            Box::new(crate::random::Legacy::new(self.seed))
+                        } else {
+                            Box::new(self.factory.from_hash_of("minecraft:terrain"))
+                        };
                         let n = Arc::new(BlendedNoise::new(
-                            &mut random,
+                            &mut *random,
                             f("xz_scale"),
                             f("y_scale"),
                             f("xz_factor"),
