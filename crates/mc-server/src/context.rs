@@ -58,6 +58,7 @@ pub enum Direct {
     DefaultSpawn(mc_protocol::packets::play::SetDefaultSpawnPosition),
     Particles(mc_protocol::packets::play::LevelParticles),
     Camera(mc_protocol::packets::play::SetCamera),
+    Boss(mc_protocol::packets::play::BossEvent),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -355,6 +356,8 @@ pub struct ServerContext {
     pub border: Mutex<crate::border::Border>,
     /// Force-loaded chunks (`/forceload`).
     pub forced: Mutex<crate::forced::Forced>,
+    /// Boss bars made with `/bossbar`.
+    pub bossbars: Mutex<crate::bossbars::BossBars>,
     /// The world spawn (`/setworldspawn` moves it).
     pub spawn: Mutex<crate::players::Respawn>,
     next_entity_id: AtomicI32,
@@ -536,6 +539,7 @@ impl ServerContext {
         let weather = crate::weather::Weather::load(world.folder(), data.version.world_version);
         let border = crate::border::Border::load(world.folder(), data.version.world_version);
         let forced = crate::forced::Forced::load(world.folder(), data.version.world_version);
+        let bossbars = crate::bossbars::BossBars::load(world.folder(), data.version.world_version);
         let spawn = crate::players::Respawn {
             dimension: world.dimension.clone(),
             pos: (
@@ -605,6 +609,7 @@ impl ServerContext {
             border: Mutex::new(border),
             spawn: Mutex::new(spawn),
             forced: Mutex::new(forced),
+            bossbars: Mutex::new(bossbars),
             data,
         })
     }

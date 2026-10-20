@@ -115,14 +115,19 @@ fn context(tree: &Tree, parse: &Parse, cursor: usize) -> (usize, usize) {
     (root, after)
 }
 
-/// Vanilla's id matching: the whole id, or its path without `minecraft:`,
-/// or any part after a `_` or `/`... (only the first two here).
+/// Vanilla's id matching: the whole id, or without a namespace typed, its
+/// path or any part of it after a `_`.
 fn ids_match(id: &str, typed: &str) -> bool {
     if id.starts_with(typed) {
         return true;
     }
     match id.split_once(':') {
-        Some((_, path)) if !typed.contains(':') => path.starts_with(typed),
+        Some((_, path)) if !typed.contains(':') => {
+            path.starts_with(typed)
+                || path
+                    .match_indices('_')
+                    .any(|(i, _)| path[i + 1..].starts_with(typed))
+        }
         _ => false,
     }
 }
@@ -344,6 +349,29 @@ fn block_state(
 }
 
 /// What an argument of `parser` suggests on its own.
+/// `~` for each coordinate not typed yet, as a vanilla server offers them.
+fn coordinates(n: usize, typed: &str) -> Vec<(usize, String, Option<Tag>)> {
+    let done = if typed.is_empty() {
+        0
+    } else {
+        typed.split(' ').count()
+    };
+    if done >= n {
+        return Vec::new();
+    }
+    (done + 1..=n)
+        .map(|k| {
+            let rest = vec!["~"; k - done].join(" ");
+            let text = if typed.is_empty() {
+                rest
+            } else {
+                format!("{typed} {rest}")
+            };
+            (0, text, None)
+        })
+        .collect()
+}
+
 fn argument(
     parser: &str,
     props: &serde_json::Value,
@@ -371,6 +399,8 @@ fn argument(
     }
     match parser {
         "brigadier:bool" => words(&["false", "true"], typed),
+        "minecraft:block_pos" | "minecraft:vec3" => coordinates(3, typed),
+        "minecraft:column_pos" | "minecraft:vec2" => coordinates(2, typed),
         "minecraft:gamemode" => words(&["adventure", "creative", "spectator", "survival"], typed),
         "minecraft:entity" | "minecraft:game_profile" | "minecraft:score_holder" => {
             selector(typed, data, known)

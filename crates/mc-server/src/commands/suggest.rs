@@ -82,6 +82,13 @@ fn candidates(ctx: &ServerContext, path: &[String]) -> Vec<String> {
             })
             .collect(),
         ["whitelist", "remove", ..] => lists.whitelist.iter().map(|w| w.name.clone()).collect(),
+        ["bossbar", "get" | "remove" | "set", "id"] | ["execute", "store", _, "bossbar", "id"] => {
+            drop(lists);
+            let bars = lock(&ctx.bossbars);
+            let mut ids: Vec<String> = bars.list().iter().map(|b| b.id.clone()).collect();
+            ids.sort();
+            return ids;
+        }
         ["place", "template", ..] => {
             drop(lists);
             return data_ids(ctx, "structure");

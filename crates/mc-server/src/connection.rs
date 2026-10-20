@@ -637,6 +637,14 @@ async fn play(
         writer.queue(&p)?;
     }
     ctx.vitals.lock().expect("vitals lock").insert(uuid, vitals);
+    let bars = ctx
+        .bossbars
+        .lock()
+        .expect("bossbars lock")
+        .join_packets(uuid);
+    for p in bars {
+        writer.queue(&p)?;
+    }
     let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
     // Non-player entities this client has been told about.
     let mut seen_entities: HashSet<i32> = HashSet::new();
@@ -1120,6 +1128,7 @@ async fn play(
                             Direct::DefaultSpawn(p) => writer.queue(&p)?,
                             Direct::Particles(p) => writer.queue(&p)?,
                             Direct::Camera(p) => writer.queue(&p)?,
+                            Direct::Boss(p) => writer.queue(&p)?,
                         }
                     }
                     Ok(Event::Border) => {

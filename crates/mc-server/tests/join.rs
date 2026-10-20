@@ -2467,6 +2467,57 @@ async fn effects_are_given_shown_and_cleared() {
 }
 
 #[tokio::test]
+async fn boss_bars_are_shown_and_store_results() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Admin".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let (mut admin, _) = join_offline(addr, ctx.ids.clone(), "Admin").await;
+
+    // Once "command.failed": /bossbar had no handler.
+    let (text, _) = chat_command(&mut admin, "bossbar add b \"Boss\"").await;
+    assert!(text.contains("commands.bossbar.create.success"), "{text}");
+    let (text, seen) = chat_command(&mut admin, "bossbar set b players @s").await;
+    assert!(
+        text.contains("commands.bossbar.set.players.success.some"),
+        "{text}"
+    );
+    let add = packet(&mut admin, &seen, "minecraft:boss_event").await;
+    assert_eq!(add[16], 0, "an add");
+    // The packet comes before the reply, as in vanilla.
+    let (text, seen) = chat_command(&mut admin, "bossbar set b value 5").await;
+    assert!(
+        text.contains("commands.bossbar.set.value.success"),
+        "{text}"
+    );
+    assert!(
+        seen.iter().any(|(n, _)| n == "minecraft:boss_event"),
+        "progress first"
+    );
+    let (text, _) = chat_command(
+        &mut admin,
+        "execute store result bossbar b value run bossbar get b max",
+    )
+    .await;
+    assert!(text.contains("commands.bossbar.get.max"), "{text}");
+    let (text, _) = chat_command(&mut admin, "bossbar get b value").await;
+    assert!(text.contains("Int(100)"), "{text}");
+    let (text, _) = chat_command(
+        &mut admin,
+        "execute store result bossbar nosuch value run seed",
+    )
+    .await;
+    assert!(text.contains("commands.bossbar.unknown"), "{text}");
+    let _ = stop.send(());
+}
+
+#[tokio::test]
 async fn locate_finds_what_vanilla_finds() {
     let Some(data_dir) = data_dir() else {
         eprintln!("skipped: no extracted data (cargo xtask extract-data)");

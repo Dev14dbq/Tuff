@@ -4,6 +4,7 @@
 //! them, recorded by `cargo xtask observe-commands`). They run on the tick
 //! thread, in order with everything else that changes the world.
 
+mod bossbar;
 mod functions;
 mod living;
 mod places;
@@ -320,7 +321,7 @@ fn run_chain(
                 match &store.target {
                     StoreTarget::Score { .. } => scores::store(ctx, store, v),
                     StoreTarget::Data { .. } => functions::store(ctx, store, v),
-                    StoreTarget::Bossbar { .. } => places::store(ctx, store, v),
+                    StoreTarget::Bossbar { .. } => bossbar::store(ctx, store, v),
                 }
             }
         }

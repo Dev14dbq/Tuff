@@ -1118,6 +1118,72 @@ pub mod play {
         }
     }
 
+    /// Boss Event: adds, changes or removes a boss bar on the client.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct BossEvent {
+        pub uuid: u128,
+        pub action: BossAction,
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum BossAction {
+        Add {
+            name: Tag,
+            progress: f32,
+            color: i32,
+            overlay: i32,
+            flags: u8,
+        },
+        Remove,
+        Progress(f32),
+        Name(Tag),
+        Style {
+            color: i32,
+            overlay: i32,
+        },
+        Flags(u8),
+    }
+    packet!(BossEvent, Play, "minecraft:boss_event");
+    impl Encode for BossEvent {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_uuid(self.uuid);
+            match &self.action {
+                BossAction::Add {
+                    name,
+                    progress,
+                    color,
+                    overlay,
+                    flags,
+                } => {
+                    out.put_varint(0);
+                    put_nbt(out, name);
+                    out.put_f32(*progress);
+                    out.put_varint(*color);
+                    out.put_varint(*overlay);
+                    out.put_u8(*flags);
+                }
+                BossAction::Remove => out.put_varint(1),
+                BossAction::Progress(p) => {
+                    out.put_varint(2);
+                    out.put_f32(*p);
+                }
+                BossAction::Name(name) => {
+                    out.put_varint(3);
+                    put_nbt(out, name);
+                }
+                BossAction::Style { color, overlay } => {
+                    out.put_varint(4);
+                    out.put_varint(*color);
+                    out.put_varint(*overlay);
+                }
+                BossAction::Flags(f) => {
+                    out.put_varint(5);
+                    out.put_u8(*f);
+                }
+            }
+        }
+    }
+
     /// Combat Death: the death screen.
     #[derive(Clone, Debug)]
     pub struct PlayerCombatKill {

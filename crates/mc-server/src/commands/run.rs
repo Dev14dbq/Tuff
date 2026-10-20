@@ -12,7 +12,7 @@ use mc_protocol::packets::play::{ItemStack, TickingState, TickingStep};
 use super::target::{self, Target, player_name};
 use super::world::{apply, in_world, put_block_data};
 use super::{Result, Run, Src, Who};
-use super::{functions, living, places, rare, scores};
+use super::{bossbar, functions, living, places, rare, scores};
 use crate::context::{Event, ServerContext};
 use crate::rules;
 use crate::tick::lock;
@@ -348,6 +348,7 @@ pub fn modify(ctx: &ServerContext, c: &Context, s: &Src) -> Result<Vec<Src>> {
         }
         _ => functions::modify(ctx, c, s, &path)
             .or_else(|| scores::modify(ctx, c, s, &path))
+            .or_else(|| bossbar::modify(ctx, c, s, &path))
             .unwrap_or_else(|| Err(CommandError::new("command.failed", Vec::new()))),
     }
 }
@@ -511,6 +512,7 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         _ => {
             return scores::run(r, path)
                 .or_else(|| places::run(r, path))
+                .or_else(|| bossbar::run(r, path))
                 .or_else(|| functions::run(r, path))
                 .or_else(|| living::run(r, path))
                 .or_else(|| rare::run(r, path));

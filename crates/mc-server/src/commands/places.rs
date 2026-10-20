@@ -8,7 +8,7 @@ use mc_nbt::{Compound, Tag};
 use mc_protocol::text::translate;
 
 use super::run::err;
-use super::{Result, Run, Store};
+use super::{Result, Run};
 use crate::context::ServerContext;
 
 pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
@@ -27,9 +27,6 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         _ => return None,
     })
 }
-
-/// Puts a stored result into a boss bar.
-pub fn store(_ctx: &ServerContext, _store: &Store, _value: i32) {}
 
 /// A rotation argument (yaw wrapped, pitch clamped), relative to the
 /// source; none is 0, 0.

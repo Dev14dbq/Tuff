@@ -86,21 +86,26 @@ fn tag_change(r: &mut Run, add: bool) -> Result<i32> {
 
 /// Names in green, separated by gray commas, as vanilla lists them.
 fn green_list(names: &[String]) -> Tag {
-    let green = |n: &str| {
+    let green = |n: &String| {
         let mut c = Compound::new();
         c.insert("color", "green");
-        c.insert("text", n);
+        c.insert("text", n.as_str());
         Tag::Compound(c)
     };
+    joined(names.iter().map(green).collect())
+}
+
+/// Components separated by gray commas, as vanilla lists them.
+pub(super) fn joined(items: Vec<Tag>) -> Tag {
     let mut parts = Vec::new();
-    for (i, n) in names.iter().enumerate() {
+    for (i, n) in items.into_iter().enumerate() {
         if i > 0 {
             let mut sep = Compound::new();
             sep.insert("color", "gray");
             sep.insert("text", ", ");
             parts.push(Tag::Compound(sep));
         }
-        parts.push(green(n));
+        parts.push(n);
     }
     match parts.len() {
         0 => Tag::from(""),

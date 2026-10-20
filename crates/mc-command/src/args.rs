@@ -994,10 +994,8 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
             }
         }
         "minecraft:particle" => {
-            let start = r.cursor;
             let id = read_id(r)?;
             if !env.exists("minecraft:particle_type", &id) {
-                r.cursor = start;
                 return Err(r.error(CommandError::new("particle.notFound", vec![string(&id)])));
             }
             let options = if r.can_read() && r.peek() == '{' {

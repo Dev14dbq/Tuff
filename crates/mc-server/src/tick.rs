@@ -189,9 +189,25 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         }
 
         while let Ok(request) = requests.try_recv() {
+            let actor = request.actor.uuid;
             let mut outcome = handle(&ctx, &mut control, request.actor, request.action);
+            // Packets sent to the player come before the reply, as in
+            // vanilla, so the reply then goes the same way.
+            let after = outcome
+                .events
+                .iter()
+                .any(|e| matches!(e, Event::Direct { uuid, .. } if *uuid == actor));
             for event in std::mem::take(&mut outcome.events) {
                 let _ = ctx.events.send(event);
+            }
+            if after {
+                for line in std::mem::take(&mut outcome.messages) {
+                    let _ = ctx.events.send(Event::Message {
+                        uuid: actor,
+                        line,
+                        overlay: false,
+                    });
+                }
             }
             for (at, drop) in std::mem::take(&mut outcome.drops) {
                 drop_item(&ctx, at, drop);

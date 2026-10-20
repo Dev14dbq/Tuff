@@ -8,6 +8,7 @@
 mod auth;
 mod blocks;
 mod border;
+mod bossbars;
 mod commands;
 mod connection;
 mod containers;
@@ -324,6 +325,7 @@ fn save(ctx: &ServerContext) {
     let time = ctx.time.lock().expect("time lock").clone();
     ctx.weather.lock().expect("weather lock").save();
     ctx.border.lock().expect("border lock").save();
+    ctx.bossbars.lock().expect("bossbars lock").save();
     if let Err(err) = ctx.world.save_time(&time) {
         tracing::warn!("saving the time: {err:#}");
     }
