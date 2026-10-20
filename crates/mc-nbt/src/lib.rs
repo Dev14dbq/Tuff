@@ -174,14 +174,14 @@ pub type Result<T> = std::result::Result<T, NbtError>;
 /// Network form: tag type + payload, no root name.
 pub fn write_network(tag: &Tag, out: &mut Vec<u8>) -> Result<()> {
     out.push(tag.type_id());
-    write_payload(tag, out)
+    write_payload(tag, out, true)
 }
 
 /// Named form: tag type + root name + payload.
 pub fn write_named(name: &str, tag: &Tag, out: &mut Vec<u8>) -> Result<()> {
     out.push(tag.type_id());
     write_string(name, out)?;
-    write_payload(tag, out)
+    write_payload(tag, out, false)
 }
 
 fn write_string(s: &str, out: &mut Vec<u8>) -> Result<()> {
@@ -197,7 +197,26 @@ fn write_len(len: usize, out: &mut Vec<u8>) {
     out.extend_from_slice(&(len as i32).to_be_bytes());
 }
 
-fn write_payload(tag: &Tag, out: &mut Vec<u8>) -> Result<()> {
+/// Compound entries in the order vanilla sends them: its compounds are
+/// Java `HashMap`s, so entries go by hash bucket, then as they were added.
+fn java_order<K: AsRef<str>, V>(entries: &[(K, V)]) -> Vec<&(K, V)> {
+    let mut cap = 16;
+    while entries.len() * 4 > cap * 3 {
+        cap *= 2;
+    }
+    let bucket = |k: &str| {
+        let h = k
+            .encode_utf16()
+            .fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(i32::from(c)))
+            as u32;
+        ((h ^ (h >> 16)) as usize) & (cap - 1)
+    };
+    let mut sorted: Vec<&(K, V)> = entries.iter().collect();
+    sorted.sort_by_key(|(k, _)| bucket(k.as_ref()));
+    sorted
+}
+
+fn write_payload(tag: &Tag, out: &mut Vec<u8>, java: bool) -> Result<()> {
     match tag {
         Tag::Byte(v) => out.push(*v as u8),
         Tag::Short(v) => out.extend_from_slice(&v.to_be_bytes()),
@@ -221,14 +240,19 @@ fn write_payload(tag: &Tag, out: &mut Vec<u8>) -> Result<()> {
                         found: item.type_id(),
                     });
                 }
-                write_payload(item, out)?;
+                write_payload(item, out, java)?;
             }
         }
         Tag::Compound(compound) => {
-            for (key, value) in &compound.0 {
+            let entries: Vec<&(String, Tag)> = if java {
+                java_order(&compound.0)
+            } else {
+                compound.0.iter().collect()
+            };
+            for (key, value) in entries {
                 out.push(value.type_id());
                 write_string(key, out)?;
-                write_payload(value, out)?;
+                write_payload(value, out, java)?;
             }
             out.push(tag_type::END);
         }
@@ -438,7 +462,26 @@ mod tests {
 
         let mut out = Vec::new();
         write_network(&root, &mut out).unwrap();
-        assert_eq!(read_network(&out).unwrap(), (root, out.len()));
+        // Entries come back in vanilla's (hash) order.
+        let (back, len) = read_network(&out).unwrap();
+        assert_eq!(len, out.len());
+        let (Tag::Compound(a), Tag::Compound(b)) = (&root, &back) else {
+            panic!("not a compound");
+        };
+        assert_eq!(a.len(), b.len());
+        for (k, v) in a.iter() {
+            assert_eq!(b.get(k), Some(v), "{k}");
+        }
+    }
+
+    #[test]
+    fn compounds_are_written_in_java_order() {
+        let mut c = Compound::new();
+        c.insert("text", "x").insert("color", "red");
+        let mut out = Vec::new();
+        write_network(&Tag::Compound(c), &mut out).unwrap();
+        // As vanilla writes `{"text":"x","color":"red"}`.
+        assert_eq!(out[1..9], *b"\x08\x00\x05color");
     }
 
     #[test]
