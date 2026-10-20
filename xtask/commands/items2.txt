@@ -1,0 +1,88 @@
+gamemode creative @s
+clear @s
+tp @s 0 -60 0
+setblock 10 -60 2 minecraft:chest
+setblock 12 -60 2 minecraft:chest
+item replace block 10 -60 2 container.* with minecraft:stick 2
+data get block 10 -60 2 Items
+item replace block 10 -60 2 container.* with minecraft:stick 2
+data get block 10 -60 2 Items
+item replace block 10 -60 2 container.* with minecraft:apple 70
+item replace block 10 -60 2 container.* with minecraft:apple 5
+data get block 10 -60 2 Items
+item replace block 10 -60 2 container.3 with minecraft:stone 4
+item replace block 10 -60 2 container.3 with minecraft:dirt 4
+data get block 10 -60 2 Items
+item override block 12 -60 2 container.* with minecraft:stick 2
+data get block 12 -60 2 Items
+item override block 12 -60 2 container.5 with minecraft:dirt
+item override block 12 -60 2 container.* with minecraft:apple 3
+data get block 12 -60 2 Items
+item fill block 12 -60 2 container.4 with minecraft:cobblestone 7
+data get block 12 -60 2 Items
+item replace entity @s hotbar.* with minecraft:stick 2
+item replace entity @s hotbar.* with minecraft:stick 2
+item replace entity @s hotbar.* with minecraft:apple
+data get entity @s Inventory
+item replace entity @s hotbar.3 with minecraft:air
+item replace entity @s hotbar.* with minecraft:dirt
+data get entity @s Inventory
+item replace entity @s hotbar.* from block 12 -60 2 container.*
+data get entity @s Inventory
+item replace entity @s inventory.* from block 12 -60 2 container.0
+item replace entity @s inventory.3 from block 12 -60 2 container.*
+item replace block 12 -60 2 container.* from entity @s hotbar.*
+data get block 12 -60 2 Items
+item replace block 12 -60 2 container.0 from entity @s inventory.*
+item override block 12 -60 2 container.* from entity @s hotbar.0
+item override block 12 -60 2 container.* from block 10 -60 2 container.*
+item override block 12 -60 2 container.* from block 10 -60 2 container.1
+item fill block 12 -60 2 container.* from block 10 -60 2 container.1
+item fill block 12 -60 2 container.* from entity @s hotbar.*
+item fill block 12 -60 2 container.1 from entity @s hotbar.*
+item fill block 12 -60 2 container.* from entity @s armor.head
+data get block 12 -60 2 Items
+item replace entity @s weapon.* with minecraft:stick
+item replace entity @s weapon with minecraft:stick
+summon minecraft:cow 8 -60 8
+item replace entity @e[type=minecraft:cow,limit=1] weapon.mainhand with minecraft:stick
+item replace entity @e[type=minecraft:cow,limit=1] armor.head with minecraft:stick
+item replace entity @e[type=minecraft:cow,limit=1] contents with minecraft:stick
+summon minecraft:item 5 -60 5 {Item:{id:"minecraft:stone",count:1},PickupDelay:32767}
+item replace entity @e[type=minecraft:item,limit=1] contents with minecraft:dirt
+item replace entity @e[type=minecraft:item,limit=1] weapon.mainhand with minecraft:dirt
+item replace entity @e[type=minecraft:item,limit=1] contents from block 12 -60 2 container.0
+item replace entity @e[type=minecraft:item,limit=1] contents from entity @s hotbar.0
+item modify entity @s hotbar.0 minecraft:nosuch
+item modify entity @s hotbar.0 {type:"minecraft:set_count",count:7}
+item modify entity @s hotbar.0 {type:"minecraft:set_count",count:7,add:true}
+item modify entity @s hotbar.9 {type:"minecraft:set_count",count:7}
+item modify block 12 -60 2 container.0 {type:"minecraft:set_count",count:9}
+item modify block 12 -60 2 container.* {type:"minecraft:set_count",count:2}
+item modify block 12 -60 2 container.30 {type:"minecraft:set_count",count:2}
+item modify entity @s armor.head {type:"minecraft:set_count",count:2}
+item modify entity @s armor.* {type:"minecraft:set_count",count:2}
+item modify entity @e[type=minecraft:cow] hotbar.0 {type:"minecraft:set_count",count:2}
+item modify entity @e[type=minecraft:cow,limit=1] weapon.mainhand {type:"minecraft:set_count",count:2}
+item modify block 6 -60 2 container.0 {type:"minecraft:set_count",count:2}
+item modify entity @s hotbar.0 [{type:"minecraft:set_count",count:3},{type:"minecraft:limit_count",limit:2}]
+item modify entity @s hotbar.0 {type:"minecraft:set_name",name:"Hi"}
+data get entity @s Inventory[0]
+item modify entity @s hotbar.0 {type:"minecraft:set_damage",damage:0.5}
+item replace entity @s hotbar.0 with minecraft:diamond_sword
+item modify entity @s hotbar.0 {type:"minecraft:set_damage",damage:0.5}
+data get entity @s Inventory[0]
+item modify entity @s hotbar.0 {type:"minecraft:set_enchantments",enchantments:{"minecraft:sharpness":3}}
+data get entity @s Inventory[0]
+item modify entity @s hotbar.0 {type:"minecraft:set_lore",lore:["a"],mode:"append"}
+item modify entity @s hotbar.0 {type:"minecraft:set_components",components:{"minecraft:custom_name":"X"}}
+data get entity @s Inventory[0]
+item modify entity @s hotbar.1 {type:"minecraft:set_count",count:{type:"minecraft:uniform",min:2,max:2}}
+item modify entity @s hotbar.1 {type:"minecraft:furnace_smelt"}
+item replace entity @s hotbar.1 with minecraft:iron_ore 3
+item modify entity @s hotbar.1 {type:"minecraft:furnace_smelt"}
+item modify entity @s hotbar.1 {type:"minecraft:set_count",count:3,conditions:[{condition:"minecraft:random_chance",chance:0}]}
+item modify entity @s hotbar.1 {type:"minecraft:set_count",count:3,conditions:[{condition:"minecraft:random_chance",chance:0}]}
+item modify entity @s hotbar.1 {type:"minecraft:set_count",count:3,conditions:[{condition:"minecraft:random_chance",chance:1}]}
+item modify entity @s hotbar.1 {type:"minecraft:set_count",count:3,conditions:[{condition:"minecraft:inverted",term:{condition:"minecraft:random_chance",chance:0}}]}
+data get entity @s Inventory

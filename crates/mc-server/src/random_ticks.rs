@@ -67,7 +67,8 @@ fn tick_chunks(ctx: &ServerContext, chunks: &[(i32, i32)]) -> usize {
     let mut level = WorldLevel::new(ctx);
     let logic = level.logic();
     let time = lock(&ctx.time).age;
-    let mut rng = mc_tick::rng::Rng::new((time as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ lcg as u64);
+    let mut rng =
+        mc_tick::rng::Rng::new((time as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ lcg as u64);
     for (p, state) in picks {
         let at = to_pos(p);
         // An earlier pick this tick may have changed it.
@@ -98,7 +99,10 @@ mod tests {
         let r = SIMULATION_DISTANCE + 1;
         for cx in -r..=r {
             for cz in -r..=r {
-                let _ = ctx.world.block(mc_protocol::Position::new(cx * 16, 64, cz * 16), &ctx.data.blocks);
+                let _ = ctx.world.block(
+                    mc_protocol::Position::new(cx * 16, 64, cz * 16),
+                    &ctx.data.blocks,
+                );
             }
         }
         Some((ctx, folder))
@@ -127,7 +131,10 @@ mod tests {
         }
         let mut worst = std::time::Duration::ZERO;
         let started = std::time::Instant::now();
-        let ticks = std::env::var("FLUID_TICKS").ok().and_then(|v| v.parse().ok()).unwrap_or(600);
+        let ticks = std::env::var("FLUID_TICKS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(600);
         if std::env::var("FLUID_TICKS").is_ok() {
             eprintln!("ticking");
         }

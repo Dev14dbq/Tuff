@@ -303,9 +303,14 @@ impl World {
                 let features = crate::generation::features(data, shapes, &biome_ids, &generator)?;
                 let air = state(data, "minecraft:air")?;
                 let plains = biome_ids.get("minecraft:plains").copied().unwrap_or(0);
-                let pipeline = Arc::new(crate::pipeline::Pipeline::new(
-                    generator, features, seed, air, plains,
-                ));
+                let fast_lava = crate::generation::fast_lava(
+                    data,
+                    mc_worldgen::generator::Dimension::Overworld,
+                );
+                let pipeline = Arc::new(
+                    crate::pipeline::Pipeline::new(generator, features, seed, air, plains)
+                        .with_fast_lava(fast_lava),
+                );
                 let early = Arc::clone(&pipeline);
                 std::thread::spawn(move || early.prepare());
                 Some(pipeline)
@@ -430,21 +435,8 @@ impl World {
         let versions: HashMap<(i32, i32), u64> =
             local.iter().map(|(p, s)| (*p, s.changes)).collect();
         local.insert((x, z), new_slot(chunk));
-        let mut view = LightView {
-            chunks: &mut local,
-            min_y: self.min_y,
-            top: self.min_y + self.height as i32,
-            touched: Vec::new(),
-            grid: None,
-        };
-        mc_light::light_region(
-            &mut view,
-            &self.light,
-            (x * 16, z * 16),
-            (x * 16 + 16, z * 16 + 16),
-            self.min_y,
-        );
-        let mut touched = view.touched;
+        let top = self.min_y + self.height as i32;
+        let mut touched = light_new(&mut local, &self.light, (x, z), self.min_y, top);
         touched.sort_unstable();
         touched.dedup();
         let mut chunks = self.chunks.lock().expect("chunks lock");
@@ -463,21 +455,10 @@ impl World {
         chunks.insert((x, z), slot);
         let relit: Vec<(i32, i32)> = if conflict {
             // A neighbour changed meanwhile: light again, on the real thing.
-            let mut view = LightView {
-                chunks: &mut chunks,
-                min_y: self.min_y,
-                top: self.min_y + self.height as i32,
-                touched: Vec::new(),
-                grid: None,
-            };
-            mc_light::light_region(
-                &mut view,
-                &self.light,
-                (x * 16, z * 16),
-                (x * 16 + 16, z * 16 + 16),
-                self.min_y,
-            );
-            view.touched.into_iter().filter(|&c| c != (x, z)).collect()
+            light_new(&mut chunks, &self.light, (x, z), self.min_y, top)
+                .into_iter()
+                .filter(|&c| c != (x, z))
+                .collect()
         } else {
             for c in touched.iter().filter(|&&c| c != (x, z)) {
                 if let (Some(from), Some(to)) = (local.get_mut(c), chunks.get_mut(c))
@@ -713,12 +694,17 @@ impl World {
             return Vec::new();
         }
         // Light moves at most 15 blocks from a change: one chunk around.
-        let min = ps.iter().fold((i32::MAX, i32::MAX), |m, (p, _)| (m.0.min((p.x >> 4) - 1), m.1.min((p.z >> 4) - 1)));
-        let max = ps.iter().fold((i32::MIN, i32::MIN), |m, (p, _)| (m.0.max((p.x >> 4) + 1), m.1.max((p.z >> 4) + 1)));
+        let min = ps.iter().fold((i32::MAX, i32::MAX), |m, (p, _)| {
+            (m.0.min((p.x >> 4) - 1), m.1.min((p.z >> 4) - 1))
+        });
+        let max = ps.iter().fold((i32::MIN, i32::MIN), |m, (p, _)| {
+            (m.0.max((p.x >> 4) + 1), m.1.max((p.z >> 4) + 1))
+        });
         let mut chunks = self.chunks.lock().expect("chunks lock");
         let top = self.min_y + self.height as i32;
         let mut view = LightView::around(&mut chunks, self.min_y, top, min, max);
-        let ps: Vec<(mc_light::Pos, u32)> = ps.iter().map(|&(p, old)| ((p.x, p.y, p.z), old)).collect();
+        let ps: Vec<(mc_light::Pos, u32)> =
+            ps.iter().map(|&(p, old)| ((p.x, p.y, p.z), old)).collect();
         mc_light::blocks_changed(&mut view, &self.light, &ps);
         view.finish()
     }
@@ -790,7 +776,8 @@ impl World {
         for &(cx, cz) in chunks {
             // Only chunks with all eight neighbours in memory: what ticks
             // looks a few blocks around and must not load anything.
-            let surrounded = (-1..=1).all(|dx| (-1..=1).all(|dz| all.contains_key(&(cx + dx, cz + dz))));
+            let surrounded =
+                (-1..=1).all(|dx| (-1..=1).all(|dz| all.contains_key(&(cx + dx, cz + dz))));
             if !surrounded {
                 continue;
             }
@@ -805,10 +792,21 @@ impl World {
                 for _ in 0..speed {
                     *lcg = lcg.wrapping_mul(3).wrapping_add(1_013_904_223);
                     let r = *lcg >> 2;
-                    let (x, y, z) = ((r & 15) as usize, ((r >> 16) & 15) as usize, ((r >> 8) & 15) as usize);
+                    let (x, y, z) = (
+                        (r & 15) as usize,
+                        ((r >> 16) & 15) as usize,
+                        ((r >> 8) & 15) as usize,
+                    );
                     let state = section.blocks.get(mc_world::Section::index(x, y, z));
                     if ticks(state) {
-                        picks.push((Position::new(cx * 16 + x as i32, base_y + y as i32, cz * 16 + z as i32), state));
+                        picks.push((
+                            Position::new(
+                                cx * 16 + x as i32,
+                                base_y + y as i32,
+                                cz * 16 + z as i32,
+                            ),
+                            state,
+                        ));
                     }
                 }
             }
@@ -818,7 +816,10 @@ impl World {
 
     /// Whether the chunk is in memory (nothing is loaded to answer).
     pub fn chunk_loaded(&self, x: i32, z: i32) -> bool {
-        self.chunks.lock().expect("chunks lock").contains_key(&(x, z))
+        self.chunks
+            .lock()
+            .expect("chunks lock")
+            .contains_key(&(x, z))
     }
 
     /// Light Data of a chunk as it is now (for Update Light).
@@ -1438,8 +1439,61 @@ fn light_alone(chunk: &mut Chunk, tables: &mc_light::Tables) {
             viewers: 0,
         },
     );
+    light_new(&mut slot, tables, (x, z), min_y, top);
+    if let Some(lit) = slot.remove(&(x, z)).and_then(|s| s.chunk) {
+        chunk.light = lit.light;
+    }
+}
+
+/// Lights the new chunk at `(x, z)` with the chunks around it in `chunks`.
+/// Returns the chunks whose light changed; their slots are marked changed.
+fn light_new(
+    chunks: &mut HashMap<(i32, i32), Slot, mc_worldgen::density::Fast>,
+    tables: &mc_light::Tables,
+    (x, z): (i32, i32),
+    min_y: i32,
+    top: i32,
+) -> Vec<(i32, i32)> {
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<mc_light::region::Scratch> =
+            std::cell::RefCell::default();
+    }
+    let keys: [(i32, i32); 9] =
+        std::array::from_fn(|i| (x + i as i32 % 3 - 1, z + i as i32 / 3 - 1));
+    {
+        let mut slots = chunks.get_disjoint_mut(keys.each_ref());
+        let mut lit = slots
+            .each_mut()
+            .map(|s| s.as_mut().and_then(|s| s.chunk.as_deref_mut()));
+        let touched =
+            SCRATCH.with_borrow_mut(|s| mc_light::region::light_new_chunk(s, tables, &mut lit));
+        if let Some(touched) = touched {
+            let mut changed = Vec::new();
+            for ((key, slot), touched) in keys.into_iter().zip(slots).zip(touched) {
+                if let (Some(slot), true) = (slot, touched) {
+                    slot.frame = None;
+                    slot.changes += 1;
+                    slot.dirty = true;
+                    changed.push(key);
+                }
+            }
+            return changed;
+        }
+    }
+    // Stored light this cannot read: through the general view.
+    light_through_view(chunks, tables, (x, z), min_y, top)
+}
+
+/// [`light_new`] through [`LightView`], for any stored light.
+fn light_through_view(
+    chunks: &mut HashMap<(i32, i32), Slot, mc_worldgen::density::Fast>,
+    tables: &mc_light::Tables,
+    (x, z): (i32, i32),
+    min_y: i32,
+    top: i32,
+) -> Vec<(i32, i32)> {
     let mut view = LightView {
-        chunks: &mut slot,
+        chunks,
         min_y,
         top,
         touched: Vec::new(),
@@ -1452,9 +1506,7 @@ fn light_alone(chunk: &mut Chunk, tables: &mc_light::Tables) {
         (x * 16 + 16, z * 16 + 16),
         min_y,
     );
-    if let Some(lit) = slot.remove(&(x, z)).and_then(|s| s.chunk) {
-        chunk.light = lit.light;
-    }
+    view.touched
 }
 
 /// The loaded chunks as the light engine sees them.
@@ -1802,5 +1854,113 @@ fn read_spawn(path: &Path) -> Result<((f64, f64, f64), f32)> {
             Ok(((f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5), 0.0))
         }
         _ => bail!("level.dat has no spawn position"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lighting a new chunk on flat arrays gives the same light, stored
+    /// arrays and changed chunks as lighting it through [`LightView`].
+    #[test]
+    fn flat_arrays_light_like_the_view() {
+        // 0 air, 1 stone, 2 glowstone, 3 leaves, 4 bottom slab, 5 torch, 6
+        // top slab, 7 glass-like (opacity 0, no faces).
+        let tables = mc_light::Tables::new(
+            vec![0, 15, 15, 1, 0, 0, 0, 0],
+            vec![0, 0, 15, 0, 0, 14, 0, 0],
+        )
+        .with_faces(vec![0, 0, 0, 0, 1, 0, 2, 0]);
+        let mut seed: u64 = 0xdead_beef;
+        let mut next = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let (min_y, sections) = (-16, 4);
+        let top = min_y + sections * 16;
+        for round in 0..12 {
+            let mut chunks: HashMap<(i32, i32), Slot, mc_worldgen::density::Fast> =
+                HashMap::default();
+            let mut order = Vec::new();
+            for cz in -1..=1 {
+                for cx in -1..=1 {
+                    if (cx, cz) != (0, 0) && next(5) == 0 {
+                        continue;
+                    }
+                    let mut chunk = Chunk::new(cx, cz, min_y, (sections * 16) as u32, 0, 0);
+                    for (s, section) in chunk.sections.iter_mut().enumerate() {
+                        let blocks: Vec<u32> = (0..4096)
+                            .map(|i| {
+                                let y = s as i32 * 16 + (i >> 8);
+                                let h = 20 + ((i & 15) + cx * 7) % 9 + ((i >> 4 & 15) + cz * 3) % 7;
+                                match next(40) {
+                                    0 => 2,
+                                    1 => 3,
+                                    2 => 4,
+                                    3 => 5,
+                                    4 => 6,
+                                    5 => 7,
+                                    _ if y < h && next(8) != 0 => 1,
+                                    _ => 0,
+                                }
+                            })
+                            .collect();
+                        *section = mc_world::Section::from_parts(blocks, vec![0; 64]);
+                    }
+                    chunks.insert(
+                        (cx, cz),
+                        Slot {
+                            chunk: Some(Box::new(chunk)),
+                            frame: None,
+                            changes: 0,
+                            dirty: false,
+                            viewers: 0,
+                        },
+                    );
+                    order.push((cx, cz));
+                }
+            }
+            // The neighbours are lit as they came, the middle one last.
+            order.retain(|&c| c != (0, 0));
+            for &c in &order {
+                light_through_view(&mut chunks, &tables, c, min_y, top);
+            }
+            let snapshot = |chunks: &HashMap<(i32, i32), Slot, mc_worldgen::density::Fast>| {
+                let mut all: Vec<_> = chunks
+                    .iter()
+                    .map(|(k, s)| (*k, s.chunk.as_ref().unwrap().light.clone(), s.changes > 0))
+                    .collect();
+                all.sort_by_key(|e| e.0);
+                all
+            };
+            let reset = |chunks: &mut HashMap<(i32, i32), Slot, mc_worldgen::density::Fast>| {
+                for s in chunks.values_mut() {
+                    s.changes = 0;
+                }
+            };
+            reset(&mut chunks);
+            let mut slow = HashMap::default();
+            for (k, s) in &chunks {
+                slow.insert(
+                    *k,
+                    Slot {
+                        chunk: s.chunk.clone(),
+                        frame: None,
+                        changes: 0,
+                        dirty: false,
+                        viewers: 0,
+                    },
+                );
+            }
+            let mut a = light_new(&mut chunks, &tables, (0, 0), min_y, top);
+            let mut b = light_through_view(&mut slow, &tables, (0, 0), min_y, top);
+            a.sort_unstable();
+            b.sort_unstable();
+            assert_eq!(a, b, "round {round}: changed chunks");
+            assert!(snapshot(&chunks) == snapshot(&slow), "round {round}: light");
+        }
     }
 }

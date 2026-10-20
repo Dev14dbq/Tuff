@@ -159,6 +159,23 @@ fn collect(root: &Path, dir: &Path, ns: &str, out: &mut Vec<String>) {
 }
 
 impl Env for DataEnv {
+    fn entries(&self, registry: &str) -> Option<Vec<String>> {
+        let mut all: Vec<String> = if let Some(set) = self.registries.get(registry) {
+            set.iter().cloned().collect()
+        } else {
+            let (_, reg) = split(registry);
+            let mut out = Vec::new();
+            for ns in std::fs::read_dir(&self.pack).ok()?.flatten() {
+                let root = ns.path().join(reg);
+                let name = ns.file_name().to_string_lossy().into_owned();
+                collect(&root, &root, &name, &mut out);
+            }
+            out
+        };
+        all.sort();
+        Some(all)
+    }
+
     fn exists(&self, registry: &str, id: &str) -> bool {
         if registry == "minecraft:dimension" {
             return matches!(

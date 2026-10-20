@@ -1,0 +1,65 @@
+# `small` area: teammsg, random reset, posteffect, place jigsaw, tm alias.
+# Run by the operator Probe in a flat creative world.
+
+teammsg hello
+tm hello
+team add red
+teammsg hello
+team join red @s
+teammsg hello there
+tm hi
+teammsg
+team modify red color red
+teammsg colored
+team modify red prefix {"text":"[R] "}
+teammsg with prefix
+team leave @s
+team remove red
+random value 1..1
+random reset *
+random reset minecraft:chests/simple_dungeon
+random reset foo
+random reset foo 5
+random reset foo 5 true
+random reset foo 5 false true
+random reset foo 5 true true
+random reset * 5 true true
+random value 1..1 foo
+random reset foo 5
+random roll 1..1 foo
+random value 1..1 foo
+random reset foo
+random value 1..1 foo
+random reset BAD!
+posteffect list @s
+posteffect add @s minecraft:blur
+posteffect add @s minecraft:nosuch
+posteffect list @s
+posteffect add @s minecraft:blur
+posteffect remove @s minecraft:blur
+posteffect remove @s minecraft:blur
+posteffect add @a minecraft:blur
+posteffect clear @s
+posteffect clear @s
+posteffect list @e[type=pig]
+place jigsaw minecraft:village/plains/town_centers minecraft:start 3
+place jigsaw minecraft:nosuch minecraft:start 3
+place jigsaw minecraft:village/plains/town_centers minecraft:nosuch 3
+place jigsaw minecraft:village/plains/town_centers minecraft:start 0
+place jigsaw minecraft:village/plains/town_centers minecraft:start 21
+place jigsaw minecraft:village/plains/town_centers minecraft:start 3 ~ ~ ~
+place jigsaw minecraft:empty minecraft:start 3
+place jigsaw minecraft:village/plains/town_centers minecraft:street 2 ~ ~ ~
+place jigsaw minecraft:village/plains/town_centers minecraft:building_entrance 2 ~ ~ ~
+place jigsaw minecraft:village/plains/town_centers minecraft:bottom 2 ~ ~ ~
+place jigsaw minecraft:village/plains/streets minecraft:street 0 ~ ~ ~
+place jigsaw minecraft:village/plains/streets minecraft:street 3 ~ ~ ~
+posteffect add @s minecraft:z
+posteffect add @s minecraft:a
+posteffect list @s
+posteffect clear @s
+>/teammsg 
+>/random reset 
+>/posteffect add @s 
+>/place jigsaw 
+>/place jigsaw minecraft:

@@ -205,6 +205,53 @@ fn function(r: &mut Run, rest: &[&str]) -> Result<i32> {
     Ok(total)
 }
 
+/// `/debug function`: runs the function(s) as `/function` does, without
+/// its messages, and says how many commands ran.
+pub(super) fn debug_function(r: &mut Run) -> Result<i32> {
+    let (id, tag) = function_arg(r, "name");
+    let functions: Vec<Arc<Function>> = {
+        let packs = lock(&r.ctx.packs);
+        if tag {
+            packs.tag(&id).unwrap_or_default()
+        } else {
+            packs.function(&id).into_iter().collect()
+        }
+    };
+    if functions.is_empty() && !tag {
+        return Err(err("arguments.function.unknown", vec![Tag::String(id)]));
+    }
+    let mut commands = 0;
+    for f in &functions {
+        let Ok(lines) = instantiate(r.ctx, f, None) else {
+            continue;
+        };
+        let src = r.src.clone();
+        call(r.ctx, r.tick, r.out, &mut r.admin, &src, &lines);
+        commands += lines.len() as i32;
+    }
+    flush(r);
+    let file = chrono::Local::now().format("debug-trace-%Y-%m-%d_%H.%M.%S.txt");
+    let (key, subject) = if functions.len() == 1 {
+        (
+            "commands.debug.function.success.single",
+            Tag::String(functions[0].id.clone()),
+        )
+    } else {
+        (
+            "commands.debug.function.success.multiple",
+            Tag::Int(functions.len() as i32),
+        )
+    };
+    r.success(
+        translate(
+            key,
+            vec![Tag::Int(commands), subject, Tag::String(file.to_string())],
+        ),
+        true,
+    );
+    Ok(commands)
+}
+
 /// The function's lines with macro arguments filled in, or why not.
 fn instantiate(
     ctx: &ServerContext,

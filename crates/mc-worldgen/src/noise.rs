@@ -529,10 +529,12 @@ pub struct FbmNoise {
 }
 
 impl FbmNoise {
-    pub fn new(random: &mut dyn RandomSource, params: &FbmParameters, legacy_random: bool) -> Self {
+    /// `old_init`: octaves made one after another from `random` (the
+    /// Nether's legacy biome noises) rather than seeded by name.
+    pub fn new(random: &mut dyn RandomSource, params: &FbmParameters, old_init: bool) -> Self {
         let n = params.octave_count;
         let make = |r: &mut dyn RandomSource| {
-            if legacy_random {
+            if old_init {
                 PerlinNoise::legacy(r, params.base_octave, &params.modifiers)
             } else {
                 PerlinNoise::new(r, params.base_octave, &params.modifiers)

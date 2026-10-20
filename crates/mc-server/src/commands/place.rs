@@ -20,6 +20,7 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         ["place", "feature", "feature", ..] => feature(r),
         ["place", "template", "template", rest @ ..] => template(r, rest),
         ["place", "structure", "structure", ..] => structure(r),
+        ["place", "jigsaw", ..] => jigsaw(r),
         _ => return None,
     })
 }
@@ -56,9 +57,15 @@ fn features(ctx: &ServerContext) -> Option<&Features> {
                 height: ctx.world.height as i32,
                 sea_level: 63,
             };
-            crate::generation::features_with(&ctx.data, shapes, &biomes, heights)
-                .map_err(|e| tracing::warn!("no features for /place: {e}"))
-                .ok()
+            crate::generation::features_with(
+                &ctx.data,
+                shapes,
+                &biomes,
+                heights,
+                mc_worldgen::generator::Dimension::Overworld,
+            )
+            .map_err(|e| tracing::warn!("no features for /place: {e}"))
+            .ok()
         })
         .as_ref()
 }
@@ -404,6 +411,65 @@ fn structure(r: &mut Run) -> Result<i32> {
         translate(
             "commands.place.structure.success",
             vec![Tag::String(id), Tag::Int(p.x), Tag::Int(p.y), Tag::Int(p.z)],
+        ),
+        true,
+    );
+    Ok(1)
+}
+
+fn jigsaw(r: &mut Run) -> Result<i32> {
+    let pool = r.string("pool").map(|s| full_id(&s)).unwrap_or_default();
+    let target = r.string("target").map(|s| full_id(&s)).unwrap_or_default();
+    let depth = r.int("max_depth").unwrap_or(1);
+    let p = if r.arg("position").is_some() {
+        loaded_pos(r, "position")?
+    } else {
+        let [x, y, z] = r.src.pos;
+        Position::new(x.floor() as i32, y.floor() as i32, z.floor() as i32)
+    };
+    let features = features(r.ctx);
+    let Some(features) = features.filter(|f| f.structures.has_pool(&pool)) else {
+        return Err(err(
+            "commands.place.jigsaw.invalid",
+            vec![Tag::String(pool)],
+        ));
+    };
+    let mut live = Live {
+        ctx: r.ctx,
+        features,
+        changes: HashMap::new(),
+        order: Vec::new(),
+        entities: Vec::new(),
+    };
+    let heights = Region::heights(&live);
+    let seed = crate::util::random_u64() as i64;
+    let Ok(start) = features.structures.generate_jigsaw(
+        &pool,
+        &target,
+        depth,
+        mc_features::P::new(p.x, p.y, p.z),
+        seed,
+        heights,
+        &mut live,
+    ) else {
+        return Err(err("commands.place.jigsaw.failed", Vec::new()));
+    };
+    let b = start.bbox;
+    let world_seed = r.ctx.config.seed.unwrap_or(0);
+    for cz in (b.min.z >> 4)..=(b.max.z >> 4) {
+        for cx in (b.min.x >> 4)..=(b.max.x >> 4) {
+            let mut rand = mc_features::rand::WorldgenRandom::legacy(0);
+            rand.set_large_feature_seed(world_seed, cx, cz);
+            features
+                .structures
+                .place(features, &mut live, &mut rand, &start, cx, cz);
+        }
+    }
+    live.finish(r);
+    r.success(
+        translate(
+            "commands.place.jigsaw.success",
+            vec![Tag::Int(p.x), Tag::Int(p.y), Tag::Int(p.z)],
         ),
         true,
     );

@@ -16,7 +16,7 @@ pub enum Fluid {
     Lava = 1,
 }
 
-/// Overworld behaviour of each fluid.
+/// How each fluid behaves.
 struct Props {
     /// Ticks between spreading steps.
     delay: i64,
@@ -41,9 +41,18 @@ const LAVA: Props = Props {
     makes_sources: false,
 };
 
-fn props(fluid: Fluid) -> &'static Props {
+/// Lava where it is fast (the Nether).
+const FAST_LAVA: Props = Props {
+    delay: 10,
+    drop: 1,
+    slope: 4,
+    makes_sources: false,
+};
+
+fn props(level: &dyn Level, fluid: Fluid) -> &'static Props {
     match fluid {
         Fluid::Water => &WATER,
+        Fluid::Lava if level.fast_lava() => &FAST_LAVA,
         Fluid::Lava => &LAVA,
     }
 }
@@ -129,7 +138,7 @@ pub fn on_place(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
     if fluid == Fluid::Lava && harden_lava(level, ctx, p, state) {
         return;
     }
-    level.schedule_fluid_tick(p, fluid as u32, props(fluid).delay);
+    level.schedule_fluid_tick(p, fluid as u32, props(level, fluid).delay);
 }
 
 /// A neighbour changed: same as being placed.
@@ -143,7 +152,7 @@ pub fn shape_updated(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, n
     if let (Some((fluid, _)), Some((other, _))) = (fluid_of(ctx, state), fluid_of(ctx, neighbor))
         && fluid == other
     {
-        level.schedule_fluid_tick(p, fluid as u32, props(fluid).delay);
+        level.schedule_fluid_tick(p, fluid as u32, props(level, fluid).delay);
     }
 }
 
@@ -196,7 +205,7 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, fluid_id: u32) {
 
 /// What a flowing block should be, from its neighbours.
 fn new_state(level: &dyn Level, ctx: Ctx, p: BlockPos, fluid: Fluid) -> u32 {
-    let props = props(fluid);
+    let props = props(level, fluid);
     let (mut most, mut sources) = (0, 0);
     for d in Dir::HORIZONTAL {
         if let Some((other, l)) = fluid_of(ctx, level.block(p.offset(d)))
@@ -238,7 +247,7 @@ fn spread(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, fluid: Fluid
     let Some((_, lvl)) = fluid_of(ctx, state) else {
         return;
     };
-    let props = props(fluid);
+    let props = props(level, fluid);
     let below = p.offset(Dir::Down);
     let below_state = level.block(below);
     let below_same = matches!(fluid_of(ctx, below_state), Some((f, _)) if f == fluid);
@@ -339,7 +348,7 @@ fn slope_distance(
         if hole_below(level, ctx, fluid, np) {
             return depth;
         }
-        if depth < props(fluid).slope {
+        if depth < props(level, fluid).slope {
             best = best.min(slope_distance(
                 level,
                 ctx,

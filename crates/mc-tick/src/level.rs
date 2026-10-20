@@ -26,6 +26,12 @@ pub trait Level {
     /// Whether `p` is inside the world's height.
     fn in_world(&self, p: BlockPos) -> bool;
 
+    /// Lava flows fast, far and thin here (the dimension's
+    /// `gameplay/fast_lava`, the Nether).
+    fn fast_lava(&self) -> bool {
+        false
+    }
+
     /// Turns the block that was at `p` into a falling block entity.
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32);
 

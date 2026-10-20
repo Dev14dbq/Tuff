@@ -5,6 +5,8 @@
 //! decoration, and the terrain shaped around them (the beardifier).
 
 pub mod built;
+pub mod end_city;
+pub mod fortress;
 pub mod jigsaw;
 pub mod legacy;
 pub mod mineshaft;
@@ -128,6 +130,12 @@ pub trait Ground {
     fn height(&mut self, x: i32, z: i32, ocean_floor: bool) -> i32;
     /// The biome of a 4×4×4 cell.
     fn biome(&mut self, qx: i32, qy: i32, qz: i32) -> u32;
+    /// Whether the bare terrain (stone, sea or air from the noise) has
+    /// something at `y` that the heightmap counts: anything but air, or
+    /// only what blocks motion for `ocean_floor`.
+    fn occupied(&mut self, x: i32, y: i32, z: i32, ocean_floor: bool) -> bool {
+        y < self.height(x, z, ocean_floor)
+    }
 }
 
 /// What placing structure pieces needs.
@@ -830,6 +838,56 @@ impl Structures {
     ) -> Option<Start> {
         let index = self.structures.iter().position(|s| s.id == id)?;
         self.generate_in(index, seed, x, z, heights, ground, false, true)
+    }
+
+    /// `/place jigsaw`: pieces grown from a random piece of `pool` whose
+    /// jigsaw named `target` sits at `anchor`. `Err(true)` for a pool that
+    /// does not exist, `Err(false)` when nothing could be placed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn generate_jigsaw(
+        &self,
+        pool: &str,
+        target: &str,
+        max_depth: i32,
+        anchor: P,
+        seed: i64,
+        heights: Heights,
+        ground: &mut dyn Ground,
+    ) -> Result<Start, bool> {
+        struct G<'g>(&'g mut dyn Ground);
+        impl jigsaw::Ground for G<'_> {
+            fn height(&mut self, x: i32, z: i32) -> i32 {
+                self.0.height(x, z, false)
+            }
+        }
+        let mut r = WorldgenRandom::legacy(seed);
+        let pieces = jigsaw::assemble_at(
+            self,
+            &mut r,
+            &mut G(ground),
+            pool,
+            target,
+            max_depth,
+            anchor,
+            heights.min_y,
+            heights.min_y + heights.height - 1,
+        )?;
+        let bbox = pieces
+            .iter()
+            .map(|p| p.bbox)
+            .reduce(BBox::union)
+            .ok_or(false)?;
+        Ok(Start {
+            structure: 0,
+            chunk: (anchor.x >> 4, anchor.z >> 4),
+            pieces: pieces.into_iter().map(Piece::Jigsaw).collect(),
+            bbox,
+        })
+    }
+
+    /// Whether there is a template pool `id`.
+    pub fn has_pool(&self, id: &str) -> bool {
+        self.pool(id).is_some()
     }
 
     /// Whether there is a structure `id`.

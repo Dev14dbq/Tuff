@@ -22,18 +22,84 @@ pub struct Blocks {
     pub lava: u32,
 }
 
+/// Where a dimension's biomes come from (the generator's `biome_source`).
+#[derive(Clone, Debug)]
+pub enum BiomeSource {
+    /// `multi_noise`: the climate's nearest biome in the parameter list
+    /// (`reports/biome_parameters/<preset>.json`).
+    MultiNoise(Value),
+    /// `the_end`: the central island, then highlands, midlands, barrens or
+    /// small islands by the island density around each section.
+    TheEnd,
+}
+
+/// The three dimensions of a normal world.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Dimension {
+    Overworld,
+    Nether,
+    End,
+}
+
+impl Dimension {
+    /// The dimension's id (`minecraft:the_nether`).
+    pub fn id(self) -> &'static str {
+        match self {
+            Dimension::Overworld => "minecraft:overworld",
+            Dimension::Nether => "minecraft:the_nether",
+            Dimension::End => "minecraft:the_end",
+        }
+    }
+
+    /// Its noise settings (`worldgen/noise_settings`).
+    pub fn settings(self) -> &'static str {
+        match self {
+            Dimension::Overworld => "minecraft:overworld",
+            Dimension::Nether => "minecraft:nether",
+            Dimension::End => "minecraft:end",
+        }
+    }
+
+    /// The multi-noise preset whose parameter list it uses, if any.
+    pub fn preset(self) -> Option<&'static str> {
+        match self {
+            Dimension::Overworld => Some("overworld"),
+            Dimension::Nether => Some("nether"),
+            Dimension::End => None,
+        }
+    }
+
+    /// `overworld`, `nether`, `end` (also `the_nether`, `the_end` and
+    /// full ids).
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim_start_matches("minecraft:") {
+            "overworld" => Some(Dimension::Overworld),
+            "nether" | "the_nether" => Some(Dimension::Nether),
+            "end" | "the_end" => Some(Dimension::End),
+            _ => None,
+        }
+    }
+}
+
+enum Biomes {
+    List(BiomeList),
+    End,
+}
+
 pub struct NoiseGenerator {
     pub min_y: i32,
     pub height: i32,
     pub sea_level: i32,
     climate: Climate,
-    biomes: BiomeList,
+    biomes: Biomes,
     final_density: Df,
     aquifers: Option<Functions>,
     aquifer_random: Positional,
     surface_level: Df,
     materials: Materials,
     blocks: Blocks,
+    /// Carvers cutting after the materials leave it.
+    bedrock: Option<u32>,
     default_fluid: Fluid,
     zoom: i64,
     /// Biome name → id.
@@ -62,17 +128,20 @@ pub struct Generated {
 }
 
 impl NoiseGenerator {
-    /// `settings` is the noise settings, `parameters` the biome parameter
-    /// report, `biome_ids` the biome registry.
+    /// `settings` is the noise settings, `biome_ids` the biome registry.
+    /// `blocks.stone` is replaced by the settings' default block.
     pub fn new(
         source: &dyn Source,
         seed: i64,
         settings: &Value,
-        parameters: &Value,
+        biome_source: &BiomeSource,
         names: &dyn Names,
         biome_ids: HashMap<String, u32>,
-        blocks: Blocks,
+        mut blocks: Blocks,
     ) -> Result<Self, String> {
+        if let Some(state) = names.state(&settings["default_block"]) {
+            blocks.stone = state;
+        }
         let legacy = settings["legacy_random_source"].as_bool().unwrap_or(false);
         let mut builder = Builder::new(source, seed, legacy);
         let router = &settings["noise_router"];
@@ -103,6 +172,7 @@ impl NoiseGenerator {
         let noise = &settings["noise"];
         let default_fluid = match settings["default_fluid"].as_str() {
             Some("minecraft:lava") => Fluid::Lava,
+            Some("minecraft:air") => Fluid::Air,
             _ => Fluid::Water,
         };
         let (min_y, height) = (
@@ -131,13 +201,19 @@ impl NoiseGenerator {
             height,
             sea_level: settings["sea_level"].as_i64().unwrap_or(63) as i32,
             climate,
-            biomes: BiomeList::from_json(parameters),
+            biomes: match biome_source {
+                BiomeSource::MultiNoise(parameters) => {
+                    Biomes::List(BiomeList::from_json(parameters))
+                }
+                BiomeSource::TheEnd => Biomes::End,
+            },
             final_density,
             aquifers,
             aquifer_random,
             surface_level,
             materials,
             blocks,
+            bedrock: names.state(&Value::String("minecraft:bedrock".into())),
             default_fluid,
             zoom: zoom_seed(seed),
             biome_ids,
@@ -147,16 +223,49 @@ impl NoiseGenerator {
         })
     }
 
+    /// Leaves out the carvers (to compare with a world made without them).
+    pub fn clear_carvers(&mut self) {
+        self.carvers.clear();
+    }
+
     /// The biome (id) of a 4×4×4 cell.
     pub fn noise_biome(&self, qx: i32, qy: i32, qz: i32) -> u32 {
-        let name = self.biomes.find(self.climate.sample(qx, qy, qz));
+        let name = match &self.biomes {
+            Biomes::List(list) => list.find(self.climate.sample(qx, qy, qz)),
+            Biomes::End => self.end_biome(qx, qy, qz),
+        };
         self.biome_ids.get(name).copied().unwrap_or(0)
     }
 
     /// [`NoiseGenerator::noise_biome`] with a chunk's caches.
     fn noise_biome_in(&self, qx: i32, qy: i32, qz: i32, ctx: &mut Ctx) -> u32 {
-        let name = self.biomes.find(self.climate.sample_in(qx, qy, qz, ctx));
+        let name = match &self.biomes {
+            Biomes::List(list) => list.find(self.climate.sample_in(qx, qy, qz, ctx)),
+            Biomes::End => self.end_biome(qx, qy, qz),
+        };
         self.biome_ids.get(name).copied().unwrap_or(0)
+    }
+
+    /// The End's biome: the island density (the router's erosion) at the
+    /// middle of the cell's section, the central island within 64 sections.
+    fn end_biome(&self, qx: i32, qy: i32, qz: i32) -> &'static str {
+        let (sx, sz) = ((qx << 2) >> 4, (qz << 2) >> 4);
+        if i64::from(sx) * i64::from(sx) + i64::from(sz) * i64::from(sz) <= 4096 {
+            return "minecraft:the_end";
+        }
+        let h = self
+            .climate
+            .erosion
+            .eval((sx * 2 + 1) * 8, qy << 2, (sz * 2 + 1) * 8);
+        if h > 0.25 {
+            "minecraft:end_highlands"
+        } else if h >= -0.0625 {
+            "minecraft:end_midlands"
+        } else if h < -0.21875 {
+            "minecraft:small_end_islands"
+        } else {
+            "minecraft:end_barrens"
+        }
     }
 
     pub fn generate(&self, cx: i32, cz: i32) -> Generated {
@@ -232,39 +341,11 @@ impl NoiseGenerator {
             }
         }
         // Carvers cut the raw terrain; the aquifer fills what they cut.
-        let biome = self.noise_biome((cx - 8) * 4, 0, (cz - 8) * 4);
-        if let Some(list) = self.carvers.get(&biome).filter(|l| !l.is_empty()) {
-            let stone = self.blocks.stone;
-            let fill = self.blocks;
-            let mut carve = |x: i32, y: i32, z: i32| {
-                let i = at(y, z - z0, x - x0);
-                if blocks[i] != stone {
-                    return false;
-                }
-                let fluid = match &mut aquifer {
-                    Some(a) => a.substance(x, y, z, 0.0, &mut ctx),
-                    None => Some(global.at(y).at(y)),
-                };
-                let Some(fluid) = fluid else {
-                    return false;
-                };
-                blocks[i] = match fluid {
-                    Fluid::Air => fill.air,
-                    Fluid::Water => fill.water,
-                    Fluid::Lava => fill.lava,
-                };
-                true
-            };
-            let mut target = Target {
-                cx,
-                cz,
-                min_y,
-                height,
-                trig: &self.trig,
-                carve: &mut carve,
-                mask: vec![false; n],
-            };
-            crate::carver::carve(self.seed, &mut target, &|_, _| list.clone());
+        // Without aquifers (the Nether) they cut after the materials, as
+        // carvers always did: floors stay bare, bedrock stays.
+        let late = self.aquifers.is_none();
+        if !late {
+            self.carve(cx, cz, &mut blocks, &mut aquifer, &mut ctx, global, false);
         }
         // Heights before materials (WORLD_SURFACE_WG: above the top
         // non-air block).
@@ -349,7 +430,69 @@ impl NoiseGenerator {
                 }
             }
         }
+        if late {
+            self.carve(cx, cz, &mut blocks, &mut aquifer, &mut ctx, global, true);
+        }
         Generated { blocks, biomes }
+    }
+
+    /// Runs the carvers of the chunk's biome. Before the materials they cut
+    /// the default block only; after them anything solid but bedrock.
+    #[allow(clippy::too_many_arguments)]
+    fn carve(
+        &self,
+        cx: i32,
+        cz: i32,
+        blocks: &mut [u32],
+        aquifer: &mut Option<Aquifer>,
+        ctx: &mut Ctx,
+        global: Global,
+        after_materials: bool,
+    ) {
+        let (x0, z0) = (cx * 16, cz * 16);
+        let (min_y, height) = (self.min_y, self.height);
+        let at = |y: i32, z: i32, x: i32| (((y - min_y) * 16 + z) * 16 + x) as usize;
+        let biome = self.noise_biome((cx - 8) * 4, 0, (cz - 8) * 4);
+        let Some(list) = self.carvers.get(&biome).filter(|l| !l.is_empty()) else {
+            return;
+        };
+        let fill = self.blocks;
+        let carvable = |s: u32| {
+            if after_materials {
+                s != fill.air && s != fill.water && s != fill.lava && Some(s) != self.bedrock
+            } else {
+                s == fill.stone
+            }
+        };
+        let mut carve = |x: i32, y: i32, z: i32| {
+            let i = at(y, z - z0, x - x0);
+            if !carvable(blocks[i]) {
+                return false;
+            }
+            let fluid = match aquifer {
+                Some(a) => a.substance(x, y, z, 0.0, ctx),
+                None => Some(global.at(y).at(y)),
+            };
+            let Some(fluid) = fluid else {
+                return false;
+            };
+            blocks[i] = match fluid {
+                Fluid::Air => fill.air,
+                Fluid::Water => fill.water,
+                Fluid::Lava => fill.lava,
+            };
+            true
+        };
+        let mut target = Target {
+            cx,
+            cz,
+            min_y,
+            height,
+            trig: &self.trig,
+            carve: &mut carve,
+            mask: vec![false; (height * 256) as usize],
+        };
+        crate::carver::carve(self.seed, &mut target, &|_, _| list.clone());
     }
 }
 
@@ -383,6 +526,31 @@ impl ColumnSampler<'_> {
             y -= 1;
         }
         g.min_y
+    }
+
+    /// Whether the bare terrain has something at a block: stone, or for
+    /// `ocean_floor` false also the sea (what is not air).
+    /// With aquifers (whose caves this does not follow) it is the column's
+    /// height.
+    pub fn occupied(&mut self, x: i32, y: i32, z: i32, ocean_floor: bool) -> bool {
+        let g = self.g;
+        if g.aquifers.is_some() {
+            return y < self.height(x, z, ocean_floor);
+        }
+        let key = (x >> 4, z >> 4);
+        let ctx = self
+            .ctxs
+            .entry(key)
+            .or_insert_with(|| Ctx::new(key.0 * 16, key.1 * 16, g.min_y, g.height));
+        if g.final_density.eval_in(x, y, z, ctx) > 0.0 {
+            return true;
+        }
+        let global = Global {
+            sea_level: g.sea_level,
+            sea: g.default_fluid,
+            lava_level: -54,
+        };
+        !ocean_floor && global.at(y).at(y) != Fluid::Air
     }
 
     /// The biome (id) of a 4×4×4 cell.

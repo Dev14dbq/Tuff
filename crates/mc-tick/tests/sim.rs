@@ -403,8 +403,12 @@ fn random_ticks_grow_spread_and_decay() {
     }
     assert_eq!(shapes.property(world.block(wheat), "age"), Some("7"));
     // Grass spreads onto dirt beside it.
-    world.blocks.insert(BlockPos::new(10, 0, 0), state("minecraft:grass_block"));
-    world.blocks.insert(BlockPos::new(11, 0, 0), state("minecraft:dirt"));
+    world
+        .blocks
+        .insert(BlockPos::new(10, 0, 0), state("minecraft:grass_block"));
+    world
+        .blocks
+        .insert(BlockPos::new(11, 0, 0), state("minecraft:dirt"));
     for _ in 0..500 {
         let p = BlockPos::new(10, 0, 0);
         let s = world.block(p);

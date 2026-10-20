@@ -34,7 +34,7 @@ pub struct Item {
     pub fuel: Option<(String, String)>,
     /// Has `max_damage` (and so a `damage` component).
     pub damageable: bool,
-    /// Uses before it breaks (`max_damage`); 0 if it does not wear.
+    /// `max_damage`, 0 for items that do not wear.
     pub max_damage: i32,
 }
 
@@ -83,6 +83,28 @@ impl Items {
     pub fn max_damage(&self, id: i32) -> i32 {
         self.get(id).map_or(0, |i| i.max_damage)
     }
+}
+
+/// A stack and its other components, with any `minecraft:damage` among them
+/// moved onto the stack (where clients see it).
+pub fn split_held(
+    mut stack: mc_protocol::packets::play::ItemStack,
+    mut comps: Compound,
+) -> (mc_protocol::packets::play::ItemStack, Compound) {
+    if let Some(Tag::Int(d)) = comps.remove("minecraft:damage") {
+        stack.damage = d;
+    }
+    stack.has_component_changes = !comps.is_empty();
+    (stack, comps)
+}
+
+/// Item components for a stack worn by `damage`.
+pub fn damage_components(damage: i32) -> Compound {
+    let mut c = Compound::new();
+    if damage != 0 {
+        c.insert("minecraft:damage", Tag::Int(damage));
+    }
+    c
 }
 
 /// Saved `components` of a stack split into its damage (kept on the stack)

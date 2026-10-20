@@ -406,7 +406,7 @@ pub fn dig(
                 crate::loot::Drop {
                     item: stack.item,
                     count: stack.count,
-                    damage: stack.damage,
+                    components: crate::items::damage_components(stack.damage),
                 },
             ));
         }

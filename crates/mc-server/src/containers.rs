@@ -215,20 +215,32 @@ pub fn slots(ctx: &ServerContext, p: Position, kind: Kind) -> Vec<Option<ItemSta
     }
 }
 
-/// Puts a stack in one slot of the container at `p` (`/item replace`).
-pub fn set_slot(
-    ctx: &ServerContext,
-    p: Position,
-    kind: Kind,
-    slot: usize,
-    stack: Option<ItemStack>,
-) {
-    put(ctx, p, kind, &[(slot, stack)]);
-}
-
 /// Changes slots of the container at `p` (commands, furnaces): stored, seen
 /// by whoever has it open, and comparators are told.
 pub fn put(ctx: &ServerContext, p: Position, kind: Kind, changes: &[(usize, Option<ItemStack>)]) {
+    let full: Vec<_> = changes.iter().map(|(i, s)| (*i, s.clone(), None)).collect();
+    put_with(ctx, p, kind, &full);
+}
+
+/// The component data of the container's stacks, by slot.
+pub fn components(ctx: &ServerContext, p: Position, kind: Kind) -> HashMap<usize, Tag> {
+    if let Some(open) = ctx.containers.lock().expect("containers lock").get(&key(p)) {
+        return open.components.clone();
+    }
+    match ctx.world.block_entity(p, &ctx.data.blocks) {
+        Some(be) => read_items(ctx, &be.data, kind.slots).1,
+        None => HashMap::new(),
+    }
+}
+
+/// Like [`put`], with component data: `Some` replaces a slot's (an empty
+/// compound removes it), `None` keeps it while the item stays the same.
+pub fn put_with(
+    ctx: &ServerContext,
+    p: Position,
+    kind: Kind,
+    changes: &[(usize, Option<ItemStack>, Option<Tag>)],
+) {
     let mut all = ctx.containers.lock().expect("containers lock");
     let open = all.entry(key(p)).or_insert_with(|| {
         let (slots, components) = match ctx.world.block_entity(p, &ctx.data.blocks) {
@@ -242,14 +254,26 @@ pub fn put(ctx: &ServerContext, p: Position, kind: Kind, changes: &[(usize, Opti
             viewers: Vec::new(),
         }
     });
-    for (slot, stack) in changes {
+    for (slot, stack, comps) in changes {
         if *slot < open.slots.len() {
             if open.slots[*slot].as_ref().map(|s| s.item) != stack.as_ref().map(|s| s.item) {
                 open.components.remove(slot);
             }
+            match comps {
+                Some(Tag::Compound(c)) if !c.is_empty() => {
+                    open.components.insert(*slot, Tag::Compound(c.clone()));
+                }
+                Some(_) => {
+                    open.components.remove(slot);
+                }
+                None => {}
+            }
             open.slots[*slot] = stack.clone();
         }
     }
+    let changes: Vec<(usize, Option<ItemStack>)> =
+        changes.iter().map(|(i, s, _)| (*i, s.clone())).collect();
+    let changes = &changes[..];
     store(ctx, p, open);
     let viewers = open.viewers.clone();
     if open.viewers.is_empty() {

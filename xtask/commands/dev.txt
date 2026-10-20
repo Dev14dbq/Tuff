@@ -1,0 +1,53 @@
+# dev tools
+debug stop
+debug start
+debug start
+debug stop
+debug function minecraft:nope
+debug function bogus
+perf stop
+perf start
+perf start
+perf stop
+perf stop
+jfr stop
+jfr start
+jfr start
+jfr stop
+test clearall
+test clearall 5
+test clearall 0
+test clearall 1000
+test clearthat
+test clearthese
+test create minecraft:a 3 3 3
+test create a 0 3 3
+test create a 3 3 3 extra
+test create Bad 3 3 3
+test locate *
+test locate minecraft:nothing
+test locate bogus:*
+test pos x
+test pos
+test resetclosest
+test resetthat
+test resetthese
+test run *
+test run minecraft:nothing
+test run * 2 true 90 3
+test run * 0
+test run * 1 false 45
+test runclosest
+test runclosest 2 true
+test runfailed
+test runfailed true
+test runfailed false 3 true
+test runmultiple * 3
+test runmultiple * 0
+test runthat
+test runthat 3
+test runthese
+test runthese 2 true
+test stop
+test verify *
+test verify minecraft:nothing

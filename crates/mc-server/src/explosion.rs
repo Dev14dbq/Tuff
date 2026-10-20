@@ -634,7 +634,7 @@ pub fn explode(
                     crate::loot::Drop {
                         item: stack.item,
                         count: stack.count,
-                        damage: stack.damage,
+                        components: crate::items::damage_components(stack.damage),
                     },
                 ));
             }
@@ -780,7 +780,7 @@ fn merge_and_drop(ctx: &ServerContext, drops: Vec<(Position, crate::loot::Drop)>
             if left == 0 {
                 break;
             }
-            if m.item == d.item && m.damage == d.damage && m.count < max {
+            if m.item == d.item && m.components == d.components && m.count < max {
                 let n = (max - m.count).min(left);
                 m.count += n;
                 left -= n;

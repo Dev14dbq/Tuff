@@ -1,5 +1,6 @@
 //! Development tasks, run as `cargo xtask <task>`.
 
+mod bench;
 mod blocks;
 mod bots;
 mod chunk_diff;
@@ -13,6 +14,7 @@ mod observe_structures;
 mod parity;
 mod probe;
 mod registry_diff;
+mod similarity;
 mod vanilla_locate;
 mod watch;
 mod worldgen_compare;
@@ -36,6 +38,10 @@ Tasks:
   bots [--addr <host:port>] [--count <n>] [--seconds <s>] [--view-distance <n>] [--version <id>]
       Load test: n bots (default 100) log in, get their chunks and walk around
       for s seconds (default 30). The server must run with --offline.
+  bench [--only vanilla|ours] [--scenarios a,b] [--bots <n>] [--entities <n>] [--seconds <s>]
+      Baseline table (docs/BENCHMARKS.md): world generation at view distance
+      10 and 32, n bots (50), hoppers, redstone clocks, n cows (2000) — on
+      vanilla and ours, each from a new world; MSPT from `tick query`.
   blocks [--addr <host:port>] [--version <id>]
       Two players on an offline creative server with a superflat world: one
       places and breaks blocks, and what both receive is printed.
@@ -65,6 +71,12 @@ Tasks:
   chunk-diff <dump a> <dump b>
       Compare chunk packets saved by `probe --dump` from two servers, decoded
       to blocks, biomes, heightmaps, light and block entities.
+  similarity [--reference <dir>] [--fail <n>] [--top <n>] [--self-test]
+      Clean-room guard: compare our Rust sources with the decompiled vanilla
+      sources (reference/26.3/server-src, or $MC_REFERENCE) by winnowing
+      fingerprints; prints only paths, line ranges and scores. Skips when
+      the sources are missing; fails when a file pair shares --fail (12) or
+      more. --self-test checks that respelled vanilla pieces are caught.
 ";
 
 fn main() -> ExitCode {
@@ -72,6 +84,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("extract-data") => extract_data::run(&args[1..]),
         Some("probe") => probe::run(&args[1..]),
+        Some("bench") => bench::run(&args[1..]),
         Some("bots") => bots::run(&args[1..]),
         Some("blocks") => blocks::run(&args[1..]),
         Some("registry-diff") => registry_diff::run(&args[1..]),
@@ -79,6 +92,7 @@ fn main() -> ExitCode {
         Some("chunk-diff") => chunk_diff::run(&args[1..]),
         Some("chunk-speed") => chunk_speed::run(&args[1..]),
         Some("gen-speed") => gen_speed::run(&args[1..]),
+        Some("similarity") => similarity::run(&args[1..]),
         Some("watch") => watch::run(&args[1..]),
         Some("parity") => parity::run(&args[1..]),
         Some("observe") => observe::run(&args[1..]),
@@ -91,6 +105,7 @@ fn main() -> ExitCode {
         Some("worldgen-logs") => worldgen_compare::logs(&args[1..]),
         Some("worldgen-map") => worldgen_compare::map(&args[1..]),
         Some("worldgen-find") => worldgen_compare::find(&args[1..]),
+        Some("worldgen-slice") => worldgen_compare::slice(&args[1..]),
         None | Some("-h" | "--help" | "help") => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;

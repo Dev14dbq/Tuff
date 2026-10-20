@@ -442,6 +442,100 @@ pub fn assemble(
     if max_depth <= 0 {
         return Some((pieces, center));
     }
+    expand(
+        s,
+        r,
+        ground,
+        &mut pieces,
+        max_depth,
+        expansion_hack,
+        max_distance,
+        (min_y, max_y),
+        center,
+    );
+    Some((pieces, center))
+}
+
+/// Starts a jigsaw at a named connector (`/place jigsaw`): a random piece
+/// of `start_pool` goes where its jigsaw named `target` is at `anchor`.
+/// `Err(true)` for a pool that does not exist, `Err(false)` when nothing
+/// could start.
+#[allow(clippy::too_many_arguments)]
+pub fn assemble_at(
+    s: &Structures,
+    r: &mut WorldgenRandom,
+    ground: &mut dyn Ground,
+    start_pool: &str,
+    target: &str,
+    max_depth: i32,
+    anchor: P,
+    min_y: i32,
+    max_y: i32,
+) -> Result<Vec<Piece>, bool> {
+    let rotation = Rotation(r.next_int_bound(4) as u8);
+    let pool = s.pool(start_pool).ok_or(true)?;
+    if pool.templates.is_empty() {
+        return Err(false);
+    }
+    let element = pool.templates[r.next_int_bound(pool.templates.len() as i32) as usize].clone();
+    if element.is_empty() {
+        return Err(false);
+    }
+    let local = element
+        .jigsaws(s, P::default(), rotation, r)
+        .into_iter()
+        .find(|j| j.name == target)
+        .ok_or(false)?;
+    let pos = P::new(
+        anchor.x - local.pos.x,
+        anchor.y - local.pos.y,
+        anchor.z - local.pos.z,
+    );
+    let bbox = element.bbox(s, pos, rotation);
+    let start = Piece {
+        element,
+        pos,
+        rotation,
+        bbox,
+        ground_delta: 1,
+        junctions: Vec::new(),
+    };
+    let center = P::new(
+        (bbox.max.x + bbox.min.x) / 2,
+        bbox.min.y,
+        (bbox.max.z + bbox.min.z) / 2,
+    );
+    let mut pieces = vec![start];
+    if max_depth > 0 {
+        expand(
+            s,
+            r,
+            ground,
+            &mut pieces,
+            max_depth,
+            false,
+            128,
+            (min_y, max_y),
+            center,
+        );
+    }
+    Ok(pieces)
+}
+
+/// Grows `pieces` (just the start) with children up to `max_depth`.
+#[allow(clippy::too_many_arguments)]
+fn expand(
+    s: &Structures,
+    r: &mut WorldgenRandom,
+    ground: &mut dyn Ground,
+    pieces: &mut Vec<Piece>,
+    max_depth: i32,
+    expansion_hack: bool,
+    max_distance: i32,
+    (min_y, max_y): (i32, i32),
+    center: P,
+) {
+    let (i, k, j) = (center.x, center.y, center.z);
     let outer = Rc::new(RefCell::new(Free {
         min: P::new(
             i - max_distance,
@@ -466,7 +560,7 @@ pub fn assemble(
             s,
             r,
             ground,
-            &mut pieces,
+            pieces,
             index,
             free,
             depth,
@@ -487,7 +581,6 @@ pub fn assemble(
             current = Some((pi, f, d));
         }
     }
-    Some((pieces, center))
 }
 
 #[allow(clippy::too_many_arguments)]

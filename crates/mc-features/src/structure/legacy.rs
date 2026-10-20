@@ -31,6 +31,7 @@ pub enum Kind {
     Built(Built),
     Mineshaft(super::mineshaft::Part),
     Stronghold(super::stronghold::Part),
+    Fortress(super::fortress::Part),
     Monument(super::observed::Monument),
 }
 
@@ -49,6 +50,7 @@ pub enum Post {
         warm: bool,
     },
     Mansion,
+    EndCity,
     Portal {
         placement: u8,
         air_pocket: bool,
@@ -268,6 +270,35 @@ pub fn generate(
             ))
         }
         "ruined_portal" => portal(s, v, r, x, z, h, ground),
+        "nether_fossil" => {
+            // Down from a random height to the first air above solid ground
+            // in the bare terrain, above the lava sea.
+            let (fx, fz) = (x * 16 + r.next_int_bound(16), z * 16 + r.next_int_bound(16));
+            let mut y = crate::value::HeightProvider::parse(&v["height"])?.sample(r, h);
+            while y > h.sea_level {
+                let air = !ground.occupied(fx, y, fz, false);
+                y -= 1;
+                if air && ground.occupied(fx, y, fz, true) {
+                    break;
+                }
+            }
+            if y <= h.sea_level {
+                return None;
+            }
+            let at = P::new(fx, y, fz);
+            let rot = random_rotation(r);
+            let id = format!(
+                "minecraft:nether_fossils/fossil_{}",
+                1 + r.next_int_bound(14)
+            );
+            let settings = Settings {
+                rotation: rot,
+                processors: vec![ignore(true)],
+                ..Settings::default()
+            };
+            let piece = template_piece(s, &id, at, settings, Post::Plain, h)?;
+            Some((vec![piece], at))
+        }
         "swamp_hut" | "desert_pyramid" | "jungle_temple" => {
             let (kind, w, hgt, d) = match ty {
                 "swamp_hut" => (BuiltKind::SwampHut, 7, 7, 9),
@@ -318,10 +349,12 @@ pub fn generate(
         }
         "mineshaft" => super::mineshaft::generate(v, r, x, z, h, ground),
         "stronghold" => super::stronghold::generate(seed, x, z, h),
+        "fortress" => super::fortress::generate(r, x, z),
         "ocean_monument" => {
             super::observed::monument(s.observed(), &s.monument_biomes, r, x, z, h, ground)
         }
         "woodland_mansion" => super::observed::mansion(s, r, x, z, h, ground),
+        "end_city" => super::end_city::generate(s, r, x, z, h, ground),
         _ => None,
     }
 }
@@ -492,6 +525,9 @@ fn portal(
     let span = bbox.y_span();
     let low = h.min_y + 15;
     let l = match placement {
+        5 if air_pocket => r.int_between(32, 100),
+        5 if r.next_float() < 0.5 => r.int_between(27, 29),
+        5 => r.int_between(29, 100),
         3 => r.int_between(70, i - span),
         1 => r.int_between(low, i - span),
         2 => i - span + r.int_between(2, 8),
@@ -503,21 +539,25 @@ fn portal(
         (bbox.min.x, bbox.max.z),
         (bbox.max.x, bbox.max.z),
     ];
-    let tops: Vec<i32> = corners
-        .iter()
-        .map(|&(cx, cz)| ground.height(cx, cz, ocean))
-        .collect();
+    // Down to where at least three corners of the bare terrain are filled.
     let mut y = l;
     while y > low {
-        if tops.iter().filter(|&&t| t > y).count() >= 3 {
+        let filled = corners
+            .iter()
+            .filter(|&&(cx, cz)| ground.occupied(cx, y, cz, ocean))
+            .count();
+        if filled >= 3 {
             break;
         }
         y -= 1;
     }
     let pos = P::new(corner.x, y, corner.z);
     let at = P::new(c.x, y, c.z);
-    let mut processors: Vec<Arc<Processor>> = Vec::new();
     let facts = s.facts();
+    let cold = setup["can_be_cold"].as_bool().unwrap_or(false) && {
+        let b = ground.biome(at.x >> 2, at.y >> 2, at.z >> 2);
+        s.cold_biomes.contains(&b)
+    };
     let rule = |input: &str, chance: f32, output: &str| -> Option<super::template::Rule> {
         let i = facts.block_id(input)?;
         super::template::Rule::new(
@@ -527,42 +567,32 @@ fn portal(
     };
     let mut rules = Vec::new();
     rules.extend(rule("minecraft:gold_block", 0.3, "minecraft:air"));
-    rules.extend(rule(
-        "minecraft:stone_bricks",
-        mossiness,
-        "minecraft:mossy_stone_bricks",
-    ));
-    rules.extend(rule(
-        "minecraft:stone_brick_stairs",
-        mossiness,
-        "minecraft:mossy_stone_brick_stairs",
-    ));
-    rules.extend(rule(
-        "minecraft:stone_brick_slab",
-        mossiness,
-        "minecraft:mossy_stone_brick_slab",
-    ));
-    rules.extend(rule(
-        "minecraft:stone_brick_wall",
-        mossiness,
-        "minecraft:mossy_stone_brick_wall",
-    ));
-    rules.extend(rule("minecraft:obsidian", 0.1, "minecraft:crying_obsidian"));
-    processors.push(Arc::new(Processor::Rule(rules)));
+    rules.extend(match (placement, cold) {
+        (4, _) => rule("minecraft:lava", 1.0, "minecraft:magma_block"),
+        (_, true) => rule("minecraft:lava", 1.0, "minecraft:netherrack"),
+        _ => rule("minecraft:lava", 0.2, "minecraft:magma_block"),
+    });
+    if !cold {
+        rules.extend(rule("minecraft:netherrack", 0.07, "minecraft:magma_block"));
+    }
+    let mut processors: Vec<Arc<Processor>> = vec![
+        ignore(!air_pocket),
+        Arc::new(Processor::Rule(rules)),
+        Arc::new(Processor::BlockAge(mossiness)),
+    ];
     if let Some(t) = facts.tag("minecraft:features_cannot_replace") {
         processors.push(Arc::new(Processor::Protected(BlockSet::Tag(t))));
     }
-    processors.push(ignore(!air_pocket));
+    processors.push(Arc::new(Processor::LavaSubmerged));
+    if setup["replace_with_blackstone"].as_bool().unwrap_or(false) {
+        processors.push(Arc::new(Processor::blackstone(facts)));
+    }
     let settings = Settings {
         rotation: rot,
         mirror,
         pivot,
         processors,
         ..Settings::default()
-    };
-    let cold = setup["can_be_cold"].as_bool().unwrap_or(false) && {
-        let b = ground.biome(at.x >> 2, at.y >> 2, at.z >> 2);
-        s.cold_biomes.contains(&b)
     };
     let p = template_piece(
         s,
@@ -598,6 +628,7 @@ pub fn place(
         Kind::Built(b) => super::built::place(facts, region, r, b, chunk),
         Kind::Mineshaft(part) => super::mineshaft::place(facts, region, r, part, chunk),
         Kind::Stronghold(part) => super::stronghold::place(facts, region, r, part, chunk),
+        Kind::Fortress(part) => super::fortress::place(facts, region, r, part, chunk),
         Kind::Monument(m) => super::observed::place_monument(s.observed(), facts, region, m, chunk),
     }
 }
@@ -639,7 +670,7 @@ fn place_template(
     let mut settings = t.settings.clone();
     settings.bbox = Some(chunk);
     let pos = *t.fixed.get_or_init(|| match t.post {
-        Post::Plain | Post::Mansion | Post::Portal { .. } => t.pos,
+        Post::Plain | Post::Mansion | Post::EndCity | Post::Portal { .. } => t.pos,
         Post::Igloo { offset, .. } => {
             let rel = transform(
                 P::new(3 - offset.x, 0, -offset.z),
@@ -724,6 +755,17 @@ fn place_template(
                         "minecraft:chests/underwater_ruin_small"
                     };
                     loot_chest(facts, region, r, mp, table);
+                }
+            }
+            (Post::EndCity, m) => {
+                if m.starts_with("Chest") && chunk.inside(mp.below(1)) {
+                    loot_chest(
+                        facts,
+                        region,
+                        r,
+                        mp.below(1),
+                        "minecraft:chests/end_city_treasure",
+                    );
                 }
             }
             (Post::Mansion, m) if m.starts_with("Chest") => {

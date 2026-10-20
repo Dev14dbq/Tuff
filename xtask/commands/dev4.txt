@@ -1,0 +1,145 @@
+# test state
+test pos
+say .
+say .
+say .
+test clearthat
+say .
+say .
+say .
+test run *
+say .
+say .
+say .
+test pos
+say .
+say .
+say .
+test pos x
+say .
+say .
+say .
+test clearthat
+say .
+say .
+say .
+test clearthat
+say .
+say .
+say .
+test run *
+say .
+say .
+say .
+test run *
+say .
+say .
+say .
+test clearthese
+say .
+say .
+say .
+test clearall
+say .
+say .
+say .
+test run *
+say .
+say .
+say .
+test resetthat
+say .
+say .
+say .
+test resetthese
+say .
+say .
+say .
+test resetclosest
+say .
+say .
+say .
+test clearall 5
+say .
+say .
+say .
+test stop
+say .
+say .
+say .
+test locate *
+say .
+say .
+say .
+test run *
+say .
+say .
+say .
+test locate *
+say .
+say .
+say .
+test locate minecraft:always_pass
+say .
+say .
+say .
+test create b 2 2 2
+say .
+say .
+say .
+test pos
+say .
+say .
+say .
+test pos x
+say .
+say .
+say .
+test locate *
+say .
+say .
+say .
+test clearall
+say .
+say .
+say .
+test create b 2 2 2
+say .
+say .
+say .
+test run *
+say .
+say .
+say .
+test runthat
+say .
+say .
+say .
+test verify *
+say .
+say .
+say .
+test runfailed
+say .
+say .
+say .
+test runfailed true
+say .
+say .
+say .
+test create c 5 5 5
+say .
+say .
+say .
+test create c 5 5 5
+say .
+say .
+say .
+test runclosest
+say .
+say .
+say .
+test clearall
+say .
+say .
+say .

@@ -5,13 +5,21 @@
 //! thread, in order with everything else that changes the world.
 
 mod bossbar;
+#[cfg(test)]
+mod coverage;
 mod data;
+mod devtools;
 mod execute;
 mod functions;
+mod gear;
+mod item;
 mod living;
+mod loot;
 pub(crate) mod place;
 mod places;
-mod rare;
+mod progress;
+mod provider;
+pub(crate) mod rare;
 mod run;
 mod scoreboard;
 mod scores;
@@ -423,6 +431,8 @@ pub(crate) fn run_chain(
             Some(Err(e)) if many => r.out.lines.extend(e.lines()),
             Some(Err(e)) => return Err(e),
             None => {
+                #[cfg(test)]
+                coverage::missing(path.join(" "));
                 warn!("/{} is not implemented yet", path.join(" "));
                 return Err(CommandError::new("command.failed", Vec::new()));
             }

@@ -194,7 +194,8 @@ fn item_matches(ctx: &ServerContext, p: &Item, stack: &ItemStack) -> bool {
         let pass = match key.trim_start_matches("minecraft:") {
             "count" => in_range(value.trim(), stack.count),
             "damage" => {
-                ctx.items.get(stack.item).is_some_and(|i| i.damageable) && in_range(value.trim(), 0)
+                ctx.items.get(stack.item).is_some_and(|i| i.damageable)
+                    && in_range(value.trim(), stack.damage)
             }
             _ => false,
         };

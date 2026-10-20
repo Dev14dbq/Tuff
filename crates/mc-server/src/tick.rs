@@ -199,7 +199,9 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             // Packets sent to the player come before the reply, as in
             // vanilla, so the reply then goes the same way.
             let after = outcome.events.iter().any(|e| match e {
-                Event::Direct { uuid, .. } | Event::Message { uuid, .. } => *uuid == actor,
+                Event::Direct { uuid, .. }
+                | Event::Message { uuid, .. }
+                | Event::Animate { uuid, .. } => *uuid == actor,
                 Event::Scoreboard(_) | Event::BiomesChanged { .. } => true,
                 _ => false,
             });
@@ -399,12 +401,41 @@ pub fn drop_item(ctx: &ServerContext, at: mc_protocol::Position, drop: crate::lo
     let entity = mc_entity::Entity {
         id: ctx.next_entity_id(),
         uuid: crate::util::random_uuid(),
-        kind: mc_entity::Kind::item(drop.item, drop.count, drop.damage, 10),
+        kind: mc_entity::Kind::item(
+            drop.item,
+            drop.count,
+            match drop.components.get("minecraft:damage") {
+                Some(mc_nbt::Tag::Int(d)) => *d,
+                _ => 0,
+            },
+            10,
+        ),
         pos: [
             f64::from(at.x) + 0.5 + r(0.5),
             f64::from(at.y) + 0.25 + r(0.5),
             f64::from(at.z) + 0.5 + r(0.5),
         ],
+        vel: [r(0.2), 0.2, r(0.2)],
+        on_ground: false,
+        age: 0,
+        removed: false,
+        tags: Vec::new(),
+    };
+    let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
+    lock(&ctx.entities).push(entity);
+}
+
+/// An item entity at an exact position (`/loot spawn`, leftovers a
+/// player has no room for).
+pub fn spawn_item_at(ctx: &ServerContext, pos: [f64; 3], item: i32, count: i32) {
+    let r = |spread: f64| {
+        (crate::util::random_u64() >> 11) as f64 / (1u64 << 53) as f64 * spread - spread / 2.0
+    };
+    let entity = mc_entity::Entity {
+        id: ctx.next_entity_id(),
+        uuid: crate::util::random_uuid(),
+        kind: mc_entity::Kind::item(item, count, 0, 10),
+        pos,
         vel: [r(0.2), 0.2, r(0.2)],
         on_ground: false,
         age: 0,
