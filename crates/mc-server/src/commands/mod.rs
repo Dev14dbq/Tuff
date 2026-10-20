@@ -9,7 +9,7 @@ mod data;
 mod execute;
 mod functions;
 mod living;
-mod place;
+pub(crate) mod place;
 mod places;
 mod rare;
 mod run;
@@ -18,7 +18,7 @@ mod scores;
 mod suggest;
 mod target;
 mod team;
-mod world;
+pub(crate) mod world;
 
 use mc_command::dispatch::{self, Context};
 use mc_command::env::DataEnv;

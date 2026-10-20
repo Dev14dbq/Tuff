@@ -100,6 +100,11 @@ impl<'a> Reader<'a> {
         Ok(slice)
     }
 
+    /// What is left, without reading it.
+    pub fn peek_rest(&self) -> &'a [u8] {
+        &self.buf[self.pos..]
+    }
+
     /// Everything that is left, for trailing "rest of packet" fields.
     pub fn rest(&mut self) -> &'a [u8] {
         let slice = &self.buf[self.pos..];

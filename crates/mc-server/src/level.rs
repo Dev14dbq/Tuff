@@ -1,7 +1,6 @@
 //! The world as block logic (`mc_tick`) sees it, collecting what changed so
 //! it can be sent to players.
 
-
 use mc_protocol::Position;
 use mc_tick::{BlockPos, Level};
 
@@ -48,6 +47,10 @@ impl<'a> WorldLevel<'a> {
         }
     }
 
+    pub fn context(&self) -> &'a ServerContext {
+        self.ctx
+    }
+
     pub fn logic(&self) -> mc_tick::Ctx<'a> {
         mc_tick::Ctx {
             shapes: &self.ctx.shapes,
@@ -89,6 +92,22 @@ impl<'a> WorldLevel<'a> {
         }
     }
 
+    /// Entities block logic created that nobody took with `finish`: they
+    /// join the world now.
+    fn release_spawned(&mut self) {
+        if self.spawned.is_empty() {
+            return;
+        }
+        let mut entities = self.ctx.entities.lock().expect("entities lock");
+        for entity in self.spawned.drain(..) {
+            let _ = self
+                .ctx
+                .events
+                .send(crate::context::Event::EntitySpawned(entity.clone()));
+            entities.push(entity);
+        }
+    }
+
     /// What changed, each block once with its final state.
     pub fn into_changes(mut self) -> Vec<(Position, u32)> {
         self.send_light();
@@ -98,13 +117,17 @@ impl<'a> WorldLevel<'a> {
     /// What changed and the entities block logic created.
     pub fn finish(mut self) -> (Vec<(Position, u32)>, Vec<mc_entity::Entity>) {
         self.send_light();
-        (std::mem::take(&mut self.changes), std::mem::take(&mut self.spawned))
+        (
+            std::mem::take(&mut self.changes),
+            std::mem::take(&mut self.spawned),
+        )
     }
 }
 
 impl Drop for WorldLevel<'_> {
     fn drop(&mut self) {
         self.send_light();
+        self.release_spawned();
     }
 }
 
@@ -327,6 +350,20 @@ impl Level for WorldLevel<'_> {
             }
         }
         (all, living)
+    }
+
+    fn grow_tree(&mut self, p: BlockPos, state: u32) -> bool {
+        crate::growth::grow_tree(self, p, state)
+    }
+
+    fn prime_tnt(&mut self, p: BlockPos) -> bool {
+        if !self.ctx.game_rule_bool("minecraft:tnt_explodes") {
+            return false;
+        }
+        let entity =
+            crate::explosion::primed(self.ctx, to_position(p), crate::explosion::TNT_FUSE, None);
+        self.spawned.push(entity);
+        true
     }
 
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32) {

@@ -251,6 +251,10 @@ pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
                 "minecraft:falling_block".to_owned(),
                 "entity.minecraft.falling_block".to_owned(),
             ),
+            mc_entity::Kind::Tnt { .. } => (
+                "minecraft:tnt".to_owned(),
+                "entity.minecraft.tnt".to_owned(),
+            ),
         };
         let mut key = Compound::new();
         key.insert("translate", name_key.as_str());

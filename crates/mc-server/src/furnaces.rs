@@ -317,6 +317,7 @@ fn tick_one(ctx: &ServerContext, p: Position, before: Progress) -> Option<Progre
             ctx.items.id("minecraft:bucket").map(|item| ItemStack {
                 count: 1,
                 item,
+                damage: 0,
                 has_component_changes: false,
             })
         } else {

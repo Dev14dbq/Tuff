@@ -640,12 +640,56 @@ pub mod play {
         pub const FINISH: i32 = 2;
     }
 
+    /// Data component type ids (`minecraft:data_component_type`, 26.3).
+    pub mod component {
+        pub const DAMAGE: i32 = 3;
+    }
+
+    /// CRC32C (Castagnoli), as the client hashes component data.
+    fn crc32c(bytes: &[u8]) -> u32 {
+        const TABLE: [u32; 256] = {
+            let mut table = [0u32; 256];
+            let mut i = 0;
+            while i < 256 {
+                let mut c = i as u32;
+                let mut k = 0;
+                while k < 8 {
+                    c = if c & 1 != 0 {
+                        0x82F6_3B78 ^ (c >> 1)
+                    } else {
+                        c >> 1
+                    };
+                    k += 1;
+                }
+                table[i] = c;
+                i += 1;
+            }
+            table
+        };
+        let mut c = !0u32;
+        for &b in bytes {
+            c = TABLE[((c ^ u32::from(b)) & 0xFF) as usize] ^ (c >> 8);
+        }
+        !c
+    }
+
+    /// The hash a client sends for an integer component (the damage): the
+    /// int type tag (8) and the value, little-endian, through CRC32C.
+    pub fn int_component_hash(value: i32) -> i32 {
+        let mut bytes = [8u8; 5];
+        bytes[1..].copy_from_slice(&value.to_le_bytes());
+        crc32c(&bytes) as i32
+    }
+
     /// An item stack in a window click: components only as hashes.
     #[derive(Clone, Debug, PartialEq)]
     pub struct HashedStack {
         pub item: i32,
         pub count: i32,
-        pub has_component_changes: bool,
+        /// Added components: type id and data hash.
+        pub added: Vec<(i32, i32)>,
+        /// Removed (default) components by type id.
+        pub removed: Vec<i32>,
     }
 
     impl HashedStack {
@@ -654,36 +698,94 @@ pub mod play {
                 return Ok(None);
             }
             let (item, count) = (r.varint()?, r.varint()?);
-            let added = r.length_prefix()?;
-            for _ in 0..added {
-                r.varint()?;
-                r.i32()?;
+            let n = r.length_prefix()?;
+            let mut added = Vec::with_capacity(n.min(64));
+            for _ in 0..n {
+                added.push((r.varint()?, r.i32()?));
             }
-            let removed = r.length_prefix()?;
-            for _ in 0..removed {
-                r.varint()?;
+            let n = r.length_prefix()?;
+            let mut removed = Vec::with_capacity(n.min(64));
+            for _ in 0..n {
+                removed.push(r.varint()?);
             }
             Ok(Some(Self {
                 item,
                 count,
-                has_component_changes: added + removed > 0,
+                added,
+                removed,
             }))
+        }
+
+        fn damage_hash(&self) -> Option<i32> {
+            self.added
+                .iter()
+                .find(|(t, _)| *t == component::DAMAGE)
+                .map(|&(_, h)| h)
+        }
+
+        fn has_others(&self) -> bool {
+            !self.removed.is_empty() || self.added.iter().any(|(t, _)| *t != component::DAMAGE)
+        }
+
+        /// Whether `stack` is what this describes, the count aside: same
+        /// item, the damage hashes alike, other changes on both or neither.
+        pub fn matches(&self, stack: &ItemStack) -> bool {
+            let damage = (stack.damage != 0).then(|| int_component_hash(stack.damage));
+            self.item == stack.item
+                && self.damage_hash() == damage
+                && self.has_others() == stack.has_component_changes
+        }
+
+        /// The stack, with its damage taken from the first of `known` that
+        /// it matches (the client only sends hashes). Without a match only
+        /// whether there are component changes is known.
+        pub fn resolve<'a>(&self, known: impl IntoIterator<Item = &'a ItemStack>) -> ItemStack {
+            let damage = known
+                .into_iter()
+                .find(|s| self.matches(s))
+                .map_or(0, |s| s.damage);
+            ItemStack {
+                count: self.count,
+                item: self.item,
+                damage,
+                has_component_changes: self.has_others()
+                    || (damage == 0 && self.damage_hash().is_some()),
+            }
         }
     }
 
-    /// An item stack as the client sends it. Component changes are not
-    /// decoded yet; `has_component_changes` says whether there were any.
+    /// An item stack. Of the component changes only the damage is known;
+    /// `has_component_changes` says whether there are others (servers keep
+    /// those beside the stack).
     #[derive(Clone, Debug, PartialEq)]
     pub struct ItemStack {
         pub count: i32,
         /// Id in the `minecraft:item` registry.
         pub item: i32,
+        /// `minecraft:damage`; 0 is the default and is not sent.
+        pub damage: i32,
         pub has_component_changes: bool,
     }
 
     impl ItemStack {
-        /// Slot data; `None` for an empty slot. Reading stops after the
-        /// component counts when there are components.
+        /// `count` of `item` without component changes.
+        pub fn new(item: i32, count: i32) -> Self {
+            Self {
+                count,
+                item,
+                damage: 0,
+                has_component_changes: false,
+            }
+        }
+
+        /// Whether it has any component changes (it does not stack with a
+        /// plain stack then).
+        pub fn has_changes(&self) -> bool {
+            self.damage != 0 || self.has_component_changes
+        }
+
+        /// Slot data; `None` for an empty slot. A leading damage component
+        /// is read; reading stops at any other.
         pub fn decode(r: &mut Reader) -> Result<Option<Self>> {
             let count = r.varint()?;
             if count <= 0 {
@@ -691,25 +793,36 @@ pub mod play {
             }
             let item = r.varint()?;
             let (added, removed) = (r.varint()?, r.varint()?);
-            if added != 0 || removed != 0 {
+            let mut stack = Self::new(item, count);
+            let mut read = 0;
+            while read < added && Reader::new(r.peek_rest()).varint()? == component::DAMAGE {
+                r.varint()?;
+                stack.damage = r.varint()?;
+                read += 1;
+            }
+            if read < added || removed != 0 {
+                stack.has_component_changes = true;
                 r.rest();
             }
-            Ok(Some(Self {
-                count,
-                item,
-                has_component_changes: added != 0 || removed != 0,
-            }))
+            Ok(Some(stack))
         }
 
-        /// Slot data without component changes.
+        /// Slot data with the damage as the only component change.
         pub fn encode(stack: Option<&Self>, out: &mut Vec<u8>) {
             match stack {
                 None => out.put_varint(0),
                 Some(stack) => {
                     out.put_varint(stack.count);
                     out.put_varint(stack.item);
-                    out.put_varint(0);
-                    out.put_varint(0);
+                    if stack.damage != 0 {
+                        out.put_varint(1);
+                        out.put_varint(0);
+                        out.put_varint(component::DAMAGE);
+                        out.put_varint(stack.damage);
+                    } else {
+                        out.put_varint(0);
+                        out.put_varint(0);
+                    }
                 }
             }
         }
@@ -1687,6 +1800,8 @@ pub mod play {
         pub entity_id: i32,
         /// Id in the `minecraft:damage_type` registry.
         pub damage_type: i32,
+        /// The entity that hit it (primed TNT), if any.
+        pub direct: Option<i32>,
     }
     packet!(DamageEvent, Play, "minecraft:damage_event");
     impl Encode for DamageEvent {
@@ -1694,8 +1809,44 @@ pub mod play {
             out.put_varint(self.entity_id);
             out.put_varint(self.damage_type);
             out.put_varint(0); // no causing entity
-            out.put_varint(0); // no direct entity
+            out.put_varint(self.direct.map_or(0, |id| id + 1));
             out.put_bool(false); // no source position
+        }
+    }
+
+    /// Explosion: where, how big, how many blocks it took, how far it
+    /// pushes this player, and its particle and sound.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Explode {
+        pub center: [f64; 3],
+        pub radius: f32,
+        pub block_count: i32,
+        pub knockback: Option<[f64; 3]>,
+        /// `minecraft:particle_type` id (one without options).
+        pub particle: i32,
+        /// `minecraft:sound_event` id.
+        pub sound: i32,
+    }
+    packet!(Explode, Play, "minecraft:explode");
+    impl Encode for Explode {
+        fn encode(&self, out: &mut Vec<u8>) {
+            for v in self.center {
+                out.put_f64(v);
+            }
+            out.put_f32(self.radius);
+            out.put_i32(self.block_count);
+            out.put_bool(self.knockback.is_some());
+            for v in self.knockback.into_iter().flatten() {
+                out.put_f64(v);
+            }
+            out.put_varint(self.particle);
+            out.put_varint(self.sound + 1);
+            // The block particles as vanilla 26.3 sends them: poof (scale
+            // 0.5) and smoke, weight 1 each, and a trailing 1.
+            out.put_slice(&[
+                0x02, 0x45, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x80, 0x00, 0x00, 0x01, 0x48, 0x3f, 0x80,
+                0x00, 0x00, 0x3f, 0x80, 0x00, 0x00, 0x01, 0x01,
+            ]);
         }
     }
 
@@ -2649,6 +2800,7 @@ mod tests {
                 Some(play::ItemStack {
                     count: 1,
                     item: 163,
+                    damage: 0,
                     has_component_changes: false,
                 }),
             )],
@@ -2664,6 +2816,60 @@ mod tests {
         }
         .encode(&mut out);
         assert_eq!(out, [0xef, 0x03, 0x00, 0x01, 0x06]);
+    }
+
+    #[test]
+    fn damaged_stacks_match_vanilla() {
+        // `give @s flint_and_steel[damage=5]` on vanilla 26.3: the slot.
+        let mut out = Vec::new();
+        play::ItemStack::encode(
+            Some(&play::ItemStack {
+                damage: 5,
+                ..play::ItemStack::new(1005, 1)
+            }),
+            &mut out,
+        );
+        assert_eq!(out, [0x01, 0xed, 0x07, 0x01, 0x00, 0x03, 0x05]);
+        let back = play::ItemStack::decode(&mut Reader::new(&out))
+            .unwrap()
+            .unwrap();
+        assert_eq!((back.damage, back.has_component_changes), (5, false));
+        // A click names it by hash; only the damaged one matches.
+        let hashed = play::HashedStack {
+            item: 1005,
+            count: 1,
+            added: vec![(play::component::DAMAGE, play::int_component_hash(5))],
+            removed: Vec::new(),
+        };
+        let fresh = play::ItemStack::new(1005, 1);
+        assert!(hashed.matches(&back) && !hashed.matches(&fresh));
+        assert_eq!(hashed.resolve([&fresh, &back]).damage, 5);
+    }
+
+    #[test]
+    fn explode_matches_vanilla_bytes() {
+        // `summon tnt ~ ~ ~7 {fuse:1}` next to a player on vanilla 26.3.
+        let mut out = Vec::new();
+        play::Explode {
+            center: [9.5, -60.0 + f64::from(0.98_f32 / 16.0), 16.5],
+            radius: 4.0,
+            block_count: 682,
+            knockback: Some([
+                0.0,
+                f64::from_bits(0x3f9bd06099876905),
+                f64::from_bits(0xbfbf3a021b0c735b),
+            ]),
+            particle: 29,
+            sound: 703,
+        }
+        .encode(&mut out);
+        let hex: String = out.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "4023000000000000c04df828f5c00000403080000000000040800000000002aa01\
+             00000000000000003f9bd06099876905bfbf3a021b0c735b1dc00502453f0000003f\
+             80000001483f8000003f8000000101"
+        );
     }
 
     #[test]
@@ -2684,6 +2890,7 @@ mod tests {
                 item: Some(play::ItemStack {
                     count: 1,
                     item: 1,
+                    damage: 0,
                     has_component_changes: false
                 }),
             }

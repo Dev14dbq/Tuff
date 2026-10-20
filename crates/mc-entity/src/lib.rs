@@ -20,9 +20,32 @@ pub enum Kind {
     Item {
         item: i32,
         count: i32,
+        /// The stack's `minecraft:damage`.
+        damage: i32,
         /// Ticks before a player may pick it up.
         pickup_delay: i32,
+        /// Hit points (5); explosions and fire take them.
+        health: f32,
     },
+    /// Primed TNT, exploding when the fuse runs out.
+    Tnt {
+        fuse: i32,
+        /// The player who lit it.
+        owner: Option<u128>,
+    },
+}
+
+impl Kind {
+    /// A dropped stack as a block drops it.
+    pub fn item(item: i32, count: i32, damage: i32, pickup_delay: i32) -> Self {
+        Kind::Item {
+            item,
+            count,
+            damage,
+            pickup_delay,
+            health: 5.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -44,7 +67,7 @@ impl Entity {
     /// Width and height of the collision box.
     pub fn size(&self) -> (f64, f64) {
         match self.kind {
-            Kind::FallingBlock { .. } => (0.98, 0.98),
+            Kind::FallingBlock { .. } | Kind::Tnt { .. } => (0.98, 0.98),
             Kind::Item { .. } => (0.25, 0.25),
         }
     }

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use mc_nbt::{Compound, Tag};
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +34,8 @@ pub struct Item {
     pub fuel: Option<(String, String)>,
     /// Has `max_damage` (and so a `damage` component).
     pub damageable: bool,
+    /// Uses before it breaks (`max_damage`); 0 if it does not wear.
+    pub max_damage: i32,
 }
 
 #[derive(Debug, Default)]
@@ -76,6 +79,43 @@ impl Items {
     pub fn max_stack(&self, id: i32) -> i32 {
         self.get(id).map_or(64, |i| i.max_stack)
     }
+
+    pub fn max_damage(&self, id: i32) -> i32 {
+        self.get(id).map_or(0, |i| i.max_damage)
+    }
+}
+
+/// Saved `components` of a stack split into its damage (kept on the stack)
+/// and the rest (kept as NBT beside it), `None` if nothing is left.
+pub fn split_damage(components: Option<&Tag>) -> (i32, Option<Tag>) {
+    let Some(Tag::Compound(c)) = components else {
+        return (0, components.cloned());
+    };
+    let damage = match c.get("minecraft:damage") {
+        Some(Tag::Int(d)) => *d,
+        _ => 0,
+    };
+    let mut rest = c.clone();
+    rest.remove("minecraft:damage");
+    (damage, (!rest.is_empty()).then_some(Tag::Compound(rest)))
+}
+
+/// The `components` to save for a stack: the damage (when not 0) first,
+/// then the rest kept beside it.
+pub fn join_damage(damage: i32, rest: Option<&Tag>) -> Option<Tag> {
+    if damage == 0 {
+        return rest.cloned();
+    }
+    let mut c = Compound::new();
+    c.insert("minecraft:damage", Tag::Int(damage));
+    if let Some(Tag::Compound(rest)) = rest {
+        for (k, v) in rest.iter() {
+            if k != "minecraft:damage" {
+                c.insert(k, v.clone());
+            }
+        }
+    }
+    Some(Tag::Compound(c))
 }
 
 fn parse(name: &str, c: &Value) -> Item {
@@ -105,6 +145,7 @@ fn parse(name: &str, c: &Value) -> Item {
             .map(str::to_owned),
         attack_damage,
         damageable: c.get("minecraft:max_damage").is_some(),
+        max_damage: c["minecraft:max_damage"].as_i64().unwrap_or(0) as i32,
         fuel: c.get("minecraft:cooking_fuel").and_then(|f| {
             Some((
                 f["burn_time"].as_str()?.to_owned(),

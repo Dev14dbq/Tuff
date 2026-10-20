@@ -234,6 +234,7 @@ impl Windows {
                     click.mode,
                     &click.changed,
                     click.carried.clone(),
+                    &[],
                 );
                 // The 2×2 grid's result.
                 let made = ctx.recipes.craft(&hands.slots[1..5], 2);
@@ -294,14 +295,36 @@ impl Windows {
                 crate::tick::throw_item(ctx, pose, ItemStack { count, ..stack });
             }
         }
+        // What both sides held before, for the stacks' damage.
+        let window_stacks: Vec<ItemStack> = match &open.kind {
+            Kind::Container { parts } => {
+                let all = ctx.containers.lock().expect("containers lock");
+                parts
+                    .iter()
+                    .filter_map(|(p, _)| all.get(&(p.x, p.y, p.z)))
+                    .flat_map(|o| o.slots.iter().flatten())
+                    .filter(|s| s.has_changes())
+                    .cloned()
+                    .collect()
+            }
+            Kind::Crafting { grid } => grid
+                .iter()
+                .flatten()
+                .filter(|s| s.has_changes())
+                .cloned()
+                .collect(),
+        };
+        let mut hand_stacks = Vec::new();
         let mut thrown = Vec::new();
         change_hands(ctx, uuid, entity_id, |hands| {
+            hand_stacks = hands.changed_stacks();
             thrown = hands.click(
                 player_slot,
                 click.button,
                 click.mode,
                 &mine,
                 click.carried.clone(),
+                &window_stacks,
             );
         });
         for stack in thrown {
@@ -321,7 +344,7 @@ impl Windows {
                     if local.is_empty() {
                         continue;
                     }
-                    let (viewers, slots) = containers::change(ctx, uuid, p, &local);
+                    let (viewers, slots) = containers::change(ctx, uuid, p, &local, &hand_stacks);
                     if !viewers.is_empty() {
                         let _ = ctx.events.send(Event::ContainerSlots {
                             position: p,
@@ -333,11 +356,8 @@ impl Windows {
             }
             Kind::Crafting { grid } => {
                 for (s, stack) in theirs {
-                    grid[s] = stack.map(|h| ItemStack {
-                        count: h.count,
-                        item: h.item,
-                        has_component_changes: h.has_component_changes,
-                    });
+                    let known: Vec<&ItemStack> = hand_stacks.iter().chain(&window_stacks).collect();
+                    grid[s] = stack.map(|h| h.resolve(known.iter().copied()));
                 }
                 let made = ctx.recipes.craft(&grid[1..10], 3);
                 if made != grid[0] {

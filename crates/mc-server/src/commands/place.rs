@@ -185,6 +185,56 @@ pub(super) fn loaded_pos(r: &Run, name: &str) -> Result<Position> {
     Ok(p)
 }
 
+/// Block changes in order, and block entity data to apply after them.
+pub(crate) type Placed = (Vec<(Position, u32)>, Vec<(Position, Compound)>);
+
+/// Places the configured feature `id` at `origin` as `/place feature`
+/// would, with `cleared` made air first. Returns the changes in order and
+/// the block entity data to apply, or `None` if it did not place.
+pub(crate) fn place_configured(
+    ctx: &ServerContext,
+    id: &str,
+    origin: Position,
+    cleared: &[Position],
+) -> Option<Placed> {
+    let features = features(ctx)?;
+    let f = features.configured(id)?.clone();
+    let mut live = Live {
+        ctx,
+        features,
+        changes: HashMap::new(),
+        order: Vec::new(),
+        entities: Vec::new(),
+    };
+    for p in cleared {
+        live.set(P::new(p.x, p.y, p.z), features.facts.air);
+    }
+    let cx = mc_features::feature::Ctx {
+        facts: &features.facts,
+        features,
+    };
+    let mut rand = mc_features::rand::WorldgenRandom::legacy(random_seed());
+    if !f.place(
+        &cx,
+        &mut live,
+        &mut rand,
+        P::new(origin.x, origin.y, origin.z),
+    ) {
+        return None;
+    }
+    let changes = live
+        .order
+        .iter()
+        .map(|&(x, y, z)| (Position::new(x, y, z), live.changes[&(x, y, z)]))
+        .collect();
+    let entities = live
+        .entities
+        .into_iter()
+        .map(|(p, nbt)| (Live::pos(p), nbt))
+        .collect();
+    Some((changes, entities))
+}
+
 fn random_seed() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

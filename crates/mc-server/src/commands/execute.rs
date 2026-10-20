@@ -149,9 +149,15 @@ fn entity_stacks(ctx: &ServerContext, t: &Target, wanted: &[i32]) -> Vec<ItemSta
         .iter()
         .filter(|e| e.uuid == t.uuid())
         .filter_map(|e| match &e.kind {
-            mc_entity::Kind::Item { item, count, .. } => Some(ItemStack {
+            mc_entity::Kind::Item {
+                item,
+                count,
+                damage,
+                ..
+            } => Some(ItemStack {
                 count: *count,
                 item: *item,
+                damage: *damage,
                 has_component_changes: false,
             }),
             _ => None,

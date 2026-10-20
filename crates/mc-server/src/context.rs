@@ -89,6 +89,7 @@ impl OnlinePlayer {
 pub struct EntityTypes {
     pub falling_block: i32,
     pub item: i32,
+    pub tnt: i32,
 }
 
 /// Things every connection in play needs to hear about.
@@ -210,6 +211,8 @@ pub enum Event {
         uuid: u128,
         entity_id: i32,
         damage_type: i32,
+        /// The entity that did it, if not a player (primed TNT).
+        direct: Option<i32>,
     },
     /// A player died.
     Died {
@@ -270,6 +273,24 @@ pub enum Event {
         uuid: u128,
         entity_id: i32,
         times: u8,
+    },
+    /// Metadata of non-player entities changed (a TNT fuse).
+    EntitiesData(Vec<mc_protocol::packets::play::SetEntityData>),
+    /// An entity event of a player (a tool breaking in their hand).
+    HandBroke {
+        uuid: u128,
+        entity_id: i32,
+        status: i8,
+    },
+    /// An explosion; players within 64 blocks see it, those it pushed with
+    /// their knockback.
+    Explosion {
+        center: [f64; 3],
+        radius: f32,
+        block_count: i32,
+        particle: i32,
+        sound: i32,
+        knockback: Vec<(u128, [f64; 3])>,
     },
     /// What a player holds in the main hand changed.
     Equipment {
@@ -338,6 +359,10 @@ pub struct ServerContext {
     pub white_list: std::sync::atomic::AtomicBool,
     /// `minecraft:entity_type` ids of the entities we have.
     pub entity_types: EntityTypes,
+    /// `minecraft:particle_type` and `minecraft:sound_event` ids of a big
+    /// explosion.
+    pub explosion_particle: i32,
+    pub explosion_sound: i32,
     /// `minecraft:player` in `minecraft:entity_type`.
     pub player_entity_type: i32,
     /// RSA key for the online-mode key exchange (`None` in offline mode).
@@ -604,9 +629,18 @@ impl ServerContext {
             default_game_mode: AtomicI32::new(default_game_mode),
             lists: Mutex::new(lists),
             white_list: std::sync::atomic::AtomicBool::new(white_list),
+            explosion_particle: data
+                .builtin
+                .id("minecraft:particle_type", "minecraft:explosion_emitter")
+                .context("explosion_emitter missing from the registries report")?,
+            explosion_sound: data
+                .builtin
+                .id("minecraft:sound_event", "minecraft:entity.generic.explode")
+                .context("entity.generic.explode missing from the registries report")?,
             entity_types: EntityTypes {
                 falling_block: entity_type("minecraft:falling_block")?,
                 item: entity_type("minecraft:item")?,
+                tnt: entity_type("minecraft:tnt")?,
             },
             player_entity_type,
             key,

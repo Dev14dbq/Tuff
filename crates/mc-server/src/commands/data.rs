@@ -145,8 +145,11 @@ fn block_nbt(ctx: &ServerContext, p: Position) -> Option<Compound> {
     Some(c)
 }
 
-fn item_entry(ctx: &ServerContext, item: i32, count: i32) -> Compound {
+fn item_entry(ctx: &ServerContext, item: i32, count: i32, damage: i32) -> Compound {
     let mut c = Compound::new();
+    if let Some(components) = crate::items::join_damage(damage, None) {
+        c.insert("components", components);
+    }
     c.insert("count", Tag::Int(count));
     c.insert(
         "id",
@@ -230,16 +233,29 @@ fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
             Tag::List(e.tags.iter().map(|s| Tag::String(s.clone())).collect()),
         );
     }
-    if let mc_entity::Kind::Item {
-        item,
-        count,
-        pickup_delay,
-    } = &e.kind
-    {
-        c.insert("Item", Tag::Compound(item_entry(ctx, *item, *count)));
-        c.insert("PickupDelay", Tag::Short(*pickup_delay as i16));
-        c.insert("Age", Tag::Short(e.age.min(i16::MAX as u32) as i16));
-        c.insert("Health", Tag::Short(5));
+    match &e.kind {
+        mc_entity::Kind::Item {
+            item,
+            count,
+            damage,
+            pickup_delay,
+            health,
+        } => {
+            c.insert(
+                "Item",
+                Tag::Compound(item_entry(ctx, *item, *count, *damage)),
+            );
+            c.insert("PickupDelay", Tag::Short(*pickup_delay as i16));
+            c.insert("Age", Tag::Short(e.age.min(i16::MAX as u32) as i16));
+            c.insert("Health", Tag::Short(*health as i16));
+        }
+        mc_entity::Kind::Tnt { fuse, owner } => {
+            c.insert("fuse", Tag::Short(*fuse as i16));
+            if let Some(owner) = owner {
+                c.insert("owner", Tag::IntArray(target::uuid_ints(*owner)));
+            }
+        }
+        mc_entity::Kind::FallingBlock { .. } => {}
     }
     c
 }

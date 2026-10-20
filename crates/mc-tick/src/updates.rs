@@ -70,6 +70,9 @@ fn set_with_limit(
     crate::fire::on_place(level, ctx, p, old, state);
     redstone::on_place(level, ctx, p, old, state);
     gravity::wake(level, ctx, p, state);
+    if ctx.shapes.block_index(old) != ctx.shapes.block_index(state) {
+        powered_tnt(level, ctx, p);
+    }
     if flags.neighbors {
         for dir in Dir::NC_ORDER {
             neighbor_changed(level, ctx, p.offset(dir), p);
@@ -174,6 +177,16 @@ pub fn update_neighbor_shapes(
     }
 }
 
+/// TNT next to power lights itself.
+fn powered_tnt(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+    if ctx.shapes.block_name(level.block(p)) == Some("minecraft:tnt")
+        && redstone::received(level, ctx, p, true) > 0
+        && level.prime_tnt(p)
+    {
+        set_block(level, ctx, p, ctx.shapes.air(), Flags::ALL);
+    }
+}
+
 /// A neighbour-changed update to the block at `p` from `from`: fluids and
 /// redstone components react.
 pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: BlockPos) {
@@ -182,6 +195,7 @@ pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: Blo
     }
     fluids::neighbor_changed(level, ctx, p);
     redstone::neighbor_changed(level, ctx, p);
+    powered_tnt(level, ctx, p);
     crate::pistons::check(level, ctx, p);
     let state = level.block(p);
     gravity::wake(level, ctx, p, state);

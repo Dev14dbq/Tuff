@@ -56,9 +56,11 @@ impl Hands {
     }
 
     /// A click in the inventory window, as the client reports its result
-    /// (the server takes the client's word for now). Returns stacks thrown
-    /// out of the window: Q over a slot (mode 4) or a click outside it
-    /// (slot −999).
+    /// (the server takes the client's word for now). The client describes
+    /// stacks by component hashes, so their damage comes from the stacks
+    /// known before the click: these slots, the cursor and `known` (an open
+    /// window's). Returns stacks thrown out of the window: Q over a slot
+    /// (mode 4) or a click outside it (slot −999).
     pub fn click(
         &mut self,
         slot: i16,
@@ -66,6 +68,7 @@ impl Hands {
         mode: i32,
         changed: &[(i16, Option<HashedStack>)],
         carried: Option<HashedStack>,
+        known: &[ItemStack],
     ) -> Vec<ItemStack> {
         let mut thrown = Vec::new();
         if mode == 4
@@ -87,11 +90,15 @@ impl Hands {
                 ..stack.clone()
             });
         }
-        let to_stack = |h: HashedStack| ItemStack {
-            count: h.count,
-            item: h.item,
-            has_component_changes: h.has_component_changes,
-        };
+        let before: Vec<ItemStack> = self
+            .slots
+            .iter()
+            .chain(std::iter::once(&self.carried))
+            .flatten()
+            .filter(|s| s.has_changes())
+            .chain(known.iter().filter(|s| s.has_changes()))
+            .cloned()
+            .collect();
         for (slot, stack) in changed {
             let Some(index) = usize::try_from(*slot)
                 .ok()
@@ -99,14 +106,25 @@ impl Hands {
             else {
                 continue;
             };
-            let new = stack.clone().map(to_stack);
+            let new = stack.as_ref().map(|h| h.resolve(&before));
             if new.as_ref().map(|s| s.item) != self.slots[index].as_ref().map(|s| s.item) {
                 self.components.remove(&index);
             }
             self.slots[index] = new;
         }
-        self.carried = carried.map(to_stack);
+        self.carried = carried.map(|h| h.resolve(&before));
         thrown
+    }
+
+    /// Stacks with component changes, for resolving a window click's hashes.
+    pub fn changed_stacks(&self) -> Vec<ItemStack> {
+        self.slots
+            .iter()
+            .chain(std::iter::once(&self.carried))
+            .flatten()
+            .filter(|s| s.has_changes())
+            .cloned()
+            .collect()
     }
 
     /// Pick block (middle click) for `item`: selects it in the hotbar,
@@ -153,6 +171,7 @@ impl Hands {
         self.slots[target] = Some(ItemStack {
             count: 1,
             item,
+            damage: 0,
             has_component_changes: false,
         });
         self.selected = target - 36;
@@ -185,23 +204,32 @@ impl Hands {
     /// Puts items in: first onto matching stacks, then into empty slots
     /// (hotbar first, then the main inventory). Returns how many went in and
     /// the container slots that changed.
-    pub fn insert(&mut self, item: i32, mut count: i32, max: i32) -> (i32, Vec<usize>) {
+    pub fn insert(&mut self, item: i32, count: i32, max: i32) -> (i32, Vec<usize>) {
+        self.insert_stack(&ItemStack::new(item, count), max)
+    }
+
+    /// [`Hands::insert`] for a stack that may be damaged: it only joins
+    /// stacks with the same damage.
+    pub fn insert_stack(&mut self, stack: &ItemStack, max: i32) -> (i32, Vec<usize>) {
         let order: Vec<usize> = (36..45).chain(9..36).collect();
         let mut changed = Vec::new();
-        let start = count;
-        for &slot in &order {
-            if count == 0 {
-                break;
-            }
-            if let Some(stack) = &mut self.slots[slot]
-                && stack.item == item
-                && !stack.has_component_changes
-                && stack.count < max
-            {
-                let n = (max - stack.count).min(count);
-                stack.count += n;
-                count -= n;
-                changed.push(slot);
+        let mut count = stack.count;
+        if !stack.has_component_changes {
+            for &slot in &order {
+                if count == 0 {
+                    break;
+                }
+                if let Some(s) = &mut self.slots[slot]
+                    && s.item == stack.item
+                    && s.damage == stack.damage
+                    && !s.has_component_changes
+                    && s.count < max
+                {
+                    let n = (max - s.count).min(count);
+                    s.count += n;
+                    count -= n;
+                    changed.push(slot);
+                }
             }
         }
         for &slot in &order {
@@ -213,14 +241,13 @@ impl Hands {
                 let n = max.min(count);
                 self.slots[slot] = Some(ItemStack {
                     count: n,
-                    item,
-                    has_component_changes: false,
+                    ..stack.clone()
                 });
                 count -= n;
                 changed.push(slot);
             }
         }
-        (start - count, changed)
+        (stack.count - count, changed)
     }
 
     /// 0 main hand, 1 off hand.
@@ -379,6 +406,7 @@ pub fn dig(
                 crate::loot::Drop {
                     item: stack.item,
                     count: stack.count,
+                    damage: stack.damage,
                 },
             ));
         }
@@ -494,11 +522,26 @@ pub fn use_item_on(
     // Flint and steel and fire charges light fire.
     let held_name = held.and_then(|item| ctx.items.name(item.item));
     if let Some(tool @ ("minecraft:flint_and_steel" | "minecraft:fire_charge")) = held_name {
-        if !light(ctx, &mut outcome, clicked, face) {
-            return refuse(outcome);
+        // TNT turns into primed TNT instead.
+        let tnt = use_blocks
+            && block_at(clicked).and_then(|s| blocks.block_name(s)) == Some("minecraft:tnt");
+        let mut level = WorldLevel::new(ctx);
+        if tnt && crate::explosion::ignite(ctx, &mut level, clicked, Some(actor.uuid)) {
+            let changes = level.into_changes();
+            outcome.updates.extend(changes.iter().copied());
+            outcome.events.push(Event::BlocksChanged { by: 0, changes });
+        } else {
+            drop(level);
+            if !light(ctx, &mut outcome, clicked, face) {
+                return refuse(outcome);
+            }
         }
-        if tool == "minecraft:fire_charge" && actor.game_mode != CREATIVE {
-            replace_held(ctx, &mut outcome, actor, hand, None);
+        if tool == "minecraft:fire_charge" {
+            if actor.game_mode != CREATIVE {
+                replace_held(ctx, &mut outcome, actor, hand, None);
+            }
+        } else {
+            wear_held(ctx, &mut outcome, actor, hand, 1);
         }
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,
@@ -643,6 +686,41 @@ fn light(ctx: &ServerContext, outcome: &mut Outcome, clicked: Position, face: us
     true
 }
 
+/// Wears the held tool by `amount` uses (not in creative); when that
+/// reaches its maximum damage it breaks and clients play the break.
+fn wear_held(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, hand: i32, amount: i32) {
+    if actor.game_mode == CREATIVE {
+        return;
+    }
+    let mut inventories = ctx.inventories.lock().expect("inventories lock");
+    let Some(hands) = inventories.get_mut(&actor.uuid) else {
+        return;
+    };
+    let slot = hands.hand_slot(hand);
+    let Some(stack) = &mut hands.slots[slot] else {
+        return;
+    };
+    let max = ctx.items.max_damage(stack.item);
+    if max == 0 {
+        return;
+    }
+    stack.damage += amount;
+    if stack.damage >= max {
+        hands.slots[slot] = None;
+        hands.components.remove(&slot);
+        outcome.events.push(Event::HandBroke {
+            uuid: actor.uuid,
+            entity_id: actor.entity_id,
+            status: if hand == 1 { 48 } else { 47 },
+        });
+    }
+    outcome.events.push(Event::InventorySlot {
+        uuid: actor.uuid,
+        slot: slot as i16,
+        item: hands.slots[slot].clone(),
+    });
+}
+
 /// Puts `item` (or nothing) in place of one of the held stack; a stack of
 /// several keeps the rest and `item` goes elsewhere in the inventory.
 fn replace_held(
@@ -671,6 +749,7 @@ fn replace_held(
         hands.slots[slot] = item.map(|item| ItemStack {
             count: 1,
             item,
+            damage: 0,
             has_component_changes: false,
         });
         hands.components.remove(&slot);
@@ -1045,5 +1124,98 @@ mod tests {
         assert!(in_reach(&me, Position::new(2, -1, 0)));
         assert!(in_reach(&me, Position::new(5, 1, 0)));
         assert!(!in_reach(&me, Position::new(30, -1, 0)));
+    }
+
+    /// Survival player at the origin holding `damage` worn flint and steel.
+    fn with_flint(damage: i32) -> Option<(ServerContext, Actor)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let data = mc_data::McData::load(&dir).ok()?;
+        let ctx = ServerContext::new(crate::Config::new(dir), data).ok()?;
+        let flint = ctx.items.id("minecraft:flint_and_steel")?;
+        let mut hands = Hands::default();
+        hands.slots[36] = Some(ItemStack {
+            damage,
+            ..ItemStack::new(flint, 1)
+        });
+        let actor = Actor {
+            uuid: 7,
+            entity_id: 7,
+            game_mode: 0,
+            pose: pose(0.5, -60.0, 0.5),
+            sneaking: false,
+        };
+        ctx.inventories.lock().unwrap().insert(7, hands);
+        Some((ctx, actor))
+    }
+
+    fn slot_after(outcome: &Outcome) -> Option<Option<ItemStack>> {
+        outcome.events.iter().rev().find_map(|e| match e {
+            Event::InventorySlot { slot: 36, item, .. } => Some(item.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn flint_and_steel_wears_and_breaks() {
+        let Some((ctx, actor)) = with_flint(10) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let top = Position::new(0, -61, 0);
+        let o = use_item_on(&ctx, actor, 0, top, 1, [0.5; 3], 1);
+        assert_eq!(slot_after(&o).flatten().map(|s| s.damage), Some(11));
+        // Fire stands on the grass now.
+        let above = ctx
+            .world
+            .block(Position::new(0, -60, 0), &ctx.data.blocks)
+            .unwrap();
+        assert_eq!(ctx.data.blocks.block_name(above), Some("minecraft:fire"));
+
+        // The last use breaks it.
+        let max = ctx
+            .items
+            .max_damage(ctx.items.id("minecraft:flint_and_steel").unwrap());
+        assert_eq!(max, 64);
+        ctx.inventories.lock().unwrap().get_mut(&7).unwrap().slots[36]
+            .as_mut()
+            .unwrap()
+            .damage = 63;
+        let o = use_item_on(&ctx, actor, 0, Position::new(1, -61, 0), 1, [0.5; 3], 2);
+        assert_eq!(slot_after(&o), Some(None));
+        assert!(
+            o.events
+                .iter()
+                .any(|e| matches!(e, Event::HandBroke { status: 47, .. }))
+        );
+        assert!(ctx.inventories.lock().unwrap()[&7].slots[36].is_none());
+    }
+
+    #[test]
+    fn flint_and_steel_primes_tnt() {
+        let Some((ctx, actor)) = with_flint(0) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let tnt = ctx.data.blocks.default_state("minecraft:tnt").unwrap();
+        let at = Position::new(1, -60, 0);
+        WorldLevel::new(&ctx).set_block(at, tnt);
+        let o = use_item_on(&ctx, actor, 0, at, 1, [0.5; 3], 1);
+        assert!(
+            o.updates
+                .iter()
+                .any(|&(p, s)| p == at && ctx.data.blocks.is_air(s))
+        );
+        let entities = ctx.entities.lock().unwrap();
+        assert!(matches!(
+            entities[..],
+            [mc_entity::Entity {
+                kind: mc_entity::Kind::Tnt {
+                    fuse: 80,
+                    owner: Some(7)
+                },
+                ..
+            }]
+        ));
+        assert_eq!((entities[0].pos[0], entities[0].pos[1]), (1.5, -60.0));
     }
 }

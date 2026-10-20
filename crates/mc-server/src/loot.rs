@@ -3,7 +3,7 @@
 //! (minecraft.wiki, "Loot table").
 //!
 //! Evaluated without a tool for now: silk touch, fortune and tool checks are
-//! false, explosions do not happen. Supported: item, alternatives, group and
+//! false. Supported: item, alternatives, group and
 //! sequence entries; survives_explosion, match_block / block_state_property,
 //! random_chance, table_bonus, inverted, any_of, all_of conditions; set_count
 //! and limit_count functions.
@@ -26,6 +26,7 @@ pub struct BlockLoot {
 pub struct Drop {
     pub item: i32,
     pub count: i32,
+    pub damage: i32,
 }
 
 fn random() -> f64 {
@@ -59,10 +60,26 @@ impl BlockLoot {
 
     /// Drops for breaking `block` whose state has `properties`.
     pub fn drops(&self, block: &str, properties: &dyn Fn(&str) -> Option<String>) -> Vec<Drop> {
+        self.drops_exploded(block, properties, None)
+    }
+
+    /// Drops for a block an explosion of `radius` destroys: with the decay
+    /// game rules on, each stack survives with the chance `1 / radius`
+    /// (`survives_explosion`).
+    pub fn drops_exploded(
+        &self,
+        block: &str,
+        properties: &dyn Fn(&str) -> Option<String>,
+        radius: Option<f32>,
+    ) -> Vec<Drop> {
         let Some(table) = self.tables.get(block) else {
             return Vec::new();
         };
-        let ctx = Ctx { block, properties };
+        let ctx = Ctx {
+            block,
+            properties,
+            radius,
+        };
         let mut out = Vec::new();
         for pool in table["pools"].as_array().into_iter().flatten() {
             if !conditions(&ctx, pool) {
@@ -94,7 +111,11 @@ impl BlockLoot {
                 let Some(&item) = entry["name"].as_str().and_then(|n| self.items.get(n)) else {
                     return false;
                 };
-                let mut drops = vec![Drop { item, count: 1 }];
+                let mut drops = vec![Drop {
+                    item,
+                    count: 1,
+                    damage: 0,
+                }];
                 apply_functions(ctx, entry, &mut drops);
                 out.extend(drops);
                 true
@@ -127,6 +148,8 @@ impl BlockLoot {
 struct Ctx<'a> {
     block: &'a str,
     properties: &'a dyn Fn(&str) -> Option<String>,
+    /// The radius of the explosion, when drops decay.
+    radius: Option<f32>,
 }
 
 /// A number provider: a constant or a uniform / binomial distribution.
@@ -169,7 +192,7 @@ fn condition(ctx: &Ctx, c: &Value) -> bool {
         .or_else(|| c["condition"].as_str())
         .unwrap_or("")
     {
-        "minecraft:survives_explosion" => true,
+        "minecraft:survives_explosion" => ctx.radius.is_none_or(|r| random() <= f64::from(1.0 / r)),
         "minecraft:match_block" | "minecraft:block_state_property" => {
             let block = c["blocks"].as_str().or_else(|| c["block"].as_str());
             if block.is_some_and(|b| b != ctx.block) {

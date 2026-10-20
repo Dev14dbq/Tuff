@@ -68,6 +68,7 @@ const TOP_ALL: u8 = 31;
 
 /// Tags [`crate::support`] asks about.
 const SUPPORT_TAGS: &[&str] = &[
+    "minecraft:flowers",
     "minecraft:cannot_support_snow_layer",
     "minecraft:support_override_snow_layer",
     "minecraft:supports_cactus",

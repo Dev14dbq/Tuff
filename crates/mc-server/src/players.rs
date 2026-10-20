@@ -150,11 +150,12 @@ impl Store {
             Some(Tag::Byte(c)) => i32::from(*c),
             _ => 1,
         };
-        let components = entry.get("components").cloned();
+        let (damage, components) = crate::items::split_damage(entry.get("components"));
         Some((
             ItemStack {
                 count,
                 item: *self.item_ids.get(id)?,
+                damage,
                 has_component_changes: components.is_some(),
             },
             components,
@@ -293,8 +294,10 @@ impl Store {
         let mut entry = Compound::new();
         entry.insert("count", Tag::Int(stack.count));
         entry.insert("id", Tag::String(names(stack.item)?));
-        if let Some(components) = hands.components.get(&slot) {
-            entry.insert("components", components.clone());
+        if let Some(components) =
+            crate::items::join_damage(stack.damage, hands.components.get(&slot))
+        {
+            entry.insert("components", components);
         }
         Some(entry)
     }

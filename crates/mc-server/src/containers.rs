@@ -121,14 +121,15 @@ fn read_items(
             };
             let slot = *slot as u8 as usize;
             if slot < size {
-                let has = e.get("components").is_some();
+                let (damage, rest) = crate::items::split_damage(e.get("components"));
                 slots[slot] = Some(ItemStack {
                     count,
                     item,
-                    has_component_changes: has,
+                    damage,
+                    has_component_changes: rest.is_some(),
                 });
-                if let Some(c) = e.get("components") {
-                    components.insert(slot, c.clone());
+                if let Some(c) = rest {
+                    components.insert(slot, c);
                 }
             }
         }
@@ -147,8 +148,8 @@ fn write_items(ctx: &ServerContext, open: &Open) -> Tag {
         e.insert("Slot", Tag::Byte(i as i8));
         e.insert("id", Tag::String(name));
         e.insert("count", Tag::Int(stack.count));
-        if let Some(c) = open.components.get(&i) {
-            e.insert("components", c.clone());
+        if let Some(c) = crate::items::join_damage(stack.damage, open.components.get(&i)) {
+            e.insert("components", c);
         }
         list.push(Tag::Compound(e));
     }
@@ -298,21 +299,26 @@ pub fn change(
     uuid: u128,
     p: Position,
     changed: &[(usize, Option<HashedStack>)],
+    known: &[ItemStack],
 ) -> (Vec<u128>, Vec<(usize, Option<ItemStack>)>) {
     let mut all = ctx.containers.lock().expect("containers lock");
     let Some(open) = all.get_mut(&key(p)) else {
         return (Vec::new(), Vec::new());
     };
+    let before: Vec<ItemStack> = open
+        .slots
+        .iter()
+        .flatten()
+        .filter(|s| s.has_changes())
+        .chain(known)
+        .cloned()
+        .collect();
     let mut done = Vec::new();
     for (slot, stack) in changed {
         if *slot >= open.slots.len() {
             continue;
         }
-        let new = stack.as_ref().map(|h| ItemStack {
-            count: h.count,
-            item: h.item,
-            has_component_changes: h.has_component_changes,
-        });
+        let new = stack.as_ref().map(|h| h.resolve(&before));
         if new.as_ref().map(|s| s.item) != open.slots[*slot].as_ref().map(|s| s.item) {
             open.components.remove(slot);
         }

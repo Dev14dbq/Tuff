@@ -284,7 +284,10 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
 
 /// Rain on `p` or beside it.
 fn near_rain(level: &dyn Level, p: BlockPos) -> bool {
-    level.raining_at(p) || Dir::HORIZONTAL.iter().any(|&d| level.raining_at(p.offset(d)))
+    level.raining_at(p)
+        || Dir::HORIZONTAL
+            .iter()
+            .any(|&d| level.raining_at(p.offset(d)))
 }
 
 fn schedule_again(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut Rng) {
@@ -311,13 +314,20 @@ fn burn_out(level: &mut dyn Level, ctx: Ctx, q: BlockPos, chance: u32, age: u32,
     if rng.below(chance) >= burn {
         return;
     }
+    let tnt = name(ctx, state) == "tnt";
     // Burnt blocks drop nothing.
     if rng.below(age + 10) < 5 && !level.raining_at(q) {
         let new_age = (age + rng.below(5) / 4).min(15);
         if let Some(fire) = fire_state(level, ctx, q, new_age) {
             set_block(level, ctx, q, fire, Flags::ALL);
+            if tnt {
+                level.prime_tnt(q);
+            }
             return;
         }
     }
     set_block(level, ctx, q, ctx.shapes.air(), Flags::ALL);
+    if tnt {
+        level.prime_tnt(q);
+    }
 }

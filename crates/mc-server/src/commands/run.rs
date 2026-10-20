@@ -1887,6 +1887,21 @@ pub(super) fn item_display(ctx: &ServerContext, name: &str) -> Tag {
     Tag::Compound(c)
 }
 
+/// The `damage=<n>` of an item argument's components.
+fn item_damage(item: &mc_command::args::Item) -> i32 {
+    let Some(components) = item.components.as_deref() else {
+        return 0;
+    };
+    components
+        .trim_matches(|c| c == '[' || c == ']')
+        .split(',')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| matches!(k.trim(), "damage" | "minecraft:damage"))
+        .and_then(|(_, v)| v.trim().parse().ok())
+        .unwrap_or(0)
+        .max(0)
+}
+
 fn give(r: &mut Run) -> Result<i32> {
     let Some(Arg::Item(item)) = r.arg("item").cloned() else {
         return Err(err("command.failed", Vec::new()));
@@ -1911,7 +1926,11 @@ fn give(r: &mut Run) -> Result<i32> {
         let Some(hands) = inventories.get_mut(&uuid) else {
             continue;
         };
-        let (_, changed) = hands.insert(id, count, max);
+        let stack = ItemStack {
+            damage: item_damage(&item),
+            ..ItemStack::new(id, count)
+        };
+        let (_, changed) = hands.insert_stack(&stack, max);
         for slot in changed {
             r.out.events.push(Event::InventorySlot {
                 uuid,
@@ -2124,12 +2143,18 @@ fn summon(r: &mut Run) -> Result<i32> {
                 .items
                 .id(&mc_command::args::full_id(id))
                 .ok_or_else(|| err("commands.summon.failed", Vec::new()))?;
-            mc_entity::Kind::Item {
-                item: item_id,
-                count: tag_i32(item.get("count")).unwrap_or(1),
-                pickup_delay: tag_i32(nbt.get("PickupDelay")).unwrap_or(0),
-            }
+            let (damage, _) = crate::items::split_damage(item.get("components"));
+            mc_entity::Kind::item(
+                item_id,
+                tag_i32(item.get("count")).unwrap_or(1),
+                damage,
+                tag_i32(nbt.get("PickupDelay")).unwrap_or(0),
+            )
         }
+        "minecraft:tnt" => mc_entity::Kind::Tnt {
+            fuse: tag_i32(nbt.get("fuse")).unwrap_or(crate::explosion::TNT_FUSE),
+            owner: None,
+        },
         "minecraft:falling_block" => {
             let state = match nbt.get("BlockState") {
                 Some(Tag::Compound(bs)) => {
@@ -2333,6 +2358,7 @@ fn item_replace(r: &mut Run, kind: &str) -> Result<i32> {
     let stack = (count > 0 && item.id != "minecraft:air").then_some(ItemStack {
         count,
         item: id,
+        damage: item_damage(&item),
         has_component_changes: false,
     });
     let shown = item_display(r.ctx, &item.id);

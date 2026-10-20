@@ -289,6 +289,7 @@ fn finish_using(ctx: &ServerContext, uuid: u128, using: &Using) {
                     hands.slots[using.slot] = Some(mc_protocol::packets::play::ItemStack {
                         count: 1,
                         item: id,
+                        damage: 0,
                         has_component_changes: false,
                     });
                 } else {
@@ -305,6 +306,7 @@ fn finish_using(ctx: &ServerContext, uuid: u128, using: &Using) {
                                 mc_protocol::packets::play::ItemStack {
                                     count: 1,
                                     item: id,
+                                    damage: 0,
                                     has_component_changes: false,
                                 },
                             );
@@ -407,6 +409,20 @@ pub fn try_hurt(
     death_key: &str,
     attacker: Option<&str>,
 ) -> Option<bool> {
+    try_hurt_by_entity(ctx, uuid, amount, damage_type, death_key, attacker, None)
+}
+
+/// [`try_hurt`] by an entity that is not a player (`direct`, its entity id:
+/// primed TNT), which clients see in the damage event.
+pub fn try_hurt_by_entity(
+    ctx: &ServerContext,
+    uuid: u128,
+    amount: f32,
+    damage_type: &str,
+    death_key: &str,
+    attacker: Option<&str>,
+    direct: Option<i32>,
+) -> Option<bool> {
     let (name, entity_id, game_mode) = lock(&ctx.players)
         .get(&uuid)
         .map(|p| (p.profile.name.clone(), p.entity_id, p.game_mode))?;
@@ -467,6 +483,7 @@ pub fn try_hurt(
         uuid,
         entity_id,
         damage_type: ctx.damage_type(damage_type),
+        direct,
     });
     if died {
         let _ = ctx.events.send(Event::Died {

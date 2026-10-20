@@ -1035,8 +1035,33 @@ async fn play(
                     {
                         writer.queue(&packet)?;
                     }
-                    Ok(Event::Hurt { uuid: who, entity_id: hurt, damage_type }) if who == uuid || visible.contains(&who) => {
-                        writer.queue(&play::DamageEvent { entity_id: hurt, damage_type })?;
+                    Ok(Event::Hurt { uuid: who, entity_id: hurt, damage_type, direct }) if who == uuid || visible.contains(&who) => {
+                        writer.queue(&play::DamageEvent { entity_id: hurt, damage_type, direct })?;
+                    }
+                    Ok(Event::EntitiesData(packets)) => {
+                        for packet in packets {
+                            if seen_entities.contains(&packet.entity_id) {
+                                writer.queue(&packet)?;
+                            }
+                        }
+                    }
+                    Ok(Event::HandBroke { uuid: who, entity_id: id, status })
+                        if who == uuid || visible.contains(&who) =>
+                    {
+                        writer.queue(&play::EntityEvent { entity_id: id, status })?;
+                    }
+                    Ok(Event::Explosion { center, radius, block_count, particle, sound, knockback }) => {
+                        let (dx, dy, dz) = (pose.x - center[0], pose.y - center[1], pose.z - center[2]);
+                        if dx * dx + dy * dy + dz * dz < 4096.0 {
+                            writer.queue(&play::Explode {
+                                center,
+                                radius,
+                                block_count,
+                                knockback: knockback.iter().find(|(who, _)| *who == uuid).map(|&(_, v)| v),
+                                particle,
+                                sound,
+                            })?;
+                        }
                     }
                     Ok(Event::Died { uuid: who, entity_id: dead, message }) => {
                         if who == uuid {
@@ -1503,6 +1528,7 @@ fn spawn_entity(
     let (kind, data) = match entity.kind {
         mc_entity::Kind::FallingBlock { state } => (ctx.entity_types.falling_block, state as i32),
         mc_entity::Kind::Item { .. } => (ctx.entity_types.item, 0),
+        mc_entity::Kind::Tnt { .. } => (ctx.entity_types.tnt, 0),
     };
     writer.queue(&play::AddEntity {
         entity_id: entity.id,
@@ -1516,18 +1542,29 @@ fn spawn_entity(
         head_yaw: 0.0,
         data,
     })?;
-    if let mc_entity::Kind::Item { item, count, .. } = entity.kind {
-        writer.queue(&play::SetEntityData {
-            entity_id: entity.id,
-            entries: vec![(
-                play::metadata::ITEM,
-                play::MetadataValue::Item(Some(play::ItemStack {
-                    count,
-                    item,
-                    has_component_changes: false,
-                })),
-            )],
-        })?;
+    match entity.kind {
+        mc_entity::Kind::Item {
+            item,
+            count,
+            damage,
+            ..
+        } => {
+            writer.queue(&play::SetEntityData {
+                entity_id: entity.id,
+                entries: vec![(
+                    play::metadata::ITEM,
+                    play::MetadataValue::Item(Some(play::ItemStack {
+                        damage,
+                        ..play::ItemStack::new(item, count)
+                    })),
+                )],
+            })?;
+        }
+        // Only a fuse other than the default is sent.
+        mc_entity::Kind::Tnt { fuse, .. } if fuse != crate::explosion::TNT_FUSE => {
+            writer.queue(&crate::explosion::fuse_data(entity.id, fuse))?;
+        }
+        _ => {}
     }
     Ok(())
 }

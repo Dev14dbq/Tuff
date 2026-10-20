@@ -14,7 +14,9 @@ use crate::updates::{Ctx, Flags, set_block};
 pub enum Behaviour {
     None,
     /// Wheat, carrots, potatoes, beetroots, torchflower crops.
-    Crop { max: u8 },
+    Crop {
+        max: u8,
+    },
     /// Pumpkin and melon stems.
     Stem,
     /// Sugar cane and cactus grow up to three high.
@@ -27,6 +29,8 @@ pub enum Behaviour {
     /// Grass blocks and mycelium spread onto dirt and die in the dark.
     Spreading,
     Leaves,
+    /// Saplings: stage 0 → 1, then a tree.
+    Sapling,
     Ice,
     SnowLayer,
     Farmland,
@@ -52,6 +56,10 @@ impl Behaviour {
             "farmland" => Self::Farmland,
             "lava" => Self::Lava,
             _ if name.ends_with("_leaves") => Self::Leaves,
+            "oak_sapling" | "spruce_sapling" | "birch_sapling" | "jungle_sapling"
+            | "acacia_sapling" | "dark_oak_sapling" | "pale_oak_sapling" | "cherry_sapling" => {
+                Self::Sapling
+            }
             _ => Self::None,
         }
     }
@@ -104,12 +112,32 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut 
                 set_block(level, ctx, p, ctx.shapes.air(), Flags::ALL);
             }
         }
+        Behaviour::Sapling => {
+            if level.brightness(p.offset(Dir::Up)) >= 9 && rng.below(7) == 0 {
+                if int(ctx, state, "stage") == 0 {
+                    let next = ctx.shapes.with(state, "stage", "1");
+                    set_block(level, ctx, p, next, Flags::NONE);
+                } else {
+                    level.grow_tree(p, state);
+                }
+            }
+        }
         Behaviour::Ice => {
             if level.block_light(p) > 11 - level.light_block(state).min(11) {
                 let below = level.block(p.offset(Dir::Down));
-                let holds = ctx.facts.blocks_motion(below) || crate::fluids::fluid_of(ctx, below).is_some();
-                let water = ctx.shapes.default_state("minecraft:water").unwrap_or(ctx.shapes.air());
-                set_block(level, ctx, p, if holds { water } else { ctx.shapes.air() }, Flags::ALL);
+                let holds =
+                    ctx.facts.blocks_motion(below) || crate::fluids::fluid_of(ctx, below).is_some();
+                let water = ctx
+                    .shapes
+                    .default_state("minecraft:water")
+                    .unwrap_or(ctx.shapes.air());
+                set_block(
+                    level,
+                    ctx,
+                    p,
+                    if holds { water } else { ctx.shapes.air() },
+                    Flags::ALL,
+                );
             }
         }
         Behaviour::SnowLayer => {
@@ -140,7 +168,11 @@ fn growth_speed(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> f64 {
             let s = level.block(BlockPos::new(below.x + dx, below.y, below.z + dz));
             let mut g = 0.0;
             if name(ctx, s) == "farmland" {
-                g = if int(ctx, s, "moisture") > 0 { 3.0 } else { 1.0 };
+                g = if int(ctx, s, "moisture") > 0 {
+                    3.0
+                } else {
+                    1.0
+                };
             }
             if dx != 0 || dz != 0 {
                 g /= 4.0;
@@ -149,7 +181,9 @@ fn growth_speed(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> f64 {
         }
     }
     let same = |dx: i32, dz: i32| {
-        ctx.shapes.block_index(level.block(BlockPos::new(p.x + dx, p.y, p.z + dz))) == block
+        ctx.shapes
+            .block_index(level.block(BlockPos::new(p.x + dx, p.y, p.z + dz)))
+            == block
     };
     let rows_x = same(-1, 0) || same(1, 0);
     let rows_z = same(0, -1) || same(0, 1);
@@ -236,7 +270,11 @@ fn column(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
     }
     let block = ctx.shapes.block_index(state);
     let mut height = 1;
-    while ctx.shapes.block_index(level.block(BlockPos::new(p.x, p.y - height, p.z))) == block {
+    while ctx
+        .shapes
+        .block_index(level.block(BlockPos::new(p.x, p.y - height, p.z)))
+        == block
+    {
         height += 1;
     }
     if height >= 3 {
@@ -331,7 +369,9 @@ fn spreading(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut
             continue;
         }
         let snowy = matches!(name(ctx, up), "snow" | "snow_block" | "powder_snow");
-        let new = ctx.shapes.with(plain, "snowy", if snowy { "true" } else { "false" });
+        let new = ctx
+            .shapes
+            .with(plain, "snowy", if snowy { "true" } else { "false" });
         set_block(level, ctx, q, new, Flags::ALL);
     }
 }
@@ -373,12 +413,17 @@ fn lava(level: &mut dyn Level, ctx: Ctx, p: BlockPos, rng: &mut Rng) {
     if !level.fire_spreads_at(p) {
         return;
     }
-    let flammable = |level: &dyn Level, q: BlockPos| crate::fire::flammability(ctx, level.block(q)).0 > 0;
+    let flammable =
+        |level: &dyn Level, q: BlockPos| crate::fire::flammability(ctx, level.block(q)).0 > 0;
     let tries = rng.below(3);
     if tries > 0 {
         let mut q = p;
         for _ in 0..tries {
-            q = BlockPos::new(q.x + rng.below(3) as i32 - 1, q.y + 1, q.z + rng.below(3) as i32 - 1);
+            q = BlockPos::new(
+                q.x + rng.below(3) as i32 - 1,
+                q.y + 1,
+                q.z + rng.below(3) as i32 - 1,
+            );
             if !level.in_world(q) {
                 return;
             }
@@ -396,7 +441,11 @@ fn lava(level: &mut dyn Level, ctx: Ctx, p: BlockPos, rng: &mut Rng) {
         }
     } else {
         for _ in 0..3 {
-            let q = BlockPos::new(p.x + rng.below(3) as i32 - 1, p.y, p.z + rng.below(3) as i32 - 1);
+            let q = BlockPos::new(
+                p.x + rng.below(3) as i32 - 1,
+                p.y,
+                p.z + rng.below(3) as i32 - 1,
+            );
             if !level.in_world(q) {
                 return;
             }

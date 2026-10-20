@@ -90,6 +90,7 @@ impl Recipes {
             let result = ItemStack {
                 count: json["result"]["count"].as_i64().unwrap_or(1) as i32,
                 item: *result,
+                damage: 0,
                 has_component_changes: false,
             };
             let kind = json["type"].as_str().unwrap_or("");
@@ -260,6 +261,7 @@ mod tests {
             Some(ItemStack {
                 count: 1,
                 item: id(n),
+                damage: 0,
                 has_component_changes: false,
             })
         };

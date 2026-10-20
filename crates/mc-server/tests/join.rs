@@ -952,6 +952,7 @@ async fn players_come_back_where_they_left_with_their_items() {
         .slots[38] = Some(mc_protocol::packets::play::ItemStack {
         count: 7,
         item: stone,
+        damage: 0,
         has_component_changes: false,
     });
     let target = (spawn.0 + 3.0, spawn.1, spawn.2 - 1.5);

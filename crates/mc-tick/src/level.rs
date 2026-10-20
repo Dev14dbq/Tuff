@@ -94,6 +94,18 @@ pub trait Level {
 
     fn set_comparator_output(&mut self, _p: BlockPos, _signal: u8) {}
 
+    /// Grows the sapling `state` at `p` into a tree where the world has
+    /// the tree features; `false` if it did not grow.
+    fn grow_tree(&mut self, _p: BlockPos, _state: u32) -> bool {
+        false
+    }
+
+    /// Lights the TNT at `p`: primed TNT appears there (the caller removes
+    /// the block). `false` if the game forbids it.
+    fn prime_tnt(&mut self, _p: BlockPos) -> bool {
+        false
+    }
+
     /// Entities whose boxes touch the box from `min` to `max`: all of them,
     /// and only players and mobs.
     fn entities_in(&self, _min: [f64; 3], _max: [f64; 3]) -> (u32, u32) {
