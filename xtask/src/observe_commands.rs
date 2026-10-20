@@ -5,7 +5,9 @@
 //!   suggestion types the data report leaves out), decoded and raw;
 //! - for each line of `--lines` (one command per line, `#` comments; by
 //!   default `xtask/commands.txt`): `> text` asks for suggestions, any other
-//!   line runs the command; the replies are recorded as text components.
+//!   line runs the command; the replies are recorded as text components;
+//! - with `--packets a,b`, the bodies of those packets too (hex; a boss
+//!   bar's random UUID left out).
 //!
 //! Output: `cache/mcdata/26.3/observed/commands.json` (+ `commands.bin`).
 
@@ -30,6 +32,7 @@ pub fn run(args: &[String]) -> Result<()> {
     // several areas can be observed side by side.
     let mut area: Option<String> = None;
     let mut port = PORT;
+    let mut packets: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -37,6 +40,20 @@ pub fn run(args: &[String]) -> Result<()> {
             "--ours" => ours = true,
             "--area" => area = Some(it.next().context("--area needs a name")?.clone()),
             "--port" => port = it.next().context("--port needs a number")?.parse()?,
+            "--packets" => {
+                packets = it
+                    .next()
+                    .context("--packets needs names")?
+                    .split(',')
+                    .map(|n| {
+                        if n.contains(':') {
+                            n.to_owned()
+                        } else {
+                            format!("minecraft:{n}")
+                        }
+                    })
+                    .collect();
+            }
             other => bail!("unknown option `{other}`"),
         }
     }
@@ -65,6 +82,7 @@ pub fn run(args: &[String]) -> Result<()> {
             port,
             &lines,
             &dir.join("world/data/minecraft/game_rules.dat"),
+            &packets,
         );
         server.stop();
         let (tree, _, replies, _) = result?;
@@ -88,6 +106,7 @@ pub fn run(args: &[String]) -> Result<()> {
         port,
         &lines,
         &dir.join("world/data/minecraft/game_rules.dat"),
+        &packets,
     );
     server.stop();
     let (tree, raw, replies, rules) = result?;
@@ -125,6 +144,7 @@ fn observe(
     port: u16,
     lines: &[String],
     rules_file: &std::path::Path,
+    packets: &[String],
 ) -> Result<Observed> {
     let ids = load_packet_ids(None)?;
     let (mut client, _) = join_player(&format!("127.0.0.1:{port}"), ids, NAME)?;
@@ -192,6 +212,12 @@ fn observe(
                     got.push(json!({ "start": start, "length": length, "matches": matches }));
                 }
                 "minecraft:disconnect" => bail!("disconnected after `{line}`"),
+                n if packets.iter().any(|p| p == n) => {
+                    // A boss bar's UUID is random.
+                    let skip = if n == "minecraft:boss_event" { 16 } else { 0 };
+                    let hex: String = body.iter().skip(skip).map(|b| format!("{b:02x}")).collect();
+                    got.push(json!({ "packet": n, "body": hex }));
+                }
                 _ => {}
             }
         }
