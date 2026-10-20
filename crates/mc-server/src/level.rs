@@ -126,6 +126,9 @@ impl Level for WorldLevel<'_> {
         else {
             return false;
         };
+        if ctx.data.blocks.block_name(state) == Some("minecraft:hopper") {
+            crate::hoppers::register(ctx, to_position(p));
+        }
         if !ctx.world.same_light(old, state) {
             self.unlit.push((to_position(p), old));
         }
@@ -329,6 +332,54 @@ impl Level for WorldLevel<'_> {
             }
         }
         (all, living)
+    }
+
+    fn torch_burnout(&mut self, p: BlockPos, add: bool) -> bool {
+        let mut all = self.ctx.torch_toggles.lock().expect("torch lock");
+        let list = all.entry((p.x, p.y, p.z)).or_default();
+        list.retain(|&t| t >= self.time - 60);
+        if add {
+            list.push(self.time);
+        }
+        let burnt = list.len() >= 8;
+        if list.is_empty() {
+            all.remove(&(p.x, p.y, p.z));
+        }
+        burnt
+    }
+
+    fn torch_fizz(&mut self, _p: BlockPos) {}
+
+    fn container_transfer(
+        &mut self,
+        from: BlockPos,
+        from_side: mc_tick::Dir,
+        to: BlockPos,
+        to_side: mc_tick::Dir,
+    ) -> bool {
+        crate::hoppers::transfer(
+            self.ctx,
+            to_position(from),
+            from_side,
+            to_position(to),
+            to_side,
+        )
+    }
+
+    fn hopper_cooldown(&self, p: BlockPos) -> i32 {
+        crate::hoppers::cooldown(self.ctx, to_position(p))
+    }
+
+    fn set_hopper_cooldown(&mut self, p: BlockPos, ticks: i32) {
+        crate::hoppers::set_cooldown(self.ctx, to_position(p), ticks);
+    }
+
+    fn hopper_pickup(&mut self, p: BlockPos) -> bool {
+        crate::hoppers::pickup(self.ctx, to_position(p))
+    }
+
+    fn dispense(&mut self, p: BlockPos, facing: mc_tick::Dir, dropper: bool) {
+        crate::hoppers::dispense(self.ctx, to_position(p), facing, dropper);
     }
 
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32) {

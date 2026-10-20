@@ -19,6 +19,7 @@ mod fastmap;
 mod forced;
 mod furnaces;
 mod generation;
+mod hoppers;
 mod interact;
 mod items;
 mod level;
