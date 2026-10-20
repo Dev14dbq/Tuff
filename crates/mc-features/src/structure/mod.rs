@@ -832,6 +832,56 @@ impl Structures {
         self.generate_in(index, seed, x, z, heights, ground, false, true)
     }
 
+    /// `/place jigsaw`: pieces grown from a random piece of `pool` whose
+    /// jigsaw named `target` sits at `anchor`. `Err(true)` for a pool that
+    /// does not exist, `Err(false)` when nothing could be placed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn generate_jigsaw(
+        &self,
+        pool: &str,
+        target: &str,
+        max_depth: i32,
+        anchor: P,
+        seed: i64,
+        heights: Heights,
+        ground: &mut dyn Ground,
+    ) -> Result<Start, bool> {
+        struct G<'g>(&'g mut dyn Ground);
+        impl jigsaw::Ground for G<'_> {
+            fn height(&mut self, x: i32, z: i32) -> i32 {
+                self.0.height(x, z, false)
+            }
+        }
+        let mut r = WorldgenRandom::legacy(seed);
+        let pieces = jigsaw::assemble_at(
+            self,
+            &mut r,
+            &mut G(ground),
+            pool,
+            target,
+            max_depth,
+            anchor,
+            heights.min_y,
+            heights.min_y + heights.height - 1,
+        )?;
+        let bbox = pieces
+            .iter()
+            .map(|p| p.bbox)
+            .reduce(BBox::union)
+            .ok_or(false)?;
+        Ok(Start {
+            structure: 0,
+            chunk: (anchor.x >> 4, anchor.z >> 4),
+            pieces: pieces.into_iter().map(Piece::Jigsaw).collect(),
+            bbox,
+        })
+    }
+
+    /// Whether there is a template pool `id`.
+    pub fn has_pool(&self, id: &str) -> bool {
+        self.pool(id).is_some()
+    }
+
     /// Whether there is a structure `id`.
     pub fn has(&self, id: &str) -> bool {
         self.structures.iter().any(|s| s.id == id)

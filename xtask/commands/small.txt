@@ -49,6 +49,15 @@ place jigsaw minecraft:village/plains/town_centers minecraft:start 0
 place jigsaw minecraft:village/plains/town_centers minecraft:start 21
 place jigsaw minecraft:village/plains/town_centers minecraft:start 3 ~ ~ ~
 place jigsaw minecraft:empty minecraft:start 3
+place jigsaw minecraft:village/plains/town_centers minecraft:street 2 ~ ~ ~
+place jigsaw minecraft:village/plains/town_centers minecraft:building_entrance 2 ~ ~ ~
+place jigsaw minecraft:village/plains/town_centers minecraft:bottom 2 ~ ~ ~
+place jigsaw minecraft:village/plains/streets minecraft:street 0 ~ ~ ~
+place jigsaw minecraft:village/plains/streets minecraft:street 3 ~ ~ ~
+posteffect add @s minecraft:z
+posteffect add @s minecraft:a
+posteffect list @s
+posteffect clear @s
 >/teammsg 
 >/random reset 
 >/posteffect add @s 
