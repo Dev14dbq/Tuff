@@ -271,6 +271,22 @@ impl Facts {
             .unwrap_or(state)
     }
 
+    /// `to` (a block's default state) with every property of `from` it
+    /// also has.
+    pub fn copy_properties(&self, from: u32, to: u32) -> u32 {
+        let key = self.blocks.describe(from).unwrap_or("");
+        let Some(props) = key
+            .split_once('[')
+            .map(|(_, rest)| rest.trim_end_matches(']'))
+        else {
+            return to;
+        };
+        props
+            .split(',')
+            .filter_map(|kv| kv.split_once('='))
+            .fold(to, |s, (k, v)| self.with(s, k, v))
+    }
+
     pub fn has_property(&self, state: u32, name: &str) -> bool {
         self.property(state, name).is_some()
     }

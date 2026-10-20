@@ -63,6 +63,8 @@ pub struct Pipeline {
     claims: crate::util::Claims,
     /// Stronghold rings, placed once before any start is looked for.
     rings: OnceLock<()>,
+    /// Lava settles as in the Nether.
+    fast_lava: bool,
 }
 
 /// A chunk's bare terrain, made once.
@@ -87,6 +89,10 @@ impl mc_features::structure::Ground for Columns<'_> {
 
     fn biome(&mut self, qx: i32, qy: i32, qz: i32) -> u32 {
         self.sampler.biome(qx, qy, qz)
+    }
+
+    fn occupied(&mut self, x: i32, y: i32, z: i32, ocean_floor: bool) -> bool {
+        self.sampler.occupied(x, y, z, ocean_floor)
     }
 }
 
@@ -144,7 +150,14 @@ impl Pipeline {
             starts: Mutex::new(HashMap::default()),
             rings: OnceLock::new(),
             claims: crate::util::Claims::default(),
+            fast_lava: false,
         }
+    }
+
+    /// Lava flows fast, far and thin (the dimension's `gameplay/fast_lava`).
+    pub fn with_fast_lava(mut self, fast: bool) -> Self {
+        self.fast_lava = fast;
+        self
     }
 
     /// Works out which structures start in the chunks around `x, z` (within
@@ -1091,6 +1104,10 @@ impl mc_tick::Level for Sim<'_> {
     fn in_world(&self, p: BlockPos) -> bool {
         let h = self.pipeline.heights;
         p.y >= h.min_y && p.y < h.min_y + h.height
+    }
+
+    fn fast_lava(&self) -> bool {
+        self.pipeline.fast_lava
     }
 
     /// Falls straight to rest.

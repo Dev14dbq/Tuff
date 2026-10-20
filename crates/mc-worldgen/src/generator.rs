@@ -528,6 +528,31 @@ impl ColumnSampler<'_> {
         g.min_y
     }
 
+    /// Whether the bare terrain has something at a block: stone, or for
+    /// `ocean_floor` false also the sea (what is not air).
+    /// With aquifers (whose caves this does not follow) it is the column's
+    /// height.
+    pub fn occupied(&mut self, x: i32, y: i32, z: i32, ocean_floor: bool) -> bool {
+        let g = self.g;
+        if g.aquifers.is_some() {
+            return y < self.height(x, z, ocean_floor);
+        }
+        let key = (x >> 4, z >> 4);
+        let ctx = self
+            .ctxs
+            .entry(key)
+            .or_insert_with(|| Ctx::new(key.0 * 16, key.1 * 16, g.min_y, g.height));
+        if g.final_density.eval_in(x, y, z, ctx) > 0.0 {
+            return true;
+        }
+        let global = Global {
+            sea_level: g.sea_level,
+            sea: g.default_fluid,
+            lava_level: -54,
+        };
+        !ocean_floor && global.at(y).at(y) != Fluid::Air
+    }
+
     /// The biome (id) of a 4×4×4 cell.
     pub fn biome(&self, qx: i32, qy: i32, qz: i32) -> u32 {
         self.g.noise_biome(qx, qy, qz)

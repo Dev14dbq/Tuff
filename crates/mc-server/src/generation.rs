@@ -109,6 +109,15 @@ fn biome_order(data: &McData, dimension: Dimension) -> Result<Vec<String>> {
     Ok(order)
 }
 
+/// Whether lava is fast in a dimension (its type's `gameplay/fast_lava`).
+pub fn fast_lava(data: &McData, dimension: Dimension) -> bool {
+    data.data_pack()
+        .read_entry("minecraft:dimension_type", dimension.id())
+        .ok()
+        .and_then(|t| t["attributes"]["minecraft:gameplay/fast_lava"].as_bool())
+        .unwrap_or(false)
+}
+
 /// The noise generator of a dimension of a normal world (vanilla's
 /// `world_preset/normal`) for `seed`; `biomes` is the biome registry.
 pub fn dimension(
@@ -523,7 +532,8 @@ mod dimension_world {
             super::dimension_features(&data, shapes, &biomes, &generator, dimension).unwrap();
         println!("not generated: {:?}", features.unsupported);
         let air = data.blocks.default_state("minecraft:air").unwrap();
-        let pipeline = crate::pipeline::Pipeline::new(generator, features, seed, air, 0);
+        let pipeline = crate::pipeline::Pipeline::new(generator, features, seed, air, 0)
+            .with_fast_lava(super::fast_lava(&data, dimension));
         pipeline.prepare();
         let region = out
             .join("dimensions")

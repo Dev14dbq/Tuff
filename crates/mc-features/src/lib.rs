@@ -10,8 +10,10 @@
 //! the chunk and the feature's place in that order.
 
 pub mod blocks;
+mod end;
 pub mod feature;
 mod misc;
+mod nether;
 pub mod placement;
 pub mod predicate;
 pub mod rand;

@@ -297,9 +297,14 @@ impl World {
                 let features = crate::generation::features(data, shapes, &biome_ids, &generator)?;
                 let air = state(data, "minecraft:air")?;
                 let plains = biome_ids.get("minecraft:plains").copied().unwrap_or(0);
-                let pipeline = Arc::new(crate::pipeline::Pipeline::new(
-                    generator, features, seed, air, plains,
-                ));
+                let fast_lava = crate::generation::fast_lava(
+                    data,
+                    mc_worldgen::generator::Dimension::Overworld,
+                );
+                let pipeline = Arc::new(
+                    crate::pipeline::Pipeline::new(generator, features, seed, air, plains)
+                        .with_fast_lava(fast_lava),
+                );
                 let early = Arc::clone(&pipeline);
                 std::thread::spawn(move || early.prepare());
                 Some(pipeline)

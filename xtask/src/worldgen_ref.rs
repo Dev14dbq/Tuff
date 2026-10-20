@@ -98,6 +98,9 @@ pub fn run(args: &[String]) -> Result<()> {
     let result = (|| -> Result<()> {
         let (x0, x1) = ((cx - radius) * 16, (cx + radius) * 16 + 15);
         let (z0, z1) = ((cz - radius) * 16, (cz + radius) * 16 + 15);
+        // No random ticks: plants would grow and nylium decay while the
+        // chunks wait, which is not generation.
+        server.command("gamerule random_tick_speed 0", true)?;
         server.command(
             &format!("execute in {dim_id} run forceload add {x0} {z0} {x1} {z1}"),
             true,

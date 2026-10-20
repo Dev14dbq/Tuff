@@ -91,6 +91,7 @@ fn main() -> ExitCode {
         Some("worldgen-logs") => worldgen_compare::logs(&args[1..]),
         Some("worldgen-map") => worldgen_compare::map(&args[1..]),
         Some("worldgen-find") => worldgen_compare::find(&args[1..]),
+        Some("worldgen-slice") => worldgen_compare::slice(&args[1..]),
         None | Some("-h" | "--help" | "help") => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
