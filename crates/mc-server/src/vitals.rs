@@ -28,8 +28,9 @@ use crate::context::{Event, Pose, ServerContext};
 use crate::tick::lock;
 
 const MAX_HEALTH: f32 = 20.0;
-const SAFE_FALL: f64 = 3.0;
 const IMMUNE_TICKS: i32 = 10;
+/// A fall this soon after being hit is credited to the attacker.
+const ASSIST_TICKS: i32 = 100;
 
 #[derive(Clone, Debug)]
 pub struct Vitals {
@@ -53,6 +54,11 @@ pub struct Vitals {
     pub effects: crate::effects::Effects,
     /// Extra hearts from absorption (`AbsorptionAmount`).
     pub absorption: f32,
+    /// Air left under water, in ticks (`Air`).
+    pub air: i32,
+    /// Ticks since a player hit them (for "doomed to fall by").
+    pub since_attacked: i32,
+    pub last_attacker: Option<String>,
 }
 
 /// Points from one experience level to the next (wiki, "Experience").
@@ -127,6 +133,9 @@ impl Default for Vitals {
             xp_total: 0,
             effects: crate::effects::Effects::default(),
             absorption: 0.0,
+            air: crate::damage::MAX_AIR,
+            since_attacked: i32::MAX,
+            last_attacker: None,
         }
     }
 }
@@ -449,6 +458,13 @@ pub fn try_hurt_by_entity(
             v.immune = IMMUNE_TICKS;
             amount
         };
+        let amount = if crate::damage::scales_always(ctx, damage_type) {
+            crate::damage::scale_for_difficulty(amount, ctx.difficulty())
+        } else {
+            amount
+        };
+        let (armor, toughness) = crate::damage::worn_armor(ctx, uuid);
+        let amount = crate::damage::armor_reduce(amount, armor, toughness, damage_type);
         let amount = crate::effects::reduce_damage(&v.effects, amount, damage_type);
         // Fully resisted still counts as a hit (vanilla's /damage succeeds).
         if amount <= 0.0 {
@@ -470,7 +486,11 @@ pub fn try_hurt_by_entity(
         }
         let amount = amount - absorbed;
         v.health = (v.health - amount).max(0.0);
-        v.exhaust(0.1);
+        v.exhaust(crate::damage::exhaustion(ctx, damage_type));
+        if let Some(by) = attacker {
+            v.since_attacked = 0;
+            v.last_attacker = Some(by.to_owned());
+        }
         let died = v.health <= 0.0;
         v.dead = died;
         (v.packet(), died)
@@ -521,14 +541,37 @@ pub fn moved(ctx: &ServerContext, uuid: u128, before: Pose, after: Pose, in_wate
         }
     };
     if let Some(fell) = landed_from {
-        let damage = (fell - SAFE_FALL).ceil();
-        if damage > 0.0 {
-            hurt(
+        let (safe, floating, assist) = {
+            let all = lock(&ctx.vitals);
+            all.get(&uuid).map_or((3.0, false, None), |v| {
+                (
+                    v.effects.value(crate::effects::Attr::SafeFallDistance),
+                    v.effects.has("slow_falling") || v.effects.has("levitation"),
+                    (v.since_attacked < ASSIST_TICKS)
+                        .then(|| v.last_attacker.clone())
+                        .flatten(),
+                )
+            })
+        };
+        let damage = (fell - safe).ceil();
+        if damage > 0.0 && !floating {
+            let below = mc_protocol::Position::new(
+                after.x.floor() as i32,
+                (after.y - 0.2).floor() as i32,
+                after.z.floor() as i32,
+            );
+            let block = ctx
+                .world
+                .block(below, &ctx.data.blocks)
+                .and_then(|s| ctx.data.blocks.block_name(s));
+            let key = crate::damage::fall_key(block, assist.is_some());
+            hurt_by(
                 ctx,
                 uuid,
                 damage as f32,
                 "minecraft:fall",
-                "death.attack.fall",
+                key,
+                assist.as_deref(),
             );
         }
     }
@@ -552,6 +595,7 @@ pub fn tick(ctx: &ServerContext) {
             if v.immune > 0 {
                 v.immune -= 1;
             }
+            v.since_attacked = v.since_attacked.saturating_add(1);
             if v.dead || !takes_damage(game_mode) {
                 continue;
             }
@@ -605,6 +649,46 @@ pub fn tick(ctx: &ServerContext) {
             hurt_by = Some((4.0, "minecraft:lava", "death.attack.lava"));
         } else if matches!(block, Some("minecraft:fire" | "minecraft:soul_fire")) {
             hurt_by = Some((1.0, "minecraft:in_fire", "death.attack.inFire"));
+        }
+        // Breathing: the head under water runs the air down.
+        let eye = mc_protocol::Position::new(
+            pose.x.floor() as i32,
+            (pose.y + 1.62).floor() as i32,
+            pose.z.floor() as i32,
+        );
+        let underwater = ctx
+            .world
+            .block(eye, &ctx.data.blocks)
+            .and_then(|s| ctx.data.blocks.block_name(s))
+            == Some("minecraft:water");
+        let mut drowns = false;
+        let mut air_change = None;
+        if let Some(v) = lock(&ctx.vitals).get_mut(&uuid) {
+            let dry = v.effects.has("water_breathing") || v.effects.has("conduit_power");
+            let (air, drown) = crate::damage::breathe(v.air, underwater && !dry);
+            drowns = drown;
+            if air != v.air {
+                v.air = air;
+                air_change = Some(air);
+            }
+        }
+        if let (Some(air), Some(entity_id)) = (
+            air_change,
+            lock(&ctx.players).get(&uuid).map(|p| p.entity_id),
+        ) {
+            let _ = ctx.events.send(Event::EntityData {
+                uuid,
+                packet: mc_protocol::packets::play::SetEntityData {
+                    entity_id,
+                    entries: vec![(
+                        mc_protocol::packets::play::metadata::AIR_SUPPLY,
+                        mc_protocol::packets::play::MetadataValue::VarInt(air),
+                    )],
+                },
+            });
+        }
+        if drowns {
+            hurt(ctx, uuid, 2.0, "minecraft:drown", "death.attack.drown");
         }
         if let Some((amount, kind, key)) = hurt_by {
             hurt(ctx, uuid, amount, kind, key);
