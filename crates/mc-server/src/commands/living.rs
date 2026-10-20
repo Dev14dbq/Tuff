@@ -64,7 +64,10 @@ fn damage(r: &mut Run, rest: &[&str]) -> Result<i32> {
         None
     };
     let hurt = if t.is_player() {
-        let key = death_key(r, &kind);
+        let key = crate::damage::with_attacker(
+            &death_key(r, &kind),
+            by.as_deref().is_some_and(|n| !n.is_empty()),
+        );
         crate::vitals::try_hurt(
             r.ctx,
             t.uuid(),

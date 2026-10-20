@@ -337,6 +337,11 @@ pub struct Effects {
 }
 
 impl Effects {
+    /// Whether the effect named `name` (no namespace) is active.
+    pub fn has(&self, name: &str) -> bool {
+        self.active.contains_key(name)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.active.is_empty()
     }

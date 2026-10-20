@@ -14,6 +14,7 @@ mod connection;
 mod containers;
 mod context;
 mod crafting;
+mod damage;
 mod effects;
 mod fastmap;
 mod forced;

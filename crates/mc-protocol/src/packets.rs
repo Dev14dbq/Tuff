@@ -1974,6 +1974,8 @@ pub mod play {
         pub const HAND_STATES: u8 = 8;
         /// Entity flags (Byte): 0x20 invisible, 0x40 glowing...
         pub const FLAGS: u8 = 0;
+        /// Air left under water (VarInt), 300 when full.
+        pub const AIR_SUPPLY: u8 = 1;
         /// Living entity health (Float).
         pub const HEALTH: u8 = 9;
         /// Living entity: the particles of its visible effects (Particles).
