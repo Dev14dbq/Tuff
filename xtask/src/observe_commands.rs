@@ -7,7 +7,8 @@
 //!   default `xtask/commands.txt`): `> text` asks for suggestions, any other
 //!   line runs the command; the replies are recorded as text components;
 //! - with `--packets a,b`, the bodies of those packets too (hex; a boss
-//!   bar's random UUID left out).
+//!   bar's random UUID left out);
+//! - with `--datapack <dir>`, that data pack is put in the world first.
 //!
 //! Output: `cache/mcdata/26.3/observed/commands.json` (+ `commands.bin`).
 
@@ -33,11 +34,15 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut area: Option<String> = None;
     let mut port = PORT;
     let mut packets: Vec<String> = Vec::new();
+    let mut datapack: Option<std::path::PathBuf> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--lines" => lines_file = it.next().context("--lines needs a file")?.into(),
             "--ours" => ours = true,
+            "--datapack" => {
+                datapack = Some(it.next().context("--datapack needs a folder")?.into());
+            }
             "--area" => area = Some(it.next().context("--area needs a name")?.clone()),
             "--port" => port = it.next().context("--port needs a number")?.parse()?,
             "--packets" => {
@@ -76,7 +81,9 @@ pub fn run(args: &[String]) -> Result<()> {
     );
     if ours {
         let dir = root.join(format!("cache/ours-commands{suffix}"));
-        let mut server = Server::ours_in(&root, &dir, &properties)?;
+        let mut server = Server::ours_in_with(&root, &dir, &properties, &|dir| {
+            add_datapack(datapack.as_deref(), &dir.join("world"))
+        })?;
         let result = observe(
             &mut server,
             port,
@@ -100,6 +107,7 @@ pub fn run(args: &[String]) -> Result<()> {
     // Made operator after joining, so the tree is sent again for it.
     let _ = std::fs::remove_file(dir.join("ops.json"));
     Server::prepare(&root, &dir, &properties)?;
+    add_datapack(datapack.as_deref(), &dir.join("world"))?;
     let mut server = Server::start_java(&root, &dir)?;
     let result = observe(
         &mut server,
@@ -138,6 +146,29 @@ pub fn run(args: &[String]) -> Result<()> {
 }
 
 type Observed = (Value, Vec<u8>, Vec<Value>, Value);
+
+/// Copies the data pack folder `pack` (if any) into `world/datapacks/`.
+fn add_datapack(pack: Option<&std::path::Path>, world: &std::path::Path) -> Result<()> {
+    let Some(pack) = pack else {
+        return Ok(());
+    };
+    let name = pack.file_name().context("data pack folder has no name")?;
+    copy_dir(pack, &world.join("datapacks").join(name))
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from).with_context(|| format!("reading {}", from.display()))? {
+        let e = e?;
+        let target = to.join(e.file_name());
+        if e.file_type()?.is_dir() {
+            copy_dir(&e.path(), &target)?;
+        } else {
+            std::fs::copy(e.path(), target)?;
+        }
+    }
+    Ok(())
+}
 
 fn observe(
     server: &mut Server,

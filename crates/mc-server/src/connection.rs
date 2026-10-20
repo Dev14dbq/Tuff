@@ -1123,6 +1123,19 @@ async fn play(
                         }
                     }
                     Ok(Event::Weather(changes)) => send_weather(writer, &changes)?,
+                    Ok(Event::BiomesChanged { chunks }) => {
+                        let chunks: Vec<(i32, i32, Vec<u8>)> = chunks
+                            .into_iter()
+                            // Not to the chunks on the edge of the view.
+                            .filter(|c| view.inside(*c))
+                            .filter_map(|(x, z)| {
+                                Some((x, z, ctx.world.biome_data(x, z, &ctx.data.blocks)?))
+                            })
+                            .collect();
+                        if !chunks.is_empty() {
+                            writer.queue(&play::ChunksBiomes { chunks })?;
+                        }
+                    }
                     Ok(Event::Direct { uuid: who, packet }) if who == uuid => {
                         use crate::context::Direct;
                         match packet {
@@ -1561,6 +1574,11 @@ impl ChunkView {
     }
 
     /// Whether the client has the chunk with this block.
+    /// Has the chunk and all around it.
+    fn inside(&self, (x, z): (i32, i32)) -> bool {
+        (-1..=1).all(|dz| (-1..=1).all(|dx| self.loaded.contains(&(x + dx, z + dz))))
+    }
+
     fn has_block(&self, p: Position) -> bool {
         self.loaded.contains(&(p.x >> 4, p.z >> 4))
     }

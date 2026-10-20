@@ -178,6 +178,12 @@ fn full_sky_light(height: u32) -> LightData {
     }
 }
 
+/// Index of a biome cell in its section: `x` and `z` in blocks, `local`
+/// the block's height above the chunk's bottom.
+fn biome_index(x: i32, local: usize, z: i32) -> usize {
+    (((local % 16) >> 2) << 4) | ((((z & 15) >> 2) as usize) << 2) | ((x & 15) >> 2) as usize
+}
+
 fn biome_names(synced: &SyncedIds) -> Vec<String> {
     let ids = &synced["minecraft:worldgen/biome"];
     let mut names = vec![String::new(); ids.len()];
@@ -660,6 +666,15 @@ impl World {
         before - chunks.len()
     }
 
+    /// Whether the chunk holding `p` is in memory (vanilla's "loaded").
+    pub fn is_loaded(&self, p: Position) -> bool {
+        self.chunks
+            .lock()
+            .expect("chunks lock")
+            .get(&(p.x >> 4, p.z >> 4))
+            .is_some_and(|s| s.chunk.is_some())
+    }
+
     /// Chunks in memory.
     pub fn loaded_chunks(&self) -> usize {
         self.chunks.lock().expect("chunks lock").len()
@@ -879,6 +894,97 @@ impl World {
             slot.changes += 1;
             slot.dirty = true;
             Some(old)
+        })
+    }
+
+    /// The biome network id of a biome name.
+    pub fn biome_id(&self, name: &str) -> Option<u32> {
+        self.biome_names
+            .iter()
+            .position(|n| n == name)
+            .map(|i| i as u32)
+    }
+
+    pub fn biome_name(&self, id: u32) -> Option<&str> {
+        self.biome_names.get(id as usize).map(String::as_str)
+    }
+
+    /// The biome stored for the 4×4×4 cell holding `p`; `None` where no
+    /// chunk is or outside the world's height.
+    pub fn biome(&self, p: Position, blocks: &Blocks) -> Option<u32> {
+        self.with_slot(p.x >> 4, p.z >> 4, blocks, |slot| {
+            let chunk = slot.chunk.as_ref()?;
+            if !chunk.contains_y(p.y) {
+                return None;
+            }
+            let local = (p.y - chunk.min_y) as usize;
+            let i = biome_index(p.x, local, p.z);
+            Some(chunk.sections[local / 16].biomes.get(i))
+        })
+    }
+
+    /// Sets the biome of the cells from `min` to `max` (cell coordinates,
+    /// inclusive) in chunk `(cx, cz)` where `replace` allows; how many
+    /// changed.
+    pub fn fill_biome(
+        &self,
+        (cx, cz): (i32, i32),
+        min: [i32; 3],
+        max: [i32; 3],
+        biome: u32,
+        replace: &dyn Fn(u32) -> bool,
+        blocks: &Blocks,
+    ) -> usize {
+        self.with_slot(cx, cz, blocks, |slot| {
+            let Some(chunk) = slot.chunk.as_mut() else {
+                return 0;
+            };
+            let mut changed = 0;
+            let bottom = chunk.min_y >> 2;
+            let cells = chunk.sections.len() as i32 * 4;
+            for qy in min[1].max(bottom)..=max[1].min(bottom + cells - 1) {
+                let local = ((qy - bottom) * 4) as usize;
+                for qz in min[2].max(cz * 4)..=max[2].min(cz * 4 + 3) {
+                    for qx in min[0].max(cx * 4)..=max[0].min(cx * 4 + 3) {
+                        let i = biome_index(qx * 4, local, qz * 4);
+                        let section = &mut chunk.sections[local / 16].biomes;
+                        let old = section.get(i);
+                        if old != biome && replace(old) {
+                            section.set(i, biome);
+                            changed += 1;
+                        }
+                    }
+                }
+            }
+            if changed > 0 {
+                // Vanilla refills every section into a fresh copy, whose
+                // palette starts with the old one's first entry.
+                for section in &mut chunk.sections {
+                    let b = &section.biomes;
+                    section.biomes = mc_world::PalettedContainer::from_values_after(
+                        mc_world::BIOMES,
+                        Some(b.first()),
+                        &b.values(),
+                    );
+                }
+                slot.frame = None;
+                slot.changes += 1;
+                slot.dirty = true;
+            }
+            changed
+        })
+    }
+
+    /// Every section's biomes as the Chunks Biomes packet carries them.
+    pub fn biome_data(&self, cx: i32, cz: i32, blocks: &Blocks) -> Option<Vec<u8>> {
+        let bits = mc_world::bits_needed((self.biome_names.len() as u32).saturating_sub(1));
+        self.with_slot(cx, cz, blocks, |slot| {
+            let chunk = slot.chunk.as_ref()?;
+            let mut out = Vec::new();
+            for s in &chunk.sections {
+                s.biomes.write_network(bits, &mut out);
+            }
+            Some(out)
         })
     }
 

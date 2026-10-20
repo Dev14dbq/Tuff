@@ -61,7 +61,13 @@ const FAST_BLOCKS: [&str; 2] = ["minecraft:blast_furnace", "minecraft:smoker"];
 /// Evaluates a `context_int_provider`/`context_float_provider` value for a
 /// furnace block: numbers, references to other entries, `div` and
 /// `conditional` on a `match_block` predicate.
-fn provider(data: &McData, registry: &str, v: &Value, block: &str, depth: u32) -> Option<f64> {
+pub(crate) fn provider(
+    data: &McData,
+    registry: &str,
+    v: &Value,
+    block: &str,
+    depth: u32,
+) -> Option<f64> {
     if depth > 16 {
         return None;
     }

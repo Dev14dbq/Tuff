@@ -31,6 +31,8 @@ pub struct Item {
     pub attack_damage: f32,
     /// As fuel: the burn time and speed providers (`cooking_fuel`).
     pub fuel: Option<(String, String)>,
+    /// Has `max_damage` (and so a `damage` component).
+    pub damageable: bool,
 }
 
 #[derive(Debug, Default)]
@@ -102,6 +104,7 @@ fn parse(name: &str, c: &Value) -> Item {
             .as_str()
             .map(str::to_owned),
         attack_damage,
+        damageable: c.get("minecraft:max_damage").is_some(),
         fuel: c.get("minecraft:cooking_fuel").and_then(|f| {
             Some((
                 f["burn_time"].as_str()?.to_owned(),

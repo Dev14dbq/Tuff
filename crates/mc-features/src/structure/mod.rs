@@ -814,6 +814,41 @@ impl Structures {
         ground: &mut dyn Ground,
         start_only: bool,
     ) -> Option<Start> {
+        self.generate_in(index, seed, x, z, heights, ground, start_only, false)
+    }
+
+    /// `/place structure`: structure `id` started in chunk `x, z`,
+    /// whatever the biome there.
+    pub fn generate_anywhere(
+        &self,
+        id: &str,
+        seed: i64,
+        x: i32,
+        z: i32,
+        heights: Heights,
+        ground: &mut dyn Ground,
+    ) -> Option<Start> {
+        let index = self.structures.iter().position(|s| s.id == id)?;
+        self.generate_in(index, seed, x, z, heights, ground, false, true)
+    }
+
+    /// Whether there is a structure `id`.
+    pub fn has(&self, id: &str) -> bool {
+        self.structures.iter().any(|s| s.id == id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn generate_in(
+        &self,
+        index: usize,
+        seed: i64,
+        x: i32,
+        z: i32,
+        heights: Heights,
+        ground: &mut dyn Ground,
+        start_only: bool,
+        any_biome: bool,
+    ) -> Option<Start> {
         let s = &self.structures[index];
         let mut r = WorldgenRandom::legacy(0);
         r.set_large_feature_seed(seed, x, z);
@@ -876,7 +911,7 @@ impl Structures {
                 pieces.len()
             );
         }
-        if !s.biomes.contains(&biome) {
+        if !any_biome && !s.biomes.contains(&biome) {
             return None;
         }
         let bbox = pieces

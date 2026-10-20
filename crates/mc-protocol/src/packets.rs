@@ -1587,6 +1587,25 @@ pub mod play {
         }
     }
 
+    /// Chunks Biomes: new biomes for whole chunks (`/fillbiome`).
+    #[derive(Clone, Debug)]
+    pub struct ChunksBiomes {
+        /// Chunk x, z and every section's biomes in network form.
+        pub chunks: Vec<(i32, i32, Vec<u8>)>,
+    }
+    packet!(ChunksBiomes, Play, "minecraft:chunks_biomes");
+    impl Encode for ChunksBiomes {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.chunks.len() as i32);
+            for (x, z, data) in &self.chunks {
+                let pos = (i64::from(*x) & 0xFFFF_FFFF) | ((i64::from(*z) & 0xFFFF_FFFF) << 32);
+                out.extend_from_slice(&pos.to_be_bytes());
+                out.put_varint(data.len() as i32);
+                out.extend_from_slice(data);
+            }
+        }
+    }
+
     /// Stop Sound: by category and/or name, or every sound.
     #[derive(Clone, Debug)]
     pub struct StopSound {

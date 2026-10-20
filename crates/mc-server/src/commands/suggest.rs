@@ -89,6 +89,10 @@ fn candidates(ctx: &ServerContext, path: &[String]) -> Vec<String> {
             ids.sort();
             return ids;
         }
+        [.., "storage", "target" | "source"] => {
+            drop(lists);
+            return lock(&ctx.storage).contents.keys().cloned().collect();
+        }
         ["place", "template", ..] => {
             drop(lists);
             return data_ids(ctx, "structure");

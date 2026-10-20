@@ -5,8 +5,11 @@
 //! thread, in order with everything else that changes the world.
 
 mod bossbar;
+mod data;
+mod execute;
 mod functions;
 mod living;
+mod place;
 mod places;
 mod rare;
 mod run;
@@ -26,6 +29,7 @@ use tracing::{info, warn};
 
 use crate::context::{Event, Pose, ServerContext};
 use crate::tick::{TickControl, lock};
+pub(crate) use functions::tick as run_functions;
 
 pub use suggest::suggest;
 
@@ -91,6 +95,17 @@ pub struct Output {
     /// Lines for whoever ran it.
     pub lines: Vec<Tag>,
     pub events: Vec<Event>,
+    /// `return`: the value (and whether it did not `fail`) the running
+    /// function ends with.
+    pub ret: Option<(bool, i32)>,
+    /// How deep in functions calling functions.
+    pub depth: u32,
+    /// Commands run and contexts forked so far, against
+    /// `max_command_sequence_length` and `max_command_forks`.
+    pub steps: i64,
+    pub forks: i64,
+    /// A limit was hit: everything left is dropped.
+    pub aborted: bool,
 }
 
 /// Where and as whom a command runs (`execute` changes it).
@@ -106,6 +121,8 @@ pub struct Src {
     pub eyes: bool,
     /// `execute store`: where the command's result goes.
     pub stores: Vec<Store>,
+    /// In a function: no feedback, errors dropped.
+    pub silent: bool,
 }
 
 /// Where `execute store result|success ...` puts what a command returned.
@@ -127,7 +144,7 @@ pub enum StoreTarget {
     /// `block|entity|storage ... <path> <type> <scale>`.
     Data {
         target: DataTarget,
-        path: String,
+        path: mc_command::nbtpath::NbtPath,
         /// `byte`, `short`, `int`, `long`, `float`, `double`.
         kind: String,
         scale: f64,
@@ -165,6 +182,7 @@ impl Src {
                     level: 4,
                     eyes: false,
                     stores: Vec::new(),
+                    silent: false,
                 }
             }
             Source::Player { uuid, name, pose } => Src {
@@ -175,6 +193,7 @@ impl Src {
                 level: level(ctx, *uuid, name),
                 eyes: false,
                 stores: Vec::new(),
+                silent: false,
             },
         }
     }
@@ -204,6 +223,9 @@ impl Run<'_> {
     /// Tells the source; with `broadcast`, other operators and the console
     /// hear of it too (`[Name: ...]`).
     pub fn success(&mut self, message: Tag, broadcast: bool) {
+        if self.src.silent {
+            return;
+        }
         if self.ctx.game_rule_bool("send_command_feedback") || self.src.who == Who::Console {
             self.out.lines.push(message.clone());
         }
@@ -233,7 +255,10 @@ pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, lin
     let src = Src::of(ctx, source);
     let mut out = Output::default();
     let parse = dispatch::parse(&commands.tree, line, src.level, &commands.env);
-    if let Some(e) = parse.error(line) {
+    if let Some(e) = parse
+        .error(line)
+        .or_else(|| execute::check_line(ctx, &parse.chain, line))
+    {
         report(ctx, source, &e, &mut out);
         return out;
     }
@@ -273,7 +298,7 @@ fn report(ctx: &ServerContext, source: &Source, e: &CommandError, out: &mut Outp
 
 /// Runs the contexts of a parsed line: each but the last changes the
 /// sources (`execute as`, `at`, `positioned`...), the last runs for each.
-fn run_chain(
+pub(crate) fn run_chain(
     ctx: &ServerContext,
     tick: &mut TickControl,
     chain: &[Context],
@@ -282,12 +307,54 @@ fn run_chain(
     admin: &mut Vec<Tag>,
 ) -> Result<i32> {
     let tree = &ctx.commands.tree;
+    let (max_steps, max_forks) = {
+        let rules = lock(&ctx.game_rules);
+        let limit = |name| match rules.get(name) {
+            Some(_) => i64::from(rules.int(name)),
+            None => i64::MAX,
+        };
+        (
+            limit("max_command_sequence_length"),
+            limit("max_command_forks"),
+        )
+    };
     let mut sources = vec![src];
+    let mut returns = false;
     let (last, modifiers) = chain.split_last().expect("a context");
     for c in modifiers {
+        if out.aborted {
+            return Ok(0);
+        }
+        if c.path(tree).first() == Some(&"return") {
+            returns = true;
+            continue;
+        }
+        let mut path = c.path(tree);
+        if path.first().is_some_and(|p| *p != "execute") && path.len() > 1 {
+            path.insert(0, "execute");
+        }
         let mut next = Vec::new();
-        for s in &sources {
-            next.extend(run::modify(ctx, c, s)?);
+        if let ["execute", kind @ ("if" | "unless"), "function", "name"] = path.as_slice() {
+            // Runs the function, so it needs more than `run::modify` has.
+            for s in &sources {
+                out.steps += 1;
+                if functions::test(ctx, tick, out, admin, c, s)? == (*kind == "if") {
+                    next.push(s.clone());
+                }
+            }
+        } else {
+            for s in &sources {
+                out.steps += 1;
+                next.extend(run::modify(ctx, c, s)?);
+            }
+        }
+        if out.steps > max_steps {
+            out.aborted = true;
+            return Ok(0);
+        }
+        out.forks += next.len() as i64;
+        if out.forks >= max_forks {
+            return Ok(0);
         }
         sources = next;
         if sources.is_empty() {
@@ -302,6 +369,12 @@ fn run_chain(
     let mut total = 0;
     let many = sources.len() > 1;
     for s in sources {
+        out.steps += 1;
+        if out.aborted || out.steps > max_steps {
+            out.aborted = true;
+            return Ok(total);
+        }
+        let silent = s.silent;
         let mut r = Run {
             ctx,
             tick: &mut *tick,
@@ -333,19 +406,30 @@ fn run_chain(
                 let v = if store.success { i32::from(ok) } else { value };
                 match &store.target {
                     StoreTarget::Score { .. } => scoreboard::store(ctx, store, v, r.out),
-                    StoreTarget::Data { .. } => functions::store(ctx, store, v),
+                    StoreTarget::Data { .. } => data::store(ctx, store, v, r.out),
                     StoreTarget::Bossbar { .. } => bossbar::store(ctx, store, v),
                 }
             }
         }
+        if returns && r.out.ret.is_none() {
+            r.out.ret = Some(match &result {
+                Some(Ok(n)) => (true, *n),
+                _ => (false, 0),
+            });
+        }
         match result {
             Some(Ok(n)) => total += n,
+            Some(Err(_)) if silent => {}
             Some(Err(e)) if many => r.out.lines.extend(e.lines()),
             Some(Err(e)) => return Err(e),
             None => {
                 warn!("/{} is not implemented yet", path.join(" "));
                 return Err(CommandError::new("command.failed", Vec::new()));
             }
+        }
+        // `return` in one fork ends the function for all of them.
+        if out.ret.is_some() {
+            break;
         }
     }
     Ok(total)

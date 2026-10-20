@@ -158,6 +158,8 @@ pub enum Arg {
     Block(Block),
     Item(Item),
     Nbt(Tag),
+    /// An NBT path.
+    NbtPath(crate::nbtpath::NbtPath),
     /// A particle type and its options.
     Particle {
         id: String,
@@ -167,6 +169,55 @@ pub enum Arg {
     Time(i32),
     /// Text as written (messages, paths, providers...).
     Raw(String),
+}
+
+/// The slots a slot range (`container.*`, `armor.head`...) names, by
+/// vanilla's slot numbers: 0-53 container, 98-99 hands, 100-103 armor,
+/// 105 body, 200-226 ender chest, 300-307 villager, 400 saddle, 401 chest,
+/// 499 cursor, 500-514 horse, 1000 contents.
+pub fn slot_range(name: &str) -> Option<Vec<i32>> {
+    let ranges: &[(&str, i32, i32)] = &[
+        ("container", 0, 54),
+        ("hotbar", 0, 9),
+        ("inventory", 9, 27),
+        ("enderchest", 200, 27),
+        ("villager", 300, 8),
+        ("horse", 500, 15),
+        ("player.crafting", 500, 4),
+    ];
+    let single: &[(&str, i32)] = &[
+        ("weapon", 98),
+        ("weapon.mainhand", 98),
+        ("weapon.offhand", 99),
+        ("armor.feet", 100),
+        ("armor.legs", 101),
+        ("armor.chest", 102),
+        ("armor.head", 103),
+        ("armor.body", 105),
+        ("saddle", 400),
+        ("horse.saddle", 400),
+        ("horse.chest", 401),
+        ("player.cursor", 499),
+        ("contents", 1000),
+    ];
+    if let Some((_, n)) = single.iter().find(|(k, _)| *k == name) {
+        return Some(vec![*n]);
+    }
+    match name {
+        "weapon.*" => return Some(vec![98, 99]),
+        "armor.*" => return Some(vec![100, 101, 102, 103, 105]),
+        _ => {}
+    }
+    let (base, index) = name.rsplit_once('.')?;
+    let &(_, first, len) = ranges.iter().find(|(k, _, _)| *k == base)?;
+    if index == "*" {
+        return Some((first..first + len).collect());
+    }
+    let i: i32 = index.parse().ok().filter(|i: &i32| (0..len).contains(i))?;
+    if index.starts_with('+') || (index.len() > 1 && index.starts_with('0')) {
+        return None;
+    }
+    Some(vec![first + i])
 }
 
 /// `namespace:path` with `minecraft:` added when there is no namespace.
@@ -1026,12 +1077,55 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
             }
             Arg::Particle { id, options }
         }
+        "minecraft:loot_predicate" => {
+            if r.can_read() && matches!(r.peek(), '{' | '[') {
+                let t = read_nbt(r)?;
+                if !matches!(t, Tag::Compound(_)) {
+                    let why = format!("Not a map: {}", crate::particle::snbt(&t));
+                    return Err(r.error_at(
+                        CommandError::new(
+                            "argument.resource_or_id.failed_to_parse",
+                            vec![string(&why)],
+                        ),
+                        r.input.len(),
+                    ));
+                }
+                Arg::Nbt(t)
+            } else {
+                Arg::Id(read_id(r)?)
+            }
+        }
+        "minecraft:context_int_provider" | "minecraft:context_float_provider" => {
+            if r.can_read() && matches!(r.peek(), '{' | '[') {
+                Arg::Nbt(read_nbt(r)?)
+            } else {
+                let id = read_id(r)?;
+                if !env.exists(parser, &full_id(&id)) {
+                    return Err(r.error(CommandError::new(
+                        "argument.resource_or_id.no_such_element",
+                        vec![string(&full_id(&id)), string(parser)],
+                    )));
+                }
+                Arg::Id(id)
+            }
+        }
+        "minecraft:slot_source" => {
+            let s = r.cursor;
+            while r.can_read() && (id_char(r.peek()) || r.peek() == '*') {
+                r.skip();
+            }
+            let name = &r.input[s..r.cursor];
+            if slot_range(name).is_none() {
+                return Err(r.error(CommandError::new(
+                    "argument.resource_or_id.no_such_element",
+                    vec![string(&full_id(name)), string("minecraft:slot_source")],
+                )));
+            }
+            Arg::Str(name.to_owned())
+        }
         "minecraft:dimension" => {
             let id = read_id(r)?;
-            if !env.exists("minecraft:dimension", &id) {
-                r.cursor = start;
-                return Err(r.error(builtin::invalid("argument.dimension.invalid", &id)));
-            }
+            // Checked when run (vanilla's error has no context).
             Arg::Id(id)
         }
         "minecraft:resource" | "minecraft:resource_key" => {
@@ -1087,6 +1181,7 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
             Arg::Nbt(t)
         }
         "minecraft:component" => Arg::Nbt(plain_text(read_nbt(r)?)),
+        "minecraft:nbt_path" => Arg::NbtPath(crate::nbtpath::parse(r)?),
         "minecraft:nbt_tag" | "minecraft:style" => Arg::Nbt(read_nbt(r)?),
         "minecraft:message" => {
             let s = r.remaining().to_owned();

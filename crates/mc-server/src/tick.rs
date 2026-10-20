@@ -132,11 +132,7 @@ pub enum Action {
         sequence: i32,
     },
     /// Using the held item without a block (buckets).
-    UseItem {
-        hand: i32,
-        yaw: f32,
-        pitch: f32,
-    },
+    UseItem { hand: i32, yaw: f32, pitch: f32 },
 }
 
 #[derive(Debug)]
@@ -182,6 +178,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         }
         if runs {
             lock(&ctx.time).advance();
+            crate::commands::run_functions(&ctx, &mut control);
             run_scheduled_ticks(&ctx);
             crate::random_ticks::tick(&ctx);
             crate::effects::tick(&ctx, count as i64);
@@ -203,7 +200,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             // vanilla, so the reply then goes the same way.
             let after = outcome.events.iter().any(|e| match e {
                 Event::Direct { uuid, .. } | Event::Message { uuid, .. } => *uuid == actor,
-                Event::Scoreboard(_) => true,
+                Event::Scoreboard(_) | Event::BiomesChanged { .. } => true,
                 _ => false,
             });
             for event in std::mem::take(&mut outcome.events) {
@@ -550,7 +547,12 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                         }
                     }
                 }
-                let delay = (pickup_delay - 1).max(0);
+                // 32767 is "never": it does not count down.
+                let delay = if pickup_delay == 32767 {
+                    pickup_delay
+                } else {
+                    (pickup_delay - 1).max(0)
+                };
                 entity.kind = mc_entity::Kind::Item {
                     item,
                     count,

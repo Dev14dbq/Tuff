@@ -284,32 +284,24 @@ impl Store {
         }))
     }
 
-    fn entry(&self, hands: &Hands, slot: usize) -> Option<Compound> {
+    fn entry(
+        names: &dyn Fn(i32) -> Option<String>,
+        hands: &Hands,
+        slot: usize,
+    ) -> Option<Compound> {
         let stack = hands.slots[slot].as_ref()?;
         let mut entry = Compound::new();
         entry.insert("count", Tag::Int(stack.count));
-        entry.insert("id", Tag::String(self.item_names.get(&stack.item)?.clone()));
+        entry.insert("id", Tag::String(names(stack.item)?));
         if let Some(components) = hands.components.get(&slot) {
             entry.insert("components", components.clone());
         }
         Some(entry)
     }
 
-    /// Writes the player's state over their stored file (or a new one).
-    pub fn save(&self, uuid: u128, saved: &Saved, data_version: i32) -> Result<()> {
-        let mut root = self.read(uuid)?.unwrap_or_else(|| {
-            let mut root = Compound::new();
-            root.insert("DataVersion", Tag::Int(data_version));
-            root.insert("Dimension", Tag::String("minecraft:overworld".into()));
-            root.insert("Health", Tag::Float(20.0));
-            root.insert("foodLevel", Tag::Int(20));
-            let mut uuid_ints = Vec::new();
-            for shift in [96, 64, 32, 0] {
-                uuid_ints.push((uuid >> shift) as u32 as i32);
-            }
-            root.insert("UUID", Tag::IntArray(uuid_ints));
-            root
-        });
+    /// Puts a player's state into their NBT, as vanilla saves it;
+    /// `names` gives item ids.
+    pub fn fill(root: &mut Compound, saved: &Saved, names: &dyn Fn(i32) -> Option<String>) {
         let p = &saved.pose;
         root.insert(
             "Pos",
@@ -381,7 +373,7 @@ impl Store {
         let mut inventory = Vec::new();
         for index in 0..36 {
             let slot = container_slot(index).expect("0..36");
-            if let Some(mut entry) = self.entry(&saved.hands, slot) {
+            if let Some(mut entry) = Self::entry(names, &saved.hands, slot) {
                 entry.insert("Slot", Tag::Byte(index as i8));
                 inventory.push(Tag::Compound(entry));
             }
@@ -389,12 +381,29 @@ impl Store {
         root.insert("Inventory", Tag::List(inventory));
         let mut equipment = Compound::new();
         for (key, slot) in EQUIPMENT {
-            if let Some(entry) = self.entry(&saved.hands, slot) {
+            if let Some(entry) = Self::entry(names, &saved.hands, slot) {
                 equipment.insert(key, Tag::Compound(entry));
             }
         }
         root.insert("equipment", Tag::Compound(equipment));
+    }
 
+    /// Writes the player's state over their stored file (or a new one).
+    pub fn save(&self, uuid: u128, saved: &Saved, data_version: i32) -> Result<()> {
+        let mut root = self.read(uuid)?.unwrap_or_else(|| {
+            let mut root = Compound::new();
+            root.insert("DataVersion", Tag::Int(data_version));
+            root.insert("Dimension", Tag::String("minecraft:overworld".into()));
+            root.insert("Health", Tag::Float(20.0));
+            root.insert("foodLevel", Tag::Int(20));
+            let mut uuid_ints = Vec::new();
+            for shift in [96, 64, 32, 0] {
+                uuid_ints.push((uuid >> shift) as u32 as i32);
+            }
+            root.insert("UUID", Tag::IntArray(uuid_ints));
+            root
+        });
+        Self::fill(&mut root, saved, &|i| self.item_names.get(&i).cloned());
         std::fs::create_dir_all(&self.dir)?;
         let mut bytes = Vec::new();
         mc_nbt::write_named("", &Tag::Compound(root), &mut bytes)?;

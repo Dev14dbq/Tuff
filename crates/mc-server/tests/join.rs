@@ -2643,3 +2643,95 @@ async fn locate_finds_what_vanilla_finds() {
     let _ = stop.send(());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn data_command_reads_and_writes_storage() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Admin".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let (mut admin, _) = join_offline(addr, ctx.ids.clone(), "Admin").await;
+
+    // Once "command.failed": /data had no handler.
+    let (text, _) = chat_command(&mut admin, "data modify storage t:s list set value [1,2]").await;
+    assert!(text.contains("commands.data.storage.modified"), "{text}");
+    let (text, _) = chat_command(&mut admin, "data modify storage t:s list append value 3").await;
+    assert!(text.contains("commands.data.storage.modified"), "{text}");
+    let (text, _) = chat_command(&mut admin, "data get storage t:s list[-1]").await;
+    assert!(text.contains("commands.data.storage.query"), "{text}");
+    let (text, _) = chat_command(
+        &mut admin,
+        "execute store result storage t:s n int 2 run data get storage t:s list",
+    )
+    .await;
+    assert!(text.contains("commands.data.storage.query"), "{text}");
+    let (text, _) = chat_command(&mut admin, "execute if data storage t:s list[]").await;
+    assert!(text.contains("Int(3)"), "{text}");
+    let (text, _) = chat_command(&mut admin, "data get storage t:s n").await;
+    assert!(text.contains("\"6\""), "{text}");
+    let (text, _) = chat_command(&mut admin, "data get block 0 -64 0").await;
+    assert!(text.contains("commands.data.block.invalid"), "{text}");
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn execute_tests_items_biomes_and_stopwatches() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Admin".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let (mut admin, _) = join_offline(addr, ctx.ids.clone(), "Admin").await;
+
+    // Once "command.failed": these tests had no handler.
+    let (text, _) = chat_command(&mut admin, "give @s stone 5").await;
+    assert!(text.contains("commands.give.success"), "{text}");
+    let (text, _) = chat_command(
+        &mut admin,
+        "execute if items entity @s hotbar.* stone[count=5]",
+    )
+    .await;
+    assert!(
+        text.contains("pass_count") && text.contains("Int(5)"),
+        "{text}"
+    );
+    let (text, _) = chat_command(&mut admin, "execute if items entity @s nosuch.slot *").await;
+    assert!(
+        text.contains("argument.resource_or_id.no_such_element"),
+        "{text}"
+    );
+    let (text, _) = chat_command(&mut admin, "execute if dimension overworld").await;
+    assert!(text.contains("commands.execute.conditional.pass"), "{text}");
+    let (text, _) = chat_command(&mut admin, "execute if loaded 0 0 0").await;
+    assert!(text.contains("commands.execute.conditional.pass"), "{text}");
+    let (text, _) = chat_command(
+        &mut admin,
+        "execute if predicate {condition:\"minecraft:random_chance\",chance:1}",
+    )
+    .await;
+    assert!(text.contains("commands.execute.conditional.pass"), "{text}");
+    let (text, _) = chat_command(&mut admin, "stopwatch create w").await;
+    assert!(text.contains("commands.stopwatch.create.success"), "{text}");
+    let (text, _) = chat_command(&mut admin, "execute if stopwatch w 1000..").await;
+    assert!(text.contains("commands.execute.conditional.fail"), "{text}");
+    let (text, _) = chat_command(
+        &mut admin,
+        "data modify storage t:s c set compute default integer minecraft:cooking/time_coal",
+    )
+    .await;
+    assert!(text.contains("commands.data.storage.modified"), "{text}");
+    let (text, _) = chat_command(&mut admin, "execute facing 0 0 10 run tp @s ~ ~ ~").await;
+    assert!(!text.contains("command.failed"), "{text}");
+    let _ = stop.send(());
+}

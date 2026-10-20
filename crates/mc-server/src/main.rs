@@ -179,6 +179,7 @@ async fn run() -> Result<()> {
     config.ops = ops;
     let level_name = props.get("level-name").to_owned();
     let flat = props.get("level-type").contains("flat");
+    config.level_dir = Some(server_dir.join(&level_name));
     config.world = if flat {
         None
     } else {

@@ -1,0 +1,1 @@
+tellraw @s "no return"

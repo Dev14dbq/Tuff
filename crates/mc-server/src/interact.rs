@@ -324,9 +324,12 @@ pub fn dig(
         && let Ok(face @ 0..=5) = usize::try_from(face)
     {
         let at = offset(position, face);
-        let fire = world
-            .block(at, blocks)
-            .is_some_and(|s| matches!(blocks.block_name(s), Some("minecraft:fire" | "minecraft:soul_fire")));
+        let fire = world.block(at, blocks).is_some_and(|s| {
+            matches!(
+                blocks.block_name(s),
+                Some("minecraft:fire" | "minecraft:soul_fire")
+            )
+        });
         if fire {
             let mut level = WorldLevel::new(ctx);
             level.set_block(at, ctx.shapes.air());
@@ -618,9 +621,10 @@ fn light(ctx: &ServerContext, outcome: &mut Outcome, clicked: Position, face: us
     let logic = level.logic();
     let state = ctx.world.block(clicked, &ctx.data.blocks).unwrap_or(0);
     let name = ctx.data.blocks.block_name(state).unwrap_or("");
-    let lightable = (name.ends_with("campfire") || name.ends_with("candle") || name.ends_with("candle_cake"))
-        && ctx.data.blocks.property(state, "lit") == Some("false")
-        && ctx.data.blocks.property(state, "waterlogged") != Some("true");
+    let lightable =
+        (name.ends_with("campfire") || name.ends_with("candle") || name.ends_with("candle_cake"))
+            && ctx.data.blocks.property(state, "lit") == Some("false")
+            && ctx.data.blocks.property(state, "waterlogged") != Some("true");
     let (at, new) = if lightable {
         (clicked, ctx.shapes.with(state, "lit", "true"))
     } else {
@@ -641,7 +645,13 @@ fn light(ctx: &ServerContext, outcome: &mut Outcome, clicked: Position, face: us
 
 /// Puts `item` (or nothing) in place of one of the held stack; a stack of
 /// several keeps the rest and `item` goes elsewhere in the inventory.
-fn replace_held(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, hand: i32, item: Option<i32>) {
+fn replace_held(
+    ctx: &ServerContext,
+    outcome: &mut Outcome,
+    actor: Actor,
+    hand: i32,
+    item: Option<i32>,
+) {
     let mut inventories = ctx.inventories.lock().expect("inventories lock");
     let Some(hands) = inventories.get_mut(&actor.uuid) else {
         return;
@@ -677,13 +687,35 @@ fn replace_held(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, hand: 
 /// The first block the player looks at within reach, and the face the look
 /// enters it through. Blocks count as full cubes; fluids are looked through
 /// unless `sources` (then only source blocks stop the look).
-fn look_at(ctx: &ServerContext, actor: Actor, yaw: f32, pitch: f32, sources: bool) -> Option<(Position, usize)> {
+fn look_at(
+    ctx: &ServerContext,
+    actor: Actor,
+    yaw: f32,
+    pitch: f32,
+    sources: bool,
+) -> Option<(Position, usize)> {
     let pose = actor.pose;
-    let eye = [pose.x, pose.y + if actor.sneaking { 1.27 } else { 1.62 }, pose.z];
+    let eye = [
+        pose.x,
+        pose.y + if actor.sneaking { 1.27 } else { 1.62 },
+        pose.z,
+    ];
     let (yaw, pitch) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
-    let dir = [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()];
-    let reach = if actor.game_mode == CREATIVE { 5.0 } else { 4.5 };
-    let mut cell = [eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32];
+    let dir = [
+        -yaw.sin() * pitch.cos(),
+        -pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    ];
+    let reach = if actor.game_mode == CREATIVE {
+        5.0
+    } else {
+        4.5
+    };
+    let mut cell = [
+        eye[0].floor() as i32,
+        eye[1].floor() as i32,
+        eye[2].floor() as i32,
+    ];
     let step = dir.map(|d| if d > 0.0 { 1 } else { -1 });
     let mut next = [0.0f64; 3];
     let mut delta = [f64::INFINITY; 3];
@@ -713,7 +745,9 @@ fn look_at(ctx: &ServerContext, actor: Actor, yaw: f32, pitch: f32, sources: boo
                 }
             }
         }
-        let a = (0..3).min_by(|&i, &j| next[i].total_cmp(&next[j])).unwrap_or(0);
+        let a = (0..3)
+            .min_by(|&i, &j| next[i].total_cmp(&next[j]))
+            .unwrap_or(0);
         travelled = next[a];
         if travelled > reach {
             return None;
@@ -765,7 +799,10 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
             let state = state_at(hit);
             let name = blocks.block_name(state).unwrap_or("");
             let (new, bucket) = if blocks.property(state, "waterlogged") == Some("true") {
-                (ctx.shapes.with(state, "waterlogged", "false"), "minecraft:water_bucket")
+                (
+                    ctx.shapes.with(state, "waterlogged", "false"),
+                    "minecraft:water_bucket",
+                )
             } else {
                 match name {
                     "minecraft:water" => (ctx.shapes.air(), "minecraft:water_bucket"),
@@ -789,7 +826,8 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
                 let fits = |s: u32| ctx.shapes.is_air(s) || ctx.rules.is_replaceable(s);
                 let at = if fits(state) { hit } else { offset(hit, face) };
                 let there = state_at(at);
-                let same = blocks.block_name(there) == Some(fluid) && blocks.property(there, "level") == Some("0");
+                let same = blocks.block_name(there) == Some(fluid)
+                    && blocks.property(there, "level") == Some("0");
                 if !fits(there) || same {
                     false
                 } else {

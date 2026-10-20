@@ -25,12 +25,14 @@ mod level;
 mod lists;
 pub mod logs;
 mod loot;
+mod packs;
 mod pipeline;
 mod players;
 mod random_ticks;
 pub mod properties;
 mod rules;
 mod scoreboard;
+mod storage;
 mod tick;
 mod util;
 mod vitals;
@@ -67,6 +69,9 @@ pub struct Config {
     /// A world folder saved by vanilla 26.3; `None` for a superflat test world.
     /// A folder without `level.dat` becomes a new generated world.
     pub world: Option<PathBuf>,
+    /// The level folder data packs are read from (also for the flat
+    /// world, which is not saved).
+    pub level_dir: Option<PathBuf>,
     /// Seed for a new world (random if `None`).
     pub seed: Option<i64>,
     /// How often changed chunks are written (vanilla: every 5 minutes).
@@ -101,6 +106,7 @@ impl Config {
             online_mode: true,
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
             world: None,
+            level_dir: None,
             seed: None,
             autosave: std::time::Duration::from_secs(300),
             console: false,
@@ -213,6 +219,8 @@ impl Server {
             let (ctx, stop) = (self.ctx.clone(), stop.clone());
             std::thread::Builder::new()
                 .name("tick".into())
+                // Functions calling functions run deep.
+                .stack_size(256 << 20)
                 .spawn(move || tick::run(ctx, requests, stop))?
         };
         if self.ctx.config.console {
@@ -254,41 +262,11 @@ pub(crate) fn save_player(ctx: &ServerContext, uuid: u128) {
     let Some(store) = &ctx.player_files else {
         return;
     };
-    let player = ctx
-        .players
-        .lock()
-        .expect("players lock")
-        .get(&uuid)
-        .cloned();
-    let hands = ctx
-        .inventories
-        .lock()
-        .expect("inventories lock")
-        .get(&uuid)
-        .cloned();
-    let (Some(player), Some(hands)) = (player, hands) else {
+    let Some(saved) = saved_of(ctx, uuid) else {
         return;
-    };
-    let Some(pose) = player.pose else {
-        return;
-    };
-    let vitals = ctx
-        .vitals
-        .lock()
-        .expect("vitals lock")
-        .get(&uuid)
-        .cloned()
-        .unwrap_or_default();
-    let saved = players::Saved {
-        pose,
-        game_mode: player.game_mode,
-        flying: player.flying,
-        hands,
-        vitals,
-        extra: player.extra.clone(),
     };
     if let Err(err) = store.save(uuid, &saved, ctx.data.version.world_version) {
-        tracing::warn!("saving {}: {err:#}", player.profile.name);
+        tracing::warn!("saving {}: {err:#}", crate::util::uuid_string(uuid));
     }
 }
 
@@ -330,6 +308,7 @@ fn save(ctx: &ServerContext) {
     ctx.border.lock().expect("border lock").save();
     ctx.bossbars.lock().expect("bossbars lock").save();
     ctx.scoreboard.lock().expect("scoreboard lock").save();
+    ctx.storage.lock().expect("storage lock").save();
     if let Err(err) = ctx.world.save_time(&time) {
         tracing::warn!("saving the time: {err:#}");
     }
@@ -357,4 +336,39 @@ fn save(ctx: &ServerContext) {
             }
         );
     }
+}
+
+/// An online player's state as it would be saved.
+pub(crate) fn saved_of(ctx: &ServerContext, uuid: u128) -> Option<players::Saved> {
+    let player = ctx
+        .players
+        .lock()
+        .expect("players lock")
+        .get(&uuid)
+        .cloned();
+    let hands = ctx
+        .inventories
+        .lock()
+        .expect("inventories lock")
+        .get(&uuid)
+        .cloned();
+    let (Some(player), Some(hands)) = (player, hands) else {
+        return None;
+    };
+    let pose = player.pose?;
+    let vitals = ctx
+        .vitals
+        .lock()
+        .expect("vitals lock")
+        .get(&uuid)
+        .cloned()
+        .unwrap_or_default();
+    Some(players::Saved {
+        pose,
+        game_mode: player.game_mode,
+        flying: player.flying,
+        hands,
+        vitals,
+        extra: player.extra.clone(),
+    })
 }

@@ -24,6 +24,7 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         ["forceload", "remove", ..] => forceload_change(r, false),
         ["forceload", "query"] => forceload_list(r),
         ["forceload", "query", "pos"] => forceload_query(r),
+        ["fillbiome", "from", "to", "biome", ..] => fillbiome(r),
         _ => return None,
     })
 }
@@ -663,6 +664,82 @@ fn forceload_query(r: &mut Run) -> Result<i32> {
     }
     r.success(translate("commands.forceload.query.success", args), false);
     Ok(1)
+}
+
+/// `/fillbiome`: biomes are kept per 4×4×4 cell, so the box grows to
+/// whole cells.
+fn fillbiome(r: &mut Run) -> Result<i32> {
+    let a = super::place::loaded_pos(r, "from")?;
+    let b = super::place::loaded_pos(r, "to")?;
+    let q = |v: i32| (v >> 2) << 2;
+    let min = [q(a.x.min(b.x)), q(a.y.min(b.y)), q(a.z.min(b.z))];
+    let max = [q(a.x.max(b.x)), q(a.y.max(b.y)), q(a.z.max(b.z))];
+    let volume = (0..3)
+        .map(|i| i64::from(max[i] - min[i] + 1))
+        .product::<i64>();
+    let limit = super::run::block_limit(r.ctx);
+    if volume > limit {
+        return Err(err(
+            "commands.fillbiome.toobig",
+            vec![Tag::Int(limit as i32), Tag::Long(volume)],
+        ));
+    }
+    let name = match r.arg("biome") {
+        Some(Arg::Id(s) | Arg::Str(s) | Arg::Raw(s)) => mc_command::args::full_id(s),
+        _ => String::new(),
+    };
+    let world = &r.ctx.world;
+    let Some(biome) = world.biome_id(&name) else {
+        return Err(err(
+            "argument.resource.not_found",
+            vec![Tag::String(name), Tag::from("minecraft:worldgen/biome")],
+        ));
+    };
+    let allowed: Option<Vec<u32>> = match r.arg("filter") {
+        Some(Arg::IdOrTag { id, tag }) => Some(
+            members(
+                r,
+                "minecraft:worldgen/biome",
+                &mc_command::args::full_id(id),
+                *tag,
+            )
+            .iter()
+            .filter_map(|n| world.biome_id(n))
+            .collect(),
+        ),
+        _ => None,
+    };
+    let replace = |old: u32| allowed.as_ref().is_none_or(|a| a.contains(&old));
+    let cell_min = [min[0] >> 2, min[1] >> 2, min[2] >> 2];
+    let cell_max = [max[0] >> 2, max[1] >> 2, max[2] >> 2];
+    let mut count = 0;
+    let mut chunks = Vec::new();
+    for cz in (min[2] >> 4)..=(max[2] >> 4) {
+        for cx in (min[0] >> 4)..=(max[0] >> 4) {
+            let n = world.fill_biome(
+                (cx, cz),
+                cell_min,
+                cell_max,
+                biome,
+                &replace,
+                &r.ctx.data.blocks,
+            );
+            if n > 0 {
+                chunks.push((cx, cz));
+                count += n;
+            }
+        }
+    }
+    if count == 0 {
+        return Err(err("commands.fillbiome.no_changes", Vec::new()));
+    }
+    r.out
+        .events
+        .push(crate::context::Event::BiomesChanged { chunks });
+    let mut with = vec![Tag::Int(count as i32)];
+    with.extend(min.iter().chain(max.iter()).map(|v| Tag::Int(*v)));
+    r.success(translate("commands.fillbiome.success.count", with), true);
+    Ok(count as i32)
 }
 
 #[cfg(test)]

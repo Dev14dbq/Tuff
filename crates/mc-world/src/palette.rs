@@ -61,8 +61,24 @@ impl PalettedContainer {
 
     /// From one value per entry.
     pub fn from_values(kind: Kind, values: &[u32]) -> Self {
+        Self::from_values_after(kind, None, values)
+    }
+
+    /// The palette's first entry (what a fresh copy of it starts filled
+    /// with).
+    pub fn first(&self) -> u32 {
+        match &self.storage {
+            Storage::Single(v) => *v,
+            Storage::Indirect { palette, .. } => palette[0],
+            Storage::Direct(values) => values[0],
+        }
+    }
+
+    /// [`Self::from_values`] with `first` as the palette's first entry, as
+    /// a container refilled from a fresh copy of one holding `first` is.
+    pub fn from_values_after(kind: Kind, first: Option<u32>, values: &[u32]) -> Self {
         assert_eq!(values.len(), kind.entries, "wrong number of entries");
-        let mut palette: Vec<u32> = Vec::new();
+        let mut palette: Vec<u32> = first.into_iter().collect();
         for &value in values {
             if !palette.contains(&value) {
                 palette.push(value);

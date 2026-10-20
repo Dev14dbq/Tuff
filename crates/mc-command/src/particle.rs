@@ -171,13 +171,14 @@ pub fn snbt(t: &Tag) -> String {
         Tag::Short(v) => format!("{v}s"),
         Tag::Int(v) => v.to_string(),
         Tag::Long(v) => format!("{v}L"),
-        Tag::Float(v) => format!("{v:?}f"),
-        Tag::Double(v) => format!("{v:?}d"),
+        Tag::Float(v) => format!("{}f", crate::text::java_float(*v)),
+        Tag::Double(v) => format!("{}d", crate::text::java_double(*v)),
         Tag::String(s) => quote(s),
         Tag::List(l) => format!("[{}]", join(l, snbt)),
         Tag::Compound(c) => format!(
             "{{{}}}",
-            c.iter()
+            mc_nbt::java_order(c)
+                .into_iter()
                 .map(|(k, v)| format!("{}:{}", key(k), snbt(v)))
                 .collect::<Vec<_>>()
                 .join(",")

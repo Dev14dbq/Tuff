@@ -12,7 +12,7 @@ pub fn in_world(ctx: &ServerContext, p: Position) -> bool {
 }
 
 /// Block entity id of a block (most are named like the block).
-fn block_entity_id(name: &str) -> String {
+pub fn block_entity_id(name: &str) -> String {
     let short = name.trim_start_matches("minecraft:");
     let id = if short.ends_with("_hanging_sign") {
         "hanging_sign"

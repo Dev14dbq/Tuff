@@ -133,6 +133,10 @@ impl Compound {
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Tag)> {
         self.0.iter().map(|(k, v)| (k.as_str(), v))
     }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&str, &mut Tag)> {
+        self.0.iter_mut().map(|(k, v)| (k.as_str(), v))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -199,7 +203,15 @@ fn write_len(len: usize, out: &mut Vec<u8>) {
 
 /// Compound entries in the order vanilla sends them: its compounds are
 /// Java `HashMap`s, so entries go by hash bucket, then as they were added.
-fn java_order<K: AsRef<str>, V>(entries: &[(K, V)]) -> Vec<&(K, V)> {
+/// A compound's entries in the order vanilla lists and sends them.
+pub fn java_order(c: &Compound) -> Vec<(&str, &Tag)> {
+    java_entries(&c.0)
+        .into_iter()
+        .map(|(k, v)| (k.as_str(), v))
+        .collect()
+}
+
+fn java_entries<K: AsRef<str>, V>(entries: &[(K, V)]) -> Vec<&(K, V)> {
     let mut cap = 16;
     while entries.len() * 4 > cap * 3 {
         cap *= 2;
@@ -245,7 +257,7 @@ fn write_payload(tag: &Tag, out: &mut Vec<u8>, java: bool) -> Result<()> {
         }
         Tag::Compound(compound) => {
             let entries: Vec<&(String, Tag)> = if java {
-                java_order(&compound.0)
+                java_entries(&compound.0)
             } else {
                 compound.0.iter().collect()
             };

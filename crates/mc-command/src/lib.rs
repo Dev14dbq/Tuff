@@ -8,6 +8,7 @@ pub mod dispatch;
 pub mod env;
 pub mod error;
 pub mod lang;
+pub mod nbtpath;
 pub mod particle;
 pub mod reader;
 pub mod suggest;

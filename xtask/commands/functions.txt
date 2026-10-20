@@ -1,0 +1,503 @@
+# Lines for `cargo xtask observe-commands --area functions --datapack
+# xtask/commands/functions-pack`: functions, schedule, data, execute
+# store/if/on/summon/facing, datapack, reload and stopwatch.
+
+# /function
+function t:hello
+function t:three
+function t:ret
+function t:retfail
+function t:retrun
+function t:retfunc
+function t:nested
+function t:noret
+function t:sub/deep
+function t:forkret
+function t:feedback
+function t:cont
+function t:cond
+function t:count
+function t:withself
+function t:perm
+function t:bad
+function t:nosuch
+function nosuch:thing
+function #t:all
+function #t:inner
+function #t:opt
+function #t:rets
+function #t:nosuch
+function #minecraft:load
+function t:macro
+function t:macro {msg:"hi",n:5}
+function t:macro {msg:"hi"}
+function t:macro {}
+function t:macro2 {a:1,b:2.5d}
+function t:macro2 {a:"x y",b:[1,2]}
+function t:macro2 {a:{c:1b},b:3L}
+function t:macro2 {a:true,b:1.5f}
+function t:hello {a:1}
+function t:macro3 {v:"[1,2,3]"}
+data get storage t:m v
+function t:macro3 {v:"{"}
+function t:macro with storage t:nosuch
+data merge storage t:args {msg:"from storage",n:9,sub:{msg:"sub",n:10}}
+function t:macro with storage t:args
+function t:macro with storage t:args sub
+function t:macro with storage t:args msg
+function t:macro with storage t:args nosuch
+function t:macro with entity @s
+function t:macro with block 0 -61 0
+function t:macro4 {path:"v"}
+function t:macro4 {path:"nosuch"}
+execute store result storage t:r v int 1 run function t:ret
+data get storage t:r v
+execute store success storage t:r s int 1 run function t:retfail
+data get storage t:r s
+execute store result storage t:r w int 1 run function t:noret
+data get storage t:r
+function t:macro {msg:"a",n:"x"}
+function t:loop
+gamerule max_command_sequence_length 5
+function t:three
+function t:count
+gamerule max_command_sequence_length 65536
+gamerule max_command_forks 1
+execute as @a as @a run tellraw @s "fork"
+function t:count
+gamerule max_command_forks 65536
+return 5
+return fail
+return run tellraw @s "returned"
+execute if function t:ret
+execute if function t:retfail
+execute if function t:noret
+execute unless function t:retfail
+execute if function #t:all
+execute if function t:nosuch
+data get storage t:load
+>function
+>function t:
+>function #
+>function t:mac
+>function t:macro with
+>function t:macro with storage
+>/execute if function
+
+# /schedule
+schedule function t:sched 1t
+schedule function t:sched 10s
+schedule function t:sched 10s append
+schedule function t:sched 20s replace
+schedule function #t:inner 100t
+schedule function t:nosuch 10t
+schedule function #t:nosuch 10t
+schedule function t:sched 0t
+schedule function t:macro 10t
+schedule clear t:sched
+schedule clear t:sched
+schedule clear #t:inner
+schedule clear t:nothing
+>schedule function
+>schedule clear
+schedule function t:sched 1000000t
+>schedule clear
+
+# /data storage
+data get storage t:nothing
+data get storage t:s
+data modify storage t:s a set value 1
+data get storage t:s
+data get storage t:s a
+data get storage t:s a 2.5
+data modify storage t:s a set value 2
+data modify storage t:s a set value 2
+data modify storage t:s b set value "text"
+data get storage t:s b
+data modify storage t:s list set value [1,2,3]
+data modify storage t:s list append value 4
+data modify storage t:s list prepend value 0
+data modify storage t:s list insert 2 value 9
+data modify storage t:s list insert 99 value 9
+data modify storage t:s list insert -1 value 8
+data modify storage t:s list append value "x"
+data get storage t:s list
+data get storage t:s list[0]
+data get storage t:s list[-1]
+data get storage t:s list[10]
+data get storage t:s list[]
+data modify storage t:s list[] set value 5
+data get storage t:s list
+data modify storage t:s obj set value {x:1,y:{z:2b}}
+data get storage t:s obj
+data get storage t:s obj.y.z
+data get storage t:s obj.y
+data modify storage t:s obj merge value {x:3,w:4s}
+data modify storage t:s obj merge value 1
+data modify storage t:s obj.x merge value {a:1}
+data get storage t:s obj
+data merge storage t:s {c:1.5f,d:2.5d,e:5L,f:[B;1b,2b],g:[I;1,2],h:[L;1L],i:"q\"uote",j:'sq'}
+data get storage t:s
+data merge storage t:s {c:1.5f}
+data modify storage t:s copy set from storage t:s obj
+data modify storage t:s copy2 set from storage t:s nothere
+data modify storage t:s str set string storage t:s b
+data modify storage t:s str2 set string storage t:s b 1
+data modify storage t:s str3 set string storage t:s b 1 3
+data modify storage t:s str4 set string storage t:s b -2
+data modify storage t:s str5 set string storage t:s b 3 1
+data modify storage t:s str6 set string storage t:s a
+data modify storage t:s str7 set string storage t:s obj
+data get storage t:s str
+data get storage t:s str2
+data get storage t:s str3
+data get storage t:s str4
+data get storage t:s str6
+data get storage t:s str7
+data modify storage t:s list append from storage t:s list[0]
+data modify storage t:s a append value 1
+data modify storage t:s nolist append value 1
+data modify storage t:s list append value {a:1}
+data modify storage t:s f append value 3
+data modify storage t:s f append value 3b
+data get storage t:s f
+data modify storage t:s g insert 0 value 7
+data get storage t:s g
+data remove storage t:s a
+data remove storage t:s a
+data remove storage t:s list[0]
+data remove storage t:s list[]
+data get storage t:s list
+data modify storage t:s objs set value [{id:1,v:a},{id:2,v:b},{id:1,v:c}]
+data get storage t:s objs[{id:1}]
+data get storage t:s objs[{id:1}].v
+data modify storage t:s objs[{id:1}].v set value z
+data get storage t:s objs
+data remove storage t:s objs[{id:1}]
+data get storage t:s objs
+data get storage t:s {c:1.5f}
+data get storage t:s {c:2f}
+data get storage t:s obj{x:3}
+data get storage t:s obj{x:3}.w
+data modify storage t:s "quoted key" set value 1
+data modify storage t:s 'single'.x set value 1
+data get storage t:s
+data get storage t:s "quoted key"
+data get storage t:s a..b
+data get storage t:s [0]
+data get storage t:s obj.
+data get storage t:s list[x]
+data get storage t:s list[{a:1}
+data get storage t:s obj.y.z.w
+data modify storage t:s deep.new.path set value 1
+data get storage t:s deep
+data modify storage t:s deep2[0] set value 1
+data modify storage t:s nums set value [1,2,3]
+data modify storage t:s nums[1] set value 5b
+data modify storage t:s nums[1] set value 5
+data get storage t:s nums
+data modify storage t:s mixed set value [1b,2s,3,4L,5f,6d]
+data get storage t:s mixed
+data modify storage t:s heter set value [1,"a",{b:2}]
+data get storage t:s heter
+data modify storage t:s bool set value true
+data get storage t:s bool
+data modify storage t:s uuidlike set value [I;1,2,3,4]
+data get storage t:s uuidlike
+data modify storage t:s empty set value {}
+data modify storage t:s emptyl set value []
+data get storage t:s empty
+data get storage t:s emptyl
+data modify storage t:s ld set value 1.0E10d
+data modify storage t:s sf set value 0.1f
+data modify storage t:s neg set value -3.25d
+data get storage t:s ld
+data get storage t:s sf
+data get storage t:s neg
+data get storage t:s neg 2
+data get storage t:s ld 1
+data modify storage t:s unicode set value "héllo ☃"
+data get storage t:s unicode
+data modify storage t:s nl set value "a\nb"
+data get storage t:s nl
+data modify storage t:other x set from storage t:s obj.y
+data get storage t:other
+>data get storage
+>data get storage t:
+>data modify storage t:s a set from storage
+>execute if data storage
+
+# /data compute
+data modify storage t:s c1 set compute default integer 5
+data modify storage t:s c2 set compute default float 1.5
+data modify storage t:s c3 set compute default integer minecraft:cooking/time_coal
+data modify storage t:s c4 set compute default float minecraft:cooking/speed_default
+data modify storage t:s c5 set compute default integer {type:"minecraft:div",left:10,right:3}
+data modify storage t:s c6 set compute block 0 -61 0 integer minecraft:cooking/time_coal
+data get storage t:s c1
+data get storage t:s c2
+data get storage t:s c3
+data get storage t:s c4
+data get storage t:s c5
+data get storage t:s c6
+
+# /data block
+data get block 0 -61 0
+data get block 0 -60 0
+setblock 0 -60 0 chest
+data get block 0 -60 0
+data get block 0 -60 0 Items
+data merge block 0 -60 0 {CustomName:"Box"}
+data get block 0 -60 0
+data merge block 0 -60 0 {CustomName:"Box"}
+data modify block 0 -60 0 Items append value {Slot:0b,id:"minecraft:stone",count:3}
+data get block 0 -60 0 Items
+data get block 0 -60 0 Items[0].count
+data modify block 0 -60 0 Items[0].count set value 5
+data get block 0 -60 0
+data remove block 0 -60 0 Items[0]
+data get block 0 -60 0
+data merge block 0 -60 0 {x:5}
+data get block 0 -60 0
+data remove block 0 -60 0 CustomName
+data get block 0 -60 0 x
+data modify block 0 -61 0 a set value 1
+data merge block 0 -61 0 {}
+data get block 0 1000 0
+data get block 1000000 -60 0
+setblock 1 -60 0 oak_sign
+data get block 1 -60 0
+setblock 2 -60 0 furnace
+data get block 2 -60 0
+setblock 3 -60 0 barrel
+data get block 3 -60 0
+data modify storage t:s fromblock set from block 0 -60 0 x
+
+# /data entity
+data get entity @s
+data get entity @s Pos
+data get entity @s Pos[0]
+data get entity @s Rotation
+data get entity @s Motion
+data get entity @s Health
+data get entity @s foodLevel
+data get entity @s foodSaturationLevel
+data get entity @s XpLevel
+data get entity @s XpP
+data get entity @s playerGameType
+data get entity @s SelectedItem
+data get entity @s selectedItemSlot
+data get entity @s Inventory
+data get entity @s OnGround
+data get entity @s UUID
+data get entity @s Dimension
+data get entity @s abilities
+data get entity @s abilities.flying
+data get entity @s id
+data get entity @s nosuch
+data get entity @s Pos 10
+data get entity @s Health 2
+data merge entity @s {Health:5f}
+data modify entity @s Health set value 5f
+data remove entity @s Health
+data get entity @e[type=item,limit=1]
+data get entity @a
+data get entity nobody
+give @s stone 5
+give @s diamond_sword
+data get entity @s Inventory
+data get entity @s SelectedItem
+data get entity @s Inventory[0].count
+data get entity @s Inventory[{id:"minecraft:stone"}]
+item replace entity @s armor.head with iron_helmet
+data get entity @s equipment
+summon item 0 -60 3 {Item:{id:"minecraft:apple",count:2},PickupDelay:32767,NoGravity:1b}
+data get entity @e[type=item,limit=1] Item
+data get entity @e[type=item,limit=1] PickupDelay
+data get entity @e[type=item,limit=1] id
+data get entity @e[type=item,limit=1] Age
+data merge entity @e[type=item,limit=1] {PickupDelay:10s}
+data get entity @e[type=item,limit=1] PickupDelay
+data modify entity @e[type=item,limit=1] Item.count set value 7
+data get entity @e[type=item,limit=1] Item
+data modify storage t:s ent set from entity @s Pos
+data get storage t:s ent
+data modify storage t:s name set from entity @s SelectedItem.id
+data get storage t:s name
+>data get entity
+
+# execute store
+execute store result storage t:e a int 1 run seed
+execute store result storage t:e b byte 1 run gamerule random_tick_speed
+execute store result storage t:e c double 0.5 run gamerule random_tick_speed
+execute store result storage t:e d float 1.5 run gamerule random_tick_speed
+execute store result storage t:e e long 2 run gamerule random_tick_speed
+execute store result storage t:e f short 1 run gamerule random_tick_speed
+execute store success storage t:e g int 1 run gamerule random_tick_speed
+execute store success storage t:e h int 1 run give @s nosuch
+execute store success storage t:e i int 1 run kill @e[type=item,tag=nope]
+execute store result storage t:e j int 1 run kill @e[type=item,tag=nope]
+execute store result storage t:e list[0] int 1 run seed
+execute store result storage t:e k.l.m int 1 run seed
+data get storage t:e
+execute store result block 0 -60 0 x int 1 run gamerule random_tick_speed
+data get block 0 -60 0 x
+execute store result block 0 -61 0 x int 1 run gamerule random_tick_speed
+execute store result entity @s Health float 1 run gamerule random_tick_speed
+execute store result entity @e[type=item,limit=1] PickupDelay short 1 run gamerule random_tick_speed
+data get entity @e[type=item,limit=1] PickupDelay
+execute store result storage t:e n int 1 run data get storage t:s obj.y.z
+execute store result storage t:e o int 1 run data get storage t:s list
+execute store result storage t:e p int 1 run data get storage t:s obj
+execute store result storage t:e q int 1 run data get storage t:s b
+data get storage t:e
+execute store result storage t:e r int 1 store success storage t:e s byte 1 run gamerule random_tick_speed
+data get storage t:e r
+data get storage t:e s
+execute store result storage t:e big int 1000000000 run gamerule random_tick_speed
+data get storage t:e big
+execute as @a store result storage t:e asall int 1 run gamerule random_tick_speed
+data get storage t:e asall
+execute store result storage t:e cnt int 1 if entity @a
+data get storage t:e cnt
+execute store result storage t:e cond int 1 if data storage t:s obj
+data get storage t:e cond
+
+# execute if/unless
+execute if data storage t:s obj
+execute if data storage t:s nothing
+execute unless data storage t:s nothing
+execute unless data storage t:s obj
+execute if data storage t:s list[]
+execute if data storage t:s objs[]
+execute if data entity @s Pos
+execute if data entity @s Nothing
+execute if data block 0 -60 0 Items
+execute if data block 0 -61 0 Items
+execute if data storage t:s obj run tellraw @s "has obj"
+execute if dimension minecraft:overworld
+execute if dimension minecraft:the_nether
+execute unless dimension minecraft:the_nether
+execute if dimension minecraft:nosuch
+execute if loaded 0 -60 0
+execute if loaded 100000 0 100000
+execute unless loaded 100000 0 100000
+execute if biome 0 -60 0 minecraft:plains
+execute if biome 0 -60 0 minecraft:desert
+execute if biome 0 -60 0 #minecraft:is_overworld
+execute if biome 0 -60 0 minecraft:nosuch
+execute if biome 100000 0 100000 minecraft:plains
+execute if predicate t:yes
+execute if predicate t:no
+execute if predicate t:notno
+execute if predicate t:raining
+execute if predicate t:nosuch
+execute if predicate {type:"minecraft:random_chance",chance:1}
+execute if predicate {type:"minecraft:weather_check",raining:false}
+execute if predicate [{type:"minecraft:random_chance",chance:1},{type:"minecraft:random_chance",chance:0}]
+execute if items entity @s container.* minecraft:stone
+execute if items entity @s container.* minecraft:dirt
+execute if items entity @s weapon.mainhand *
+execute if items entity @s hotbar.* *
+execute if items entity @s armor.head minecraft:iron_helmet
+execute if items entity @s container.0 minecraft:stone[count=5]
+execute if items entity @s container.* #minecraft:swords
+execute if items entity @s container.* *[minecraft:damage=0]
+execute if items entity @s inventory.* *
+execute if items block 0 -60 0 container.* *
+execute if items block 0 -61 0 container.* *
+execute if items entity @e[type=item] contents minecraft:apple
+execute unless items entity @s container.* minecraft:dirt
+execute if items entity @s nosuch.slot *
+execute store result storage t:e items int 1 if items entity @s container.* *
+data get storage t:e items
+execute if stopwatch t:nope 0..
+>execute if items entity @s
+
+# execute on / summon / facing
+execute on owner run tellraw @a "owner"
+execute on vehicle run tellraw @a "vehicle"
+execute on passengers run tellraw @a "passenger"
+execute on attacker run tellraw @a "attacker"
+execute on target run tellraw @a "target"
+execute on controller run tellraw @a "controller"
+execute on leasher run tellraw @a "leasher"
+execute on origin run tellraw @a "origin"
+execute as @e[type=item] on origin run tellraw @a "item origin"
+execute summon falling_block run tellraw @a "summoned"
+execute summon item run tellraw @a "item"
+execute summon pig run tellraw @a "pig"
+execute summon minecraft:nosuch run tellraw @a "x"
+execute summon falling_block run data get entity @s id
+execute facing 0 -60 10 run tp @s ~ ~ ~
+data get entity @s Rotation
+execute facing 10 -50 0.5 run tp @s ~ ~ ~
+data get entity @s Rotation
+execute facing entity @e[type=item,limit=1] feet run tp @s ~ ~ ~
+data get entity @s Rotation
+execute facing entity @e[type=item,limit=1] eyes run tp @s ~ ~ ~
+data get entity @s Rotation
+execute facing entity @e[type=nosuch_type] feet run tp @s ~ ~ ~
+execute rotated 0 0 run tp @s ~ ~ ~
+
+# /stopwatch
+stopwatch create t:w
+stopwatch create t:w
+stopwatch create w2
+stopwatch query t:nope
+stopwatch restart t:nope
+stopwatch remove t:nope
+stopwatch restart t:w
+stopwatch remove w2
+stopwatch remove w2
+execute if stopwatch t:w 0..
+execute if stopwatch t:w 1000..
+execute unless stopwatch t:w 1000..
+execute if stopwatch t:nope 0..
+>stopwatch query
+>stopwatch remove
+>execute if stopwatch
+>stopwatch create
+
+# /datapack
+datapack list
+datapack list enabled
+datapack list available
+datapack disable "file/functions-pack"
+datapack list
+function t:hello
+datapack disable "file/functions-pack"
+datapack enable "file/functions-pack"
+datapack enable "file/functions-pack"
+function t:hello
+datapack enable "file/functions-pack" first
+datapack enable minecart_improvements
+datapack enable trade_rebalance
+datapack enable nosuch
+datapack disable vanilla
+datapack disable nosuch
+datapack enable "file/nosuch"
+>datapack enable
+>datapack disable
+datapack create newpack "A new pack"
+datapack create newpack "Again"
+datapack create "bad name!" "x"
+datapack create "Upper" "x"
+datapack list
+datapack disable "file/newpack"
+datapack list
+>datapack enable
+datapack enable "file/newpack" after "file/functions-pack"
+datapack enable "file/newpack" before vanilla
+datapack enable "file/newpack" last
+datapack disable "file/newpack"
+datapack enable "file/newpack" before "file/functions-pack"
+datapack list enabled
+
+# /reload
+data remove storage t:load loaded
+data get storage t:load
+reload
+data get storage t:load
+function t:hello
+schedule function t:sched 1000t

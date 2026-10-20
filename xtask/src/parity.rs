@@ -246,6 +246,16 @@ impl Server {
 
     /// Builds and starts our server in a fresh `dir` with `properties`.
     pub(crate) fn ours_in(root: &Path, dir: &Path, properties: &str) -> Result<Self> {
+        Self::ours_in_with(root, dir, properties, &|_| Ok(()))
+    }
+
+    /// `ours_in`, with `setup` run on the fresh folder before the start.
+    pub(crate) fn ours_in_with(
+        root: &Path,
+        dir: &Path,
+        properties: &str,
+        setup: &dyn Fn(&Path) -> Result<()>,
+    ) -> Result<Self> {
         let status = Command::new("cargo")
             .args(["build", "--release", "-q", "-p", "mc-server"])
             .current_dir(root)
@@ -255,6 +265,7 @@ impl Server {
         let _ = std::fs::remove_dir_all(dir);
         std::fs::create_dir_all(dir)?;
         std::fs::write(dir.join("server.properties"), properties)?;
+        setup(dir)?;
         let child = Command::new(root.join("target/release/mc-server"))
             .args(["--universe".as_ref(), dir.as_os_str()])
             .env("NO_COLOR", "1")

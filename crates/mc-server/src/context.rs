@@ -242,6 +242,10 @@ pub enum Event {
         uuid: u128,
         packet: mc_protocol::packets::play::UpdateAttributes,
     },
+    /// `/fillbiome` changed these chunks' biomes.
+    BiomesChanged {
+        chunks: Vec<(i32, i32)>,
+    },
     /// A packet for one player only.
     Direct {
         uuid: u128,
@@ -362,6 +366,12 @@ pub struct ServerContext {
     pub bossbars: Mutex<crate::bossbars::BossBars>,
     /// Objectives, scores and teams.
     pub scoreboard: Mutex<crate::scoreboard::Scoreboard>,
+    /// Command storage (`/data ... storage`).
+    pub storage: Mutex<crate::storage::Storage>,
+    /// `/stopwatch`: when each one started.
+    pub stopwatches: Mutex<std::collections::BTreeMap<String, std::time::Instant>>,
+    /// Data packs, their functions and `/schedule`.
+    pub packs: Mutex<crate::packs::Packs>,
     /// The world spawn (`/setworldspawn` moves it).
     pub spawn: Mutex<crate::players::Respawn>,
     next_entity_id: AtomicI32,
@@ -543,6 +553,9 @@ impl ServerContext {
         let weather = crate::weather::Weather::load(world.folder(), data.version.world_version);
         let border = crate::border::Border::load(world.folder(), data.version.world_version);
         let forced = crate::forced::Forced::load(world.folder(), data.version.world_version);
+        let commands = crate::commands::Commands::load(&config_data_dir);
+        let packs = crate::packs::Packs::load(config.level_dir.as_deref(), &commands);
+        let storage = crate::storage::Storage::load(world.folder(), data.version.world_version);
         let scoreboard =
             crate::scoreboard::Scoreboard::load(world.folder(), data.version.world_version);
         let bossbars = crate::bossbars::BossBars::load(world.folder(), data.version.world_version);
@@ -609,7 +622,8 @@ impl ServerContext {
             }),
             shutdown: tokio::sync::Notify::new(),
             next_entity_id: AtomicI32::new(1),
-            commands: crate::commands::Commands::load(&config_data_dir),
+            packs: Mutex::new(packs),
+            commands,
             game_rules: Mutex::new(game_rules),
             weather: Mutex::new(weather),
             border: Mutex::new(border),
@@ -617,6 +631,8 @@ impl ServerContext {
             forced: Mutex::new(forced),
             bossbars: Mutex::new(bossbars),
             scoreboard: Mutex::new(scoreboard),
+            storage: Mutex::new(storage),
+            stopwatches: Mutex::default(),
             data,
         })
     }

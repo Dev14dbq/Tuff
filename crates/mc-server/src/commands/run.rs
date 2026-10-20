@@ -11,8 +11,8 @@ use mc_protocol::packets::play::{ItemStack, TickingState, TickingStep};
 
 use super::target::{self, Target, player_name};
 use super::world::{apply, in_world, put_block_data};
-use super::{Result, Run, Src, Who};
-use super::{bossbar, functions, living, places, rare, scoreboard, scores, team};
+use super::{Result, Run, Src, Who, data, execute};
+use super::{bossbar, functions, living, place, places, rare, scoreboard, scores, team};
 use crate::context::{Event, ServerContext};
 use crate::rules;
 use crate::tick::lock;
@@ -341,7 +341,10 @@ pub fn modify(ctx: &ServerContext, c: &Context, s: &Src) -> Result<Vec<Src>> {
                 }
             })
         }
-        ["execute", "in", "dimension"] => Ok(vec![s.clone()]),
+        ["execute", "in", "dimension"] => {
+            super::execute::dimension(ctx, c)?;
+            Ok(vec![s.clone()])
+        }
         ["execute", kind @ ("if" | "unless"), rest @ ..] => {
             let pass = condition(ctx, c, s, rest)?;
             if pass == (*kind == "if") {
@@ -351,6 +354,8 @@ pub fn modify(ctx: &ServerContext, c: &Context, s: &Src) -> Result<Vec<Src>> {
             }
         }
         _ => functions::modify(ctx, c, s, &path)
+            .or_else(|| data::modify_store(ctx, c, s, &path))
+            .or_else(|| execute::modify(ctx, c, s, &path))
             .or_else(|| scores::modify(ctx, c, s, &path))
             .or_else(|| bossbar::modify(ctx, c, s, &path))
             .or_else(|| scoreboard::modify(ctx, c, s, &path))
@@ -392,7 +397,10 @@ pub(super) fn condition(ctx: &ServerContext, c: &Context, s: &Src, rest: &[&str]
                     .iter()
                     .all(|(k, v)| ctx.data.blocks.with_property(state, k, v) == Some(state)))
         }
-        _ => scoreboard::condition(ctx, c, s, rest)
+        _ => data::found(ctx, c, s, rest)
+            .map(|n| n.map(|n| n > 0))
+            .or_else(|| execute::condition(ctx, c, s, rest))
+            .or_else(|| scoreboard::condition(ctx, c, s, rest))
             .or_else(|| scores::condition(ctx, c, s, rest))
             .or_else(|| functions::condition(ctx, c, s, rest))
             .unwrap_or_else(|| Err(CommandError::new("command.failed", Vec::new()))),
@@ -406,14 +414,18 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         ["execute", kind @ ("if" | "unless"), rest @ ..] => {
             let pass = condition(r.ctx, r.c, &r.src, rest).map(|p| p == (*kind == "if"));
             // `if entity` counts what it found.
-            let count = match (*kind, rest, r.arg("entities")) {
-                ("if", ["entity", "entities"], Some(Arg::Entity(sel))) => {
+            let count = match (rest, r.arg("entities")) {
+                (["entity", "entities"], Some(Arg::Entity(sel))) => {
                     Some(target::resolve(r.ctx, sel, &r.src).len() as i32)
                 }
+                (["items", ..], _) => execute::count(r.ctx, r.c, &r.src, rest).and_then(|n| n.ok()),
+                (["data", ..], _) => data::found(r.ctx, r.c, &r.src, rest)
+                    .and_then(|n| n.ok())
+                    .map(|n| n as i32),
                 _ => None,
             };
             match pass {
-                Ok(true) if count.is_some() => {
+                Ok(true) if count.is_some() && *kind == "if" => {
                     let n = count.unwrap_or(1);
                     r.success(
                         translate("commands.execute.conditional.pass_count", vec![Tag::Int(n)]),
@@ -428,7 +440,13 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
                     );
                     Ok(1)
                 }
-                Ok(false) => Err(err("commands.execute.conditional.fail", Vec::new())),
+                Ok(false) => match count {
+                    Some(n) if n > 0 => Err(err(
+                        "commands.execute.conditional.fail_count",
+                        vec![Tag::Int(n)],
+                    )),
+                    _ => Err(err("commands.execute.conditional.fail", Vec::new())),
+                },
                 Err(e) => Err(e),
             }
         }
@@ -532,12 +550,14 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         ["stopsound", "targets", rest @ ..] => stopsound(r, rest),
         ["random", kind @ ("value" | "roll"), "range", ..] => random(r, *kind == "roll"),
         ["clone", ..] => clone(r, path),
-        ["datapack", "list", rest @ ..] => datapack_list(r, rest.first().copied()),
         _ => {
             return scores::run(r, path)
                 .or_else(|| places::run(r, path))
+                .or_else(|| place::run(r, path))
                 .or_else(|| bossbar::run(r, path))
                 .or_else(|| scoreboard::run(r, path))
+                .or_else(|| data::run(r, path))
+                .or_else(|| execute::run(r, path))
                 .or_else(|| team::run(r, path))
                 .or_else(|| functions::run(r, path))
                 .or_else(|| living::run(r, path))
@@ -825,9 +845,54 @@ pub(super) fn style(t: &mut Tag, styles: &[(&str, &str)]) {
     }
 }
 
+/// Fills in `selector` parts of a text component with who they find.
+pub(super) fn resolve_text(ctx: &ServerContext, src: &Src, t: &Tag) -> Tag {
+    match t {
+        Tag::Compound(c) => {
+            if let Some(Tag::String(sel)) = c.get("selector") {
+                let mut reader = mc_command::reader::Reader::new(sel);
+                let found = mc_command::args::read_selector(&mut reader, &ctx.commands.env)
+                    .map(|s| target::resolve(ctx, &s, src))
+                    .unwrap_or_default();
+                let names: Vec<Tag> = found.iter().map(Target::display).collect();
+                return match names.len() {
+                    0 => Tag::from(""),
+                    1 => names.into_iter().next().unwrap_or_else(|| Tag::from("")),
+                    _ => {
+                        let mut parts = Vec::new();
+                        for (i, n) in names.into_iter().enumerate() {
+                            if i > 0 {
+                                parts.push(mc_protocol::text::colored(", ", "gray"));
+                            }
+                            parts.push(n);
+                        }
+                        let mut out = Compound::new();
+                        out.insert("text", "");
+                        out.insert("extra", mc_protocol::text::list(parts));
+                        Tag::Compound(out)
+                    }
+                };
+            }
+            let mut out = Compound::new();
+            for (k, v) in c.iter() {
+                let v = if k == "extra" || k == "with" {
+                    resolve_text(ctx, src, v)
+                } else {
+                    v.clone()
+                };
+                out.insert(k, v);
+            }
+            Tag::Compound(out)
+        }
+        Tag::List(l) => Tag::List(l.iter().map(|e| resolve_text(ctx, src, e)).collect()),
+        other => other.clone(),
+    }
+}
+
 fn tellraw(r: &mut Run) -> Result<i32> {
     let targets = r.targets("targets", true)?;
     let message = r.nbt("message").unwrap_or_else(|| Tag::from(""));
+    let message = resolve_text(r.ctx, &r.src, &message);
     for t in &targets {
         r.out.events.push(Event::Message {
             uuid: t.uuid(),
@@ -2759,50 +2824,6 @@ fn clone(r: &mut Run, path: &[&str]) -> Result<i32> {
         true,
     );
     Ok(count as i32)
-}
-
-fn datapack_list(r: &mut Run, which: Option<&str>) -> Result<i32> {
-    let mut hover_text = Compound::new();
-    hover_text.insert("text", "");
-    hover_text.insert(
-        "extra",
-        mc_protocol::text::list(vec![
-            translate("dataPack.vanilla.name", Vec::new()),
-            Tag::from("\n"),
-            translate("dataPack.vanilla.description", Vec::new()),
-        ]),
-    );
-    let mut hover = Compound::new();
-    hover.insert("action", "show_text");
-    hover.insert("value", Tag::Compound(hover_text));
-    let source = vec![
-        Tag::from("vanilla"),
-        translate("pack.source.builtin", Vec::new()),
-    ];
-    let mut name = translate("pack.nameAndSource", source);
-    style(&mut name, &[("color", "gray")]);
-    let mut pack = translate("chat.square_brackets", vec![name]);
-    style(&mut pack, &[("color", "green")]);
-    if let Tag::Compound(c) = &mut pack {
-        c.insert("hover_event", Tag::Compound(hover));
-        c.insert("insertion", "vanilla");
-    }
-    if which != Some("available") {
-        r.success(
-            translate(
-                "commands.datapack.list.enabled.success",
-                vec![Tag::Int(1), pack],
-            ),
-            false,
-        );
-    }
-    if which != Some("enabled") {
-        r.success(
-            translate("commands.datapack.list.available.none", Vec::new()),
-            false,
-        );
-    }
-    Ok(1)
 }
 
 fn experience_change(r: &mut Run, op: &str, levels: bool) -> Result<i32> {

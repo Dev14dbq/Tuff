@@ -294,6 +294,21 @@ pub fn features(
     biomes: &HashMap<String, u32>,
     generator: &NoiseGenerator,
 ) -> Result<mc_features::Features> {
+    let heights = mc_features::Heights {
+        min_y: generator.min_y,
+        height: generator.height,
+        sea_level: generator.sea_level,
+    };
+    features_with(data, shapes, biomes, heights)
+}
+
+/// [`features`] for a world of the given heights (`/place` in any world).
+pub fn features_with(
+    data: &McData,
+    shapes: mc_tick::Shapes,
+    biomes: &HashMap<String, u32>,
+    heights: mc_features::Heights,
+) -> Result<mc_features::Features> {
     let rules = mc_tick::BlockRules::new(data).map_err(anyhow::Error::msg)?;
     let facts = mc_features::Facts::new(data, shapes, rules).map_err(anyhow::Error::msg)?;
     let parameters: Value = serde_json::from_str(
@@ -311,11 +326,6 @@ pub fn features(
             order.push(name.to_owned());
         }
     }
-    let heights = mc_features::Heights {
-        min_y: generator.min_y,
-        height: generator.height,
-        sea_level: generator.sea_level,
-    };
     let started = std::time::Instant::now();
     let features = mc_features::Features::load(
         &data.data_pack().root.join("minecraft/worldgen"),
