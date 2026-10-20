@@ -546,7 +546,7 @@ impl World {
     /// Structures starting within `radius` chunks of block `x, z`: name and
     /// the start chunk's corner (with the structure's middle height), nearest
     /// first.
-    pub fn locate(
+    pub fn starts_within(
         &self,
         x: i32,
         z: i32,
@@ -560,10 +560,33 @@ impl World {
             return Vec::new();
         };
         g.pipeline
-            .locate(x >> 4, z >> 4, radius, name)
+            .starts_within(x >> 4, z >> 4, radius, name)
             .into_iter()
             .map(|(n, c, p)| (n, (c.0 * 16, p.y, c.1 * 16)))
             .collect()
+    }
+
+    /// The biome the generator gives a 4×4×4 cell, as `/locate biome`
+    /// samples it; `None` where the world has no generator of ours.
+    pub fn noise_biome(&self, qx: i32, qy: i32, qz: i32) -> Option<&str> {
+        let id = match &self.source {
+            Source::Flat(_) => return Some("minecraft:plains"),
+            Source::Anvil(anvil) => anvil
+                .generation
+                .as_ref()?
+                .pipeline
+                .generator
+                .noise_biome(qx, qy, qz),
+        };
+        self.biome_names.get(id as usize).map(String::as_str)
+    }
+
+    /// What makes the world's new chunks (and knows its structures).
+    pub(crate) fn pipeline(&self) -> Option<&crate::pipeline::Pipeline> {
+        match &self.source {
+            Source::Anvil(anvil) => anvil.generation.as_ref().map(|g| &*g.pipeline),
+            Source::Flat(_) => None,
+        }
     }
 
     /// Chunks whose light a new neighbour changed since the last call.

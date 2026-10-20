@@ -1,6 +1,7 @@
 //! `cargo xtask vanilla-locate --seed <n> <structure>...`: asks a vanilla
 //! server (a new world with that seed) where the nearest of each structure
-//! is from 0, 0 (or `name@x,z`), to compare structure placement with ours.
+//! is from 0, 0 (or `name@x,z`), to compare structure placement with ours;
+//! `--ours` asks our server the same.
 
 use std::time::Duration;
 
@@ -13,10 +14,12 @@ const PORT: u16 = 25574;
 pub fn run(args: &[String]) -> Result<()> {
     let mut seed = 0i64;
     let mut names = Vec::new();
+    let mut ours = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--seed" => seed = it.next().context("--seed needs a value")?.parse()?,
+            "--ours" => ours = true,
             n => names.push(n.to_owned()),
         }
     }
@@ -29,8 +32,16 @@ pub fn run(args: &[String]) -> Result<()> {
          view-distance=2\nsimulation-distance=2\npause-when-empty-seconds=0\n\
          enable-status=true\nsync-chunk-writes=false\n"
     );
-    Server::prepare(&root, &dir, &properties)?;
-    let mut server = Server::start_java(&root, &dir)?;
+    let mut server = if ours {
+        Server::ours_in(
+            &root,
+            &root.join(format!("cache/ours-locate/{seed}")),
+            &properties,
+        )?
+    } else {
+        Server::prepare(&root, &dir, &properties)?;
+        Server::start_java(&root, &dir)?
+    };
     for n in &names {
         // `name@x,z` asks from that block instead of 0, 0.
         let (n, at) = n.split_once('@').unwrap_or((n, "0,0"));
@@ -44,7 +55,7 @@ pub fn run(args: &[String]) -> Result<()> {
             &format!("execute positioned {ax} 0 {az} run locate structure {id}"),
             false,
         )?;
-        std::thread::sleep(Duration::from_secs(4));
+        std::thread::sleep(Duration::from_secs(10));
         server.command("", true)?;
     }
     server.stop();

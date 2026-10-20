@@ -2465,3 +2465,60 @@ async fn effects_are_given_shown_and_cleared() {
     );
     let _ = stop.send(());
 }
+
+#[tokio::test]
+async fn locate_finds_what_vanilla_finds() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("mc-rewrite-locate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.world = Some(dir.clone());
+    config.seed = Some(12345);
+    config.ops = vec!["Seeker".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let (mut seeker, _) = join_offline(addr, ctx.ids.clone(), "Seeker").await;
+    // What a vanilla 26.3 server says for this seed (`cargo xtask
+    // vanilla-locate --seed 12345 ...`); /locate once failed for anything.
+    for (line, want) in [
+        (
+            "execute positioned 0 0 0 run locate structure minecraft:village_plains",
+            [160, 880, 894],
+        ),
+        (
+            "execute positioned 1000 0 -2000 run locate structure #minecraft:village",
+            [-144, -832, 1634],
+        ),
+        (
+            "execute positioned 0 0 0 run locate structure minecraft:stronghold",
+            [-560, -1648, 1740],
+        ),
+        // Pyramids only where no corner of them is under the sea.
+        (
+            "execute positioned 0 0 0 run locate structure minecraft:desert_pyramid",
+            [-5120, -4864, 7062],
+        ),
+        (
+            "execute positioned 0 0 0 run locate structure minecraft:buried_treasure",
+            [761, 409, 863],
+        ),
+    ] {
+        let (text, _) = chat_command(&mut seeker, line).await;
+        let [x, z, d] = want;
+        assert!(
+            text.contains("commands.locate.structure.success")
+                && text.contains(&format!("\"/tp @s {x} ~ {z}\""))
+                && text.contains(&format!("(\"\", Int({d}))")),
+            "{line}: {text}"
+        );
+    }
+    let (text, _) = chat_command(&mut seeker, "locate structure minecraft:nosuch").await;
+    assert!(text.contains("commands.locate.structure.invalid"), "{text}");
+    let _ = stop.send(());
+    let _ = std::fs::remove_dir_all(&dir);
+}

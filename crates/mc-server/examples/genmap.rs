@@ -76,7 +76,9 @@ async fn main() -> anyhow::Result<()> {
         let r: i32 = r.parse()?;
         let t = std::time::Instant::now();
         let name = std::env::var("NAME").ok();
-        let found = ctx.world.locate(ox * 16, oz * 16, r, name.as_deref());
+        let found = ctx
+            .world
+            .starts_within(ox * 16, oz * 16, r, name.as_deref());
         println!(
             "{} starts within {r} chunks ({:.1} s):",
             found.len(),

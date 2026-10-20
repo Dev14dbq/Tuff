@@ -94,6 +94,8 @@ struct Set {
     id: String,
     structures: Vec<(usize, i32)>,
     placement: Placement,
+    /// Added to a start chunk's corner where `/locate` points.
+    locate_offset: (i32, i32, i32),
 }
 
 /// A structure that starts in a chunk, with its pieces.
@@ -379,10 +381,12 @@ impl Structures {
                     }),
                 }
             };
+            let off = |i: usize| p["locate_offset"][i].as_i64().unwrap_or(0) as i32;
             sets.push(Set {
                 id,
                 structures: list,
                 placement,
+                locate_offset: (off(0), off(1), off(2)),
             });
         }
         let monument_biomes = biome_set(
@@ -614,6 +618,117 @@ impl Structures {
         }
     }
 
+    /// The nearest of the `wanted` structures (indices) from block `pos`,
+    /// searched as vanilla's `/locate` does: the ring placements by the
+    /// distance of their chunk middles, then the spread ones ring by ring of
+    /// placement cells out to `radius`, stopping at the first ring with a
+    /// find. `starts` gives the structures starting in a chunk. Returns the
+    /// structure and the block shown (the chunk corner plus the set's
+    /// locate offset, at y 0).
+    pub fn locate(
+        &self,
+        seed: i64,
+        wanted: &HashSet<usize>,
+        pos: (i32, i32, i32),
+        radius: i32,
+        starts: &mut dyn FnMut(i32, i32) -> Vec<Arc<Start>>,
+    ) -> Option<(usize, (i32, i32, i32))> {
+        let dist2 = |a: (i32, i32, i32)| {
+            let d = |u: i32, v: i32| f64::from(u - v).powi(2);
+            d(a.0, pos.0) + d(a.1, pos.1) + d(a.2, pos.2)
+        };
+        let found_at =
+            |set: &Set, x: i32, z: i32, starts: &mut dyn FnMut(i32, i32) -> Vec<Arc<Start>>| {
+                starts(x, z)
+                    .iter()
+                    .find(|s| {
+                        wanted.contains(&s.structure)
+                            && set.structures.iter().any(|e| e.0 == s.structure)
+                    })
+                    .map(|s| {
+                        let o = set.locate_offset;
+                        (s.structure, (x * 16 + o.0, o.1, z * 16 + o.2))
+                    })
+            };
+        let sets: Vec<&Set> = self
+            .sets
+            .iter()
+            .filter(|s| s.structures.iter().any(|e| wanted.contains(&e.0)))
+            .collect();
+        let mut best: Option<(usize, (i32, i32, i32))> = None;
+        let mut best_d = f64::MAX;
+        for set in &sets {
+            if !matches!(set.placement, Placement::Rings { .. }) {
+                continue;
+            }
+            let ring = self
+                .rings
+                .lock()
+                .expect("rings lock")
+                .get(&set.id)
+                .cloned()
+                .unwrap_or_default();
+            for (x, z) in ring {
+                let d = dist2((x * 16 + 8, 32, z * 16 + 8));
+                if (best.is_none() || d < best_d)
+                    && let Some(f) = found_at(set, x, z, starts)
+                {
+                    best = Some(f);
+                    best_d = d;
+                }
+            }
+        }
+        let (cx, cz) = (pos.0 >> 4, pos.2 >> 4);
+        for r in 0..=radius {
+            let mut any = false;
+            for set in &sets {
+                let Placement::Spread {
+                    spacing,
+                    separation,
+                    salt,
+                    triangular,
+                    ..
+                } = set.placement
+                else {
+                    continue;
+                };
+                let mut hit = None;
+                'ring: for dx in -r..=r {
+                    for dz in -r..=r {
+                        if dx.abs() != r && dz.abs() != r {
+                            continue;
+                        }
+                        let (x, z) = Self::spread_chunk(
+                            seed,
+                            cx + spacing * dx,
+                            cz + spacing * dz,
+                            spacing,
+                            separation,
+                            salt,
+                            triangular,
+                        );
+                        if let Some(f) = found_at(set, x, z, starts) {
+                            hit = Some(f);
+                            break 'ring;
+                        }
+                    }
+                }
+                if let Some(f) = hit {
+                    any = true;
+                    let d = dist2(f.1);
+                    if d < best_d {
+                        best_d = d;
+                        best = Some(f);
+                    }
+                }
+            }
+            if any {
+                break;
+            }
+        }
+        best
+    }
+
     /// Structures starting in chunk `x, z`.
     pub fn starts(
         &self,
@@ -623,13 +738,40 @@ impl Structures {
         heights: Heights,
         ground: &mut dyn Ground,
     ) -> Vec<Arc<Start>> {
+        self.starts_as(seed, x, z, heights, ground, false)
+    }
+
+    /// [`Self::starts`] with only the start piece of jigsaw structures, as
+    /// vanilla checks where one could start (`/locate`): much quicker.
+    pub fn start_pieces(
+        &self,
+        seed: i64,
+        x: i32,
+        z: i32,
+        heights: Heights,
+        ground: &mut dyn Ground,
+    ) -> Vec<Arc<Start>> {
+        self.starts_as(seed, x, z, heights, ground, true)
+    }
+
+    fn starts_as(
+        &self,
+        seed: i64,
+        x: i32,
+        z: i32,
+        heights: Heights,
+        ground: &mut dyn Ground,
+        start_only: bool,
+    ) -> Vec<Arc<Start>> {
         let mut out = Vec::new();
         for set in &self.sets {
             if set.structures.is_empty() || !self.is_structure_chunk(set, seed, x, z) {
                 continue;
             }
             if set.structures.len() == 1 {
-                if let Some(s) = self.generate(set.structures[0].0, seed, x, z, heights, ground) {
+                if let Some(s) =
+                    self.generate(set.structures[0].0, seed, x, z, heights, ground, start_only)
+                {
                     out.push(Arc::new(s));
                 }
                 continue;
@@ -650,7 +792,7 @@ impl Structures {
                 }
                 let k = k.min(list.len() - 1);
                 let e = list[k];
-                if let Some(s) = self.generate(e.0, seed, x, z, heights, ground) {
+                if let Some(s) = self.generate(e.0, seed, x, z, heights, ground, start_only) {
                     out.push(Arc::new(s));
                     break;
                 }
@@ -661,6 +803,7 @@ impl Structures {
         out
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn generate(
         &self,
         index: usize,
@@ -669,6 +812,7 @@ impl Structures {
         z: i32,
         heights: Heights,
         ground: &mut dyn Ground,
+        start_only: bool,
     ) -> Option<Start> {
         let s = &self.structures[index];
         let mut r = WorldgenRandom::legacy(0);
@@ -701,7 +845,7 @@ impl Structures {
                     &mut r,
                     &mut g,
                     start_pool,
-                    *size,
+                    if start_only { 0 } else { *size },
                     P::new(x * 16, y, z * 16),
                     *expansion_hack,
                     project.is_some(),

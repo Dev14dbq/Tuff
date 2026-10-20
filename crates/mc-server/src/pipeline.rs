@@ -199,7 +199,7 @@ impl Pipeline {
 
     /// Structures that start within `radius` chunks of chunk `x, z`
     /// (name, start chunk, centre block), nearest first.
-    pub fn locate(
+    pub fn starts_within(
         &self,
         x: i32,
         z: i32,
@@ -220,6 +220,45 @@ impl Pipeline {
         }
         out.sort_by_key(|(_, (cx, cz), _)| (cx - x).pow(2) + (cz - z).pow(2));
         out
+    }
+
+    /// `/locate structure`: the nearest of the structures named `wanted`
+    /// from block `pos`, as vanilla searches (see
+    /// [`mc_features::structure::Structures::locate`]): its name and the
+    /// block shown.
+    pub fn locate(
+        &self,
+        wanted: &[String],
+        pos: (i32, i32, i32),
+        radius: i32,
+    ) -> Option<(String, (i32, i32, i32))> {
+        let structures = &self.features.structures;
+        let wanted: HashSet<usize> = structures
+            .structures
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| wanted.contains(&s.id))
+            .map(|(i, _)| i)
+            .collect();
+        self.ensure_rings();
+        let mut ground = Columns {
+            sampler: self.generator.columns(),
+        };
+        // Starts already worked out are used; others only as far as vanilla
+        // looks (where the start piece would go).
+        let mut starts = |x: i32, z: i32| {
+            let known = self
+                .starts
+                .lock()
+                .expect("starts lock")
+                .get(&(x, z))
+                .and_then(|cell| cell.get().cloned());
+            known.unwrap_or_else(|| {
+                structures.start_pieces(self.seed, x, z, self.heights, &mut ground)
+            })
+        };
+        let (i, at) = structures.locate(self.seed, &wanted, pos, radius, &mut starts)?;
+        Some((structures.structures[i].id.clone(), at))
     }
 
     /// Structures whose pieces may reach chunk `x, z`.

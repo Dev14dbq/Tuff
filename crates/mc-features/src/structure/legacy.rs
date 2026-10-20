@@ -269,12 +269,23 @@ pub fn generate(
         }
         "ruined_portal" => portal(s, v, r, x, z, h, ground),
         "swamp_hut" | "desert_pyramid" | "jungle_temple" => {
-            let at = chunk_center(ground, x, z, false);
             let (kind, w, hgt, d) = match ty {
                 "swamp_hut" => (BuiltKind::SwampHut, 7, 7, 9),
                 "desert_pyramid" => (BuiltKind::DesertPyramid, 21, 15, 21),
                 _ => (BuiltKind::JunglePyramid, 12, 10, 15),
             };
+            // Pyramids not where a corner of the footprint is below sea
+            // level (the highest block there, water counting); huts stand
+            // in swamp water.
+            let lowest = [(0, 0), (0, d), (w, 0), (w, d)]
+                .into_iter()
+                .map(|(dx, dz)| ground.height(x * 16 + dx, z * 16 + dz, false) - 1)
+                .min()
+                .unwrap_or(0);
+            if kind != BuiltKind::SwampHut && lowest < h.sea_level {
+                return None;
+            }
+            let at = chunk_center(ground, x, z, false);
             let facing = HORIZONTAL[r.next_int_bound(4) as usize];
             let y = 64;
             let bbox = if matches!(facing, Dir::North | Dir::South) {
