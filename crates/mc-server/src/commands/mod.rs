@@ -16,6 +16,7 @@ mod living;
 mod loot;
 mod place;
 mod places;
+mod progress;
 pub(crate) mod rare;
 mod run;
 mod scoreboard;

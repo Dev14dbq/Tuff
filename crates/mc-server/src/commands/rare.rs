@@ -25,6 +25,9 @@ pub struct State {
     post_effects: HashMap<u128, Vec<String>>,
     /// `/attribute`: base values and modifiers set per player.
     pub attributes: HashMap<u128, HashMap<String, AttrState>>,
+    /// `/advancement` and `/recipe`.
+    pub book: Option<std::sync::Arc<super::progress::Book>>,
+    pub progress: super::progress::Progress,
     /// Locator bar settings per entity.
     waypoints: HashMap<u128, Waypoint>,
 }
