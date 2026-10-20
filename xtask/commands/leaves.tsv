@@ -582,7 +582,7 @@ debug stop	debug stop
 defaultgamemode <gamemode>	defaultgamemode survival
 deop <targets>	deop @a
 dialog clear <targets>	dialog clear @a
-dialog show <targets> <dialog>	dialog show @a minecraft:x
+dialog show <targets> <dialog>	dialog show @a minecraft:server_links
 difficulty	difficulty
 difficulty easy	difficulty easy
 difficulty hard	difficulty hard
@@ -1220,11 +1220,11 @@ summon <entity> <pos> <nbt>	summon minecraft:stone 0 64 0 {}
 swing	swing
 swing <targets>	swing @e
 swing <targets> mainhand	swing @e mainhand
-swing <targets> mainhand <animation>	swing @e mainhand mainhand
-swing <targets> mainhand <animation> <duration>	swing @e mainhand mainhand 1t
+swing <targets> mainhand <animation>	swing @e mainhand whack
+swing <targets> mainhand <animation> <duration>	swing @e mainhand whack 1t
 swing <targets> offhand	swing @e offhand
-swing <targets> offhand <animation>	swing @e offhand mainhand
-swing <targets> offhand <animation> <duration>	swing @e offhand mainhand 1t
+swing <targets> offhand <animation>	swing @e offhand whack
+swing <targets> offhand <animation> <duration>	swing @e offhand whack 1t
 tag <targets> add <name>	tag @e add a
 tag <targets> list	tag @e list
 tag <targets> remove <name>	tag @e remove a

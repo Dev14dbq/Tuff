@@ -17,6 +17,7 @@ mod loot;
 mod place;
 mod places;
 mod progress;
+mod provider;
 pub(crate) mod rare;
 mod run;
 mod scoreboard;

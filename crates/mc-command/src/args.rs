@@ -1094,8 +1094,19 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
             }
         }
         "minecraft:context_int_provider" | "minecraft:context_float_provider" => {
+            let float = parser == "minecraft:context_float_provider";
             if r.can_read() && matches!(r.peek(), '{' | '[') {
-                Arg::Nbt(read_nbt(r)?)
+                let t = read_nbt(r)?;
+                if let Some(why) = provider_error(&t, float) {
+                    return Err(r.error_at(
+                        CommandError::new(
+                            "argument.resource_or_id.failed_to_parse",
+                            vec![string(&why)],
+                        ),
+                        r.input.len(),
+                    ));
+                }
+                Arg::Nbt(t)
             } else {
                 let id = read_id(r)?;
                 if !env.exists(parser, &full_id(&id)) {
@@ -1502,4 +1513,76 @@ pub fn plain_text(t: Tag) -> Tag {
         Tag::List(l) => crate::text::list_of(l.into_iter().map(plain_text).collect()),
         other => other,
     }
+}
+
+
+/// What makes a context provider written out in a command fail to parse
+/// (vanilla's codec complaint), or `None` when it is shaped right. Only
+/// the top level is checked.
+fn provider_error(t: &Tag, float: bool) -> Option<String> {
+    // (type, keys that must be there, in the order the codec reports them)
+    const NEEDS: [(&str, &[&str]); 33] = [
+        ("constant", &["value"]),
+        ("add", &["inputs"]),
+        ("sub", &["right", "left"]),
+        ("mul", &["inputs"]),
+        ("div", &["right", "left"]),
+        ("mod", &["right", "left"]),
+        ("floor_div", &["right", "left"]),
+        ("floor_mod", &["right", "left"]),
+        ("min", &["inputs"]),
+        ("max", &["inputs"]),
+        ("avg", &["inputs"]),
+        ("abs", &["input"]),
+        ("negate", &["input"]),
+        ("pow", &["exponent", "base"]),
+        ("binomial", &["p", "n"]),
+        ("uniform", &["max", "min"]),
+        ("weighted_list", &["distribution"]),
+        ("conditional", &["on_true", "condition"]),
+        ("number_dispatcher", &["cases"]),
+        ("from_float", &["input"]),
+        ("score", &["score", "target"]),
+        ("storage", &["path", "storage"]),
+        ("environment_attribute", &["attribute"]),
+        ("sqrt", &["input"]),
+        ("sin", &["input"]),
+        ("floor", &["input"]),
+        ("round", &["input"]),
+        ("length", &["inputs"]),
+        ("from_int", &["input"]),
+        ("enchantment_level", &["amount"]),
+        ("ceil", &["input"]),
+        ("cos", &["input"]),
+        ("tan", &["input"]),
+    ];
+    let Tag::Compound(c) = t else {
+        return Some(format!("Not a map: {}", crate::particle::snbt(t)));
+    };
+    let map = crate::particle::snbt(t);
+    let prefix = "Failed to parse either. First: Not a number; Second: ";
+    let Some(kind) = c.get("type") else {
+        return Some(format!("{prefix}No key type in MapLike[{map}]"));
+    };
+    let name = match kind {
+        Tag::String(s) => full_id(s),
+        _ => String::new(),
+    };
+    let short = name.trim_start_matches("minecraft:");
+    let float_only = ["sqrt", "sin", "floor", "round", "length", "from_int", "enchantment_level", "ceil", "cos", "tan"];
+    let allowed = NEEDS.iter().find(|(k, _)| *k == short).filter(|(k, _)| {
+        if float { *k != "from_float" } else { !float_only.contains(k) }
+    });
+    let Some((_, needs)) = allowed else {
+        let registry = if float { "context_float_provider_type" } else { "context_int_provider_type" };
+        return Some(format!(
+            "{prefix}Unknown registry key in ResourceKey[minecraft:root / minecraft:{registry}]: {name}"
+        ));
+    };
+    let missing: Vec<String> = needs
+        .iter()
+        .filter(|k| c.get(k).is_none())
+        .map(|k| format!("No key {k} in MapLike[{map}]"))
+        .collect();
+    (!missing.is_empty()).then(|| format!("{prefix}{}", missing.join("; ")))
 }

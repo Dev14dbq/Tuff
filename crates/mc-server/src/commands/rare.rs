@@ -70,6 +70,7 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         ["waypoint", "list"] => waypoint_list(r),
         ["waypoint", "modify", ..] => waypoint_modify(r, path),
         ["fetchprofile", kind, ..] => fetchprofile(r, kind),
+        ["compute", ..] => compute(r, path),
         _ => return None,
     })
 }
@@ -623,5 +624,103 @@ fn fetchprofile(r: &mut Run, kind: &str) -> Result<i32> {
             r.success(msg, false);
             Ok(1)
         }
+    }
+}
+
+/// `/compute`: what a provider of the data pack comes to.
+fn compute(r: &mut Run, path: &[&str]) -> Result<i32> {
+    let block = match path[1] {
+        "block" => {
+            let p = r.loaded_pos("computePos")?;
+            let state = r.ctx.world.block(p, &r.ctx.data.blocks).unwrap_or(0);
+            r.ctx.data.blocks.block_name(state).unwrap_or("").to_owned()
+        }
+        "entity" => {
+            r.targets("computeTarget", false)?;
+            String::new()
+        }
+        _ => String::new(),
+    };
+    let float = path.contains(&"float");
+    let registry = if float {
+        "minecraft:context_float_provider"
+    } else {
+        "minecraft:context_int_provider"
+    };
+    let (value, named) = match r.arg("provider") {
+        Some(Arg::Id(id)) => (serde_json::Value::String(full_id(id)), Some(full_id(id))),
+        Some(Arg::Nbt(t)) => (mc_command::text::to_json(t), None),
+        _ => return Err(err("command.failed", Vec::new())),
+    };
+    let kind = if named.is_some() { "named" } else { "unnamed" };
+    let evaluated = match super::provider::eval(&resolve_named(r, registry, &value, 0), float) {
+        Ok(super::provider::Num::Int(i)) => Some(f64::from(i)),
+        Ok(super::provider::Num::Float(f)) => Some(f64::from(f)),
+        Err(super::provider::Failure::Invalid(why)) => {
+            return Err(err(
+                &format!("command.compute.result.{kind}.invalid"),
+                vec![Tag::from(why.as_str())],
+            ));
+        }
+        Err(super::provider::Failure::Unknown) => {
+            crate::furnaces::provider(&r.ctx.data, registry, &value, &block, 0)
+        }
+    };
+    let Some(v) = evaluated else {
+        return Err(err(
+            &format!("command.compute.result.{kind}.invalid"),
+            vec![Tag::from("unsupported provider")],
+        ));
+    };
+    let scale = match r.arg("scale") {
+        Some(Arg::Double(s)) => *s,
+        Some(Arg::Float(s)) => f64::from(*s),
+        _ => 1.0,
+    };
+    let (shown, result) = if float {
+        let f = f64::from(v as f32);
+        (f, (f * scale).trunc() as i32)
+    } else {
+        (v, v as i32)
+    };
+    let mut args = Vec::new();
+    if let Some(id) = &named {
+        args.push(Tag::from(id.as_str()));
+    }
+    let exact = shown.fract() == 0.0;
+    let key = if exact { "exact" } else { "rounded" };
+    if exact && float {
+        args.push(Tag::Int(result));
+    } else if exact {
+        args.push(Tag::Int(shown as i32));
+    } else {
+        args.push(Tag::Double(shown));
+        args.push(Tag::Int(result));
+    }
+    r.success(
+        translate(&format!("command.compute.result.{kind}.{key}"), args),
+        false,
+    );
+    Ok(result)
+}
+
+/// A provider with the data pack entries it names written in.
+fn resolve_named(r: &Run, registry: &str, v: &serde_json::Value, depth: u32) -> serde_json::Value {
+    use serde_json::Value;
+    if depth > 16 {
+        return v.clone();
+    }
+    match v {
+        Value::String(id) => match r.ctx.data.data_pack().read_entry(registry, id) {
+            Ok(entry) => resolve_named(r, registry, &entry, depth + 1),
+            Err(_) => v.clone(),
+        },
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, e)| (k.clone(), resolve_named(r, registry, e, depth + 1)))
+                .collect(),
+        ),
+        Value::Array(a) => Value::Array(a.iter().map(|e| resolve_named(r, registry, e, depth + 1)).collect()),
+        other => other.clone(),
     }
 }
