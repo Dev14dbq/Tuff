@@ -2,6 +2,7 @@
 
 Рабочая папка для изучения логики Minecraft Java Edition и написания своей реализации.
 
+- [docs/CONCEPT.md](docs/CONCEPT.md) — концепция целиком: сервер, клиент, платформа, аккаунты, пакеты
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — архитектура: слабые места ваниллы и наши решения, тик, моды
 - [docs/ROADMAP.md](docs/ROADMAP.md) — план работ по фазам с критериями готовности
 - [docs/specs/protocol-26.3.md](docs/specs/protocol-26.3.md) — где протокол 26.3 расходится с документацией и как это проверять
