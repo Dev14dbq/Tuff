@@ -355,7 +355,6 @@ impl Level for WorldLevel<'_> {
         (all, living)
     }
 
-<<<<<<< HEAD
     fn grow_tree(&mut self, p: BlockPos, state: u32) -> bool {
         crate::growth::grow_tree(self, p, state)
     }
@@ -368,7 +367,8 @@ impl Level for WorldLevel<'_> {
             crate::explosion::primed(self.ctx, to_position(p), crate::explosion::TNT_FUSE, None);
         self.spawned.push(entity);
         true
-=======
+    }
+
     fn torch_burnout(&mut self, p: BlockPos, add: bool) -> bool {
         let mut all = self.ctx.torch_toggles.lock().expect("torch lock");
         let list = all.entry((p.x, p.y, p.z)).or_default();
@@ -415,7 +415,6 @@ impl Level for WorldLevel<'_> {
 
     fn dispense(&mut self, p: BlockPos, facing: mc_tick::Dir, dropper: bool) {
         crate::hoppers::dispense(self.ctx, to_position(p), facing, dropper);
->>>>>>> claude/redstone-rest-df258e
     }
 
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32) {

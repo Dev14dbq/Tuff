@@ -99,7 +99,7 @@ pub fn pickup(ctx: &ServerContext, p: Position) -> bool {
     };
     let mut entities = lock(&ctx.entities);
     for e in entities.iter_mut() {
-        let mc_entity::Kind::Item { item, count, .. } = e.kind else {
+        let mc_entity::Kind::Item { item, count, damage, health, .. } = e.kind else {
             continue;
         };
         if e.removed
@@ -127,6 +127,7 @@ pub fn pickup(ctx: &ServerContext, p: Position) -> bool {
         slots[i] = Some(ItemStack {
             count: slots[i].as_ref().map_or(0, |s| s.count) + add,
             item,
+            damage,
             has_component_changes: false,
         });
         containers::put(ctx, p, kind, &[(i, slots[i].clone())]);
@@ -136,6 +137,8 @@ pub fn pickup(ctx: &ServerContext, p: Position) -> bool {
             e.kind = mc_entity::Kind::Item {
                 item,
                 count: count - add,
+                damage,
+                health,
                 pickup_delay: 0,
             };
         }
@@ -214,6 +217,7 @@ fn transfer_from_slot(
     let moved = ItemStack {
         count: dst[t].as_ref().map_or(0, |d| d.count) + 1,
         item: stack.item,
+        damage: stack.damage,
         has_component_changes: stack.has_component_changes,
     };
     dst[t] = Some(moved.clone());
