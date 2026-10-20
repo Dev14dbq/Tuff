@@ -365,6 +365,19 @@ impl Server {
         Ok(())
     }
 
+    /// The server's process id.
+    pub(crate) fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// The next console line (without the log prefix) within `timeout`.
+    pub(crate) fn next_line(&mut self, timeout: Duration) -> Option<String> {
+        self.lines
+            .recv_timeout(timeout)
+            .ok()
+            .map(|l| strip_log_prefix(&l).to_owned())
+    }
+
     pub(crate) fn stop(&mut self) {
         let _ = writeln!(self.stdin, "stop");
         let _ = self.stdin.flush();

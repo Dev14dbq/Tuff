@@ -153,12 +153,14 @@ fn bot(
             step += 1;
             let angle = angle0 + f64::from(step) * 0.05;
             let radius = 40.0;
+            // The circle starts where the bot stands: no jump on the first step.
             let mut moved = Vec::new();
-            moved.put_f64(x0 + radius * angle.cos());
+            moved.put_f64(x0 + radius * (angle.cos() - angle0.cos()));
             moved.put_f64(y);
-            moved.put_f64(z0 + radius * angle.sin());
+            moved.put_f64(z0 + radius * (angle.sin() - angle0.sin()));
             moved.put_u8(0x01);
             client.send("minecraft:move_player_pos", moved)?;
+            client.send("minecraft:client_tick_end", Vec::new())?;
             next_move = Instant::now() + Duration::from_millis(50);
         }
         let (packet, body) = match client.recv() {
@@ -184,12 +186,21 @@ fn bot(
             }
             "minecraft:chunk_batch_finished" if !spawned => {
                 spawned = true;
+                // As a client does once its world is shown; vanilla rejects
+                // movement before it.
+                client.send("minecraft:player_loaded", Vec::new())?;
                 stats.joined.fetch_add(1, Ordering::Relaxed);
                 let ms = begin.elapsed().as_millis() as u64;
                 stats.join_ms_total.fetch_add(ms, Ordering::Relaxed);
                 stats.join_ms_max.fetch_max(ms, Ordering::Relaxed);
             }
-            "minecraft:disconnect" => bail!("kicked"),
+            "minecraft:disconnect" => {
+                let text: String = String::from_utf8_lossy(&body)
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .collect();
+                bail!("kicked: {text}")
+            }
             _ => {}
         }
     }
