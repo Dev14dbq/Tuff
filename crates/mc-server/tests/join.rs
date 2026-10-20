@@ -1322,7 +1322,7 @@ async fn falls_hurt_and_kill_and_players_respawn() {
     let mut r = Reader::new(&death);
     r.varint().unwrap();
     let message = format!("{:?}", r.nbt().unwrap());
-    assert!(message.contains("death.attack.fall"), "{message}");
+    assert!(message.contains("death.fell.accident.generic"), "{message}");
     // Respawn.
     let mut respawn = Vec::new();
     respawn.put_varint(0);
