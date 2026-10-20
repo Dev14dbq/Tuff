@@ -69,6 +69,10 @@ fn set_with_limit(
     fluids::on_place(level, ctx, p, state);
     crate::fire::on_place(level, ctx, p, old, state);
     redstone::on_place(level, ctx, p, old, state);
+    if ctx.shapes.block_index(old) != ctx.shapes.block_index(state) {
+        crate::rails::on_place(level, ctx, p, state);
+        crate::hopper::on_place(level, ctx, p, state);
+    }
     gravity::wake(level, ctx, p, state);
     if ctx.shapes.block_index(old) != ctx.shapes.block_index(state) {
         powered_tnt(level, ctx, p);
@@ -196,6 +200,8 @@ pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: Blo
     fluids::neighbor_changed(level, ctx, p);
     redstone::neighbor_changed(level, ctx, p);
     powered_tnt(level, ctx, p);
+    crate::rails::neighbor_changed(level, ctx, p);
+    crate::hopper::neighbor_changed(level, ctx, p);
     crate::pistons::check(level, ctx, p);
     let state = level.block(p);
     gravity::wake(level, ctx, p, state);
@@ -204,6 +210,8 @@ pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: Blo
 /// A due block tick.
 pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     redstone::block_tick(level, ctx, p, kind);
+    crate::rails::block_tick(level, ctx, p, kind);
+    crate::hopper::block_tick(level, ctx, p, kind);
     gravity::block_tick(level, ctx, p, kind);
     crate::fire::block_tick(level, ctx, p, kind);
     crate::leaves::block_tick(level, ctx, p, kind);

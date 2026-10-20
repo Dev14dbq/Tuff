@@ -354,6 +354,10 @@ pub struct ServerContext {
     pub fuels: crate::furnaces::Fuels,
     /// Furnaces burning or cooking (tick thread).
     pub furnaces: Mutex<crate::furnaces::Active>,
+    /// Hoppers that tick (tick thread).
+    pub hoppers: Mutex<crate::hoppers::Active>,
+    /// Recent redstone torch toggles by position (burnout).
+    pub torch_toggles: Mutex<HashMap<(i32, i32, i32), Vec<i64>>>,
     /// Containers whose contents changed, for comparators (tick thread).
     pub container_updates: Mutex<Vec<mc_protocol::Position>>,
     /// Players eating or drinking (tick thread counts down).
@@ -634,6 +638,8 @@ impl ServerContext {
             items,
             using: Mutex::new(HashMap::new()),
             container_updates: Mutex::new(Vec::new()),
+            hoppers: Mutex::new(Default::default()),
+            torch_toggles: Mutex::new(HashMap::new()),
             fuels,
             furnaces: Mutex::new(HashMap::new()),
             block_events: Mutex::new(Vec::new()),

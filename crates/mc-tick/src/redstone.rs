@@ -125,6 +125,7 @@ const STONE_BUTTON_TICKS: i64 = 20;
 const WOODEN_BUTTON_TICKS: i64 = 30;
 /// Pressure plates look again for entities this often while pressed.
 const PLATE_TICKS: i64 = 20;
+const TORCH_BURNOUT_DELAY: i64 = 160;
 const WEIGHTED_PLATE_TICKS: i64 = 10;
 
 fn is(ctx: Ctx, state: u32, property: &str) -> bool {
@@ -225,7 +226,7 @@ fn emitted(level: &dyn Level, ctx: Ctx, at: BlockPos, state: u32, toward: Dir, w
             level.comparator_output(at)
         }
         Part::Wire if wires && wire_points(ctx, state, toward) => wire_power(ctx, state),
-        _ => 0,
+        _ => crate::rails::emits(ctx, state, toward, false),
     }
 }
 
@@ -255,7 +256,7 @@ fn emitted_strong(
             level.comparator_output(at)
         }
         Part::Wire if wires && wire_points(ctx, state, toward) => wire_power(ctx, state),
-        _ => 0,
+        _ => crate::rails::emits(ctx, state, toward, true),
     }
 }
 
@@ -495,7 +496,10 @@ fn analog_signal(level: &dyn Level, ctx: Ctx, p: BlockPos) -> Option<u8> {
         }
         "minecraft:respawn_anchor" => level_of(ctx, state, "charges") * 15 / 4,
         "minecraft:beehive" | "minecraft:bee_nest" => level_of(ctx, state, "honey_level"),
-        _ => return level.container_signal(p),
+        _ => {
+            return crate::rails::comparator_reading(level, ctx, p)
+                .or_else(|| level.container_signal(p));
+        }
     };
     Some(signal)
 }
@@ -630,6 +634,7 @@ fn press_plate(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
 /// An entity is in the block at `p`: an unpressed plate there checks
 /// whether it is pressed now.
 pub fn entity_inside(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+    crate::rails::entity_inside(level, ctx, p);
     let state = level.block(p);
     if matches!(part(ctx, state), Part::Plate | Part::WeightedPlate) && plate_power(ctx, state) == 0
     {
@@ -765,8 +770,18 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     match part(ctx, state) {
         Part::Torch | Part::WallTorch => {
             let should = torch_should_light(level, ctx, p, state);
-            if is(ctx, state, "lit") != should {
-                set_quietly(level, ctx, p, with_bool(ctx, state, "lit", should));
+            let lit = is(ctx, state, "lit");
+            if lit && !should {
+                set_quietly(level, ctx, p, with_bool(ctx, state, "lit", false));
+                update_around(level, ctx, p);
+                // Toggling 8 times in 60 ticks burns it out: it stays dark
+                // and looks again after 160 ticks.
+                if level.torch_burnout(p, true) {
+                    level.torch_fizz(p);
+                    level.schedule_block_tick(p, kind, TORCH_BURNOUT_DELAY, 0);
+                }
+            } else if !lit && should && !level.torch_burnout(p, false) {
+                set_quietly(level, ctx, p, with_bool(ctx, state, "lit", true));
                 update_around(level, ctx, p);
             }
         }

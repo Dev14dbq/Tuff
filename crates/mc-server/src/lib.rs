@@ -21,7 +21,11 @@ mod fastmap;
 mod forced;
 mod furnaces;
 mod generation;
+<<<<<<< HEAD
 mod growth;
+=======
+mod hoppers;
+>>>>>>> claude/redstone-rest-df258e
 mod interact;
 mod items;
 mod level;

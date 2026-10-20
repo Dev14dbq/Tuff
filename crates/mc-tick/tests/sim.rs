@@ -4,13 +4,24 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use mc_tick::{BlockPos, BlockRules, Ctx, Flags, Level, ScheduledTicks, Shapes};
+use mc_tick::{BlockPos, BlockRules, Ctx, Dir, Flags, Level, ScheduledTicks, Shapes};
 
 struct World {
     blocks: HashMap<BlockPos, u32>,
     air: u32,
     time: i64,
     ticks: ScheduledTicks,
+    extra: Extra,
+}
+
+#[derive(Default)]
+struct Extra {
+    minecarts: std::collections::HashSet<BlockPos>,
+    torch: HashMap<BlockPos, Vec<i64>>,
+    fizzes: u32,
+    items: HashMap<BlockPos, Vec<Option<(i32, u32)>>>,
+    cooldown: HashMap<BlockPos, i32>,
+    dispensed: Vec<(BlockPos, Dir, bool)>,
 }
 
 impl Level for World {
@@ -38,6 +49,52 @@ impl Level for World {
         self.ticks
             .blocks
             .schedule(p, block, self.time + delay, priority);
+    }
+    fn minecarts_at(&self, p: BlockPos) -> u32 {
+        u32::from(self.extra.minecarts.contains(&p))
+    }
+    fn torch_burnout(&mut self, p: BlockPos, add: bool) -> bool {
+        let now = self.time;
+        let list = self.extra.torch.entry(p).or_default();
+        list.retain(|&t| t >= now - 60);
+        if add {
+            list.push(now);
+        }
+        list.len() >= 8
+    }
+    fn torch_fizz(&mut self, _p: BlockPos) {
+        self.extra.fizzes += 1;
+    }
+    fn container_transfer(&mut self, from: BlockPos, _fs: Dir, to: BlockPos, _ts: Dir) -> bool {
+        if !self.extra.items.contains_key(&from) || !self.extra.items.contains_key(&to) {
+            return false;
+        }
+        let mut src = self.extra.items.remove(&from).unwrap();
+        let dst = self.extra.items.get_mut(&to).unwrap();
+        let mut moved = false;
+        'slots: for slot in src.iter_mut() {
+            let Some((item, count)) = *slot else { continue };
+            let target = dst
+                .iter()
+                .position(|d| d.is_some_and(|(i, c)| i == item && c < 64))
+                .or_else(|| dst.iter().position(Option::is_none));
+            let Some(t) = target else { continue 'slots };
+            dst[t] = Some((item, dst[t].map_or(0, |d| d.1) + 1));
+            *slot = (count > 1).then_some((item, count - 1));
+            moved = true;
+            break;
+        }
+        self.extra.items.insert(from, src);
+        moved
+    }
+    fn hopper_cooldown(&self, p: BlockPos) -> i32 {
+        self.extra.cooldown.get(&p).copied().unwrap_or(0)
+    }
+    fn set_hopper_cooldown(&mut self, p: BlockPos, ticks: i32) {
+        self.extra.cooldown.insert(p, ticks);
+    }
+    fn dispense(&mut self, p: BlockPos, facing: Dir, dropper: bool) {
+        self.extra.dispensed.push((p, facing, dropper));
     }
 }
 
@@ -86,6 +143,7 @@ fn falling_lava_on_water_spreads_after_making_stone() {
         air: state("minecraft:air"),
         time: 0,
         ticks: ScheduledTicks::default(),
+        extra: Extra::default(),
     };
     for x in -12..=12 {
         for z in -12..=12 {
@@ -130,6 +188,7 @@ fn lava_and_water_placed_together() {
         air: state("minecraft:air"),
         time: 0,
         ticks: ScheduledTicks::default(),
+        extra: Extra::default(),
     };
     for x in 10..=30 {
         for z in 10..=30 {
@@ -221,6 +280,7 @@ fn dust_line_connects_and_carries_power() {
         air: state("minecraft:air"),
         time: 0,
         ticks: ScheduledTicks::default(),
+        extra: Extra::default(),
     };
     for x in -2..=20 {
         world
@@ -294,6 +354,7 @@ fn lamp_set_beside_powered_dust_stays_off() {
         air: state("minecraft:air"),
         time: 0,
         ticks: ScheduledTicks::default(),
+        extra: Extra::default(),
     };
     for x in 0..=8 {
         world
@@ -346,6 +407,7 @@ fn fire_burns_planks_and_dies_on_stone() {
         air: state("minecraft:air"),
         time: 0,
         ticks: ScheduledTicks::default(),
+        extra: Extra::default(),
     };
     for x in -3..=3 {
         for z in -3..=3 {
@@ -390,6 +452,7 @@ fn random_ticks_grow_spread_and_decay() {
         air: state("minecraft:air"),
         time: 0,
         ticks: ScheduledTicks::default(),
+        extra: Extra::default(),
     };
     let mut rng = mc_tick::rng::Rng::new(7);
     // Wheat on farmland ripens.
@@ -431,4 +494,320 @@ fn random_ticks_grow_spread_and_decay() {
     let s = world.block(leaf);
     mc_tick::random::tick(&mut world, ctx, leaf, s, &mut rng);
     assert_eq!(world.block(leaf), world.air);
+}
+
+fn new_world() -> Option<(mc_data::McData, Shapes, BlockRules)> {
+    setup()
+}
+
+fn name_at(data: &mc_data::McData, w: &World, p: BlockPos) -> String {
+    data.blocks.describe(w.block(p)).unwrap().to_owned()
+}
+
+fn floor(w: &mut World, data: &mc_data::McData, y: i32) {
+    let stone = data.blocks.default_state("minecraft:stone").unwrap();
+    for x in -8..=8 {
+        for z in -8..=8 {
+            w.blocks.insert(BlockPos::new(x, y, z), stone);
+        }
+    }
+}
+
+fn empty_world(data: &mc_data::McData) -> World {
+    World {
+        blocks: HashMap::new(),
+        air: data.blocks.default_state("minecraft:air").unwrap(),
+        time: 0,
+        ticks: ScheduledTicks::default(),
+        extra: Extra::default(),
+    }
+}
+
+#[test]
+fn torch_burns_out_after_eight_toggles() {
+    let Some((data, shapes, rules)) = new_world() else {
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |n: &str| data.blocks.default_state(n).unwrap();
+    let mut w = empty_world(&data);
+    floor(&mut w, &data, -60);
+    let torch = BlockPos::new(0, -59, 0);
+    let block = BlockPos::new(1, -59, 0);
+    let _ = block;
+    mc_tick::set_block(
+        &mut w,
+        ctx,
+        torch,
+        state("minecraft:redstone_torch"),
+        Flags::ALL,
+    );
+    let tk = shapes.block_index(state("minecraft:redstone_torch"));
+    let _ = tk;
+    let lever = BlockPos::new(0, -60, 1);
+    let lever_state = shapes
+        .state(
+            "minecraft:lever",
+            &[("face", "wall"), ("facing", "south"), ("powered", "false")],
+        )
+        .unwrap();
+    w.blocks.insert(lever, lever_state);
+    let mut toggles_off = 0;
+    for _ in 0..12 {
+        mc_tick::redstone::use_block(&mut w, ctx, lever);
+        run_block_ticks(&mut w, ctx, 2);
+        if name_at(&data, &w, torch).contains("lit=false") {
+            toggles_off += 1;
+        }
+        mc_tick::redstone::use_block(&mut w, ctx, lever);
+        run_block_ticks(&mut w, ctx, 2);
+    }
+    assert!(
+        w.extra.fizzes >= 1,
+        "torch never burned out ({toggles_off} offs)"
+    );
+    // Burnt out: stays dark though nothing powers it.
+    assert!(name_at(&data, &w, torch).contains("lit=false"));
+    run_block_ticks(&mut w, ctx, 170);
+    assert!(name_at(&data, &w, torch).contains("lit=true"));
+}
+
+#[test]
+fn rails_join_into_curves_slopes_and_straights() {
+    let Some((data, shapes, rules)) = new_world() else {
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |n: &str| data.blocks.default_state(n).unwrap();
+    let mut w = empty_world(&data);
+    floor(&mut w, &data, -60);
+    let rail = state("minecraft:rail");
+    let put = |w: &mut World, x: i32, z: i32| {
+        mc_tick::set_block(w, ctx, BlockPos::new(x, -59, z), rail, Flags::ALL);
+    };
+    // A corner: rails at (0,0), (1,0) and (0,1).
+    put(&mut w, 0, 0);
+    put(&mut w, 1, 0);
+    put(&mut w, 0, 1);
+    let at = |w: &World, x: i32, z: i32| name_at(&data, w, BlockPos::new(x, -59, z));
+    assert!(
+        at(&w, 0, 0).contains("shape=south_east"),
+        "{}",
+        at(&w, 0, 0)
+    );
+    assert!(at(&w, 1, 0).contains("shape=east_west"), "{}", at(&w, 1, 0));
+    assert!(
+        at(&w, 0, 1).contains("shape=north_south"),
+        "{}",
+        at(&w, 0, 1)
+    );
+    // A slope: a rail one up to the east of a lone straight pair.
+    let mut w = empty_world(&data);
+    floor(&mut w, &data, -60);
+    mc_tick::set_block(
+        &mut w,
+        ctx,
+        BlockPos::new(3, -59, 3),
+        state("minecraft:stone"),
+        Flags::ALL,
+    );
+    mc_tick::set_block(&mut w, ctx, BlockPos::new(2, -59, 3), rail, Flags::ALL);
+    mc_tick::set_block(&mut w, ctx, BlockPos::new(3, -58, 3), rail, Flags::ALL);
+    let s = name_at(&data, &w, BlockPos::new(2, -59, 3));
+    assert!(s.contains("shape=ascending_east"), "{s}");
+    // A powered rail never curves.
+    let mut w = empty_world(&data);
+    floor(&mut w, &data, -60);
+    let pr = state("minecraft:powered_rail");
+    mc_tick::set_block(&mut w, ctx, BlockPos::new(0, -59, 0), pr, Flags::ALL);
+    mc_tick::set_block(&mut w, ctx, BlockPos::new(1, -59, 0), rail, Flags::ALL);
+    mc_tick::set_block(&mut w, ctx, BlockPos::new(0, -59, 1), rail, Flags::ALL);
+    let s = name_at(&data, &w, BlockPos::new(0, -59, 0));
+    assert!(
+        s.contains("shape=north_south") || s.contains("shape=east_west"),
+        "{s}"
+    );
+}
+
+#[test]
+fn powered_rail_chain_carries_power_eight_further() {
+    let Some((data, shapes, rules)) = new_world() else {
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |n: &str| data.blocks.default_state(n).unwrap();
+    let mut w = empty_world(&data);
+    floor(&mut w, &data, -60);
+    let pr = state("minecraft:powered_rail");
+    for x in 0..12 {
+        mc_tick::set_block(&mut w, ctx, BlockPos::new(x, -59, 0), pr, Flags::ALL);
+    }
+    mc_tick::set_block(
+        &mut w,
+        ctx,
+        BlockPos::new(-1, -59, 0),
+        state("minecraft:redstone_block"),
+        Flags::ALL,
+    );
+    let on =
+        |w: &World, x: i32| name_at(&data, w, BlockPos::new(x, -59, 0)).contains("powered=true");
+    // Power spreads from the rail beside the source one rail at a time as each
+    // updates; after settling, nine rails are on (the source's neighbour plus 8).
+    let lit = (0..12).filter(|&x| on(&w, x)).count();
+    assert_eq!(lit, 9, "{lit} rails powered");
+    // Activator rails behave the same.
+    let mut w = empty_world(&data);
+    floor(&mut w, &data, -60);
+    let ar = state("minecraft:activator_rail");
+    for x in 0..4 {
+        mc_tick::set_block(&mut w, ctx, BlockPos::new(x, -59, 0), ar, Flags::ALL);
+    }
+    mc_tick::set_block(
+        &mut w,
+        ctx,
+        BlockPos::new(-1, -59, 0),
+        state("minecraft:redstone_block"),
+        Flags::ALL,
+    );
+    assert!((0..4).all(|x| on(&w, x)));
+}
+
+#[test]
+fn detector_rail_follows_minecarts() {
+    let Some((data, shapes, rules)) = new_world() else {
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |n: &str| data.blocks.default_state(n).unwrap();
+    let mut w = empty_world(&data);
+    floor(&mut w, &data, -60);
+    let p = BlockPos::new(0, -59, 0);
+    mc_tick::set_block(&mut w, ctx, p, state("minecraft:detector_rail"), Flags::ALL);
+    w.extra.minecarts.insert(p);
+    mc_tick::redstone::entity_inside(&mut w, ctx, p);
+    assert!(name_at(&data, &w, p).contains("powered=true"));
+    // It strongly powers the block below.
+    let below = BlockPos::new(0, -60, 0);
+    assert_eq!(
+        mc_tick::redstone::power_from(&w, ctx, BlockPos::new(0, -61, 0), Dir::Up, true),
+        15
+    );
+    let _ = below;
+    w.extra.minecarts.clear();
+    run_block_ticks(&mut w, ctx, 21);
+    assert!(name_at(&data, &w, p).contains("powered=false"));
+}
+
+#[test]
+fn hopper_moves_items_down_and_locks_when_powered() {
+    let Some((data, shapes, rules)) = new_world() else {
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |n: &str| data.blocks.default_state(n).unwrap();
+    let mut w = empty_world(&data);
+    floor(&mut w, &data, -60);
+    let chest = BlockPos::new(0, -57, 0);
+    let hopper = BlockPos::new(0, -58, 0);
+    let target = BlockPos::new(0, -59, 0);
+    mc_tick::set_block(&mut w, ctx, chest, state("minecraft:chest"), Flags::ALL);
+    mc_tick::set_block(&mut w, ctx, hopper, state("minecraft:hopper"), Flags::ALL);
+    mc_tick::set_block(&mut w, ctx, target, state("minecraft:chest"), Flags::ALL);
+    w.extra
+        .items
+        .insert(chest, vec![Some((7, 3)), None, None, None, None]);
+    w.extra.items.insert(hopper, vec![None; 5]);
+    w.extra.items.insert(target, vec![None; 5]);
+    let count =
+        |w: &World, p: BlockPos| -> u32 { w.extra.items[&p].iter().flatten().map(|s| s.1).sum() };
+    // The hopper above `target` faces down by default.
+    for _ in 0..40 {
+        w.time += 1;
+        mc_tick::hopper::tick(&mut w, ctx, hopper);
+    }
+    assert_eq!(count(&w, chest) + count(&w, hopper) + count(&w, target), 3);
+    assert_eq!(count(&w, target), 3, "all three arrive, 8 ticks apart");
+    // Powered: locked.
+    w.extra
+        .items
+        .insert(chest, vec![Some((7, 2)), None, None, None, None]);
+    mc_tick::set_block(
+        &mut w,
+        ctx,
+        BlockPos::new(1, -58, 0),
+        state("minecraft:redstone_block"),
+        Flags::ALL,
+    );
+    assert!(name_at(&data, &w, hopper).contains("enabled=false"));
+    for _ in 0..40 {
+        w.time += 1;
+        mc_tick::hopper::tick(&mut w, ctx, hopper);
+    }
+    assert_eq!(count(&w, chest), 2);
+}
+
+#[test]
+fn dispenser_fires_once_per_rising_edge_after_four_ticks() {
+    let Some((data, shapes, rules)) = new_world() else {
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |n: &str| data.blocks.default_state(n).unwrap();
+    let mut w = empty_world(&data);
+    floor(&mut w, &data, -60);
+    let d = BlockPos::new(0, -59, 0);
+    mc_tick::set_block(&mut w, ctx, d, state("minecraft:dispenser"), Flags::ALL);
+    let src = BlockPos::new(1, -59, 0);
+    mc_tick::set_block(
+        &mut w,
+        ctx,
+        src,
+        state("minecraft:redstone_block"),
+        Flags::ALL,
+    );
+    assert!(name_at(&data, &w, d).contains("triggered=true"));
+    run_block_ticks(&mut w, ctx, 3);
+    assert!(w.extra.dispensed.is_empty());
+    run_block_ticks(&mut w, ctx, 1);
+    assert_eq!(w.extra.dispensed.len(), 1);
+    // Still powered: no second shot. Unpowered: re-armed.
+    run_block_ticks(&mut w, ctx, 10);
+    assert_eq!(w.extra.dispensed.len(), 1);
+    mc_tick::set_block(&mut w, ctx, src, state("minecraft:air"), Flags::ALL);
+    assert!(name_at(&data, &w, d).contains("triggered=false"));
+    // The dropper is the same with dropper = true.
+    let dr = BlockPos::new(0, -59, 3);
+    mc_tick::set_block(&mut w, ctx, dr, state("minecraft:dropper"), Flags::ALL);
+    mc_tick::set_block(
+        &mut w,
+        ctx,
+        BlockPos::new(1, -59, 3),
+        state("minecraft:redstone_block"),
+        Flags::ALL,
+    );
+    run_block_ticks(&mut w, ctx, 4);
+    assert!(
+        w.extra
+            .dispensed
+            .iter()
+            .any(|&(p, _, dropper)| p == dr && dropper)
+    );
 }

@@ -411,6 +411,9 @@ pub fn placed(ctx: &ServerContext, p: Position, state: u32) {
     let Some(kind) = blocks.block_name(state).and_then(kind_of) else {
         return;
     };
+    if kind.entity == "minecraft:hopper" {
+        crate::hoppers::register(ctx, p);
+    }
     if ctx
         .world
         .block_entity(p, blocks)

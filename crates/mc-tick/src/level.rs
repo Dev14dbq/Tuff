@@ -1,6 +1,6 @@
 //! What block logic needs from a world.
 
-use crate::dir::BlockPos;
+use crate::dir::{BlockPos, Dir};
 
 pub trait Level {
     /// The block at `p`; air where nothing is loaded.
@@ -117,4 +117,48 @@ pub trait Level {
     fn entities_in(&self, _min: [f64; 3], _max: [f64; 3]) -> (u32, u32) {
         (0, 0)
     }
+
+    /// Minecarts whose boxes touch the block at `p`.
+    fn minecarts_at(&self, _p: BlockPos) -> u32 {
+        0
+    }
+
+    /// Records a redstone torch toggle at `p` (when `add`) and tells whether
+    /// it has toggled too often lately (8 times within 60 ticks): then it
+    /// burns out.
+    fn torch_burnout(&mut self, _p: BlockPos, _add: bool) -> bool {
+        false
+    }
+
+    /// A burned-out torch hisses (sound and smoke).
+    fn torch_fizz(&mut self, _p: BlockPos) {}
+
+    /// Moves one item from the container at `from` (through its face `from_side`)
+    /// into the container at `to` (through its face `to_side`), into an
+    /// existing stack first. `false` if either is not a container or nothing
+    /// could move.
+    fn container_transfer(
+        &mut self,
+        _from: BlockPos,
+        _from_side: Dir,
+        _to: BlockPos,
+        _to_side: Dir,
+    ) -> bool {
+        false
+    }
+
+    /// The hopper's remaining rest in ticks (its block entity).
+    fn hopper_cooldown(&self, _p: BlockPos) -> i32 {
+        0
+    }
+
+    fn set_hopper_cooldown(&mut self, _p: BlockPos, _ticks: i32) {}
+
+    /// The hopper at `p` picks up an item entity from the space above it.
+    fn hopper_pickup(&mut self, _p: BlockPos) -> bool {
+        false
+    }
+
+    /// A dispenser or dropper at `p` facing `facing` fires.
+    fn dispense(&mut self, _p: BlockPos, _facing: Dir, _dropper: bool) {}
 }

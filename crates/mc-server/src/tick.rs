@@ -291,6 +291,7 @@ pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     tick_entities(ctx, &mut level);
     press_plates(ctx, &mut level);
     mc_tick::pistons::tick(&mut level, logic);
+    crate::hoppers::tick(ctx, &mut level);
     let (changes, spawned) = level.finish();
     if !changes.is_empty() {
         let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
