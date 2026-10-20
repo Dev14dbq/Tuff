@@ -379,6 +379,7 @@ pub fn dig(
                 crate::loot::Drop {
                     item: stack.item,
                     count: stack.count,
+                    components: Default::default(),
                 },
             ));
         }

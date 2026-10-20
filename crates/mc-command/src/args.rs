@@ -181,7 +181,6 @@ pub fn slot_range(name: &str) -> Option<Vec<i32>> {
         ("hotbar", 0, 9),
         ("inventory", 9, 27),
         ("enderchest", 200, 27),
-        ("villager", 300, 8),
         ("horse", 500, 15),
         ("player.crafting", 500, 4),
     ];
@@ -195,7 +194,6 @@ pub fn slot_range(name: &str) -> Option<Vec<i32>> {
         ("armor.head", 103),
         ("armor.body", 105),
         ("saddle", 400),
-        ("horse.saddle", 400),
         ("horse.chest", 401),
         ("player.cursor", 499),
         ("contents", 1000),
@@ -1107,6 +1105,50 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
                     )));
                 }
                 Arg::Id(id)
+            }
+        }
+        "minecraft:loot_modifier" | "minecraft:loot_table" => {
+            while r.can_read() && r.peek() == ' ' {
+                r.skip();
+            }
+            if r.can_read() && matches!(r.peek(), '{' | '[') {
+                Arg::Nbt(read_nbt(r)?)
+            } else {
+                let id = read_id(r)?;
+                let registry = if parser == "minecraft:loot_modifier" {
+                    "minecraft:item_modifier"
+                } else {
+                    "minecraft:loot_table"
+                };
+                if !env.exists(registry, &full_id(&id)) {
+                    return Err(r.error(CommandError::new(
+                        "argument.resource_or_id.no_such_element",
+                        vec![string(&full_id(&id)), string(registry)],
+                    )));
+                }
+                Arg::Id(id)
+            }
+        }
+        "minecraft:item_slot" => {
+            let s = r.cursor;
+            while r.can_read() && (id_char(r.peek()) || matches!(r.peek(), '*' | '-')) {
+                r.skip();
+            }
+            let name = &r.input[s..r.cursor];
+            match slot_range(name) {
+                None => {
+                    return Err(r.error(CommandError::new(
+                        "slot.unknown",
+                        vec![string(name)],
+                    )));
+                }
+                Some(v) if v.len() != 1 => {
+                    return Err(r.error(CommandError::new(
+                        "slot.only_single_allowed",
+                        vec![string(name)],
+                    )));
+                }
+                Some(_) => Arg::Str(name.to_owned()),
             }
         }
         "minecraft:slot_source" => {

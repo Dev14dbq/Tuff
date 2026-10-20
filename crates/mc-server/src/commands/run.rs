@@ -527,16 +527,6 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         ["summon", ..] => summon(r),
         ["setblock", ..] => setblock(r, path.get(3).copied()),
         ["fill", ..] => fill(r, &path[4..]),
-        [
-            "item",
-            "replace",
-            kind @ ("entity" | "block"),
-            "target",
-            "slots",
-            "with",
-            "item",
-            ..,
-        ] => item_replace(r, kind),
         ["weather", kind, ..] => weather(r, kind),
         [
             "experience",
@@ -563,6 +553,8 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
                 .or_else(|| team::run(r, path))
                 .or_else(|| functions::run(r, path))
                 .or_else(|| living::run(r, path))
+                .or_else(|| super::item::run(r, path))
+                .or_else(|| super::loot::run(r, path))
                 .or_else(|| rare::run(r, path));
         }
     })
@@ -2322,99 +2314,6 @@ fn fill(r: &mut Run, mode: &[&str]) -> Result<i32> {
         true,
     );
     Ok(count as i32)
-}
-
-/// `item replace (entity|block) ... with <item> [<count>]`.
-fn item_replace(r: &mut Run, kind: &str) -> Result<i32> {
-    let Some(Arg::Item(item)) = r.arg("item").cloned() else {
-        return Err(err("command.failed", Vec::new()));
-    };
-    let count = r.int("count").unwrap_or(1);
-    let slot = r.string("slots").unwrap_or_default();
-    let id = r.ctx.items.id(&item.id).unwrap_or(0);
-    let stack = (count > 0 && item.id != "minecraft:air").then_some(ItemStack {
-        count,
-        item: id,
-        has_component_changes: false,
-    });
-    let shown = item_display(r.ctx, &item.id);
-    if kind == "block" {
-        let p = r.loaded_pos("target")?;
-        let index: usize = slot
-            .strip_prefix("container.")
-            .and_then(|n| n.parse().ok())
-            .ok_or_else(|| err("commands.item.target.no_such_slot", vec![str_tag(&slot)]))?;
-        let state = r.ctx.world.block(p, &r.ctx.data.blocks).unwrap_or(0);
-        let block = r.ctx.data.blocks.block_name(state).unwrap_or("");
-        let pos_args = vec![Tag::Int(p.x), Tag::Int(p.y), Tag::Int(p.z)];
-        let kind = crate::containers::kind_of(block)
-            .ok_or_else(|| err("commands.item.target.not_a_container", pos_args.clone()))?;
-        if index >= kind.slots {
-            return Err(err(
-                "commands.item.target.no_such_slot",
-                vec![str_tag(&slot)],
-            ));
-        }
-        crate::containers::set_slot(r.ctx, p, kind, index, stack);
-        let mut args = pos_args;
-        args.push(shown);
-        r.success(translate("commands.item.block.set.success", args), true);
-        return Ok(1);
-    }
-    let targets = r.targets("target", false)?;
-    let mut done = 0;
-    for t in &targets {
-        let uuid = t.uuid();
-        let index = match slot.as_str() {
-            "weapon.mainhand" | "weapon" => {
-                lock(&r.ctx.inventories).get(&uuid).map(|h| h.hand_slot(0))
-            }
-            "weapon.offhand" => Some(45),
-            "armor.head" => Some(5),
-            "armor.chest" => Some(6),
-            "armor.legs" => Some(7),
-            "armor.feet" => Some(8),
-            s => match s.split_once('.') {
-                Some(("hotbar", n)) => n.parse::<usize>().ok().filter(|&n| n < 9).map(|n| 36 + n),
-                Some(("inventory", n)) => {
-                    n.parse::<usize>().ok().filter(|&n| n < 27).map(|n| 9 + n)
-                }
-                _ => None,
-            },
-        };
-        let Some(index) = index else { continue };
-        let mut inventories = lock(&r.ctx.inventories);
-        let Some(hands) = inventories.get_mut(&uuid) else {
-            continue;
-        };
-        hands.slots[index] = stack.clone();
-        hands.components.remove(&index);
-        r.out.events.push(Event::InventorySlot {
-            uuid,
-            slot: index as i16,
-            item: stack.clone(),
-        });
-        done += 1;
-    }
-    if done == 0 {
-        return Err(err(
-            "commands.item.target.no_changed.known_item",
-            vec![shown, str_tag(&slot)],
-        ));
-    }
-    let msg = if targets.len() == 1 {
-        translate(
-            "commands.item.entity.set.success.single",
-            vec![targets[0].display(), shown],
-        )
-    } else {
-        translate(
-            "commands.item.entity.set.success.multiple",
-            vec![Tag::Int(targets.len() as i32), shown],
-        )
-    };
-    r.success(msg, true);
-    Ok(done)
 }
 
 fn weather(r: &mut Run, kind: &str) -> Result<i32> {

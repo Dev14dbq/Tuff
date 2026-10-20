@@ -11,8 +11,8 @@ sample={
 'minecraft:nbt_compound_tag':'{}','minecraft:nbt_tag':'1','minecraft:function':'minecraft:f','minecraft:gamemode':'survival','minecraft:dialog':'minecraft:x','minecraft:swizzle':'xyz',
 'minecraft:entity_anchor':'feet','minecraft:resource_or_tag':'minecraft:stone','minecraft:slot_source':'container.0','minecraft:loot_predicate':'minecraft:x','minecraft:score_holder':'a',
 'minecraft:objective':'o','minecraft:int_range':'1','minecraft:float_range':'1','minecraft:heightmap':'world_surface','minecraft:rotation':'0 0','minecraft:uuid':'00000000-0000-0000-0000-000000000000',
-'minecraft:block_state':'minecraft:stone','minecraft:column_pos':'0 0','minecraft:item_stack':'minecraft:stone','minecraft:loot_modifier':'minecraft:x','minecraft:resource_or_tag_key':'minecraft:stone',
-'minecraft:loot_table':'minecraft:x','minecraft:item_slot':'container.0','minecraft:particle':'minecraft:flame','minecraft:feature':'minecraft:oak','minecraft:template_rotation':'none','minecraft:template_mirror':'none',
+'minecraft:block_state':'minecraft:stone','minecraft:column_pos':'0 0','minecraft:item_stack':'minecraft:stone','minecraft:loot_modifier':'{type:"minecraft:set_count",count:1}','minecraft:resource_or_tag_key':'minecraft:stone',
+'minecraft:loot_table':'minecraft:blocks/stone','minecraft:item_slot':'container.0','minecraft:particle':'minecraft:flame','minecraft:feature':'minecraft:oak','minecraft:template_rotation':'none','minecraft:template_mirror':'none',
 'minecraft:time':'1t','minecraft:objective_criteria':'dummy','minecraft:style':'{}','minecraft:scoreboard_slot':'sidebar','minecraft:operation':'=','minecraft:vec2':'0 0','minecraft:swing_animation':'mainhand',
 'minecraft:team':'t','minecraft:team_color':'red','minecraft:resource_selector':'minecraft:*','minecraft:hex_color':'ffffff'}
 byname=json.load(open(sys.argv[1])) if len(sys.argv)>1 else {}

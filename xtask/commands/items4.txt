@@ -1,0 +1,66 @@
+gamemode creative @s
+clear @s
+tp @s 0 -60 0
+setblock 14 -60 2 minecraft:chest
+setblock 16 -60 2 minecraft:chest
+item replace entity @s hotbar.0 with minecraft:apple 2
+item replace entity @s hotbar.1 with minecraft:stick 3
+item replace entity @s hotbar.2 with minecraft:dirt 4
+item fill block 14 -60 2 container.* from entity @s hotbar.*
+data get block 14 -60 2 Items
+item fill block 16 -60 2 container.* from entity @s hotbar.1
+data get block 16 -60 2 Items
+item override block 16 -60 2 container.* from entity @s hotbar.*
+data get block 16 -60 2 Items
+item replace block 16 -60 2 container.* from entity @s hotbar.*
+data get block 16 -60 2 Items
+item fill entity @s inventory.* from entity @s hotbar.*
+data get entity @s Inventory
+item replace block 16 -60 2 container.1 from entity @s hotbar.0 {type:"minecraft:set_count",count:5}
+item replace block 16 -60 2 container.2 from entity @s hotbar.9
+item replace block 16 -60 2 container.2 from entity @s hotbar.3
+item replace entity @s hotbar.5 from block 16 -60 2 container.30
+item modify entity @s hotbar.0 {type:"minecraft:set_count",count:100}
+item modify entity @s hotbar.0 {type:"minecraft:set_count",count:-3}
+item modify entity @s hotbar.*  {type:"minecraft:set_count",count:3}
+item modify entity @s armor.head {type:"minecraft:set_count",count:3}
+item replace entity @s armor.head with minecraft:diamond_helmet
+item modify entity @s armor.head {type:"minecraft:set_count",count:3}
+item modify entity @s armor.head {type:"minecraft:discard"}
+data get entity @s Inventory
+item replace entity @s hotbar.0 with minecraft:dirt[minecraft:custom_name='"Q"']
+item replace entity @s hotbar.0 with minecraft:dirt[minecraft:custom_name='"Q"'] 3
+data get entity @s Inventory[0]
+item replace block 16 -60 2 container.0 from entity @s hotbar.0
+data get block 16 -60 2 Items[0]
+loot give @s mine 14 -60 2
+loot give @s mine 0 -61 0 minecraft:stick
+loot replace entity @s hotbar.5 2 mine 0 -61 0
+loot replace entity @s hotbar.5 3 loot minecraft:chests/simple_dungeon
+data get entity @s Inventory
+loot replace block 16 -60 2 container.0 loot minecraft:chests/simple_dungeon
+loot replace block 16 -60 2 container.0 27 loot minecraft:chests/simple_dungeon
+loot replace block 16 -60 2 container.20 10 loot minecraft:chests/simple_dungeon
+loot replace block 16 -60 2 container.-1 loot minecraft:chests/simple_dungeon
+loot replace block 16 -60 2 container.0 -1 loot minecraft:chests/simple_dungeon
+loot replace block 0 -61 0 container.0 loot minecraft:chests/simple_dungeon
+loot insert 0 -61 0 loot minecraft:chests/simple_dungeon
+loot replace entity @e[type=minecraft:cow] hotbar.0 loot minecraft:blocks/stone
+loot replace entity @a hotbar.0 loot minecraft:blocks/stone
+loot replace entity @s hotbar.0 loot minecraft:blocks/stone
+loot replace entity @s armor.head 2 loot minecraft:blocks/stone
+loot replace entity @s armor.body loot minecraft:blocks/stone
+loot replace entity @s armor.feet 4 loot minecraft:chests/simple_dungeon
+loot replace entity @s container.34 5 loot minecraft:chests/simple_dungeon
+loot replace entity @s weapon.mainhand 2 loot minecraft:chests/simple_dungeon
+loot replace entity @e[type=minecraft:zombie,limit=1] weapon.mainhand loot minecraft:blocks/stone
+loot spawn ~ ~ ~ loot minecraft:blocks/stone
+loot spawn 100000 0 0 loot minecraft:blocks/stone
+loot spawn 0 1000 0 loot minecraft:blocks/stone
+loot spawn ~ ~ ~ kill @s
+loot give @s loot minecraft:entities/zombie
+loot give @s kill @e[type=minecraft:armor_stand,limit=1]
+summon minecraft:armor_stand 3 -60 9
+loot give @s kill @e[type=minecraft:armor_stand,limit=1]
+summon minecraft:sheep 3 -60 9
+loot give @s kill @e[type=minecraft:sheep,limit=1]

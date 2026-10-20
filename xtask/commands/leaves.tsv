@@ -883,41 +883,41 @@ give <targets> <item> <count>	give @a minecraft:stone 1
 help	help
 help <command>	help a
 item fill block <target> <slots> from block <source> <sourceSlots>	item fill block 0 64 0 container.0 from block 0 64 0 container.0
-item fill block <target> <slots> from block <source> <sourceSlots> <modifier>	item fill block 0 64 0 container.0 from block 0 64 0 container.0 minecraft:x
+item fill block <target> <slots> from block <source> <sourceSlots> <modifier>	item fill block 0 64 0 container.0 from block 0 64 0 container.0 {type:"minecraft:set_count",count:1}
 item fill block <target> <slots> from entity <source> <sourceSlots>	item fill block 0 64 0 container.0 from entity @e container.0
-item fill block <target> <slots> from entity <source> <sourceSlots> <modifier>	item fill block 0 64 0 container.0 from entity @e container.0 minecraft:x
+item fill block <target> <slots> from entity <source> <sourceSlots> <modifier>	item fill block 0 64 0 container.0 from entity @e container.0 {type:"minecraft:set_count",count:1}
 item fill block <target> <slots> with <item>	item fill block 0 64 0 container.0 with minecraft:stone
 item fill block <target> <slots> with <item> <count>	item fill block 0 64 0 container.0 with minecraft:stone 1
 item fill entity <target> <slots> from block <source> <sourceSlots>	item fill entity @e container.0 from block 0 64 0 container.0
-item fill entity <target> <slots> from block <source> <sourceSlots> <modifier>	item fill entity @e container.0 from block 0 64 0 container.0 minecraft:x
+item fill entity <target> <slots> from block <source> <sourceSlots> <modifier>	item fill entity @e container.0 from block 0 64 0 container.0 {type:"minecraft:set_count",count:1}
 item fill entity <target> <slots> from entity <source> <sourceSlots>	item fill entity @e container.0 from entity @e container.0
-item fill entity <target> <slots> from entity <source> <sourceSlots> <modifier>	item fill entity @e container.0 from entity @e container.0 minecraft:x
+item fill entity <target> <slots> from entity <source> <sourceSlots> <modifier>	item fill entity @e container.0 from entity @e container.0 {type:"minecraft:set_count",count:1}
 item fill entity <target> <slots> with <item>	item fill entity @e container.0 with minecraft:stone
 item fill entity <target> <slots> with <item> <count>	item fill entity @e container.0 with minecraft:stone 1
-item modify block <target> <slots> <modifier>	item modify block 0 64 0 container.0 minecraft:x
-item modify entity <target> <slots> <modifier>	item modify entity @e container.0 minecraft:x
+item modify block <target> <slots> <modifier>	item modify block 0 64 0 container.0 {type:"minecraft:set_count",count:1}
+item modify entity <target> <slots> <modifier>	item modify entity @e container.0 {type:"minecraft:set_count",count:1}
 item override block <target> <slots> from block <source> <sourceSlots>	item override block 0 64 0 container.0 from block 0 64 0 container.0
-item override block <target> <slots> from block <source> <sourceSlots> <modifier>	item override block 0 64 0 container.0 from block 0 64 0 container.0 minecraft:x
+item override block <target> <slots> from block <source> <sourceSlots> <modifier>	item override block 0 64 0 container.0 from block 0 64 0 container.0 {type:"minecraft:set_count",count:1}
 item override block <target> <slots> from entity <source> <sourceSlots>	item override block 0 64 0 container.0 from entity @e container.0
-item override block <target> <slots> from entity <source> <sourceSlots> <modifier>	item override block 0 64 0 container.0 from entity @e container.0 minecraft:x
+item override block <target> <slots> from entity <source> <sourceSlots> <modifier>	item override block 0 64 0 container.0 from entity @e container.0 {type:"minecraft:set_count",count:1}
 item override block <target> <slots> with <item>	item override block 0 64 0 container.0 with minecraft:stone
 item override block <target> <slots> with <item> <count>	item override block 0 64 0 container.0 with minecraft:stone 1
 item override entity <target> <slots> from block <source> <sourceSlots>	item override entity @e container.0 from block 0 64 0 container.0
-item override entity <target> <slots> from block <source> <sourceSlots> <modifier>	item override entity @e container.0 from block 0 64 0 container.0 minecraft:x
+item override entity <target> <slots> from block <source> <sourceSlots> <modifier>	item override entity @e container.0 from block 0 64 0 container.0 {type:"minecraft:set_count",count:1}
 item override entity <target> <slots> from entity <source> <sourceSlots>	item override entity @e container.0 from entity @e container.0
-item override entity <target> <slots> from entity <source> <sourceSlots> <modifier>	item override entity @e container.0 from entity @e container.0 minecraft:x
+item override entity <target> <slots> from entity <source> <sourceSlots> <modifier>	item override entity @e container.0 from entity @e container.0 {type:"minecraft:set_count",count:1}
 item override entity <target> <slots> with <item>	item override entity @e container.0 with minecraft:stone
 item override entity <target> <slots> with <item> <count>	item override entity @e container.0 with minecraft:stone 1
 item replace block <target> <slots> from block <source> <sourceSlots>	item replace block 0 64 0 container.0 from block 0 64 0 container.0
-item replace block <target> <slots> from block <source> <sourceSlots> <modifier>	item replace block 0 64 0 container.0 from block 0 64 0 container.0 minecraft:x
+item replace block <target> <slots> from block <source> <sourceSlots> <modifier>	item replace block 0 64 0 container.0 from block 0 64 0 container.0 {type:"minecraft:set_count",count:1}
 item replace block <target> <slots> from entity <source> <sourceSlots>	item replace block 0 64 0 container.0 from entity @e container.0
-item replace block <target> <slots> from entity <source> <sourceSlots> <modifier>	item replace block 0 64 0 container.0 from entity @e container.0 minecraft:x
+item replace block <target> <slots> from entity <source> <sourceSlots> <modifier>	item replace block 0 64 0 container.0 from entity @e container.0 {type:"minecraft:set_count",count:1}
 item replace block <target> <slots> with <item>	item replace block 0 64 0 container.0 with minecraft:stone
 item replace block <target> <slots> with <item> <count>	item replace block 0 64 0 container.0 with minecraft:stone 1
 item replace entity <target> <slots> from block <source> <sourceSlots>	item replace entity @e container.0 from block 0 64 0 container.0
-item replace entity <target> <slots> from block <source> <sourceSlots> <modifier>	item replace entity @e container.0 from block 0 64 0 container.0 minecraft:x
+item replace entity <target> <slots> from block <source> <sourceSlots> <modifier>	item replace entity @e container.0 from block 0 64 0 container.0 {type:"minecraft:set_count",count:1}
 item replace entity <target> <slots> from entity <source> <sourceSlots>	item replace entity @e container.0 from entity @e container.0
-item replace entity <target> <slots> from entity <source> <sourceSlots> <modifier>	item replace entity @e container.0 from entity @e container.0 minecraft:x
+item replace entity <target> <slots> from entity <source> <sourceSlots> <modifier>	item replace entity @e container.0 from entity @e container.0 {type:"minecraft:set_count",count:1}
 item replace entity <target> <slots> with <item>	item replace entity @e container.0 with minecraft:stone
 item replace entity <target> <slots> with <item> <count>	item replace entity @e container.0 with minecraft:stone 1
 jfr start	jfr start
