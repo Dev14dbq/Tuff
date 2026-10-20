@@ -23,8 +23,18 @@ pub struct State {
     sequences: BTreeSet<String>,
     /// Screen shaders per player.
     post_effects: HashMap<u128, Vec<String>>,
+    /// `/attribute`: base values and modifiers set per player.
+    pub attributes: HashMap<u128, HashMap<String, AttrState>>,
     /// Locator bar settings per entity.
     waypoints: HashMap<u128, Waypoint>,
+}
+
+/// What `/attribute` changed on one attribute of a player.
+#[derive(Debug, Default, Clone)]
+pub struct AttrState {
+    pub base: Option<f64>,
+    /// (id, amount, operation 0-2).
+    pub modifiers: Vec<(String, f64, i32)>,
 }
 
 #[derive(Debug, Default, Clone)]
