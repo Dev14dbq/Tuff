@@ -1,4 +1,5 @@
-//! `cargo xtask worldgen-compare <vanilla world> <our world> [--radius n]`:
+//! `cargo xtask worldgen-compare <vanilla world> <our world> [--radius n]
+//! [--center x z] [--dimension nether|end]`:
 //! compares two worlds chunk by chunk around 0, 0: how many blocks are the
 //! same, which blocks differ most, and how often each block occurs in
 //! each (features: trees, plants, ores).
@@ -16,14 +17,26 @@ fn region(world: &Path) -> std::path::PathBuf {
     if d.is_dir() { d } else { world.join("region") }
 }
 
+/// The region folder of another dimension, and its lowest y and height.
+fn dimension_region(world: &Path, dimension: &str) -> Result<(std::path::PathBuf, i32, i32)> {
+    Ok(match dimension {
+        "overworld" => (region(world), -64, 384),
+        "nether" | "the_nether" => (world.join("dimensions/minecraft/the_nether/region"), 0, 128),
+        "end" | "the_end" => (world.join("dimensions/minecraft/the_end/region"), 0, 128),
+        other => bail!("unknown dimension `{other}`"),
+    })
+}
+
 pub fn run(args: &[String]) -> Result<()> {
     let mut paths = Vec::new();
     let mut radius = 4;
     let (mut ox, mut oz) = (0i32, 0i32);
+    let mut dimension = String::from("overworld");
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--radius" => radius = it.next().map_or(Ok(4), |v| v.parse())?,
+            "--dimension" => dimension = it.next().cloned().unwrap_or_default(),
             "--center" => {
                 ox = it.next().map_or(Ok(0), |v| v.parse())?;
                 oz = it.next().map_or(Ok(0), |v| v.parse())?;
@@ -44,8 +57,10 @@ pub fn run(args: &[String]) -> Result<()> {
         fallback_biome: 0,
         unresolved: std::cell::Cell::new(0),
     };
-    let mut a = mc_storage::region::RegionStorage::new(region(theirs));
-    let mut b = mc_storage::region::RegionStorage::new(region(ours));
+    let (region_a, min_y, height) = dimension_region(theirs, &dimension)?;
+    let (region_b, ..) = dimension_region(ours, &dimension)?;
+    let mut a = mc_storage::region::RegionStorage::new(region_a);
+    let mut b = mc_storage::region::RegionStorage::new(region_b);
     let name = |s: u32| {
         data.blocks
             .block_name(s)
@@ -57,19 +72,22 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut counts: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     let mut pairs: HashMap<(String, String), usize> = HashMap::new();
     let mut chunks = 0;
+    // `PAIR=vanilla,ours`: where that difference is, by y.
+    let pair = std::env::var("PAIR").ok();
+    let mut pair_y: BTreeMap<i32, usize> = BTreeMap::new();
     for cz in oz - radius..=oz + radius {
         for cx in ox - radius..=ox + radius {
             let (Some(ta), Some(tb)) = (a.read_chunk(cx, cz)?, b.read_chunk(cx, cz)?) else {
                 continue;
             };
             let (Ok(Decoded::Chunk(ca)), Ok(Decoded::Chunk(cb))) = (
-                decode_chunk(&ta, -64, 384, &palettes),
-                decode_chunk(&tb, -64, 384, &palettes),
+                decode_chunk(&ta, min_y, height as u32, &palettes),
+                decode_chunk(&tb, min_y, height as u32, &palettes),
             ) else {
                 continue;
             };
             chunks += 1;
-            for y in -64..320 {
+            for y in min_y..min_y + height {
                 for lz in 0..16 {
                     for lx in 0..16 {
                         let (sa, sb) = (ca.block(lx, y, lz), cb.block(lx, y, lz));
@@ -78,6 +96,9 @@ pub fn run(args: &[String]) -> Result<()> {
                         if na == nb {
                             same += 1;
                         } else {
+                            if pair.as_deref() == Some(&format!("{na},{nb}")) {
+                                *pair_y.entry(y).or_default() += 1;
+                            }
                             *pairs.entry((na.clone(), nb.clone())).or_default() += 1;
                         }
                         if na != "air" && na != "stone" && na != "deepslate" {
@@ -95,6 +116,9 @@ pub fn run(args: &[String]) -> Result<()> {
         "{chunks} chunks: {same}/{total} blocks the same ({:.3}%)",
         same as f64 * 100.0 / total.max(1) as f64
     );
+    if pair.is_some() {
+        println!("by y: {pair_y:?}");
+    }
     let mut list: Vec<_> = pairs.into_iter().collect();
     list.sort_by_key(|x| std::cmp::Reverse(x.1));
     println!("most different (vanilla → ours):");
