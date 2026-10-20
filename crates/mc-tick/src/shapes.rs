@@ -57,6 +57,8 @@ pub struct Shapes {
     support: Vec<u8>,
     /// How each state reacts to pistons, observed (`observed/push.json`).
     push: Vec<crate::pistons::Push>,
+    /// What each state does on a random tick.
+    random: Vec<crate::random::Behaviour>,
     /// Block tags support rules read, by block (index in `blocks_of`).
     tags: std::collections::HashMap<&'static str, std::collections::HashSet<u32>>,
 }
@@ -95,6 +97,12 @@ const SUPPORT_TAGS: &[&str] = &[
     "minecraft:saplings",
     "minecraft:small_flowers",
     "minecraft:flowers",
+    "minecraft:logs",
+    "minecraft:leaves",
+    "minecraft:dirt",
+    "minecraft:maintains_farmland",
+    "minecraft:supports_pumpkin_stem_fruit",
+    "minecraft:supports_melon_stem_fruit",
 ];
 
 impl Shapes {
@@ -240,7 +248,11 @@ impl Shapes {
             }
             support_tags.insert(tag, set);
         }
+        let random = (0..states as u32)
+            .map(|s| crate::random::Behaviour::of(blocks.block_name(s).unwrap_or("")))
+            .collect();
         Self {
+            random,
             instrument: vec![0; states],
             support: vec![TOP_ALL; states],
             push: vec![crate::pistons::Push::Normal; states],
@@ -601,6 +613,19 @@ impl Shapes {
             return false;
         };
         self.tags.get(tag).is_some_and(|set| set.contains(&block))
+    }
+
+    /// What `state` does on a random tick.
+    pub fn random_behaviour(&self, state: u32) -> crate::random::Behaviour {
+        self.random
+            .get(state as usize)
+            .copied()
+            .unwrap_or(crate::random::Behaviour::None)
+    }
+
+    /// Whether `state` does anything on a random tick.
+    pub fn random_ticks(&self, state: u32) -> bool {
+        self.random_behaviour(state) != crate::random::Behaviour::None
     }
 
     /// The air state.

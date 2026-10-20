@@ -27,6 +27,7 @@ pub mod logs;
 mod loot;
 mod pipeline;
 mod players;
+mod random_ticks;
 pub mod properties;
 mod rules;
 mod scoreboard;

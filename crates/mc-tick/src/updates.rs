@@ -137,6 +137,7 @@ pub fn update_neighbor_shapes(
             _ => {}
         }
         new = crate::fire::update_shape(level, ctx, np, new);
+        crate::leaves::shape_updated(level, ctx, np, new);
         // Something that lost what held it up breaks (or looks again next
         // tick).
         let from = dir.opposite();
@@ -191,6 +192,7 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     redstone::block_tick(level, ctx, p, kind);
     gravity::block_tick(level, ctx, p, kind);
     crate::fire::block_tick(level, ctx, p, kind);
+    crate::leaves::block_tick(level, ctx, p, kind);
     let state = level.block(p);
     if ctx.shapes.block_index(state) == kind
         && crate::support::check(ctx, state) == crate::support::Check::Tick

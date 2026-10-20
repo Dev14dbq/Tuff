@@ -183,6 +183,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         if runs {
             lock(&ctx.time).advance();
             run_scheduled_ticks(&ctx);
+            crate::random_ticks::tick(&ctx);
             crate::effects::tick(&ctx, count as i64);
             crate::vitals::tick(&ctx);
             crate::vitals::tick_using(&ctx);
@@ -258,7 +259,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
 
 /// Due block ticks, then due fluid ticks, then entities; what they change
 /// goes to everyone.
-fn run_scheduled_ticks(ctx: &ServerContext) {
+pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     let now = lock(&ctx.time).age;
     let relit = ctx.world.take_relit();
     if !relit.is_empty() {

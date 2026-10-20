@@ -53,6 +53,15 @@ impl Tables {
         self
     }
 
+    /// Whether light treats `a` and `b` alike (same opacity, emission and
+    /// occluding faces): a change from one to the other moves no light.
+    pub fn same_light(&self, a: u32, b: u32) -> bool {
+        a == b
+            || (self.opacity(a) == self.opacity(b)
+                && self.emission(a) == self.emission(b)
+                && self.faces(a) == self.faces(b))
+    }
+
     fn faces(&self, state: u32) -> u8 {
         self.faces.get(state as usize).copied().unwrap_or(0)
     }
@@ -120,12 +129,25 @@ fn spread(world: &mut dyn LightWorld, tables: &Tables, kind: Kind, queue: &mut V
         if level <= 1 {
             continue;
         }
-        let from = world.state(p);
+        let mut from = None;
         for (d, step) in NEIGHBOURS.into_iter().enumerate() {
             let n = add(p, step);
+            // The most light that can get there: one less, or full sky
+            // light straight down. A neighbour that has it already needs no
+            // look at its block (most of them, inside a flood).
+            let most = if kind == Kind::Sky && level == 15 && d == 0 {
+                15
+            } else {
+                level - 1
+            };
+            let have = world.light(kind, n);
+            if have >= most {
+                continue;
+            }
             let Some(to) = world.state(n) else { continue };
+            let from = *from.get_or_insert_with(|| world.state(p));
             let value = passed(tables, kind, level, from, to, d);
-            if value > world.light(kind, n) {
+            if value > have {
                 world.set_light(kind, n, value);
                 queue.push_back(n);
             }
@@ -149,20 +171,49 @@ fn own_light(world: &dyn LightWorld, tables: &Tables, kind: Kind, p: Pos, state:
 
 /// The block at `p` changed (it now is `state`): fix both lights around it.
 pub fn block_changed(world: &mut dyn LightWorld, tables: &Tables, p: Pos) {
+    blocks_changed(world, tables, &[(p, UNKNOWN)]);
+}
+
+/// An old state not known: light is taken away and worked out again.
+pub const UNKNOWN: u32 = u32::MAX;
+
+/// Several blocks changed (each with the state it had before, or
+/// [`UNKNOWN`]): fix both lights around all of them at once. Light is first
+/// taken away around every changed block that may now pass or give less of
+/// it, then flows back in one pass, so blocks changed close together (a
+/// spreading fluid, a piston pushing a row) share the work. A block that
+/// only lets more light through or gives more (lava flowing into air) takes
+/// nothing away: light just spreads further.
+pub fn blocks_changed(world: &mut dyn LightWorld, tables: &Tables, changes: &[(Pos, u32)]) {
     for kind in [Kind::Block, Kind::Sky] {
-        relight(world, tables, kind, p);
+        relight(world, tables, kind, changes);
     }
 }
 
-fn relight(world: &mut dyn LightWorld, tables: &Tables, kind: Kind, p: Pos) {
-    let Some(state) = world.state(p) else { return };
-    // Take away what may have come through or from this cell.
+/// Whether going from `old` to `new` can only add light of `kind`.
+fn only_brighter(tables: &Tables, kind: Kind, old: u32, new: u32) -> bool {
+    old != UNKNOWN
+        && tables.opacity(new) <= tables.opacity(old)
+        && (kind == Kind::Sky || tables.emission(new) >= tables.emission(old))
+        && tables.faces(new) & !tables.faces(old) == 0
+}
+
+fn relight(world: &mut dyn LightWorld, tables: &Tables, kind: Kind, changes: &[(Pos, u32)]) {
+    // Take away what may have come through or from these cells.
     let mut removal: VecDeque<(Pos, u8)> = VecDeque::new();
     let mut again: VecDeque<Pos> = VecDeque::new();
-    let old = world.light(kind, p);
-    if old > 0 {
-        world.set_light(kind, p, 0);
-        removal.push_back((p, old));
+    for &(p, before) in changes {
+        let Some(now) = world.state(p) else {
+            continue;
+        };
+        if only_brighter(tables, kind, before, now) {
+            continue;
+        }
+        let old = world.light(kind, p);
+        if old > 0 {
+            world.set_light(kind, p, 0);
+            removal.push_back((p, old));
+        }
     }
     while let Some((q, level)) = removal.pop_front() {
         for d in NEIGHBOURS {
@@ -184,23 +235,25 @@ fn relight(world: &mut dyn LightWorld, tables: &Tables, kind: Kind, p: Pos) {
             }
         }
     }
-    // The cell's own light (an emitting block).
-    let own = own_light(world, tables, kind, p, state);
-    if own > world.light(kind, p) {
-        world.set_light(kind, p, own);
-        again.push_back(p);
-    }
-    // Light flows back in from the neighbours, including into p.
-    for d in NEIGHBOURS {
-        let n = add(p, d);
-        if world.state(n).is_some() && world.light(kind, n) > 0 {
-            again.push_back(n);
+    for &(p, _) in changes {
+        let Some(state) = world.state(p) else { continue };
+        // The cell's own light (an emitting block).
+        let own = own_light(world, tables, kind, p, state);
+        if own > world.light(kind, p) {
+            world.set_light(kind, p, own);
+            again.push_back(p);
         }
-    }
-    // Sky light from above the world falls into the column.
-    if kind == Kind::Sky {
-        let above = (p.0, world.top(), p.2);
-        again.push_back(above);
+        // Light flows back in from the neighbours, including into p.
+        for d in NEIGHBOURS {
+            let n = add(p, d);
+            if world.state(n).is_some() && world.light(kind, n) > 0 {
+                again.push_back(n);
+            }
+        }
+        // Sky light from above the world falls into the column.
+        if kind == Kind::Sky {
+            again.push_back((p.0, world.top(), p.2));
+        }
     }
     spread(world, tables, kind, &mut again);
 }
@@ -493,11 +546,18 @@ mod tests {
                 }
             }
             light_region(&mut t, &tables, (0, 0), (24, 24), 0);
-            for _ in 0..60 {
-                let p = (next(24) as i32, next(24) as i32, next(24) as i32);
-                let b = [0, 1, 2, 3][next(4) as usize];
-                t.blocks.insert(p, b);
-                block_changed(&mut t, &tables, p);
+            // Half the rounds one block at a time, half in batches.
+            for _ in 0..60 / (1 + round % 2 * 9) {
+                let mut changed = Vec::new();
+                for _ in 0..(1 + round % 2 * 9) {
+                    let p = (next(24) as i32, next(24) as i32, next(24) as i32);
+                    let b = [0, 1, 2, 3][next(4) as usize];
+                    let before = t.state(p).unwrap_or(UNKNOWN);
+                    t.blocks.insert(p, b);
+                    // Some changes with their old state, some without.
+                    changed.push((p, if next(2) == 0 { before } else { UNKNOWN }));
+                }
+                blocks_changed(&mut t, &tables, &changed);
             }
             let mut fresh = Test {
                 blocks: t.blocks.clone(),

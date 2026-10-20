@@ -4,6 +4,7 @@
 
 use crate::dir::{BlockPos, Dir};
 use crate::level::Level;
+use crate::rng::Rng;
 use crate::support::TOP_FULL;
 use crate::updates::{Ctx, Flags, set_block};
 
@@ -15,12 +16,38 @@ const WOODS: &[&str] = &[
 
 /// Flowers and plants that catch at 60 and burn up at 100.
 const PLANTS: &[&str] = &[
-    "short_grass", "fern", "dead_bush", "tall_grass", "large_fern", "sunflower", "lilac",
-    "rose_bush", "peony", "pitcher_plant", "dandelion", "poppy", "blue_orchid", "allium",
-    "azure_bluet", "oxeye_daisy", "cornflower", "lily_of_the_valley", "wither_rose",
-    "torchflower", "pink_petals", "open_eyeblossom", "closed_eyeblossom", "sweet_berry_bush",
-    "spore_blossom", "leaf_litter", "wildflowers", "bush", "firefly_bush", "short_dry_grass",
-    "tall_dry_grass", "cactus_flower",
+    "short_grass",
+    "fern",
+    "dead_bush",
+    "tall_grass",
+    "large_fern",
+    "sunflower",
+    "lilac",
+    "rose_bush",
+    "peony",
+    "pitcher_plant",
+    "dandelion",
+    "poppy",
+    "blue_orchid",
+    "allium",
+    "azure_bluet",
+    "oxeye_daisy",
+    "cornflower",
+    "lily_of_the_valley",
+    "wither_rose",
+    "torchflower",
+    "pink_petals",
+    "open_eyeblossom",
+    "closed_eyeblossom",
+    "sweet_berry_bush",
+    "spore_blossom",
+    "leaf_litter",
+    "wildflowers",
+    "bush",
+    "firefly_bush",
+    "short_dry_grass",
+    "tall_dry_grass",
+    "cactus_flower",
 ];
 
 /// How readily a block catches fire next to it, and how readily it burns
@@ -95,7 +122,9 @@ fn sturdy_top(ctx: Ctx, state: u32) -> bool {
 
 /// Whether a flammable block touches `p`.
 fn next_to_fuel(level: &dyn Level, ctx: Ctx, p: BlockPos) -> bool {
-    Dir::ALL.iter().any(|&d| can_burn(ctx, level.block(p.offset(d))))
+    Dir::ALL
+        .iter()
+        .any(|&d| can_burn(ctx, level.block(p.offset(d))))
 }
 
 /// The fire that would be lit at `p`: soul fire on soul sand and soil;
@@ -160,11 +189,10 @@ fn age(ctx: Ctx, state: u32) -> u32 {
 
 /// Fire just placed starts its clock.
 pub fn on_place(level: &mut dyn Level, ctx: Ctx, p: BlockPos, old: u32, state: u32) {
-    if name(ctx, state) != "fire" || ctx.shapes.block_index(old) == ctx.shapes.block_index(state)
-    {
+    if name(ctx, state) != "fire" || ctx.shapes.block_index(old) == ctx.shapes.block_index(state) {
         return;
     }
-    let mut rng = Rng::new(p, level.game_time());
+    let mut rng = Rng::at(p, level.game_time());
     schedule(level, ctx, p, state, &mut rng);
 }
 
@@ -175,37 +203,17 @@ fn schedule(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut 
     }
 }
 
-/// Small deterministic generator, seeded from where and when.
-struct Rng(u64);
-
-impl Rng {
-    fn new(p: BlockPos, time: i64) -> Self {
-        let seed = (p.x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            ^ (p.y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
-            ^ (p.z as u64).wrapping_mul(0x1656_67B1_9E37_79F9)
-            ^ (time as u64);
-        Self(seed | 1)
-    }
-
-    fn below(&mut self, n: u32) -> u32 {
-        // splitmix64
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        ((z >> 32) % u64::from(n.max(1))) as u32
-    }
-}
-
 /// A due fire tick: age, burn out, burn neighbours away, spread.
 pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     let state = level.block(p);
     if ctx.shapes.block_index(state) != kind || name(ctx, state) != "fire" {
         return;
     }
-    let mut rng = Rng::new(p, level.game_time());
+    let mut rng = Rng::at(p, level.game_time());
     schedule_again(level, ctx, p, state, &mut rng);
+    if !level.fire_spreads_at(p) {
+        return;
+    }
     if !can_survive(level, ctx, p, state) {
         set_block(level, ctx, p, ctx.shapes.air(), Flags::ALL);
         return;
@@ -213,6 +221,10 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     let below = level.block(p.offset(Dir::Down));
     let infinite = matches!(name(ctx, below), "netherrack" | "magma_block");
     let old_age = age(ctx, state);
+    if !infinite && near_rain(level, p) && rng.unit() < 0.2 + f64::from(old_age) * 0.03 {
+        set_block(level, ctx, p, ctx.shapes.air(), Flags::ALL);
+        return;
+    }
     let age = (old_age + rng.below(3) / 2).min(15);
     if age != old_age {
         let aged = ctx.shapes.with(state, "age", &age.to_string());
@@ -249,13 +261,17 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
                     continue;
                 }
                 let q = BlockPos::new(p.x + dx, p.y + dy, p.z + dz);
-                let odds = if dy > 1 { 100 + (dy as u32 - 1) * 100 } else { 100 };
+                let odds = if dy > 1 {
+                    100 + (dy as u32 - 1) * 100
+                } else {
+                    100
+                };
                 let ignite = ignite_odds(level, ctx, q);
                 if ignite == 0 {
                     continue;
                 }
                 let catch = (ignite + 40 + difficulty * 7) / (age + 30);
-                if catch > 0 && rng.below(odds) <= catch {
+                if catch > 0 && rng.below(odds) <= catch && !near_rain(level, q) {
                     let new_age = (age + rng.below(5) / 4).min(15);
                     if let Some(fire) = fire_state(level, ctx, q, new_age) {
                         set_block(level, ctx, q, fire, Flags::ALL);
@@ -264,6 +280,11 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
             }
         }
     }
+}
+
+/// Rain on `p` or beside it.
+fn near_rain(level: &dyn Level, p: BlockPos) -> bool {
+    level.raining_at(p) || Dir::HORIZONTAL.iter().any(|&d| level.raining_at(p.offset(d)))
 }
 
 fn schedule_again(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut Rng) {
@@ -291,7 +312,7 @@ fn burn_out(level: &mut dyn Level, ctx: Ctx, q: BlockPos, chance: u32, age: u32,
         return;
     }
     // Burnt blocks drop nothing.
-    if rng.below(age + 10) < 5 {
+    if rng.below(age + 10) < 5 && !level.raining_at(q) {
         let new_age = (age + rng.below(5) / 4).min(15);
         if let Some(fire) = fire_state(level, ctx, q, new_age) {
             set_block(level, ctx, q, fire, Flags::ALL);

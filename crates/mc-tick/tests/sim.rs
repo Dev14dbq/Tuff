@@ -349,10 +349,14 @@ fn fire_burns_planks_and_dies_on_stone() {
     };
     for x in -3..=3 {
         for z in -3..=3 {
-            world.blocks.insert(BlockPos::new(x, 0, z), state("minecraft:oak_planks"));
+            world
+                .blocks
+                .insert(BlockPos::new(x, 0, z), state("minecraft:oak_planks"));
         }
     }
-    world.blocks.insert(BlockPos::new(20, 0, 0), state("minecraft:stone"));
+    world
+        .blocks
+        .insert(BlockPos::new(20, 0, 0), state("minecraft:stone"));
     let fire = mc_tick::fire::can_light(&world, ctx, BlockPos::new(0, 1, 0)).unwrap();
     mc_tick::set_block(&mut world, ctx, BlockPos::new(0, 1, 0), fire, Flags::ALL);
     let lone = mc_tick::fire::can_light(&world, ctx, BlockPos::new(20, 1, 0)).unwrap();
@@ -363,5 +367,64 @@ fn fire_burns_planks_and_dies_on_stone() {
     let planks = state("minecraft:oak_planks");
     let left = world.blocks.values().filter(|&&s| s == planks).count();
     assert!(left < 49, "fire burnt no planks");
-    assert_eq!(world.block(BlockPos::new(20, 1, 0)), world.air, "fire on stone went out");
+    assert_eq!(
+        world.block(BlockPos::new(20, 1, 0)),
+        world.air,
+        "fire on stone went out"
+    );
+}
+
+#[test]
+fn random_ticks_grow_spread_and_decay() {
+    let Some((data, shapes, rules)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |name: &str| data.blocks.default_state(name).unwrap();
+    let mut world = World {
+        blocks: HashMap::new(),
+        air: state("minecraft:air"),
+        time: 0,
+        ticks: ScheduledTicks::default(),
+    };
+    let mut rng = mc_tick::rng::Rng::new(7);
+    // Wheat on farmland ripens.
+    let farmland = shapes.with(state("minecraft:farmland"), "moisture", "7");
+    world.blocks.insert(BlockPos::new(0, 0, 0), farmland);
+    let wheat = BlockPos::new(0, 1, 0);
+    world.blocks.insert(wheat, state("minecraft:wheat"));
+    for _ in 0..2000 {
+        let s = world.block(wheat);
+        mc_tick::random::tick(&mut world, ctx, wheat, s, &mut rng);
+    }
+    assert_eq!(shapes.property(world.block(wheat), "age"), Some("7"));
+    // Grass spreads onto dirt beside it.
+    world.blocks.insert(BlockPos::new(10, 0, 0), state("minecraft:grass_block"));
+    world.blocks.insert(BlockPos::new(11, 0, 0), state("minecraft:dirt"));
+    for _ in 0..500 {
+        let p = BlockPos::new(10, 0, 0);
+        let s = world.block(p);
+        mc_tick::random::tick(&mut world, ctx, p, s, &mut rng);
+    }
+    assert_eq!(
+        shapes.block_name(world.block(BlockPos::new(11, 0, 0))),
+        Some("minecraft:grass_block")
+    );
+    // Leaves cut off from their log decay.
+    let log = BlockPos::new(20, 0, 0);
+    let leaf = BlockPos::new(20, 1, 0);
+    world.blocks.insert(log, state("minecraft:oak_log"));
+    let leaves = shapes.with(state("minecraft:oak_leaves"), "distance", "1");
+    world.blocks.insert(leaf, leaves);
+    let air = world.air;
+    mc_tick::set_block(&mut world, ctx, log, air, Flags::ALL);
+    run_block_ticks(&mut world, ctx, 5);
+    assert_eq!(shapes.property(world.block(leaf), "distance"), Some("7"));
+    let s = world.block(leaf);
+    mc_tick::random::tick(&mut world, ctx, leaf, s, &mut rng);
+    assert_eq!(world.block(leaf), world.air);
 }

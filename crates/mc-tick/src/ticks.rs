@@ -4,7 +4,9 @@
 //! Block ticks run before fluid ticks; at most 65536 of each per game tick.
 //! A tick already waiting for the same position and block is not added again.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
+
+use crate::fast::FastSet;
 
 use crate::dir::BlockPos;
 
@@ -23,7 +25,7 @@ struct Key {
 #[derive(Debug, Default)]
 pub struct TickQueue {
     queue: BTreeMap<Key, (BlockPos, u32)>,
-    waiting: HashSet<(BlockPos, u32)>,
+    waiting: FastSet<(BlockPos, u32)>,
     next_order: u64,
 }
 

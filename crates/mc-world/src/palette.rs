@@ -182,6 +182,16 @@ impl PalettedContainer {
         (0..self.kind.entries).map(|i| self.get(i)).collect()
     }
 
+    /// Whether any entry may satisfy `test`: the palette is checked, not
+    /// the entries, so a value no longer used can still answer yes.
+    pub fn may_contain(&self, test: impl Fn(u32) -> bool) -> bool {
+        match &self.storage {
+            Storage::Single(value) => test(*value),
+            Storage::Indirect { palette, .. } => palette.iter().any(|&v| test(v)),
+            Storage::Direct(values) => values.iter().any(|&v| test(v)),
+        }
+    }
+
     /// How many entries satisfy `test`, testing each distinct value once.
     pub fn count(&self, test: impl Fn(u32) -> bool) -> usize {
         match &self.storage {

@@ -3,12 +3,16 @@
 
 pub mod dir;
 pub mod facts;
+pub mod fast;
 pub mod fire;
 pub mod fluids;
 pub mod gravity;
+pub mod leaves;
 pub mod level;
 pub mod pistons;
+pub mod random;
 pub mod redstone;
+pub mod rng;
 pub mod shapes;
 pub mod support;
 pub mod ticks;

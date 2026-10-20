@@ -56,6 +56,27 @@ pub trait Level {
         15
     }
 
+    /// Block light alone at `p` (torches, lava; not the sky).
+    fn block_light(&self, _p: BlockPos) -> u8 {
+        0
+    }
+
+    /// How much light `state` takes away passing through it (0-15).
+    fn light_block(&self, _state: u32) -> u8 {
+        0
+    }
+
+    /// Whether rain falls on `p` (raining, and open to the sky).
+    fn raining_at(&self, _p: BlockPos) -> bool {
+        false
+    }
+
+    /// Whether fire at `p` may age and spread (a player is near enough,
+    /// `fire_spread_radius_around_player`).
+    fn fire_spreads_at(&self, _p: BlockPos) -> bool {
+        true
+    }
+
     /// The block `state` at `p` broke because nothing holds it any more (it
     /// drops what it would when broken).
     fn destroyed(&mut self, _p: BlockPos, _state: u32) {}

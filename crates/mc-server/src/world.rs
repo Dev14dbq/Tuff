@@ -429,6 +429,7 @@ impl World {
             min_y: self.min_y,
             top: self.min_y + self.height as i32,
             touched: Vec::new(),
+            grid: None,
         };
         mc_light::light_region(
             &mut view,
@@ -461,6 +462,7 @@ impl World {
                 min_y: self.min_y,
                 top: self.min_y + self.height as i32,
                 touched: Vec::new(),
+                grid: None,
             };
             mc_light::light_region(
                 &mut view,
@@ -683,9 +685,27 @@ impl World {
             min_y: self.min_y,
             top: self.min_y + self.height as i32,
             touched: Vec::new(),
+            grid: None,
         };
         mc_light::block_changed(&mut view, &self.light, (p.x, p.y, p.z));
         view.touched
+    }
+
+    /// Fixes light after the blocks at `ps` changed from the states given,
+    /// all in one pass. Returns the chunks whose light changed.
+    pub fn relight_many(&self, ps: &[(Position, u32)]) -> Vec<(i32, i32)> {
+        if ps.is_empty() {
+            return Vec::new();
+        }
+        // Light moves at most 15 blocks from a change: one chunk around.
+        let min = ps.iter().fold((i32::MAX, i32::MAX), |m, (p, _)| (m.0.min((p.x >> 4) - 1), m.1.min((p.z >> 4) - 1)));
+        let max = ps.iter().fold((i32::MIN, i32::MIN), |m, (p, _)| (m.0.max((p.x >> 4) + 1), m.1.max((p.z >> 4) + 1)));
+        let mut chunks = self.chunks.lock().expect("chunks lock");
+        let top = self.min_y + self.height as i32;
+        let mut view = LightView::around(&mut chunks, self.min_y, top, min, max);
+        let ps: Vec<(mc_light::Pos, u32)> = ps.iter().map(|&(p, old)| ((p.x, p.y, p.z), old)).collect();
+        mc_light::blocks_changed(&mut view, &self.light, &ps);
+        view.finish()
     }
 
     /// The brighter of sky and block light at `p` (15 where nothing is
@@ -698,10 +718,92 @@ impl World {
             min_y: self.min_y,
             top: self.min_y + self.height as i32,
             touched: Vec::new(),
+            grid: None,
         };
         let at = (p.x, p.y, p.z);
         view.light(mc_light::Kind::Sky, at)
             .max(view.light(mc_light::Kind::Block, at))
+    }
+
+    /// Block light alone at `p`.
+    pub fn block_light(&self, p: Position) -> u8 {
+        self.light_of(mc_light::Kind::Block, p)
+    }
+
+    /// Sky light alone at `p` (15 open to the sky).
+    pub fn sky_light(&self, p: Position) -> u8 {
+        self.light_of(mc_light::Kind::Sky, p)
+    }
+
+    fn light_of(&self, kind: mc_light::Kind, p: Position) -> u8 {
+        use mc_light::LightWorld as _;
+        let mut chunks = self.chunks.lock().expect("chunks lock");
+        let view = LightView {
+            chunks: &mut chunks,
+            min_y: self.min_y,
+            top: self.min_y + self.height as i32,
+            touched: Vec::new(),
+            grid: None,
+        };
+        view.light(kind, (p.x, p.y, p.z))
+    }
+
+    /// How much light `state` stops.
+    pub fn light_block(&self, state: u32) -> u8 {
+        self.light.opacity(state)
+    }
+
+    /// Whether changing `a` to `b` leaves light as it is.
+    pub fn same_light(&self, a: u32, b: u32) -> bool {
+        self.light.same_light(a, b)
+    }
+
+    /// Random tick picks for one game tick (minecraft.wiki, "Tick" →
+    /// "Random tick"): in every section of `chunks` whose palette holds a
+    /// state `ticks` cares about, `speed` positions drawn from vanilla's
+    /// level-wide generator (`lcg`); the ones holding such a state come back.
+    /// Sections without one cost a palette scan and nothing else.
+    pub fn random_tick_picks(
+        &self,
+        chunks: &[(i32, i32)],
+        speed: u32,
+        lcg: &mut i32,
+        ticks: impl Fn(u32) -> bool,
+    ) -> Vec<(Position, u32)> {
+        let mut picks = Vec::new();
+        let all = self.chunks.lock().expect("chunks lock");
+        for &(cx, cz) in chunks {
+            // Only chunks with all eight neighbours in memory: what ticks
+            // looks a few blocks around and must not load anything.
+            let surrounded = (-1..=1).all(|dx| (-1..=1).all(|dz| all.contains_key(&(cx + dx, cz + dz))));
+            if !surrounded {
+                continue;
+            }
+            let Some(chunk) = all.get(&(cx, cz)).and_then(|slot| slot.chunk.as_ref()) else {
+                continue;
+            };
+            for (i, section) in chunk.sections.iter().enumerate() {
+                if !section.blocks.may_contain(&ticks) {
+                    continue;
+                }
+                let base_y = chunk.min_y + 16 * i as i32;
+                for _ in 0..speed {
+                    *lcg = lcg.wrapping_mul(3).wrapping_add(1_013_904_223);
+                    let r = *lcg >> 2;
+                    let (x, y, z) = ((r & 15) as usize, ((r >> 16) & 15) as usize, ((r >> 8) & 15) as usize);
+                    let state = section.blocks.get(mc_world::Section::index(x, y, z));
+                    if ticks(state) {
+                        picks.push((Position::new(cx * 16 + x as i32, base_y + y as i32, cz * 16 + z as i32), state));
+                    }
+                }
+            }
+        }
+        picks
+    }
+
+    /// Whether the chunk is in memory (nothing is loaded to answer).
+    pub fn chunk_loaded(&self, x: i32, z: i32) -> bool {
+        self.chunks.lock().expect("chunks lock").contains_key(&(x, z))
     }
 
     /// Light Data of a chunk as it is now (for Update Light).
@@ -1235,6 +1337,7 @@ fn light_alone(chunk: &mut Chunk, tables: &mc_light::Tables) {
         min_y,
         top,
         touched: Vec::new(),
+        grid: None,
     };
     mc_light::light_region(
         &mut view,
@@ -1254,14 +1357,96 @@ struct LightView<'a> {
     min_y: i32,
     top: i32,
     touched: Vec<(i32, i32)>,
+    /// The slots of a rectangle of chunks, taken out of the map while the
+    /// view lives, so light flooding through it finds a chunk by index
+    /// instead of by hash. They go back when the view is dropped.
+    grid: Option<Grid>,
 }
 
-impl LightView<'_> {
+struct Grid {
+    x0: i32,
+    z0: i32,
+    w: i32,
+    d: i32,
+    slots: Vec<Option<Slot>>,
+}
+
+impl<'a> LightView<'a> {
+    /// A view whose lookups inside the chunks `min..=max` go through a grid.
+    fn around(
+        chunks: &'a mut HashMap<(i32, i32), Slot, mc_worldgen::density::Fast>,
+        min_y: i32,
+        top: i32,
+        min: (i32, i32),
+        max: (i32, i32),
+    ) -> Self {
+        let (w, d) = (max.0 - min.0 + 1, max.1 - min.1 + 1);
+        let grid = (w > 0 && d > 0 && w * d <= 4096).then(|| {
+            let mut slots = Vec::with_capacity((w * d) as usize);
+            for x in 0..w {
+                for z in 0..d {
+                    slots.push(chunks.remove(&(min.0 + x, min.1 + z)));
+                }
+            }
+            Grid {
+                x0: min.0,
+                z0: min.1,
+                w,
+                d,
+                slots,
+            }
+        });
+        Self {
+            chunks,
+            min_y,
+            top,
+            touched: Vec::new(),
+            grid,
+        }
+    }
+
+    /// Puts the grid's chunks back and returns the chunks whose light
+    /// changed.
+    fn finish(mut self) -> Vec<(i32, i32)> {
+        if let Some(g) = self.grid.take() {
+            let mut slots = g.slots.into_iter();
+            for x in 0..g.w {
+                for z in 0..g.d {
+                    if let Some(Some(slot)) = slots.next() {
+                        self.chunks.insert((g.x0 + x, g.z0 + z), slot);
+                    }
+                }
+            }
+        }
+        self.touched
+    }
+
+    /// Where the grid keeps a chunk, if it covers it.
+    fn cell(&self, key: (i32, i32)) -> Option<usize> {
+        let g = self.grid.as_ref()?;
+        let (x, z) = (key.0 - g.x0, key.1 - g.z0);
+        (x >= 0 && z >= 0 && x < g.w && z < g.d).then_some((x * g.d + z) as usize)
+    }
+
+    fn slot(&self, key: (i32, i32)) -> Option<&Slot> {
+        match self.cell(key) {
+            Some(i) => self.grid.as_ref()?.slots[i].as_ref(),
+            None => self.chunks.get(&key),
+        }
+    }
+
+    fn slot_mut(&mut self, key: (i32, i32)) -> Option<&mut Slot> {
+        match self.cell(key) {
+            Some(i) => self.grid.as_mut()?.slots[i].as_mut(),
+            None => self.chunks.get_mut(&key),
+        }
+    }
+
     fn chunk(&self, p: mc_light::Pos) -> Option<&Chunk> {
         if p.1 < self.min_y || p.1 >= self.top {
             return None;
         }
-        self.chunks.get(&(p.0 >> 4, p.2 >> 4))?.chunk.as_deref()
+        self.slot((p.0 >> 4, p.2 >> 4))?.chunk.as_deref()
     }
 }
 
@@ -1313,18 +1498,39 @@ impl mc_light::LightWorld for LightView<'_> {
         stored_level(chunk, kind, local / 16, index)
     }
 
+    fn top(&self) -> i32 {
+        self.top
+    }
+
     fn set_light(&mut self, kind: mc_light::Kind, p: mc_light::Pos, level: u8) {
         if p.1 < self.min_y || p.1 >= self.top {
             return;
         }
         let key = (p.0 >> 4, p.2 >> 4);
-        let Some(slot) = self.chunks.get_mut(&key) else {
-            return;
-        };
+        let min_y = self.min_y;
+        let mut touched = std::mem::take(&mut self.touched);
+        if let Some(slot) = self.slot_mut(key) {
+            set_slot_light(slot, &mut touched, key, min_y, kind, p, level);
+        }
+        self.touched = touched;
+    }
+}
+
+/// Sets one light value in a chunk's slot, making its array real first.
+fn set_slot_light(
+    slot: &mut Slot,
+    touched: &mut Vec<(i32, i32)>,
+    key: (i32, i32),
+    min_y: i32,
+    kind: mc_light::Kind,
+    p: mc_light::Pos,
+    level: u8,
+) {
+    {
         let Some(chunk) = slot.chunk.as_mut() else {
             return;
         };
-        let local = (p.1 - self.min_y) as usize;
+        let local = (p.1 - min_y) as usize;
         let section = local / 16;
         let index = ((local & 15) << 8) | (((p.2 & 15) as usize) << 4) | (p.0 & 15) as usize;
         if chunk.light.len() < chunk.sections.len() {
@@ -1395,13 +1601,10 @@ impl mc_light::LightWorld for LightView<'_> {
         slot.frame = None;
         slot.changes += 1;
         slot.dirty = true;
-        if !self.touched.contains(&key) {
-            self.touched.push(key);
+        // Most writes land in the chunk written last.
+        if touched.last() != Some(&key) && !touched.contains(&key) {
+            touched.push(key);
         }
-    }
-
-    fn top(&self) -> i32 {
-        self.top
     }
 }
 

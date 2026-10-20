@@ -1,7 +1,6 @@
 //! The world as block logic (`mc_tick`) sees it, collecting what changed so
 //! it can be sent to players.
 
-use std::collections::HashMap;
 
 use mc_protocol::Position;
 use mc_tick::{BlockPos, Level};
@@ -18,13 +17,19 @@ pub fn to_position(p: BlockPos) -> Position {
 
 pub struct WorldLevel<'a> {
     ctx: &'a ServerContext,
+    /// Game time, read once: it does not move while block logic runs.
+    time: i64,
     /// Changed blocks in the order they first changed, with their last state.
     changes: Vec<(Position, u32)>,
-    index: HashMap<BlockPos, usize>,
+    index: mc_tick::fast::FastMap<BlockPos, usize>,
     /// Entities created by block logic, for the tick to add.
     pub spawned: Vec<mc_entity::Entity>,
     /// Chunks whose light changed.
     lit: Vec<(i32, i32)>,
+    /// Changed blocks whose light is not fixed yet: light is worked out for
+    /// all of them at once when the level is done (as vanilla's light
+    /// engine also runs after the changes, not during them).
+    unlit: Vec<(Position, u32)>,
     /// While entities move: their boxes as they are so far this tick.
     pub entity_boxes: Option<Vec<mc_entity::Aabb>>,
 }
@@ -33,10 +38,12 @@ impl<'a> WorldLevel<'a> {
     pub fn new(ctx: &'a ServerContext) -> Self {
         Self {
             ctx,
+            time: ctx.time.lock().expect("time lock").age,
             changes: Vec::new(),
-            index: HashMap::new(),
+            index: Default::default(),
             spawned: Vec::new(),
             lit: Vec::new(),
+            unlit: Vec::new(),
             entity_boxes: None,
         }
     }
@@ -54,26 +61,50 @@ impl<'a> WorldLevel<'a> {
         mc_tick::set_block(self, logic, to_pos(p), state, mc_tick::Flags::ALL)
     }
 
-    /// What changed, each block once with its final state.
-    pub fn into_changes(self) -> Vec<(Position, u32)> {
+    /// Fixes the light around every block changed so far.
+    pub fn light(&mut self) {
+        if self.unlit.is_empty() {
+            return;
+        }
+        let mut unlit = std::mem::take(&mut self.unlit);
+        // Each block once, with the state it had first: the light stored is
+        // still the light of that state.
+        unlit.sort_by_key(|(p, _)| (p.x, p.z, p.y));
+        unlit.dedup_by_key(|(p, _)| *p);
+        for chunk in self.ctx.world.relight_many(&unlit) {
+            if !self.lit.contains(&chunk) {
+                self.lit.push(chunk);
+            }
+        }
+    }
+
+    fn send_light(&mut self) {
+        self.light();
         if !self.lit.is_empty() {
+            let lit = std::mem::take(&mut self.lit);
             let _ = self
                 .ctx
                 .events
-                .send(crate::context::Event::LightChanged(self.lit));
+                .send(crate::context::Event::LightChanged(lit));
         }
-        self.changes
+    }
+
+    /// What changed, each block once with its final state.
+    pub fn into_changes(mut self) -> Vec<(Position, u32)> {
+        self.send_light();
+        std::mem::take(&mut self.changes)
     }
 
     /// What changed and the entities block logic created.
-    pub fn finish(self) -> (Vec<(Position, u32)>, Vec<mc_entity::Entity>) {
-        if !self.lit.is_empty() {
-            let _ = self
-                .ctx
-                .events
-                .send(crate::context::Event::LightChanged(self.lit));
-        }
-        (self.changes, self.spawned)
+    pub fn finish(mut self) -> (Vec<(Position, u32)>, Vec<mc_entity::Entity>) {
+        self.send_light();
+        (std::mem::take(&mut self.changes), std::mem::take(&mut self.spawned))
+    }
+}
+
+impl Drop for WorldLevel<'_> {
+    fn drop(&mut self) {
+        self.send_light();
     }
 }
 
@@ -87,17 +118,14 @@ impl Level for WorldLevel<'_> {
 
     fn set(&mut self, p: BlockPos, state: u32) -> bool {
         let ctx = self.ctx;
-        if ctx
+        let Some(old) = ctx
             .world
             .set_block(to_position(p), state, &ctx.data.blocks, &ctx.rules)
-            .is_none()
-        {
+        else {
             return false;
-        }
-        for chunk in ctx.world.relight(to_position(p)) {
-            if !self.lit.contains(&chunk) {
-                self.lit.push(chunk);
-            }
+        };
+        if !ctx.world.same_light(old, state) {
+            self.unlit.push((to_position(p), old));
         }
         match self.index.get(&p) {
             Some(&i) => self.changes[i].1 = state,
@@ -110,7 +138,7 @@ impl Level for WorldLevel<'_> {
     }
 
     fn game_time(&self) -> i64 {
-        self.ctx.time.lock().expect("time lock").age
+        self.time
     }
 
     fn schedule_fluid_tick(&mut self, p: BlockPos, fluid: u32, delay: i64) {
@@ -126,17 +154,14 @@ impl Level for WorldLevel<'_> {
 
     fn set_hidden(&mut self, p: BlockPos, state: u32) -> bool {
         let ctx = self.ctx;
-        if ctx
+        let Some(old) = ctx
             .world
             .set_block(to_position(p), state, &ctx.data.blocks, &ctx.rules)
-            .is_none()
-        {
+        else {
             return false;
-        }
-        for chunk in ctx.world.relight(to_position(p)) {
-            if !self.lit.contains(&chunk) {
-                self.lit.push(chunk);
-            }
+        };
+        if !ctx.world.same_light(old, state) {
+            self.unlit.push((to_position(p), old));
         }
         // Already changed this tick: clients get it as it ends up.
         if let Some(&i) = self.index.get(&p) {
@@ -178,6 +203,46 @@ impl Level for WorldLevel<'_> {
 
     fn brightness(&self, p: BlockPos) -> u8 {
         self.ctx.world.brightness(to_position(p))
+    }
+
+    fn block_light(&self, p: BlockPos) -> u8 {
+        self.ctx.world.block_light(to_position(p))
+    }
+
+    fn light_block(&self, state: u32) -> u8 {
+        self.ctx.world.light_block(state)
+    }
+
+    fn raining_at(&self, p: BlockPos) -> bool {
+        self.ctx.weather.lock().expect("weather lock").raining
+            && self.ctx.world.sky_light(to_position(p)) == 15
+    }
+
+    fn fire_spreads_at(&self, p: BlockPos) -> bool {
+        let radius = self
+            .ctx
+            .game_rules
+            .lock()
+            .expect("game rules lock")
+            .int("minecraft:fire_spread_radius_around_player");
+        if radius < 0 {
+            return true;
+        }
+        let r = f64::from(radius);
+        self.ctx
+            .players
+            .lock()
+            .expect("players lock")
+            .values()
+            .filter_map(|player| player.pose)
+            .any(|pose| {
+                let (dx, dy, dz) = (
+                    pose.x - f64::from(p.x) - 0.5,
+                    pose.y - f64::from(p.y) - 0.5,
+                    pose.z - f64::from(p.z) - 0.5,
+                );
+                dx * dx + dy * dy + dz * dz <= r * r
+            })
     }
 
     fn destroyed(&mut self, p: BlockPos, state: u32) {
