@@ -526,6 +526,9 @@ fn argument(
             typed,
         ),
         "minecraft:particle" => ids(data.ids("minecraft:particle_type"), typed),
+        "minecraft:dialog" => ids(data.ids("minecraft:dialog"), typed),
+        "minecraft:swing_animation" => words(&["none", "stab", "whack"], typed),
+        "minecraft:hex_color" => words(&["F00", "FF0000"], typed),
         "minecraft:entity_anchor" => words(&["eyes", "feet"], typed),
         "minecraft:heightmap" => words(
             &[

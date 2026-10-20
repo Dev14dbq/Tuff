@@ -1262,6 +1262,89 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
             }
             Arg::Str(name.to_owned())
         }
+        "minecraft:swing_animation" => {
+            let name = r.read_unquoted().to_owned();
+            if !matches!(name.as_str(), "none" | "whack" | "stab") {
+                return Err(r.error(CommandError::new(
+                    "argument.swing_animation.invalid",
+                    vec![string(&name)],
+                )));
+            }
+            Arg::Str(name)
+        }
+        "minecraft:hex_color" => {
+            let word = r.read_unquoted().to_owned();
+            if word.len() != 3 && word.len() != 6 {
+                return Err(r.error(CommandError::new(
+                    "argument.hexcolor.invalid",
+                    vec![string(&word)],
+                )));
+            }
+            // Three digits mean each one twice; the digits are read in
+            // pairs and a bad pair is named in the error.
+            let full: String = if word.len() == 3 {
+                word.chars().flat_map(|c| [c, c]).collect()
+            } else {
+                word.clone()
+            };
+            for pair in full.as_bytes().chunks(2) {
+                if let Some(i) = pair.iter().position(|b| !b.is_ascii_hexdigit()) {
+                    let pair = String::from_utf8_lossy(pair).into_owned();
+                    return Err(r.error(CommandError::new(
+                        "command.exception",
+                        vec![string(&format!("Error at index {i} in: \"{pair}\""))],
+                    )));
+                }
+            }
+            Arg::Str(full.to_ascii_uppercase())
+        }
+        "minecraft:dialog" => {
+            if r.can_read() && matches!(r.peek(), '{' | '[') {
+                let t = read_nbt(r)?;
+                let fail = |r: &Reader, why: String| {
+                    r.error_at(
+                        CommandError::new(
+                            "argument.resource_or_id.failed_to_parse",
+                            vec![string(&why)],
+                        ),
+                        r.input.len(),
+                    )
+                };
+                let Tag::Compound(c) = &t else {
+                    let why = format!("Not a map: {}", crate::particle::snbt(&t));
+                    return Err(fail(r, why));
+                };
+                let map = crate::particle::snbt(&t);
+                let Some(kind) = c.get("type") else {
+                    return Err(fail(r, format!("No key type in MapLike[{map}]")));
+                };
+                let kind = match kind {
+                    Tag::String(s) => full_id(s),
+                    _ => String::new(),
+                };
+                if !env.exists("minecraft:dialog_type", &kind) {
+                    return Err(fail(
+                        r,
+                        format!(
+                            "Unknown registry key in ResourceKey[minecraft:root / minecraft:dialog_type]: {kind}"
+                        ),
+                    ));
+                }
+                if c.get("title").is_none() {
+                    return Err(fail(r, format!("No key title in MapLike[{map}]")));
+                }
+                Arg::Nbt(t)
+            } else {
+                let id = read_id(r)?;
+                if !env.exists("minecraft:dialog", &full_id(&id)) {
+                    return Err(r.error(CommandError::new(
+                        "argument.resource_or_id.no_such_element",
+                        vec![string(&full_id(&id)), string("minecraft:dialog")],
+                    )));
+                }
+                Arg::Id(id)
+            }
+        }
         "minecraft:uuid" => {
             let s = r.cursor;
             while r.can_read() && (r.peek().is_ascii_hexdigit() || r.peek() == '-') {

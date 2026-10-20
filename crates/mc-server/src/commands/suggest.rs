@@ -93,6 +93,7 @@ fn candidates(ctx: &ServerContext, path: &[String]) -> Vec<String> {
             drop(lists);
             return lock(&ctx.storage).contents.keys().cloned().collect();
         }
+        ["random", "reset", "sequence"] => lock(&ctx.rare).sequences().to_vec(),
         ["place", "template", ..] => {
             drop(lists);
             return data_ids(ctx, "structure");

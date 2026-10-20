@@ -13,7 +13,7 @@ mod functions;
 mod living;
 mod place;
 mod places;
-mod rare;
+pub(crate) mod rare;
 mod run;
 mod scoreboard;
 mod scores;

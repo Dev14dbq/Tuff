@@ -2279,6 +2279,90 @@ pub mod play {
         }
     }
 
+    /// Disguised Chat: a message shown by a chat type of the registry, with
+    /// no signature (`/teammsg`).
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct DisguisedChat {
+        pub message: Tag,
+        /// Network id in the chat type registry.
+        pub chat_type: i32,
+        pub name: Tag,
+        pub target: Option<Tag>,
+    }
+    packet!(DisguisedChat, Play, "minecraft:disguised_chat");
+    impl Encode for DisguisedChat {
+        fn encode(&self, out: &mut Vec<u8>) {
+            put_nbt(out, &self.message);
+            out.put_varint(self.chat_type);
+            put_nbt(out, &self.name);
+            match &self.target {
+                Some(t) => {
+                    out.put_bool(true);
+                    put_nbt(out, t);
+                }
+                None => out.put_bool(false),
+            }
+        }
+    }
+
+    /// Transfer: the client reconnects to another server.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Transfer {
+        pub host: String,
+        pub port: i32,
+    }
+    packet!(Transfer, Play, "minecraft:transfer");
+    impl Encode for Transfer {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.host);
+            out.put_varint(self.port);
+        }
+    }
+
+    /// Show Dialog: a dialog of the registry (`Some(id)`) or one written
+    /// out (`None` and its data).
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ShowDialog {
+        pub registry_id: Option<i32>,
+        pub inline: Option<Tag>,
+    }
+    packet!(ShowDialog, Play, "minecraft:show_dialog");
+    impl Encode for ShowDialog {
+        fn encode(&self, out: &mut Vec<u8>) {
+            match (&self.registry_id, &self.inline) {
+                (Some(id), _) => out.put_varint(id + 1),
+                (None, Some(tag)) => {
+                    out.put_varint(0);
+                    put_nbt(out, tag);
+                }
+                (None, None) => out.put_varint(0),
+            }
+        }
+    }
+
+    /// Clear Dialog.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ClearDialog;
+    packet!(ClearDialog, Play, "minecraft:clear_dialog");
+    impl Encode for ClearDialog {
+        fn encode(&self, _out: &mut Vec<u8>) {}
+    }
+
+    /// Post Effects: the screen shaders `/posteffect` set.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct PostEffects {
+        pub ids: Vec<String>,
+    }
+    packet!(PostEffects, Play, "minecraft:post_effects");
+    impl Encode for PostEffects {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_len(self.ids.len());
+            for id in &self.ids {
+                out.put_string(id);
+            }
+        }
+    }
+
     /// Pickup Item: the item flies to whoever picked it up (the entity is
     /// removed separately).
     #[derive(Clone, Debug)]

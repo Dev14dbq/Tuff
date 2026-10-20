@@ -2726,6 +2726,9 @@ fn random(r: &mut Run, roll: bool) -> Result<i32> {
         return Err(err("commands.random.error.range_too_large", Vec::new()));
     }
     let value = min + (crate::util::random_u64() % span as u64) as i64;
+    if let Some(seq) = r.string("sequence") {
+        lock(&r.ctx.rare).use_sequence(&mc_command::args::full_id(&seq));
+    }
     if roll {
         let line = translate(
             "commands.random.roll",

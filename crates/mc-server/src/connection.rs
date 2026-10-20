@@ -1153,6 +1153,11 @@ async fn play(
                             Direct::Particles(p) => writer.queue(&p)?,
                             Direct::Camera(p) => writer.queue(&p)?,
                             Direct::Boss(p) => writer.queue(&p)?,
+                            Direct::Transfer(p) => writer.queue(&p)?,
+                            Direct::DisguisedChat(p) => writer.queue(&p)?,
+                            Direct::ShowDialog(p) => writer.queue(&p)?,
+                            Direct::ClearDialog(p) => writer.queue(&p)?,
+                            Direct::PostEffects(p) => writer.queue(&p)?,
                         }
                     }
                     Ok(Event::Scoreboard(p)) => send_scoreboard(writer, &p)?,
@@ -1263,6 +1268,16 @@ async fn play(
                                 duration: 6,
                             })?;
                         }
+                    }
+                    Ok(Event::Animate { uuid: other, entity_id: other_entity, hand, kind, duration })
+                        if other == uuid || visible.contains(&other) =>
+                    {
+                        writer.queue(&play::SwingAnimation {
+                            entity_id: other_entity,
+                            hand,
+                            kind,
+                            duration,
+                        })?;
                     }
                     Ok(Event::Equipment { uuid: other, entity_id: other_entity, main_hand })
                         if other != uuid && visible.contains(&other) =>
