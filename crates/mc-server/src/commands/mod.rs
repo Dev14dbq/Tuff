@@ -10,6 +10,7 @@ mod coverage;
 mod data;
 mod execute;
 mod functions;
+mod gear;
 mod item;
 mod living;
 mod loot;
