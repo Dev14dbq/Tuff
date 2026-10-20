@@ -280,6 +280,7 @@ pub(crate) fn save_player(ctx: &ServerContext, uuid: u128) {
         flying: player.flying,
         hands,
         vitals,
+        extra: player.extra.clone(),
     };
     if let Err(err) = store.save(uuid, &saved, ctx.data.version.world_version) {
         tracing::warn!("saving {}: {err:#}", player.profile.name);

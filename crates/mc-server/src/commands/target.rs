@@ -17,6 +17,7 @@ pub enum Target {
         name: String,
         pose: Pose,
         game_mode: i32,
+        tags: Vec<String>,
     },
     Entity {
         uuid: u128,
@@ -26,6 +27,7 @@ pub enum Target {
         pos: [f64; 3],
         /// The translation key of its name.
         name_key: String,
+        tags: Vec<String>,
     },
 }
 
@@ -54,6 +56,12 @@ impl Target {
         match self {
             Target::Player { .. } => "minecraft:player",
             Target::Entity { kind, .. } => kind,
+        }
+    }
+
+    pub fn tags(&self) -> &[String] {
+        match self {
+            Target::Player { tags, .. } | Target::Entity { tags, .. } => tags,
         }
     }
 
@@ -141,6 +149,7 @@ pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
                 name: p.profile.name.clone(),
                 pose: p.pose?,
                 game_mode: p.game_mode,
+                tags: p.extra.tags.clone(),
             })
         })
         .collect();
@@ -160,6 +169,7 @@ pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
             kind,
             pos: e.pos,
             name_key,
+            tags: e.tags.clone(),
         });
     }
     out
@@ -235,8 +245,18 @@ pub fn resolve(ctx: &ServerContext, s: &Selector, src: &Src) -> Vec<Target> {
                 Target::Entity { .. } => false,
             })
         })
-        // No entity has tags or a team yet.
-        .filter(|_| s.tags.iter().all(|(neg, want)| *neg || want.is_empty()))
+        // `tag=x` has x, `tag=` has none; `!` turns either round.
+        .filter(|t| {
+            s.tags.iter().all(|(neg, want)| {
+                let has = if want.is_empty() {
+                    t.tags().is_empty()
+                } else {
+                    t.tags().iter().any(|g| g == want)
+                };
+                has != *neg
+            })
+        })
+        // No entity is in a team yet.
         .filter(|_| s.teams.iter().all(|(neg, want)| *neg != want.is_empty()))
         .filter(|t| {
             let p = t.pos();

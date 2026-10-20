@@ -28,6 +28,64 @@ pub struct Saved {
     pub flying: bool,
     pub hands: Hands,
     pub vitals: crate::vitals::Vitals,
+    pub extra: Extra,
+}
+
+/// A respawn point (`respawn` of a player, `spawn` of level.dat).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Respawn {
+    pub dimension: String,
+    pub pos: (i32, i32, i32),
+    pub yaw: f32,
+    pub pitch: f32,
+    /// Set by `/spawnpoint`: no bed or anchor needed.
+    pub forced: bool,
+}
+
+impl Respawn {
+    pub fn to_nbt(&self, with_forced: bool) -> Compound {
+        let mut c = Compound::new();
+        c.insert("dimension", Tag::String(self.dimension.clone()));
+        c.insert(
+            "pos",
+            Tag::IntArray(vec![self.pos.0, self.pos.1, self.pos.2]),
+        );
+        c.insert("yaw", Tag::Float(self.yaw));
+        c.insert("pitch", Tag::Float(self.pitch));
+        if with_forced {
+            c.insert("forced", Tag::Byte(i8::from(self.forced)));
+        }
+        c
+    }
+
+    pub fn from_nbt(c: &Compound) -> Option<Self> {
+        let Some(Tag::IntArray(pos)) = c.get("pos") else {
+            return None;
+        };
+        let [x, y, z] = pos[..] else { return None };
+        let float = |k: &str| match c.get(k) {
+            Some(Tag::Float(v)) => *v,
+            _ => 0.0,
+        };
+        Some(Respawn {
+            dimension: match c.get("dimension") {
+                Some(Tag::String(d)) => d.clone(),
+                _ => "minecraft:overworld".into(),
+            },
+            pos: (x, y, z),
+            yaw: float("yaw"),
+            pitch: float("pitch"),
+            forced: matches!(c.get("forced"), Some(Tag::Byte(1))),
+        })
+    }
+}
+
+/// What a player keeps besides their body and items.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Extra {
+    pub respawn: Option<Respawn>,
+    /// `/tag` (`Tags`).
+    pub tags: Vec<String>,
 }
 
 /// Container slot of each equipment key.
@@ -200,12 +258,29 @@ impl Store {
             vitals.absorption = *a;
         }
         vitals.dead = vitals.health <= 0.0;
+        let extra = Extra {
+            respawn: match root.get("respawn") {
+                Some(Tag::Compound(c)) => Respawn::from_nbt(c),
+                _ => None,
+            },
+            tags: match root.get("Tags") {
+                Some(Tag::List(l)) => l
+                    .iter()
+                    .filter_map(|t| match t {
+                        Tag::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
+        };
         Ok(Some(Saved {
             pose,
             game_mode,
             flying,
             hands,
             vitals,
+            extra,
         }))
     }
 
@@ -274,6 +349,29 @@ impl Store {
         root.insert("XpP", Tag::Float(saved.vitals.xp_progress));
         root.insert("XpTotal", Tag::Int(saved.vitals.xp_total));
         root.insert("AbsorptionAmount", Tag::Float(saved.vitals.absorption));
+        match &saved.extra.respawn {
+            Some(r) => {
+                root.insert("respawn", Tag::Compound(r.to_nbt(true)));
+            }
+            None => {
+                root.remove("respawn");
+            }
+        }
+        if saved.extra.tags.is_empty() {
+            root.remove("Tags");
+        } else {
+            root.insert(
+                "Tags",
+                Tag::List(
+                    saved
+                        .extra
+                        .tags
+                        .iter()
+                        .map(|t| Tag::String(t.clone()))
+                        .collect(),
+                ),
+            );
+        }
         if saved.vitals.effects.is_empty() {
             root.remove("active_effects");
         } else {

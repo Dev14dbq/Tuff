@@ -38,6 +38,8 @@ pub struct OnlinePlayer {
     pub flying: bool,
     /// The address they connected from (for `/ban-ip`).
     pub address: Option<String>,
+    /// Their own respawn point and tags (kept in the player file).
+    pub extra: crate::players::Extra,
 }
 
 /// Packets commands send to one player.
@@ -53,6 +55,7 @@ pub enum Direct {
     StopSound(mc_protocol::packets::play::StopSound),
     MobEffect(mc_protocol::packets::play::UpdateMobEffect),
     RemoveMobEffect(mc_protocol::packets::play::RemoveMobEffect),
+    DefaultSpawn(mc_protocol::packets::play::SetDefaultSpawnPosition),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -348,6 +351,8 @@ pub struct ServerContext {
     pub game_rules: Mutex<crate::rules::GameRules>,
     pub weather: Mutex<crate::weather::Weather>,
     pub border: Mutex<crate::border::Border>,
+    /// The world spawn (`/setworldspawn` moves it).
+    pub spawn: Mutex<crate::players::Respawn>,
     next_entity_id: AtomicI32,
 }
 
@@ -526,6 +531,17 @@ impl ServerContext {
         );
         let weather = crate::weather::Weather::load(world.folder(), data.version.world_version);
         let border = crate::border::Border::load(world.folder(), data.version.world_version);
+        let spawn = crate::players::Respawn {
+            dimension: world.dimension.clone(),
+            pos: (
+                world.spawn.0.floor() as i32,
+                world.spawn.1.floor() as i32,
+                world.spawn.2.floor() as i32,
+            ),
+            yaw: world.spawn_yaw,
+            pitch: 0.0,
+            forced: false,
+        };
         Ok(Self {
             core_pack: KnownPack {
                 namespace: "minecraft".into(),
@@ -582,6 +598,7 @@ impl ServerContext {
             game_rules: Mutex::new(game_rules),
             weather: Mutex::new(weather),
             border: Mutex::new(border),
+            spawn: Mutex::new(spawn),
             data,
         })
     }

@@ -92,6 +92,10 @@ pub struct TickControl {
     pub frozen: bool,
     /// Ticks still to run while frozen.
     pub steps: u32,
+    /// How long the last 100 ticks took (ns), as `/tick query` shows them.
+    pub times: [u64; 100],
+    /// The tick time smoothed as vanilla does (ms).
+    pub smoothed_ms: f32,
 }
 
 impl Default for TickControl {
@@ -100,6 +104,8 @@ impl Default for TickControl {
             rate: 20.0,
             frozen: false,
             steps: 0,
+            times: [0; 100],
+            smoothed_ms: 0.0,
         }
     }
 }
@@ -211,6 +217,9 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             frozen: control.frozen,
         };
         let took = started.elapsed();
+        let nanos = took.as_nanos() as u64;
+        control.times[(count % 100) as usize] = nanos;
+        control.smoothed_ms = control.smoothed_ms * 0.8 + nanos as f32 / 1.0e6 * 0.2;
         if took > interval {
             slow_ticks += 1;
             if slow_ticks.is_power_of_two() {
@@ -382,6 +391,7 @@ pub fn drop_item(ctx: &ServerContext, at: mc_protocol::Position, drop: crate::lo
         on_ground: false,
         age: 0,
         removed: false,
+        tags: Vec::new(),
     };
     let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
     lock(&ctx.entities).push(entity);
@@ -416,6 +426,7 @@ pub fn throw_item(
         on_ground: false,
         age: 0,
         removed: false,
+        tags: Vec::new(),
     };
     let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
     lock(&ctx.entities).push(entity);
@@ -443,6 +454,7 @@ pub fn scatter_item(
         on_ground: false,
         age: 0,
         removed: false,
+        tags: Vec::new(),
     };
     let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
     lock(&ctx.entities).push(entity);

@@ -590,6 +590,8 @@ fn seed(r: &mut Run) -> Result<i32> {
         .world
         .folder()
         .and_then(crate::generation::seed_of)
+        // The flat test world: the configured seed.
+        .or(r.ctx.config.seed)
         .unwrap_or(0);
     let text = seed.to_string();
     let mut click = Compound::new();
@@ -1533,20 +1535,39 @@ fn tick(r: &mut Run, rest: &[&str]) -> Result<i32> {
     };
     match rest {
         ["query"] => {
+            let mspt = 1000.0 / r.tick.rate;
+            let average = r.tick.smoothed_ms;
             let status = if r.tick.frozen {
                 "commands.tick.status.frozen"
+            } else if average > mspt {
+                "commands.tick.status.lagging"
             } else {
                 "commands.tick.status.running"
             };
             r.success(translate(status, Vec::new()), false);
-            let mspt = 1000.0 / r.tick.rate;
             r.success(
                 translate(
                     "commands.tick.query.rate.running",
                     vec![
                         Tag::String(format!("{:.1}", r.tick.rate)),
-                        Tag::String("0.0".into()),
+                        Tag::String(format!("{average:.1}")),
                         Tag::String(format!("{mspt:.1}")),
+                    ],
+                ),
+                false,
+            );
+            let mut times = r.tick.times;
+            times.sort_unstable();
+            let ms = |i: usize| Tag::String(format!("{:.1}", times[i] as f64 / 1.0e6));
+            let n = times.len();
+            r.success(
+                translate(
+                    "commands.tick.query.percentiles",
+                    vec![
+                        ms(n / 2),
+                        ms((n as f64 * 0.95) as usize),
+                        ms((n as f64 * 0.99) as usize),
+                        Tag::Int(n as i32),
                     ],
                 ),
                 false,
@@ -1639,6 +1660,11 @@ fn teleport(r: &mut Run, path: &[&str]) -> Result<i32> {
         }
         _ => None,
     };
+    let facing = if path.contains(&"facing") {
+        Some(facing_point(r)?)
+    } else {
+        None
+    };
     for t in &targets {
         if let Target::Player { uuid, pose, .. } = t {
             let mut pose = *pose;
@@ -1647,6 +1673,9 @@ fn teleport(r: &mut Run, path: &[&str]) -> Result<i32> {
                 (pose.yaw, pose.pitch) = (yaw, pitch);
             } else if let Some(Target::Player { pose: p, .. }) = &entity_dest {
                 (pose.yaw, pose.pitch) = (p.yaw, p.pitch);
+            }
+            if let Some(at) = facing {
+                (pose.yaw, pose.pitch) = look_at([pose.x, pose.y + EYE_HEIGHT, pose.z], at);
             }
             r.out.events.push(Event::Teleport { uuid: *uuid, pose });
         } else {
@@ -1682,6 +1711,45 @@ fn teleport(r: &mut Run, path: &[&str]) -> Result<i32> {
     };
     r.success(msg, true);
     Ok(n as i32)
+}
+
+/// How high a standing player's eyes are.
+pub(super) const EYE_HEIGHT: f64 = 1.62;
+
+/// The yaw and pitch to look from `from` at `to`, as vanilla turns.
+pub(super) fn look_at(from: [f64; 3], to: [f64; 3]) -> (f32, f32) {
+    let (dx, dy, dz) = (to[0] - from[0], to[1] - from[1], to[2] - from[2]);
+    let flat = (dx * dx + dz * dz).sqrt();
+    let wrap = |d: f32| {
+        let mut d = d % 360.0;
+        if d >= 180.0 {
+            d -= 360.0;
+        }
+        if d < -180.0 {
+            d += 360.0;
+        }
+        d
+    };
+    let pitch = wrap(-(dy.atan2(flat).to_degrees() as f32));
+    let yaw = wrap(dz.atan2(dx).to_degrees() as f32 - 90.0);
+    (yaw, pitch)
+}
+
+/// The point of a `facing` clause: `facingLocation`, or `facingEntity` at
+/// its feet or eyes (`facingAnchor`).
+pub(super) fn facing_point(r: &Run) -> Result<[f64; 3]> {
+    if let Some(at) = r.vec3("facingLocation") {
+        return Ok(at);
+    }
+    let to = r.targets("facingEntity", false)?;
+    let Some(t) = to.first() else {
+        return Err(err("argument.entity.notfound.entity", Vec::new()));
+    };
+    let mut at = t.pos();
+    if r.string("facingAnchor").as_deref() == Some("eyes") && t.is_player() {
+        at[1] += EYE_HEIGHT;
+    }
+    Ok(at)
 }
 
 /// An item as messages show it: `[Diamond]` with a hover card.
@@ -1991,6 +2059,7 @@ fn summon(r: &mut Run) -> Result<i32> {
         on_ground: false,
         age: 0,
         removed: false,
+        tags: Vec::new(),
     };
     r.out.events.push(Event::EntitySpawned(entity.clone()));
     lock(&r.ctx.entities).push(entity.clone());

@@ -132,7 +132,7 @@ pub fn suggest(
         Source::Console => 4,
         Source::Player { uuid, name, .. } => super::level(ctx, *uuid, name),
     };
-    let (start, matches) = mc_command::suggest::complete(
+    let (start, mut matches) = mc_command::suggest::complete(
         &commands.tree,
         input,
         level,
@@ -140,6 +140,8 @@ pub fn suggest(
         &commands.env,
         &Known(ctx),
     );
+    // Vanilla sends at most 1000.
+    matches.truncate(1000);
     if matches.is_empty() {
         // Vanilla's empty suggestions cover nothing.
         return Some(CommandSuggestions {

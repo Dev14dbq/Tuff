@@ -225,6 +225,7 @@ async fn login(
         main_hand: None,
         flying: saved.as_ref().is_some_and(|s| s.flying),
         address: Some(peer.ip().to_string()),
+        extra: saved.as_ref().map(|s| s.extra.clone()).unwrap_or_default(),
     };
     let uuid = player.profile.uuid;
     // Bans and the whitelist (operators are always let in).
@@ -462,18 +463,10 @@ async fn play(
     let (uuid, entity_id) = (me.profile.uuid, me.entity_id);
     // Subscribe before reading the player list, so nobody slips through.
     let mut events = ctx.events.subscribe();
-    let (sx, sy, sz) = world.spawn;
-    let mut pose = session.saved.as_ref().map_or(
-        Pose {
-            x: sx,
-            y: sy,
-            z: sz,
-            yaw: world.spawn_yaw,
-            pitch: 0.0,
-            on_ground: true,
-        },
-        |s| s.pose,
-    );
+    let mut pose = session
+        .saved
+        .as_ref()
+        .map_or_else(|| world_spawn_pose(&ctx), |s| s.pose);
     let (x, y, z) = (pose.x, pose.y, pose.z);
 
     writer.queue(&play::Login {
@@ -542,12 +535,7 @@ async fn play(
     let ticking = ctx.ticking.lock().expect("ticking lock").clone();
     writer.queue(&ticking)?;
     writer.queue(&play::TickingStep { steps: 0 })?;
-    writer.queue(&play::SetDefaultSpawnPosition {
-        dimension: world.dimension.clone(),
-        position: Position::new(x.floor() as i32, y as i32, z.floor() as i32),
-        yaw: 0.0,
-        pitch: 0.0,
-    })?;
+    writer.queue(&spawn_packet(&ctx))?;
     writer.queue(&ctx.border.lock().expect("border lock").packet())?;
     {
         let w = ctx.weather.lock().expect("weather lock");
@@ -794,8 +782,7 @@ async fn play(
                             update_player(&ctx, uuid, |p| p.flying = flying);
                             writer.queue(&abilities(game_mode, flying))?;
                             writer.queue(&health)?;
-                            let (sx, sy, sz) = world.spawn;
-                            pose = Pose { x: sx, y: sy, z: sz, yaw: world.spawn_yaw, pitch: 0.0, on_ground: true };
+                            pose = respawn_pose(&ctx, uuid);
                             next_teleport += 1;
                             awaiting_teleport = Some(next_teleport);
                             writer.queue(&play::PlayerPosition {
@@ -1130,6 +1117,7 @@ async fn play(
                             Direct::StopSound(p) => writer.queue(&p)?,
                             Direct::MobEffect(p) => writer.queue(&p)?,
                             Direct::RemoveMobEffect(p) => writer.queue(&p)?,
+                            Direct::DefaultSpawn(p) => writer.queue(&p)?,
                         }
                     }
                     Ok(Event::Border) => {
@@ -1778,5 +1766,51 @@ impl PacketWriter {
     async fn send<P: Encode>(&mut self, packet: &P) -> Result<()> {
         self.queue(packet)?;
         self.flush().await
+    }
+}
+
+/// Where new players appear: the middle of the world spawn's block.
+fn world_spawn_pose(ctx: &ServerContext) -> Pose {
+    let spawn = ctx.spawn.lock().expect("spawn lock").clone();
+    Pose {
+        x: f64::from(spawn.pos.0) + 0.5,
+        y: f64::from(spawn.pos.1),
+        z: f64::from(spawn.pos.2) + 0.5,
+        yaw: spawn.yaw,
+        pitch: spawn.pitch,
+        on_ground: true,
+    }
+}
+
+/// Where a player respawns: their own point if `/spawnpoint` set one,
+/// else the world spawn.
+fn respawn_pose(ctx: &ServerContext, uuid: u128) -> Pose {
+    let own = ctx
+        .players
+        .lock()
+        .expect("players lock")
+        .get(&uuid)
+        .and_then(|p| p.extra.respawn.clone());
+    match own {
+        Some(r) if r.forced => Pose {
+            x: f64::from(r.pos.0) + 0.5,
+            y: f64::from(r.pos.1),
+            z: f64::from(r.pos.2) + 0.5,
+            yaw: r.yaw,
+            pitch: r.pitch,
+            on_ground: true,
+        },
+        _ => world_spawn_pose(ctx),
+    }
+}
+
+/// Tells a client where the world spawn is (the compass points there).
+pub fn spawn_packet(ctx: &ServerContext) -> play::SetDefaultSpawnPosition {
+    let spawn = ctx.spawn.lock().expect("spawn lock").clone();
+    play::SetDefaultSpawnPosition {
+        dimension: spawn.dimension,
+        position: Position::new(spawn.pos.0, spawn.pos.1, spawn.pos.2),
+        yaw: spawn.yaw,
+        pitch: spawn.pitch,
     }
 }

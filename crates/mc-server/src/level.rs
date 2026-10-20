@@ -274,6 +274,7 @@ impl Level for WorldLevel<'_> {
             on_ground: false,
             age: 0,
             removed: false,
+            tags: Vec::new(),
         };
         self.spawned.push(entity);
     }

@@ -679,9 +679,14 @@ const BYPASSES_RESISTANCE: [&str; 3] = [
     "minecraft:starve",
 ];
 
+/// Whether fire resistance keeps this damage off entirely.
+pub fn fire_proof(effects: &Effects, damage_type: &str) -> bool {
+    effects.active.contains_key("fire_resistance") && FIRE.contains(&damage_type)
+}
+
 /// Damage after fire resistance and resistance.
 pub fn reduce_damage(effects: &Effects, amount: f32, damage_type: &str) -> f32 {
-    if effects.active.contains_key("fire_resistance") && FIRE.contains(&damage_type) {
+    if fire_proof(effects, damage_type) {
         return 0.0;
     }
     match effects.active.get("resistance") {

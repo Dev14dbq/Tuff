@@ -41,6 +41,8 @@ pub struct Vitals {
     pub fall_distance: f64,
     food_timer: i32,
     immune: i32,
+    /// The damage that started the immunity: only more gets through.
+    last_hurt: f32,
     pub dead: bool,
     /// Experience: the level, the part of the next one (0–1) and every
     /// point ever collected (`XpLevel`, `XpP`, `XpTotal`).
@@ -118,6 +120,7 @@ impl Default for Vitals {
             fall_distance: 0.0,
             food_timer: 0,
             immune: 0,
+            last_hurt: 0.0,
             dead: false,
             xp_level: 0,
             xp_progress: 0.0,
@@ -387,26 +390,53 @@ pub fn hurt_by(
     death_key: &str,
     attacker: Option<&str>,
 ) -> bool {
-    let Some((name, entity_id, game_mode)) = lock(&ctx.players)
+    try_hurt(ctx, uuid, amount, damage_type, death_key, attacker).unwrap_or(false)
+}
+
+/// Damage types that hurt even creative players and the immune
+/// (`bypasses_invulnerability`).
+const BYPASSES_INVULNERABILITY: [&str; 2] = ["minecraft:out_of_world", "minecraft:generic_kill"];
+
+/// [`hurt_by`]: `None` when the player took no damage (creative, immune,
+/// nothing left after effects), else whether they died.
+pub fn try_hurt(
+    ctx: &ServerContext,
+    uuid: u128,
+    amount: f32,
+    damage_type: &str,
+    death_key: &str,
+    attacker: Option<&str>,
+) -> Option<bool> {
+    let (name, entity_id, game_mode) = lock(&ctx.players)
         .get(&uuid)
-        .map(|p| (p.profile.name.clone(), p.entity_id, p.game_mode))
-    else {
-        return false;
-    };
-    if !takes_damage(game_mode) || amount <= 0.0 {
-        return false;
+        .map(|p| (p.profile.name.clone(), p.entity_id, p.game_mode))?;
+    let bypass = BYPASSES_INVULNERABILITY.contains(&damage_type);
+    if !(takes_damage(game_mode) || bypass && game_mode == 1) || amount <= 0.0 {
+        return None;
     }
     let (packet, died) = {
         let mut all = lock(&ctx.vitals);
-        let Some(v) = all.get_mut(&uuid) else {
-            return false;
-        };
-        if v.dead || v.immune > 0 {
-            return false;
+        let v = all.get_mut(&uuid)?;
+        if v.dead || crate::effects::fire_proof(&v.effects, damage_type) {
+            return None;
         }
+        // While immune only a harder hit gets through, by what it adds.
+        let amount = if v.immune > 0 && !bypass {
+            if amount <= v.last_hurt {
+                return None;
+            }
+            let more = amount - v.last_hurt;
+            v.last_hurt = amount;
+            more
+        } else {
+            v.last_hurt = amount;
+            v.immune = IMMUNE_TICKS;
+            amount
+        };
         let amount = crate::effects::reduce_damage(&v.effects, amount, damage_type);
+        // Fully resisted still counts as a hit (vanilla's /damage succeeds).
         if amount <= 0.0 {
-            return false;
+            return Some(false);
         }
         let absorbed = amount.min(v.absorption);
         if absorbed > 0.0 {
@@ -424,7 +454,6 @@ pub fn hurt_by(
         }
         let amount = amount - absorbed;
         v.health = (v.health - amount).max(0.0);
-        v.immune = IMMUNE_TICKS;
         v.exhaust(0.1);
         let died = v.health <= 0.0;
         v.dead = died;
@@ -449,7 +478,7 @@ pub fn hurt_by(
             },
         });
     }
-    died
+    Some(died)
 }
 
 /// A player moved: track falling and hurt them when they land.

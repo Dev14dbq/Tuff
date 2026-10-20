@@ -152,7 +152,8 @@ impl Src {
     fn of(ctx: &ServerContext, source: &Source) -> Self {
         match source {
             Source::Console => {
-                let (x, y, z) = ctx.world.spawn;
+                let spawn = ctx.spawn.lock().expect("spawn lock").pos;
+                let (x, y, z) = (f64::from(spawn.0), f64::from(spawn.1), f64::from(spawn.2));
                 Src {
                     who: Who::Console,
                     name: "Server".into(),

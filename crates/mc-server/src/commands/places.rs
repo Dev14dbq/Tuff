@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use mc_command::args::{Arg, Env as _};
+use mc_command::args::{Arg, Coord, Env as _};
 use mc_nbt::{Compound, Tag};
 use mc_protocol::text::translate;
 
@@ -16,12 +16,128 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         ["locate", "structure", "structure"] => locate_structure(r),
         ["locate", "biome", "biome"] => locate_biome(r),
         ["locate", "poi", "poi"] => locate_poi(r),
+        ["setworldspawn", ..] => set_world_spawn(r),
+        ["spawnpoint", ..] => spawn_point(r),
         _ => return None,
     })
 }
 
 /// Puts a stored result into a boss bar.
 pub fn store(_ctx: &ServerContext, _store: &Store, _value: i32) {}
+
+/// A rotation argument (yaw wrapped, pitch clamped), relative to the
+/// source; none is 0, 0.
+fn rotation(r: &Run, name: &str) -> (f32, f32) {
+    let Some(Arg::Pos2([yaw, pitch])) = r.arg(name) else {
+        return (0.0, 0.0);
+    };
+    let f = |c: &Coord, base: f32| {
+        if c.relative {
+            base + c.value as f32
+        } else {
+            c.value as f32
+        }
+    };
+    let yaw = f(yaw, r.src.rot[0]);
+    let pitch = f(pitch, r.src.rot[1]);
+    // Wrapped as vanilla's Mth.wrapDegrees does.
+    let mut yaw = yaw % 360.0;
+    if yaw >= 180.0 {
+        yaw -= 360.0;
+    }
+    if yaw < -180.0 {
+        yaw += 360.0;
+    }
+    (yaw, pitch.clamp(-90.0, 90.0))
+}
+
+/// A block position argument, or the source's block.
+fn pos_or_here(r: &Run, name: &str) -> (i32, i32, i32) {
+    match r.block_pos(name) {
+        Some(p) => (p.x, p.y, p.z),
+        None => source_block(r),
+    }
+}
+
+fn set_world_spawn(r: &mut Run) -> Result<i32> {
+    let pos = pos_or_here(r, "pos");
+    let (yaw, pitch) = rotation(r, "rotation");
+    let spawn = crate::players::Respawn {
+        dimension: "minecraft:overworld".into(),
+        pos,
+        yaw,
+        pitch,
+        forced: false,
+    };
+    *r.ctx.spawn.lock().expect("spawn lock") = spawn.clone();
+    if let Err(e) = r.ctx.world.update_level(|data| {
+        data.insert("spawn", Tag::Compound(spawn.to_nbt(false)));
+    }) {
+        tracing::warn!("saving the world spawn: {e:#}");
+    }
+    let packet = crate::connection::spawn_packet(r.ctx);
+    let everyone: Vec<u128> = crate::tick::lock(&r.ctx.players).keys().copied().collect();
+    for uuid in everyone {
+        super::run::direct(
+            r,
+            uuid,
+            crate::context::Direct::DefaultSpawn(packet.clone()),
+        );
+    }
+    r.success(
+        translate(
+            "commands.setworldspawn.success",
+            vec![
+                Tag::Int(pos.0),
+                Tag::Int(pos.1),
+                Tag::Int(pos.2),
+                Tag::Float(yaw),
+                Tag::Float(pitch),
+                Tag::String(spawn.dimension),
+            ],
+        ),
+        true,
+    );
+    Ok(1)
+}
+
+fn spawn_point(r: &mut Run) -> Result<i32> {
+    let targets = r.targets_or_self("targets", true)?;
+    let pos = pos_or_here(r, "pos");
+    let (yaw, pitch) = rotation(r, "rotation");
+    let respawn = crate::players::Respawn {
+        dimension: "minecraft:overworld".into(),
+        pos,
+        yaw,
+        pitch,
+        forced: true,
+    };
+    {
+        let mut players = crate::tick::lock(&r.ctx.players);
+        for t in &targets {
+            if let Some(p) = players.get_mut(&t.uuid()) {
+                p.extra.respawn = Some(respawn.clone());
+            }
+        }
+    }
+    let mut args = vec![
+        Tag::Int(pos.0),
+        Tag::Int(pos.1),
+        Tag::Int(pos.2),
+        Tag::Float(yaw),
+        Tag::Float(pitch),
+        Tag::String(respawn.dimension),
+    ];
+    let key = if targets.len() == 1 {
+        args.push(targets[0].display());
+        "commands.spawnpoint.success.single"
+    } else {
+        args.push(Tag::Int(targets.len() as i32));
+        "commands.spawnpoint.success.multiple"
+    };
+    r.success(translate(key, args), true);
+    Ok(targets.len() as i32)
+}
 
 /// How far `/locate structure` looks, in placement cells.
 const STRUCTURE_RADIUS: i32 = 100;

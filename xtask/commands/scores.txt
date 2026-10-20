@@ -1,0 +1,596 @@
+# `scores` area: scoreboard, team, tag, trigger and score conditions.
+# Run by the operator Probe in a flat creative world (see xtask/commands.txt).
+
+# Objectives
+scoreboard objectives list
+scoreboard players list
+team list
+scoreboard objectives add obj dummy
+scoreboard objectives add obj dummy
+scoreboard objectives add Obj2 dummy {"text":"Second","color":"red"}
+scoreboard objectives add bad nosuchcriterion
+scoreboard objectives add bad minecraft.mined:minecraft.nosuch
+scoreboard objectives add bad minecraft.nosuch:minecraft.stone
+scoreboard objectives add bad teamkill.nosuch
+scoreboard objectives add looooooooooooooooooooooooooooooooong dummy
+scoreboard objectives add a.b-c+d_e dummy
+scoreboard objectives add hp health
+scoreboard objectives add trig trigger
+scoreboard objectives add lvl level
+scoreboard objectives add xpo xp
+scoreboard objectives add deaths deathCount
+scoreboard objectives add kills playerKillCount
+scoreboard objectives add tk totalKillCount
+scoreboard objectives add tkills teamkill.red
+scoreboard objectives add kbt killedByTeam.blue
+scoreboard objectives add jumps minecraft.custom:minecraft.jump
+scoreboard objectives add mined minecraft.mined:minecraft.stone
+scoreboard objectives add brk minecraft.broken:minecraft.diamond_pickaxe
+scoreboard objectives add kld minecraft.killed:minecraft.zombie
+scoreboard objectives add ac air
+scoreboard objectives add ar armor
+scoreboard objectives add fd food
+scoreboard objectives list
+scoreboard objectives add
+scoreboard objectives add x
+scoreboard objectives modify obj displayname {"text":"Objective","color":"gold"}
+scoreboard objectives modify obj rendertype hearts
+scoreboard objectives modify obj rendertype integer
+scoreboard objectives modify hp rendertype integer
+scoreboard objectives modify obj displayautoupdate true
+scoreboard objectives modify obj displayautoupdate false
+scoreboard objectives modify obj numberformat blank
+scoreboard objectives modify obj numberformat fixed "x"
+scoreboard objectives modify obj numberformat styled {"color":"red","bold":true}
+scoreboard objectives modify obj numberformat
+scoreboard objectives modify nosuch rendertype hearts
+scoreboard objectives setdisplay sidebar obj
+scoreboard objectives setdisplay sidebar obj
+scoreboard objectives setdisplay list hp
+scoreboard objectives setdisplay below_name Obj2
+scoreboard objectives setdisplay sidebar.team.red obj
+scoreboard objectives setdisplay sidebar.team.dark_purple Obj2
+scoreboard objectives setdisplay sidebar.team.nosuch obj
+scoreboard objectives setdisplay nosuchslot obj
+scoreboard objectives setdisplay belowName obj
+scoreboard objectives setdisplay sidebar.team.red
+scoreboard objectives setdisplay sidebar.team.red
+scoreboard objectives setdisplay sidebar nosuch
+scoreboard objectives list
+
+# Players
+scoreboard players set @s obj 5
+scoreboard players set Probe obj 6
+scoreboard players set fake obj 10
+scoreboard players set #hidden obj -3
+scoreboard players set fake Obj2 7
+scoreboard players set @s hp 5
+scoreboard players set @s nosuch 5
+scoreboard players set nobody
+scoreboard players set nobody obj
+scoreboard players set nobody obj x
+scoreboard players add @s obj 2
+scoreboard players add @s obj -2
+scoreboard players remove @s obj 3
+scoreboard players remove fake obj 100
+scoreboard players add fake obj 2147483647
+scoreboard players add fake obj 200
+scoreboard players get @s obj
+scoreboard players get fake obj
+scoreboard players get #hidden obj
+scoreboard players get nobody obj
+scoreboard players get @a obj
+scoreboard players get * obj
+scoreboard players get @s Obj2
+scoreboard players set * Obj2 3
+scoreboard players add * obj 1
+scoreboard players list
+scoreboard players list fake
+scoreboard players list nobody
+scoreboard players list @s
+scoreboard players list *
+scoreboard players set fake obj 20
+scoreboard players set two obj 3
+scoreboard players operation fake obj += two obj
+scoreboard players operation fake obj -= two obj
+scoreboard players operation fake obj *= two obj
+scoreboard players operation fake obj /= two obj
+scoreboard players operation fake obj %= two obj
+scoreboard players operation fake obj = @s obj
+scoreboard players operation fake obj < two obj
+scoreboard players operation fake obj > @s obj
+scoreboard players operation fake obj >< two obj
+scoreboard players get fake obj
+scoreboard players get two obj
+scoreboard players set neg obj -7
+scoreboard players operation neg obj /= two obj
+scoreboard players get neg obj
+scoreboard players set neg obj -7
+scoreboard players operation neg obj %= two obj
+scoreboard players get neg obj
+scoreboard players operation fake obj ?= two obj
+scoreboard players operation fake obj += two
+scoreboard players set zero obj 0
+scoreboard players operation fake obj /= zero obj
+scoreboard players operation fake obj %= zero obj
+scoreboard players operation fake obj += unset obj
+scoreboard players operation fresh obj += two obj
+scoreboard players get fresh obj
+scoreboard players operation fresh2 obj = unset obj
+scoreboard players operation * obj += two obj
+scoreboard players operation fake hp += two obj
+scoreboard players operation fake obj += two hp
+scoreboard players operation fake obj += two nosuch
+scoreboard players operation fake obj += fake obj
+scoreboard players operation fake obj >< fake obj
+scoreboard players enable @s trig
+scoreboard players enable @s trig
+scoreboard players enable @s obj
+scoreboard players enable fake trig
+scoreboard players enable fake,other trig
+scoreboard players get @s trig
+scoreboard players display name fake obj {"text":"Fake","color":"aqua"}
+scoreboard players display name fake obj
+scoreboard players display name nobody obj {"text":"N"}
+scoreboard players display name * obj "All"
+scoreboard players display numberformat fake obj blank
+scoreboard players display numberformat fake obj fixed "f"
+scoreboard players display numberformat fake obj styled {"bold":true}
+scoreboard players display numberformat fake obj
+scoreboard players display numberformat * obj blank
+scoreboard players list fake
+scoreboard players reset fake obj
+scoreboard players reset fake obj
+scoreboard players reset fake
+scoreboard players reset nobody
+scoreboard players reset * Obj2
+scoreboard players reset fake nosuch
+scoreboard players list
+
+# Criteria from the player
+experience add @s 5 points
+scoreboard players get @s xpo
+experience add @s 2 levels
+scoreboard players get @s lvl
+scoreboard players get @s hp
+scoreboard players get @s fd
+scoreboard players get @s ac
+scoreboard players get @s ar
+scoreboard players get @s deaths
+scoreboard players set @s deaths 3
+scoreboard players get @s deaths
+scoreboard players set @s jumps 4
+scoreboard players set @s tkills 1
+scoreboard players set @s xpo 1
+scoreboard players set @s lvl 1
+scoreboard players set @s fd 1
+scoreboard players set @s ac 1
+scoreboard players set @s ar 1
+scoreboard players add @s mined 1
+scoreboard players list @s
+
+# Trigger
+trigger trig
+trigger trig
+scoreboard players enable @s trig
+trigger trig add 5
+trigger trig
+scoreboard players enable @s trig
+trigger trig set 3
+scoreboard players get @s trig
+scoreboard players enable @s trig
+trigger trig add -2
+scoreboard players get @s trig
+trigger obj
+trigger nosuch
+trigger hp
+trigger trig set x
+
+# Score conditions
+scoreboard players set @s obj 5
+scoreboard players set fake obj 9
+execute if score @s obj matches 1..
+execute if score @s obj matches ..0
+execute if score @s obj matches 5
+execute unless score @s obj matches 5
+execute if score @s obj matches 3..7
+execute if score @s obj matches 7..3
+execute if score @s obj matches x
+execute if score @s obj = fake obj
+execute if score @s obj < fake obj
+execute if score @s obj <= fake obj
+execute if score @s obj > fake obj
+execute if score @s obj >= fake obj
+execute unless score @s obj >= fake obj
+execute if score @s obj = @s obj
+execute if score @s obj < unset obj
+execute unless score @s obj < unset obj
+execute if score nobody obj matches 1
+execute unless score nobody obj matches 1
+execute if score @s nosuch matches 1
+execute if score @s obj ?? fake obj
+execute if score * obj matches 1
+execute store result score @s obj run scoreboard players get fake obj
+scoreboard players get @s obj
+execute store success score fake obj run scoreboard players get nobody obj
+scoreboard players get fake obj
+execute store result score two Obj2 run scoreboard players add @s obj 0
+scoreboard players get two Obj2
+execute store result score @s obj store success score fake Obj2 run scoreboard objectives list
+scoreboard players get @s obj
+scoreboard players get fake Obj2
+execute if entity @a[scores={obj=1..}]
+execute if entity @a[scores={obj=..-100}]
+execute if entity @a[scores={obj=5..,Obj2=..100}]
+execute if entity @a[scores={nosuch=1}]
+execute if entity @a[scores={}]
+execute if entity @a[scores={Obj2=1}]
+execute as @a[scores={obj=1..}] run scoreboard players get @s obj
+scoreboard players set @a[scores={obj=1..}] obj 12
+
+# Teams
+team add red
+team add red
+team add blue {"text":"Blue Team","color":"blue"}
+team add "quoted"
+team add a.b-c+d_e
+team add looooooooooooooooooooooooooooooooong
+team list
+team list red
+team list nosuch
+team join red @s
+team join red fake
+team join red other
+team list red
+team list
+team join blue fake
+team list blue
+team join red
+team join nosuch @s
+team leave fake
+team leave nobody
+team leave *
+team join red @s
+team modify red color green
+team modify red color green
+team modify red color reset
+team modify red color reset
+team modify red color nosuch
+team modify red color dark_aqua
+team modify red displayName {"text":"Reds","bold":true}
+team modify red displayName {"text":"Reds","bold":true}
+team modify red friendlyFire false
+team modify red friendlyFire false
+team modify red friendlyFire true
+team modify red friendlyFire true
+team modify red seeFriendlyInvisibles false
+team modify red seeFriendlyInvisibles false
+team modify red seeFriendlyInvisibles true
+team modify red nametagVisibility never
+team modify red nametagVisibility never
+team modify red nametagVisibility hideForOtherTeams
+team modify red nametagVisibility hideForOwnTeam
+team modify red nametagVisibility always
+team modify red deathMessageVisibility hideForOwnTeam
+team modify red deathMessageVisibility hideForOwnTeam
+team modify red deathMessageVisibility never
+team modify red deathMessageVisibility always
+team modify red collisionRule pushOwnTeam
+team modify red collisionRule pushOwnTeam
+team modify red collisionRule never
+team modify red collisionRule always
+team modify red prefix {"text":"[R] ","color":"red"}
+team modify red prefix {"text":"[R] ","color":"red"}
+team modify red suffix "!"
+team modify nosuch color red
+scoreboard players set @s obj 1
+scoreboard players get @s obj
+team list red
+tag @s add colored
+tag @s list
+execute if entity @s[team=red]
+execute if entity @s[team=!red]
+execute if entity @s[team=blue]
+execute if entity @s[team=!blue]
+execute if entity @s[team=]
+execute if entity @s[team=!]
+execute if entity @a[team=red,team=!blue]
+team empty red
+team empty red
+team empty nosuch
+team list red
+execute if entity @s[team=]
+execute if entity @s[team=!]
+team join blue Probe
+scoreboard players get @s obj
+team modify red prefix ""
+team modify red suffix ""
+team remove blue
+team remove blue
+team list
+scoreboard players get @s obj
+
+# Tags
+tag @s remove colored
+tag @s list
+tag @s add t1
+tag @s add t1
+tag @s add t2
+tag @s list
+tag @a list
+tag @s remove t3
+tag @s remove t2
+tag @s add "quoted"
+tag @s add a.b-c+d_e
+tag @s list
+execute if entity @s[tag=t1]
+execute if entity @s[tag=!t1]
+execute if entity @s[tag=t2]
+execute if entity @s[tag=!t2]
+execute if entity @s[tag=]
+execute if entity @s[tag=!]
+execute if entity @s[tag=t1,tag=a.b-c+d_e]
+execute if entity @s[tag=t1,tag=!a.b-c+d_e]
+tag @s remove t1
+tag @s remove a.b-c+d_e
+tag @s list
+execute if entity @s[tag=]
+execute if entity @s[tag=!]
+tag nobody add x
+summon minecraft:item ~ ~1 ~3 {Item:{id:"minecraft:stone",count:1},PickupDelay:32767}
+summon minecraft:item ~ ~1 ~4 {Item:{id:"minecraft:dirt",count:1},PickupDelay:32767}
+tag @e[type=item] add it
+tag @e[type=item] add it
+tag @e[type=item] list
+tag @e list
+tag @e[type=item,limit=1,sort=nearest] remove it
+tag @e[type=item] list
+execute if entity @e[type=item,tag=it]
+execute if entity @e[tag=nothing]
+team join red @e[type=item]
+team list red
+scoreboard players set @e[type=item] obj 4
+scoreboard players add @e[type=item,tag=it] obj 1
+kill @e[type=item]
+
+# Suggestions
+>/scoreboard
+>/scoreboard 
+>/scoreboard objectives
+>/scoreboard objectives 
+>/scoreboard objectives add x
+>/scoreboard objectives add x 
+>/scoreboard objectives add x minecraft.
+>/scoreboard objectives add x minecraft.custom:minecraft.j
+>/scoreboard objectives add x team
+>/scoreboard objectives remove
+>/scoreboard objectives remove 
+>/scoreboard objectives modify obj
+>/scoreboard objectives modify obj 
+>/scoreboard objectives setdisplay
+>/scoreboard objectives setdisplay 
+>/scoreboard objectives setdisplay sidebar.team.
+>/scoreboard objectives setdisplay sidebar
+>/scoreboard objectives setdisplay sidebar 
+>/scoreboard players set
+>/scoreboard players set 
+>/scoreboard players set f
+>/scoreboard players set fake
+>/scoreboard players set fake 
+>/scoreboard players set fake o
+>/scoreboard players operation fake obj
+>/scoreboard players operation fake obj 
+>/scoreboard players enable @s
+>/scoreboard players enable @s 
+>/scoreboard players list
+>/scoreboard players list 
+>/team
+>/team 
+>/team join
+>/team join 
+>/team join red
+>/team join red 
+>/team modify red
+>/team modify red 
+>/team modify red color
+>/team modify red color 
+>/team modify red nametagVisibility
+>/team modify red nametagVisibility 
+>/team remove
+>/team remove 
+>/team leave
+>/team leave 
+>/trigger
+>/trigger 
+>/trigger trig
+>/trigger trig 
+>/tag @s
+>/tag @s 
+>/tag @s remove
+>/tag @s remove 
+>/tag @s remove t
+>/execute if score @s obj
+>/execute if score @s obj 
+>/execute if score @s obj matches
+>/execute if score @s obj matches 
+>/execute if score
+>/execute if score 
+>/execute store result score @s
+>/execute store result score @s 
+
+# Removing
+scoreboard objectives remove kld
+scoreboard objectives remove kld
+scoreboard objectives remove
+team remove nosuch
+scoreboard objectives list
+
+# Counting what changed
+scoreboard players set cnt1 obj 0
+scoreboard players set cnt1 obj 0
+scoreboard players set cnt1 obj 4
+scoreboard players set cnt1 obj 4
+scoreboard players add cnt1 obj 0
+scoreboard players add cnt2 obj 0
+scoreboard players remove cnt1 obj 0
+scoreboard players set cnt1 trig 3
+scoreboard players reset cnt1 trig
+scoreboard players reset cnt1 trig
+scoreboard players set cnt1,x obj 1
+scoreboard players operation cnt1 obj = cnt1 obj
+scoreboard players operation cnt3 obj = cnt1 obj
+scoreboard players operation cnt3 obj += cnt9 obj
+scoreboard players set * obj 4
+scoreboard players add * obj 0
+scoreboard players enable cnt4 trig
+scoreboard players enable * trig
+scoreboard players enable * trig
+scoreboard players display name cnt1 obj
+scoreboard players display numberformat cnt1 obj
+scoreboard players reset cnt5
+scoreboard players reset * kld
+scoreboard players list cnt1
+scoreboard players list cnt5
+
+# Team members
+team add t0
+team join t0 @s
+team leave @s
+team leave @s
+team leave Probe
+team join t0 Probe
+team join t0 Probe
+team join t0 b
+team join t0 A
+team join t0 _x
+team join t0 10
+team join t0 Zz
+team join t0 #h
+team list t0
+team leave *
+team list t0
+team join t0 @a
+team join t0 *
+team list t0
+team empty t0
+team remove t0
+team add ta
+team add tb
+team add tc
+team add td
+team add te
+team add tf
+team add tg
+team add th
+team add ti
+team add tj
+team add tk
+team add tl
+team add tm
+team add tn
+team add to
+team add tp
+team add tq
+team add tr
+team add ts
+team add tt
+team list
+team remove ta
+team remove tb
+team remove tc
+team remove td
+team remove te
+team remove tf
+team remove tg
+team remove th
+team remove ti
+team remove tj
+team remove tk
+team remove tl
+team remove tm
+team remove tn
+team remove to
+team remove tp
+team remove tq
+team list
+
+# Many holders
+scoreboard players set h1 Obj2 1
+scoreboard players set h2 Obj2 1
+scoreboard players set h3 Obj2 1
+scoreboard players set h4 Obj2 1
+scoreboard players set h5 Obj2 1
+scoreboard players set h6 Obj2 1
+scoreboard players set h7 Obj2 1
+scoreboard players set h8 Obj2 1
+scoreboard players set h9 Obj2 1
+scoreboard players set h10 Obj2 1
+scoreboard players set h11 Obj2 1
+scoreboard players set h12 Obj2 1
+scoreboard players set h13 Obj2 1
+scoreboard players set h14 Obj2 1
+scoreboard players set h15 Obj2 1
+scoreboard players set h16 Obj2 1
+scoreboard players list
+scoreboard players reset * Obj2
+scoreboard players reset h1
+scoreboard players reset h2
+scoreboard players reset h3
+scoreboard players reset h4
+scoreboard players reset h5
+scoreboard players reset h6
+scoreboard players reset h7
+scoreboard players reset h8
+scoreboard players reset h9
+scoreboard players reset h10
+scoreboard players reset h11
+scoreboard players reset h12
+scoreboard players list
+
+# Tags on several entities
+summon minecraft:item ~ ~1 ~3 {Item:{id:"minecraft:stone",count:1},PickupDelay:32767}
+summon minecraft:item ~ ~1 ~4 {Item:{id:"minecraft:dirt",count:1},PickupDelay:32767}
+tag @e[type=item] list
+tag @e[type=item,limit=1,sort=nearest] add one
+tag @e[type=item] add one
+tag @e[type=item] add one
+tag @e[type=item,limit=1,sort=nearest] remove one
+tag @e[type=item] remove one
+tag @e[type=item] remove one
+tag @e[type=item] add Zed
+tag @e[type=item] add abc
+tag @e[type=item,limit=1,sort=nearest] add _only
+tag @e[type=item] list
+tag @e[type=item,limit=1,sort=nearest] list
+execute as @e[type=item,tag=_only] run tag @s list
+kill @e[type=item]
+tag @s add saved
+tag @s add Saved2
+
+# What the file keeps
+scoreboard objectives add fin dummy {"text":"Fin","italic":true}
+scoreboard objectives modify fin rendertype hearts
+scoreboard objectives modify fin displayautoupdate true
+scoreboard objectives modify fin numberformat styled {"color":"aqua"}
+scoreboard objectives add fin2 dummy
+scoreboard objectives modify fin2 numberformat fixed {"text":"F"}
+scoreboard objectives setdisplay sidebar.team.gold fin
+scoreboard players set f1 fin 3
+scoreboard players display numberformat f1 fin fixed "x"
+scoreboard players display numberformat f1 fin2 styled {"color":"red"}
+scoreboard players display name f1 fin {"text":"Eff","color":"red"}
+scoreboard players enable f1 trig
+team add fteam {"text":"FT"}
+team modify fteam color gold
+team modify fteam friendlyFire false
+team modify fteam seeFriendlyInvisibles false
+team modify fteam nametagVisibility hideForOwnTeam
+team modify fteam deathMessageVisibility never
+team modify fteam collisionRule pushOtherTeams
+team modify fteam prefix "<"
+team modify fteam suffix {"text":">","color":"blue"}
+team join fteam f1
+team join fteam f2
+scoreboard players set f2 fin 7
+scoreboard players list f1
+save-all

@@ -141,6 +141,42 @@ fn words(list: &[&str], typed: &str) -> Vec<(usize, String, Option<Tag>)> {
         .collect()
 }
 
+/// The slot names `item_slot` takes: each numbered group with its `.*`.
+fn slot_names() -> Vec<String> {
+    let mut out: Vec<String> = [
+        "armor.body",
+        "armor.chest",
+        "armor.feet",
+        "armor.head",
+        "armor.legs",
+        "armor.*",
+        "contents",
+        "horse.chest",
+        "player.cursor",
+        "saddle",
+        "weapon",
+        "weapon.*",
+        "weapon.mainhand",
+        "weapon.offhand",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect();
+    for (group, count) in [
+        ("container", 54),
+        ("enderchest", 27),
+        ("horse", 15),
+        ("hotbar", 9),
+        ("inventory", 27),
+        ("mob.inventory", 8),
+        ("player.crafting", 4),
+    ] {
+        out.push(format!("{group}.*"));
+        out.extend((0..count).map(|i| format!("{group}.{i}")));
+    }
+    out
+}
+
 const SELECTORS: [(&str, &str); 6] = [
     ("@a", "allPlayers"),
     ("@e", "allEntities"),
@@ -340,6 +376,12 @@ fn argument(
             selector(typed, data, known)
         }
         "minecraft:item_stack" => ids(data.ids("minecraft:item"), typed),
+        "minecraft:item_slot" | "minecraft:slot_source" => {
+            let mut list = slot_names();
+            list.retain(|w| w.starts_with(typed));
+            list.sort();
+            list.into_iter().map(|w| (0, w, None)).collect()
+        }
         "minecraft:item_predicate" => {
             let mut list = data.ids("minecraft:item");
             list.extend(

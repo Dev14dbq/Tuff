@@ -37,6 +37,29 @@ mod tests {
         assert!(ours == vanilla, "packets differ");
     }
 
+    struct Nobody;
+    impl crate::suggest::Known for Nobody {
+        fn players(&self) -> Vec<String> {
+            vec!["Probe".into()]
+        }
+        fn ask(&self, _: &[String], _: &str) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    /// Item slots complete as vanilla's do.
+    #[test]
+    fn item_slots_complete() {
+        let Some(d) = data() else { return };
+        let tree = crate::Tree::load(&d).unwrap();
+        let env = crate::env::DataEnv::load(&d);
+        let (_, got) =
+            crate::suggest::complete(&tree, "item replace entity @s ", 4, &env, &env, &Nobody);
+        let got: Vec<&str> = got.iter().map(|g| g.0.as_str()).collect();
+        assert_eq!(got.len(), 165, "{:?}", &got[..got.len().min(5)]);
+        assert_eq!(&got[..3], ["armor.*", "armor.body", "armor.chest"]);
+    }
+
     /// `/help` prints what vanilla prints.
     #[test]
     fn help_matches_vanilla() {

@@ -36,6 +36,8 @@ pub struct Entity {
     /// Ticks lived.
     pub age: u32,
     pub removed: bool,
+    /// `/tag` (`Tags`).
+    pub tags: Vec<String>,
 }
 
 impl Entity {
