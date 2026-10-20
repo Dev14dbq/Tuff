@@ -1,0 +1,1379 @@
+advancement grant <targets> everything	advancement grant @a everything
+advancement grant <targets> from <advancement>	advancement grant @a from minecraft:story/root
+advancement grant <targets> only <advancement>	advancement grant @a only minecraft:story/root
+advancement grant <targets> only <advancement> <criterion>	advancement grant @a only minecraft:story/root a
+advancement grant <targets> through <advancement>	advancement grant @a through minecraft:story/root
+advancement grant <targets> until <advancement>	advancement grant @a until minecraft:story/root
+advancement revoke <targets> everything	advancement revoke @a everything
+advancement revoke <targets> from <advancement>	advancement revoke @a from minecraft:story/root
+advancement revoke <targets> only <advancement>	advancement revoke @a only minecraft:story/root
+advancement revoke <targets> only <advancement> <criterion>	advancement revoke @a only minecraft:story/root a
+advancement revoke <targets> through <advancement>	advancement revoke @a through minecraft:story/root
+advancement revoke <targets> until <advancement>	advancement revoke @a until minecraft:story/root
+attribute <target> <attribute> base get	attribute @e[limit=1] minecraft:scale base get
+attribute <target> <attribute> base get <scale>	attribute @e[limit=1] minecraft:scale base get 1.0
+attribute <target> <attribute> base reset	attribute @e[limit=1] minecraft:scale base reset
+attribute <target> <attribute> base set <value>	attribute @e[limit=1] minecraft:scale base set 1.0
+attribute <target> <attribute> get	attribute @e[limit=1] minecraft:scale get
+attribute <target> <attribute> get <scale>	attribute @e[limit=1] minecraft:scale get 1.0
+attribute <target> <attribute> modifier add <id> <value> add_multiplied_base	attribute @e[limit=1] minecraft:scale modifier add minecraft:stone 1.0 add_multiplied_base
+attribute <target> <attribute> modifier add <id> <value> add_multiplied_total	attribute @e[limit=1] minecraft:scale modifier add minecraft:stone 1.0 add_multiplied_total
+attribute <target> <attribute> modifier add <id> <value> add_value	attribute @e[limit=1] minecraft:scale modifier add minecraft:stone 1.0 add_value
+attribute <target> <attribute> modifier remove <id>	attribute @e[limit=1] minecraft:scale modifier remove minecraft:stone
+attribute <target> <attribute> modifier value get <id>	attribute @e[limit=1] minecraft:scale modifier value get minecraft:stone
+attribute <target> <attribute> modifier value get <id> <scale>	attribute @e[limit=1] minecraft:scale modifier value get minecraft:stone 1.0
+ban <targets>	ban @a
+ban <targets> <reason>	ban @a hi
+ban-ip <target>	ban-ip a
+ban-ip <target> <reason>	ban-ip a hi
+banlist	banlist
+banlist ips	banlist ips
+banlist players	banlist players
+bossbar add <id> <name>	bossbar add minecraft:stone "a"
+bossbar get <id> max	bossbar get minecraft:stone max
+bossbar get <id> players	bossbar get minecraft:stone players
+bossbar get <id> value	bossbar get minecraft:stone value
+bossbar get <id> visible	bossbar get minecraft:stone visible
+bossbar list	bossbar list
+bossbar remove <id>	bossbar remove minecraft:stone
+bossbar set <id> color blue	bossbar set minecraft:stone color blue
+bossbar set <id> color green	bossbar set minecraft:stone color green
+bossbar set <id> color pink	bossbar set minecraft:stone color pink
+bossbar set <id> color purple	bossbar set minecraft:stone color purple
+bossbar set <id> color red	bossbar set minecraft:stone color red
+bossbar set <id> color white	bossbar set minecraft:stone color white
+bossbar set <id> color yellow	bossbar set minecraft:stone color yellow
+bossbar set <id> max <max>	bossbar set minecraft:stone max 1
+bossbar set <id> name <name>	bossbar set minecraft:stone name "a"
+bossbar set <id> players	bossbar set minecraft:stone players
+bossbar set <id> players <targets>	bossbar set minecraft:stone players @a
+bossbar set <id> style notched_10	bossbar set minecraft:stone style notched_10
+bossbar set <id> style notched_12	bossbar set minecraft:stone style notched_12
+bossbar set <id> style notched_20	bossbar set minecraft:stone style notched_20
+bossbar set <id> style notched_6	bossbar set minecraft:stone style notched_6
+bossbar set <id> style progress	bossbar set minecraft:stone style progress
+bossbar set <id> value <value>	bossbar set minecraft:stone value 1
+bossbar set <id> visible <visible>	bossbar set minecraft:stone visible true
+clear	clear
+clear <targets>	clear @a
+clear <targets> <item>	clear @a minecraft:stone
+clear <targets> <item> <maxCount>	clear @a minecraft:stone 1
+clone <begin> <end> <destination>	clone 0 64 0 0 64 0 0 64 0
+clone <begin> <end> <destination> filtered <filter>	clone 0 64 0 0 64 0 0 64 0 filtered minecraft:stone
+clone <begin> <end> <destination> filtered <filter> force	clone 0 64 0 0 64 0 0 64 0 filtered minecraft:stone force
+clone <begin> <end> <destination> filtered <filter> move	clone 0 64 0 0 64 0 0 64 0 filtered minecraft:stone move
+clone <begin> <end> <destination> filtered <filter> normal	clone 0 64 0 0 64 0 0 64 0 filtered minecraft:stone normal
+clone <begin> <end> <destination> masked	clone 0 64 0 0 64 0 0 64 0 masked
+clone <begin> <end> <destination> masked force	clone 0 64 0 0 64 0 0 64 0 masked force
+clone <begin> <end> <destination> masked move	clone 0 64 0 0 64 0 0 64 0 masked move
+clone <begin> <end> <destination> masked normal	clone 0 64 0 0 64 0 0 64 0 masked normal
+clone <begin> <end> <destination> replace	clone 0 64 0 0 64 0 0 64 0 replace
+clone <begin> <end> <destination> replace force	clone 0 64 0 0 64 0 0 64 0 replace force
+clone <begin> <end> <destination> replace move	clone 0 64 0 0 64 0 0 64 0 replace move
+clone <begin> <end> <destination> replace normal	clone 0 64 0 0 64 0 0 64 0 replace normal
+clone <begin> <end> <destination> strict	clone 0 64 0 0 64 0 0 64 0 strict
+clone <begin> <end> <destination> strict filtered <filter>	clone 0 64 0 0 64 0 0 64 0 strict filtered minecraft:stone
+clone <begin> <end> <destination> strict filtered <filter> force	clone 0 64 0 0 64 0 0 64 0 strict filtered minecraft:stone force
+clone <begin> <end> <destination> strict filtered <filter> move	clone 0 64 0 0 64 0 0 64 0 strict filtered minecraft:stone move
+clone <begin> <end> <destination> strict filtered <filter> normal	clone 0 64 0 0 64 0 0 64 0 strict filtered minecraft:stone normal
+clone <begin> <end> <destination> strict masked	clone 0 64 0 0 64 0 0 64 0 strict masked
+clone <begin> <end> <destination> strict masked force	clone 0 64 0 0 64 0 0 64 0 strict masked force
+clone <begin> <end> <destination> strict masked move	clone 0 64 0 0 64 0 0 64 0 strict masked move
+clone <begin> <end> <destination> strict masked normal	clone 0 64 0 0 64 0 0 64 0 strict masked normal
+clone <begin> <end> <destination> strict replace	clone 0 64 0 0 64 0 0 64 0 strict replace
+clone <begin> <end> <destination> strict replace force	clone 0 64 0 0 64 0 0 64 0 strict replace force
+clone <begin> <end> <destination> strict replace move	clone 0 64 0 0 64 0 0 64 0 strict replace move
+clone <begin> <end> <destination> strict replace normal	clone 0 64 0 0 64 0 0 64 0 strict replace normal
+clone <begin> <end> to <targetDimension> <destination>	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0
+clone <begin> <end> to <targetDimension> <destination> filtered <filter>	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 filtered minecraft:stone
+clone <begin> <end> to <targetDimension> <destination> filtered <filter> force	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 filtered minecraft:stone force
+clone <begin> <end> to <targetDimension> <destination> filtered <filter> move	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 filtered minecraft:stone move
+clone <begin> <end> to <targetDimension> <destination> filtered <filter> normal	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 filtered minecraft:stone normal
+clone <begin> <end> to <targetDimension> <destination> masked	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 masked
+clone <begin> <end> to <targetDimension> <destination> masked force	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 masked force
+clone <begin> <end> to <targetDimension> <destination> masked move	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 masked move
+clone <begin> <end> to <targetDimension> <destination> masked normal	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 masked normal
+clone <begin> <end> to <targetDimension> <destination> replace	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 replace
+clone <begin> <end> to <targetDimension> <destination> replace force	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 replace force
+clone <begin> <end> to <targetDimension> <destination> replace move	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 replace move
+clone <begin> <end> to <targetDimension> <destination> replace normal	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 replace normal
+clone <begin> <end> to <targetDimension> <destination> strict	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict
+clone <begin> <end> to <targetDimension> <destination> strict filtered <filter>	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict filtered minecraft:stone
+clone <begin> <end> to <targetDimension> <destination> strict filtered <filter> force	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict filtered minecraft:stone force
+clone <begin> <end> to <targetDimension> <destination> strict filtered <filter> move	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict filtered minecraft:stone move
+clone <begin> <end> to <targetDimension> <destination> strict filtered <filter> normal	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict filtered minecraft:stone normal
+clone <begin> <end> to <targetDimension> <destination> strict masked	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict masked
+clone <begin> <end> to <targetDimension> <destination> strict masked force	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict masked force
+clone <begin> <end> to <targetDimension> <destination> strict masked move	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict masked move
+clone <begin> <end> to <targetDimension> <destination> strict masked normal	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict masked normal
+clone <begin> <end> to <targetDimension> <destination> strict replace	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict replace
+clone <begin> <end> to <targetDimension> <destination> strict replace force	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict replace force
+clone <begin> <end> to <targetDimension> <destination> strict replace move	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict replace move
+clone <begin> <end> to <targetDimension> <destination> strict replace normal	clone 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict replace normal
+clone from <sourceDimension> <begin> <end> <destination>	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0
+clone from <sourceDimension> <begin> <end> <destination> filtered <filter>	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 filtered minecraft:stone
+clone from <sourceDimension> <begin> <end> <destination> filtered <filter> force	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 filtered minecraft:stone force
+clone from <sourceDimension> <begin> <end> <destination> filtered <filter> move	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 filtered minecraft:stone move
+clone from <sourceDimension> <begin> <end> <destination> filtered <filter> normal	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 filtered minecraft:stone normal
+clone from <sourceDimension> <begin> <end> <destination> masked	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 masked
+clone from <sourceDimension> <begin> <end> <destination> masked force	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 masked force
+clone from <sourceDimension> <begin> <end> <destination> masked move	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 masked move
+clone from <sourceDimension> <begin> <end> <destination> masked normal	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 masked normal
+clone from <sourceDimension> <begin> <end> <destination> replace	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 replace
+clone from <sourceDimension> <begin> <end> <destination> replace force	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 replace force
+clone from <sourceDimension> <begin> <end> <destination> replace move	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 replace move
+clone from <sourceDimension> <begin> <end> <destination> replace normal	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 replace normal
+clone from <sourceDimension> <begin> <end> <destination> strict	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict
+clone from <sourceDimension> <begin> <end> <destination> strict filtered <filter>	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict filtered minecraft:stone
+clone from <sourceDimension> <begin> <end> <destination> strict filtered <filter> force	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict filtered minecraft:stone force
+clone from <sourceDimension> <begin> <end> <destination> strict filtered <filter> move	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict filtered minecraft:stone move
+clone from <sourceDimension> <begin> <end> <destination> strict filtered <filter> normal	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict filtered minecraft:stone normal
+clone from <sourceDimension> <begin> <end> <destination> strict masked	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict masked
+clone from <sourceDimension> <begin> <end> <destination> strict masked force	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict masked force
+clone from <sourceDimension> <begin> <end> <destination> strict masked move	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict masked move
+clone from <sourceDimension> <begin> <end> <destination> strict masked normal	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict masked normal
+clone from <sourceDimension> <begin> <end> <destination> strict replace	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict replace
+clone from <sourceDimension> <begin> <end> <destination> strict replace force	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict replace force
+clone from <sourceDimension> <begin> <end> <destination> strict replace move	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict replace move
+clone from <sourceDimension> <begin> <end> <destination> strict replace normal	clone from minecraft:overworld 0 64 0 0 64 0 0 64 0 strict replace normal
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination>	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> filtered <filter>	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 filtered minecraft:stone
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> filtered <filter> force	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 filtered minecraft:stone force
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> filtered <filter> move	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 filtered minecraft:stone move
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> filtered <filter> normal	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 filtered minecraft:stone normal
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> masked	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 masked
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> masked force	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 masked force
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> masked move	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 masked move
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> masked normal	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 masked normal
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> replace	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 replace
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> replace force	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 replace force
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> replace move	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 replace move
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> replace normal	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 replace normal
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict filtered <filter>	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict filtered minecraft:stone
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict filtered <filter> force	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict filtered minecraft:stone force
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict filtered <filter> move	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict filtered minecraft:stone move
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict filtered <filter> normal	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict filtered minecraft:stone normal
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict masked	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict masked
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict masked force	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict masked force
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict masked move	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict masked move
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict masked normal	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict masked normal
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict replace	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict replace
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict replace force	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict replace force
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict replace move	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict replace move
+clone from <sourceDimension> <begin> <end> to <targetDimension> <destination> strict replace normal	clone from minecraft:overworld 0 64 0 0 64 0 to minecraft:overworld 0 64 0 strict replace normal
+compute block <computePos> float <provider>	compute block 0 64 0 float minecraft:brewing/speed_default
+compute block <computePos> float <provider> <scale>	compute block 0 64 0 float minecraft:brewing/speed_default 1.0
+compute block <computePos> integer <provider>	compute block 0 64 0 integer minecraft:brewing/uses_default
+compute default float <provider>	compute default float minecraft:brewing/speed_default
+compute default float <provider> <scale>	compute default float minecraft:brewing/speed_default 1.0
+compute default integer <provider>	compute default integer minecraft:brewing/uses_default
+compute entity <computeTarget> float <provider>	compute entity @e[limit=1] float minecraft:brewing/speed_default
+compute entity <computeTarget> float <provider> <scale>	compute entity @e[limit=1] float minecraft:brewing/speed_default 1.0
+compute entity <computeTarget> integer <provider>	compute entity @e[limit=1] integer minecraft:brewing/uses_default
+damage <target> <amount>	damage @e[limit=1] 1.0
+damage <target> <amount> <damageType>	damage @e[limit=1] 1.0 minecraft:generic
+damage <target> <amount> <damageType> at <location>	damage @e[limit=1] 1.0 minecraft:generic at 0 64 0
+damage <target> <amount> <damageType> by <entity>	damage @e[limit=1] 1.0 minecraft:generic by @e[limit=1]
+damage <target> <amount> <damageType> by <entity> from <cause>	damage @e[limit=1] 1.0 minecraft:generic by @e[limit=1] from @e[limit=1]
+data get block <target>	data get block 0 64 0
+data get block <target> <path>	data get block 0 64 0 a
+data get block <target> <path> <scale>	data get block 0 64 0 a 1.0
+data get entity <target>	data get entity @e[limit=1]
+data get entity <target> <path>	data get entity @e[limit=1] a
+data get entity <target> <path> <scale>	data get entity @e[limit=1] a 1.0
+data get storage <target>	data get storage minecraft:stone
+data get storage <target> <path>	data get storage minecraft:stone a
+data get storage <target> <path> <scale>	data get storage minecraft:stone a 1.0
+data merge block <target> <nbt>	data merge block 0 64 0 {}
+data merge entity <target> <nbt>	data merge entity @e[limit=1] {}
+data merge storage <target> <nbt>	data merge storage minecraft:stone {}
+data modify block <target> <targetPath> append compute block <computePos> float <provider>	data modify block 0 64 0 a append compute block 0 64 0 float minecraft:brewing/speed_default
+data modify block <target> <targetPath> append compute block <computePos> integer <provider>	data modify block 0 64 0 a append compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> append compute default float <provider>	data modify block 0 64 0 a append compute default float minecraft:brewing/speed_default
+data modify block <target> <targetPath> append compute default integer <provider>	data modify block 0 64 0 a append compute default integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> append compute entity <computeTarget> float <provider>	data modify block 0 64 0 a append compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify block <target> <targetPath> append compute entity <computeTarget> integer <provider>	data modify block 0 64 0 a append compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> append from block <source>	data modify block 0 64 0 a append from block 0 64 0
+data modify block <target> <targetPath> append from block <source> <sourcePath>	data modify block 0 64 0 a append from block 0 64 0 a
+data modify block <target> <targetPath> append from entity <source>	data modify block 0 64 0 a append from entity @e[limit=1]
+data modify block <target> <targetPath> append from entity <source> <sourcePath>	data modify block 0 64 0 a append from entity @e[limit=1] a
+data modify block <target> <targetPath> append from storage <source>	data modify block 0 64 0 a append from storage minecraft:stone
+data modify block <target> <targetPath> append from storage <source> <sourcePath>	data modify block 0 64 0 a append from storage minecraft:stone a
+data modify block <target> <targetPath> append string block <source>	data modify block 0 64 0 a append string block 0 64 0
+data modify block <target> <targetPath> append string block <source> <sourcePath>	data modify block 0 64 0 a append string block 0 64 0 a
+data modify block <target> <targetPath> append string block <source> <sourcePath> <start>	data modify block 0 64 0 a append string block 0 64 0 a 1
+data modify block <target> <targetPath> append string block <source> <sourcePath> <start> <end>	data modify block 0 64 0 a append string block 0 64 0 a 1 1
+data modify block <target> <targetPath> append string entity <source>	data modify block 0 64 0 a append string entity @e[limit=1]
+data modify block <target> <targetPath> append string entity <source> <sourcePath>	data modify block 0 64 0 a append string entity @e[limit=1] a
+data modify block <target> <targetPath> append string entity <source> <sourcePath> <start>	data modify block 0 64 0 a append string entity @e[limit=1] a 1
+data modify block <target> <targetPath> append string entity <source> <sourcePath> <start> <end>	data modify block 0 64 0 a append string entity @e[limit=1] a 1 1
+data modify block <target> <targetPath> append string storage <source>	data modify block 0 64 0 a append string storage minecraft:stone
+data modify block <target> <targetPath> append string storage <source> <sourcePath>	data modify block 0 64 0 a append string storage minecraft:stone a
+data modify block <target> <targetPath> append string storage <source> <sourcePath> <start>	data modify block 0 64 0 a append string storage minecraft:stone a 1
+data modify block <target> <targetPath> append string storage <source> <sourcePath> <start> <end>	data modify block 0 64 0 a append string storage minecraft:stone a 1 1
+data modify block <target> <targetPath> append value <value>	data modify block 0 64 0 a append value 1
+data modify block <target> <targetPath> insert <index> compute block <computePos> float <provider>	data modify block 0 64 0 a insert 1 compute block 0 64 0 float minecraft:brewing/speed_default
+data modify block <target> <targetPath> insert <index> compute block <computePos> integer <provider>	data modify block 0 64 0 a insert 1 compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> insert <index> compute default float <provider>	data modify block 0 64 0 a insert 1 compute default float minecraft:brewing/speed_default
+data modify block <target> <targetPath> insert <index> compute default integer <provider>	data modify block 0 64 0 a insert 1 compute default integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> insert <index> compute entity <computeTarget> float <provider>	data modify block 0 64 0 a insert 1 compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify block <target> <targetPath> insert <index> compute entity <computeTarget> integer <provider>	data modify block 0 64 0 a insert 1 compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> insert <index> from block <source>	data modify block 0 64 0 a insert 1 from block 0 64 0
+data modify block <target> <targetPath> insert <index> from block <source> <sourcePath>	data modify block 0 64 0 a insert 1 from block 0 64 0 a
+data modify block <target> <targetPath> insert <index> from entity <source>	data modify block 0 64 0 a insert 1 from entity @e[limit=1]
+data modify block <target> <targetPath> insert <index> from entity <source> <sourcePath>	data modify block 0 64 0 a insert 1 from entity @e[limit=1] a
+data modify block <target> <targetPath> insert <index> from storage <source>	data modify block 0 64 0 a insert 1 from storage minecraft:stone
+data modify block <target> <targetPath> insert <index> from storage <source> <sourcePath>	data modify block 0 64 0 a insert 1 from storage minecraft:stone a
+data modify block <target> <targetPath> insert <index> string block <source>	data modify block 0 64 0 a insert 1 string block 0 64 0
+data modify block <target> <targetPath> insert <index> string block <source> <sourcePath>	data modify block 0 64 0 a insert 1 string block 0 64 0 a
+data modify block <target> <targetPath> insert <index> string block <source> <sourcePath> <start>	data modify block 0 64 0 a insert 1 string block 0 64 0 a 1
+data modify block <target> <targetPath> insert <index> string block <source> <sourcePath> <start> <end>	data modify block 0 64 0 a insert 1 string block 0 64 0 a 1 1
+data modify block <target> <targetPath> insert <index> string entity <source>	data modify block 0 64 0 a insert 1 string entity @e[limit=1]
+data modify block <target> <targetPath> insert <index> string entity <source> <sourcePath>	data modify block 0 64 0 a insert 1 string entity @e[limit=1] a
+data modify block <target> <targetPath> insert <index> string entity <source> <sourcePath> <start>	data modify block 0 64 0 a insert 1 string entity @e[limit=1] a 1
+data modify block <target> <targetPath> insert <index> string entity <source> <sourcePath> <start> <end>	data modify block 0 64 0 a insert 1 string entity @e[limit=1] a 1 1
+data modify block <target> <targetPath> insert <index> string storage <source>	data modify block 0 64 0 a insert 1 string storage minecraft:stone
+data modify block <target> <targetPath> insert <index> string storage <source> <sourcePath>	data modify block 0 64 0 a insert 1 string storage minecraft:stone a
+data modify block <target> <targetPath> insert <index> string storage <source> <sourcePath> <start>	data modify block 0 64 0 a insert 1 string storage minecraft:stone a 1
+data modify block <target> <targetPath> insert <index> string storage <source> <sourcePath> <start> <end>	data modify block 0 64 0 a insert 1 string storage minecraft:stone a 1 1
+data modify block <target> <targetPath> insert <index> value <value>	data modify block 0 64 0 a insert 1 value 1
+data modify block <target> <targetPath> merge compute block <computePos> float <provider>	data modify block 0 64 0 a merge compute block 0 64 0 float minecraft:brewing/speed_default
+data modify block <target> <targetPath> merge compute block <computePos> integer <provider>	data modify block 0 64 0 a merge compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> merge compute default float <provider>	data modify block 0 64 0 a merge compute default float minecraft:brewing/speed_default
+data modify block <target> <targetPath> merge compute default integer <provider>	data modify block 0 64 0 a merge compute default integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> merge compute entity <computeTarget> float <provider>	data modify block 0 64 0 a merge compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify block <target> <targetPath> merge compute entity <computeTarget> integer <provider>	data modify block 0 64 0 a merge compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> merge from block <source>	data modify block 0 64 0 a merge from block 0 64 0
+data modify block <target> <targetPath> merge from block <source> <sourcePath>	data modify block 0 64 0 a merge from block 0 64 0 a
+data modify block <target> <targetPath> merge from entity <source>	data modify block 0 64 0 a merge from entity @e[limit=1]
+data modify block <target> <targetPath> merge from entity <source> <sourcePath>	data modify block 0 64 0 a merge from entity @e[limit=1] a
+data modify block <target> <targetPath> merge from storage <source>	data modify block 0 64 0 a merge from storage minecraft:stone
+data modify block <target> <targetPath> merge from storage <source> <sourcePath>	data modify block 0 64 0 a merge from storage minecraft:stone a
+data modify block <target> <targetPath> merge string block <source>	data modify block 0 64 0 a merge string block 0 64 0
+data modify block <target> <targetPath> merge string block <source> <sourcePath>	data modify block 0 64 0 a merge string block 0 64 0 a
+data modify block <target> <targetPath> merge string block <source> <sourcePath> <start>	data modify block 0 64 0 a merge string block 0 64 0 a 1
+data modify block <target> <targetPath> merge string block <source> <sourcePath> <start> <end>	data modify block 0 64 0 a merge string block 0 64 0 a 1 1
+data modify block <target> <targetPath> merge string entity <source>	data modify block 0 64 0 a merge string entity @e[limit=1]
+data modify block <target> <targetPath> merge string entity <source> <sourcePath>	data modify block 0 64 0 a merge string entity @e[limit=1] a
+data modify block <target> <targetPath> merge string entity <source> <sourcePath> <start>	data modify block 0 64 0 a merge string entity @e[limit=1] a 1
+data modify block <target> <targetPath> merge string entity <source> <sourcePath> <start> <end>	data modify block 0 64 0 a merge string entity @e[limit=1] a 1 1
+data modify block <target> <targetPath> merge string storage <source>	data modify block 0 64 0 a merge string storage minecraft:stone
+data modify block <target> <targetPath> merge string storage <source> <sourcePath>	data modify block 0 64 0 a merge string storage minecraft:stone a
+data modify block <target> <targetPath> merge string storage <source> <sourcePath> <start>	data modify block 0 64 0 a merge string storage minecraft:stone a 1
+data modify block <target> <targetPath> merge string storage <source> <sourcePath> <start> <end>	data modify block 0 64 0 a merge string storage minecraft:stone a 1 1
+data modify block <target> <targetPath> merge value <value>	data modify block 0 64 0 a merge value 1
+data modify block <target> <targetPath> prepend compute block <computePos> float <provider>	data modify block 0 64 0 a prepend compute block 0 64 0 float minecraft:brewing/speed_default
+data modify block <target> <targetPath> prepend compute block <computePos> integer <provider>	data modify block 0 64 0 a prepend compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> prepend compute default float <provider>	data modify block 0 64 0 a prepend compute default float minecraft:brewing/speed_default
+data modify block <target> <targetPath> prepend compute default integer <provider>	data modify block 0 64 0 a prepend compute default integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> prepend compute entity <computeTarget> float <provider>	data modify block 0 64 0 a prepend compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify block <target> <targetPath> prepend compute entity <computeTarget> integer <provider>	data modify block 0 64 0 a prepend compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> prepend from block <source>	data modify block 0 64 0 a prepend from block 0 64 0
+data modify block <target> <targetPath> prepend from block <source> <sourcePath>	data modify block 0 64 0 a prepend from block 0 64 0 a
+data modify block <target> <targetPath> prepend from entity <source>	data modify block 0 64 0 a prepend from entity @e[limit=1]
+data modify block <target> <targetPath> prepend from entity <source> <sourcePath>	data modify block 0 64 0 a prepend from entity @e[limit=1] a
+data modify block <target> <targetPath> prepend from storage <source>	data modify block 0 64 0 a prepend from storage minecraft:stone
+data modify block <target> <targetPath> prepend from storage <source> <sourcePath>	data modify block 0 64 0 a prepend from storage minecraft:stone a
+data modify block <target> <targetPath> prepend string block <source>	data modify block 0 64 0 a prepend string block 0 64 0
+data modify block <target> <targetPath> prepend string block <source> <sourcePath>	data modify block 0 64 0 a prepend string block 0 64 0 a
+data modify block <target> <targetPath> prepend string block <source> <sourcePath> <start>	data modify block 0 64 0 a prepend string block 0 64 0 a 1
+data modify block <target> <targetPath> prepend string block <source> <sourcePath> <start> <end>	data modify block 0 64 0 a prepend string block 0 64 0 a 1 1
+data modify block <target> <targetPath> prepend string entity <source>	data modify block 0 64 0 a prepend string entity @e[limit=1]
+data modify block <target> <targetPath> prepend string entity <source> <sourcePath>	data modify block 0 64 0 a prepend string entity @e[limit=1] a
+data modify block <target> <targetPath> prepend string entity <source> <sourcePath> <start>	data modify block 0 64 0 a prepend string entity @e[limit=1] a 1
+data modify block <target> <targetPath> prepend string entity <source> <sourcePath> <start> <end>	data modify block 0 64 0 a prepend string entity @e[limit=1] a 1 1
+data modify block <target> <targetPath> prepend string storage <source>	data modify block 0 64 0 a prepend string storage minecraft:stone
+data modify block <target> <targetPath> prepend string storage <source> <sourcePath>	data modify block 0 64 0 a prepend string storage minecraft:stone a
+data modify block <target> <targetPath> prepend string storage <source> <sourcePath> <start>	data modify block 0 64 0 a prepend string storage minecraft:stone a 1
+data modify block <target> <targetPath> prepend string storage <source> <sourcePath> <start> <end>	data modify block 0 64 0 a prepend string storage minecraft:stone a 1 1
+data modify block <target> <targetPath> prepend value <value>	data modify block 0 64 0 a prepend value 1
+data modify block <target> <targetPath> set compute block <computePos> float <provider>	data modify block 0 64 0 a set compute block 0 64 0 float minecraft:brewing/speed_default
+data modify block <target> <targetPath> set compute block <computePos> integer <provider>	data modify block 0 64 0 a set compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> set compute default float <provider>	data modify block 0 64 0 a set compute default float minecraft:brewing/speed_default
+data modify block <target> <targetPath> set compute default integer <provider>	data modify block 0 64 0 a set compute default integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> set compute entity <computeTarget> float <provider>	data modify block 0 64 0 a set compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify block <target> <targetPath> set compute entity <computeTarget> integer <provider>	data modify block 0 64 0 a set compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify block <target> <targetPath> set from block <source>	data modify block 0 64 0 a set from block 0 64 0
+data modify block <target> <targetPath> set from block <source> <sourcePath>	data modify block 0 64 0 a set from block 0 64 0 a
+data modify block <target> <targetPath> set from entity <source>	data modify block 0 64 0 a set from entity @e[limit=1]
+data modify block <target> <targetPath> set from entity <source> <sourcePath>	data modify block 0 64 0 a set from entity @e[limit=1] a
+data modify block <target> <targetPath> set from storage <source>	data modify block 0 64 0 a set from storage minecraft:stone
+data modify block <target> <targetPath> set from storage <source> <sourcePath>	data modify block 0 64 0 a set from storage minecraft:stone a
+data modify block <target> <targetPath> set string block <source>	data modify block 0 64 0 a set string block 0 64 0
+data modify block <target> <targetPath> set string block <source> <sourcePath>	data modify block 0 64 0 a set string block 0 64 0 a
+data modify block <target> <targetPath> set string block <source> <sourcePath> <start>	data modify block 0 64 0 a set string block 0 64 0 a 1
+data modify block <target> <targetPath> set string block <source> <sourcePath> <start> <end>	data modify block 0 64 0 a set string block 0 64 0 a 1 1
+data modify block <target> <targetPath> set string entity <source>	data modify block 0 64 0 a set string entity @e[limit=1]
+data modify block <target> <targetPath> set string entity <source> <sourcePath>	data modify block 0 64 0 a set string entity @e[limit=1] a
+data modify block <target> <targetPath> set string entity <source> <sourcePath> <start>	data modify block 0 64 0 a set string entity @e[limit=1] a 1
+data modify block <target> <targetPath> set string entity <source> <sourcePath> <start> <end>	data modify block 0 64 0 a set string entity @e[limit=1] a 1 1
+data modify block <target> <targetPath> set string storage <source>	data modify block 0 64 0 a set string storage minecraft:stone
+data modify block <target> <targetPath> set string storage <source> <sourcePath>	data modify block 0 64 0 a set string storage minecraft:stone a
+data modify block <target> <targetPath> set string storage <source> <sourcePath> <start>	data modify block 0 64 0 a set string storage minecraft:stone a 1
+data modify block <target> <targetPath> set string storage <source> <sourcePath> <start> <end>	data modify block 0 64 0 a set string storage minecraft:stone a 1 1
+data modify block <target> <targetPath> set value <value>	data modify block 0 64 0 a set value 1
+data modify entity <target> <targetPath> append compute block <computePos> float <provider>	data modify entity @e[limit=1] a append compute block 0 64 0 float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> append compute block <computePos> integer <provider>	data modify entity @e[limit=1] a append compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> append compute default float <provider>	data modify entity @e[limit=1] a append compute default float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> append compute default integer <provider>	data modify entity @e[limit=1] a append compute default integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> append compute entity <computeTarget> float <provider>	data modify entity @e[limit=1] a append compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> append compute entity <computeTarget> integer <provider>	data modify entity @e[limit=1] a append compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> append from block <source>	data modify entity @e[limit=1] a append from block 0 64 0
+data modify entity <target> <targetPath> append from block <source> <sourcePath>	data modify entity @e[limit=1] a append from block 0 64 0 a
+data modify entity <target> <targetPath> append from entity <source>	data modify entity @e[limit=1] a append from entity @e[limit=1]
+data modify entity <target> <targetPath> append from entity <source> <sourcePath>	data modify entity @e[limit=1] a append from entity @e[limit=1] a
+data modify entity <target> <targetPath> append from storage <source>	data modify entity @e[limit=1] a append from storage minecraft:stone
+data modify entity <target> <targetPath> append from storage <source> <sourcePath>	data modify entity @e[limit=1] a append from storage minecraft:stone a
+data modify entity <target> <targetPath> append string block <source>	data modify entity @e[limit=1] a append string block 0 64 0
+data modify entity <target> <targetPath> append string block <source> <sourcePath>	data modify entity @e[limit=1] a append string block 0 64 0 a
+data modify entity <target> <targetPath> append string block <source> <sourcePath> <start>	data modify entity @e[limit=1] a append string block 0 64 0 a 1
+data modify entity <target> <targetPath> append string block <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a append string block 0 64 0 a 1 1
+data modify entity <target> <targetPath> append string entity <source>	data modify entity @e[limit=1] a append string entity @e[limit=1]
+data modify entity <target> <targetPath> append string entity <source> <sourcePath>	data modify entity @e[limit=1] a append string entity @e[limit=1] a
+data modify entity <target> <targetPath> append string entity <source> <sourcePath> <start>	data modify entity @e[limit=1] a append string entity @e[limit=1] a 1
+data modify entity <target> <targetPath> append string entity <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a append string entity @e[limit=1] a 1 1
+data modify entity <target> <targetPath> append string storage <source>	data modify entity @e[limit=1] a append string storage minecraft:stone
+data modify entity <target> <targetPath> append string storage <source> <sourcePath>	data modify entity @e[limit=1] a append string storage minecraft:stone a
+data modify entity <target> <targetPath> append string storage <source> <sourcePath> <start>	data modify entity @e[limit=1] a append string storage minecraft:stone a 1
+data modify entity <target> <targetPath> append string storage <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a append string storage minecraft:stone a 1 1
+data modify entity <target> <targetPath> append value <value>	data modify entity @e[limit=1] a append value 1
+data modify entity <target> <targetPath> insert <index> compute block <computePos> float <provider>	data modify entity @e[limit=1] a insert 1 compute block 0 64 0 float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> insert <index> compute block <computePos> integer <provider>	data modify entity @e[limit=1] a insert 1 compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> insert <index> compute default float <provider>	data modify entity @e[limit=1] a insert 1 compute default float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> insert <index> compute default integer <provider>	data modify entity @e[limit=1] a insert 1 compute default integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> insert <index> compute entity <computeTarget> float <provider>	data modify entity @e[limit=1] a insert 1 compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> insert <index> compute entity <computeTarget> integer <provider>	data modify entity @e[limit=1] a insert 1 compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> insert <index> from block <source>	data modify entity @e[limit=1] a insert 1 from block 0 64 0
+data modify entity <target> <targetPath> insert <index> from block <source> <sourcePath>	data modify entity @e[limit=1] a insert 1 from block 0 64 0 a
+data modify entity <target> <targetPath> insert <index> from entity <source>	data modify entity @e[limit=1] a insert 1 from entity @e[limit=1]
+data modify entity <target> <targetPath> insert <index> from entity <source> <sourcePath>	data modify entity @e[limit=1] a insert 1 from entity @e[limit=1] a
+data modify entity <target> <targetPath> insert <index> from storage <source>	data modify entity @e[limit=1] a insert 1 from storage minecraft:stone
+data modify entity <target> <targetPath> insert <index> from storage <source> <sourcePath>	data modify entity @e[limit=1] a insert 1 from storage minecraft:stone a
+data modify entity <target> <targetPath> insert <index> string block <source>	data modify entity @e[limit=1] a insert 1 string block 0 64 0
+data modify entity <target> <targetPath> insert <index> string block <source> <sourcePath>	data modify entity @e[limit=1] a insert 1 string block 0 64 0 a
+data modify entity <target> <targetPath> insert <index> string block <source> <sourcePath> <start>	data modify entity @e[limit=1] a insert 1 string block 0 64 0 a 1
+data modify entity <target> <targetPath> insert <index> string block <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a insert 1 string block 0 64 0 a 1 1
+data modify entity <target> <targetPath> insert <index> string entity <source>	data modify entity @e[limit=1] a insert 1 string entity @e[limit=1]
+data modify entity <target> <targetPath> insert <index> string entity <source> <sourcePath>	data modify entity @e[limit=1] a insert 1 string entity @e[limit=1] a
+data modify entity <target> <targetPath> insert <index> string entity <source> <sourcePath> <start>	data modify entity @e[limit=1] a insert 1 string entity @e[limit=1] a 1
+data modify entity <target> <targetPath> insert <index> string entity <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a insert 1 string entity @e[limit=1] a 1 1
+data modify entity <target> <targetPath> insert <index> string storage <source>	data modify entity @e[limit=1] a insert 1 string storage minecraft:stone
+data modify entity <target> <targetPath> insert <index> string storage <source> <sourcePath>	data modify entity @e[limit=1] a insert 1 string storage minecraft:stone a
+data modify entity <target> <targetPath> insert <index> string storage <source> <sourcePath> <start>	data modify entity @e[limit=1] a insert 1 string storage minecraft:stone a 1
+data modify entity <target> <targetPath> insert <index> string storage <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a insert 1 string storage minecraft:stone a 1 1
+data modify entity <target> <targetPath> insert <index> value <value>	data modify entity @e[limit=1] a insert 1 value 1
+data modify entity <target> <targetPath> merge compute block <computePos> float <provider>	data modify entity @e[limit=1] a merge compute block 0 64 0 float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> merge compute block <computePos> integer <provider>	data modify entity @e[limit=1] a merge compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> merge compute default float <provider>	data modify entity @e[limit=1] a merge compute default float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> merge compute default integer <provider>	data modify entity @e[limit=1] a merge compute default integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> merge compute entity <computeTarget> float <provider>	data modify entity @e[limit=1] a merge compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> merge compute entity <computeTarget> integer <provider>	data modify entity @e[limit=1] a merge compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> merge from block <source>	data modify entity @e[limit=1] a merge from block 0 64 0
+data modify entity <target> <targetPath> merge from block <source> <sourcePath>	data modify entity @e[limit=1] a merge from block 0 64 0 a
+data modify entity <target> <targetPath> merge from entity <source>	data modify entity @e[limit=1] a merge from entity @e[limit=1]
+data modify entity <target> <targetPath> merge from entity <source> <sourcePath>	data modify entity @e[limit=1] a merge from entity @e[limit=1] a
+data modify entity <target> <targetPath> merge from storage <source>	data modify entity @e[limit=1] a merge from storage minecraft:stone
+data modify entity <target> <targetPath> merge from storage <source> <sourcePath>	data modify entity @e[limit=1] a merge from storage minecraft:stone a
+data modify entity <target> <targetPath> merge string block <source>	data modify entity @e[limit=1] a merge string block 0 64 0
+data modify entity <target> <targetPath> merge string block <source> <sourcePath>	data modify entity @e[limit=1] a merge string block 0 64 0 a
+data modify entity <target> <targetPath> merge string block <source> <sourcePath> <start>	data modify entity @e[limit=1] a merge string block 0 64 0 a 1
+data modify entity <target> <targetPath> merge string block <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a merge string block 0 64 0 a 1 1
+data modify entity <target> <targetPath> merge string entity <source>	data modify entity @e[limit=1] a merge string entity @e[limit=1]
+data modify entity <target> <targetPath> merge string entity <source> <sourcePath>	data modify entity @e[limit=1] a merge string entity @e[limit=1] a
+data modify entity <target> <targetPath> merge string entity <source> <sourcePath> <start>	data modify entity @e[limit=1] a merge string entity @e[limit=1] a 1
+data modify entity <target> <targetPath> merge string entity <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a merge string entity @e[limit=1] a 1 1
+data modify entity <target> <targetPath> merge string storage <source>	data modify entity @e[limit=1] a merge string storage minecraft:stone
+data modify entity <target> <targetPath> merge string storage <source> <sourcePath>	data modify entity @e[limit=1] a merge string storage minecraft:stone a
+data modify entity <target> <targetPath> merge string storage <source> <sourcePath> <start>	data modify entity @e[limit=1] a merge string storage minecraft:stone a 1
+data modify entity <target> <targetPath> merge string storage <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a merge string storage minecraft:stone a 1 1
+data modify entity <target> <targetPath> merge value <value>	data modify entity @e[limit=1] a merge value 1
+data modify entity <target> <targetPath> prepend compute block <computePos> float <provider>	data modify entity @e[limit=1] a prepend compute block 0 64 0 float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> prepend compute block <computePos> integer <provider>	data modify entity @e[limit=1] a prepend compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> prepend compute default float <provider>	data modify entity @e[limit=1] a prepend compute default float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> prepend compute default integer <provider>	data modify entity @e[limit=1] a prepend compute default integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> prepend compute entity <computeTarget> float <provider>	data modify entity @e[limit=1] a prepend compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> prepend compute entity <computeTarget> integer <provider>	data modify entity @e[limit=1] a prepend compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> prepend from block <source>	data modify entity @e[limit=1] a prepend from block 0 64 0
+data modify entity <target> <targetPath> prepend from block <source> <sourcePath>	data modify entity @e[limit=1] a prepend from block 0 64 0 a
+data modify entity <target> <targetPath> prepend from entity <source>	data modify entity @e[limit=1] a prepend from entity @e[limit=1]
+data modify entity <target> <targetPath> prepend from entity <source> <sourcePath>	data modify entity @e[limit=1] a prepend from entity @e[limit=1] a
+data modify entity <target> <targetPath> prepend from storage <source>	data modify entity @e[limit=1] a prepend from storage minecraft:stone
+data modify entity <target> <targetPath> prepend from storage <source> <sourcePath>	data modify entity @e[limit=1] a prepend from storage minecraft:stone a
+data modify entity <target> <targetPath> prepend string block <source>	data modify entity @e[limit=1] a prepend string block 0 64 0
+data modify entity <target> <targetPath> prepend string block <source> <sourcePath>	data modify entity @e[limit=1] a prepend string block 0 64 0 a
+data modify entity <target> <targetPath> prepend string block <source> <sourcePath> <start>	data modify entity @e[limit=1] a prepend string block 0 64 0 a 1
+data modify entity <target> <targetPath> prepend string block <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a prepend string block 0 64 0 a 1 1
+data modify entity <target> <targetPath> prepend string entity <source>	data modify entity @e[limit=1] a prepend string entity @e[limit=1]
+data modify entity <target> <targetPath> prepend string entity <source> <sourcePath>	data modify entity @e[limit=1] a prepend string entity @e[limit=1] a
+data modify entity <target> <targetPath> prepend string entity <source> <sourcePath> <start>	data modify entity @e[limit=1] a prepend string entity @e[limit=1] a 1
+data modify entity <target> <targetPath> prepend string entity <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a prepend string entity @e[limit=1] a 1 1
+data modify entity <target> <targetPath> prepend string storage <source>	data modify entity @e[limit=1] a prepend string storage minecraft:stone
+data modify entity <target> <targetPath> prepend string storage <source> <sourcePath>	data modify entity @e[limit=1] a prepend string storage minecraft:stone a
+data modify entity <target> <targetPath> prepend string storage <source> <sourcePath> <start>	data modify entity @e[limit=1] a prepend string storage minecraft:stone a 1
+data modify entity <target> <targetPath> prepend string storage <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a prepend string storage minecraft:stone a 1 1
+data modify entity <target> <targetPath> prepend value <value>	data modify entity @e[limit=1] a prepend value 1
+data modify entity <target> <targetPath> set compute block <computePos> float <provider>	data modify entity @e[limit=1] a set compute block 0 64 0 float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> set compute block <computePos> integer <provider>	data modify entity @e[limit=1] a set compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> set compute default float <provider>	data modify entity @e[limit=1] a set compute default float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> set compute default integer <provider>	data modify entity @e[limit=1] a set compute default integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> set compute entity <computeTarget> float <provider>	data modify entity @e[limit=1] a set compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify entity <target> <targetPath> set compute entity <computeTarget> integer <provider>	data modify entity @e[limit=1] a set compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify entity <target> <targetPath> set from block <source>	data modify entity @e[limit=1] a set from block 0 64 0
+data modify entity <target> <targetPath> set from block <source> <sourcePath>	data modify entity @e[limit=1] a set from block 0 64 0 a
+data modify entity <target> <targetPath> set from entity <source>	data modify entity @e[limit=1] a set from entity @e[limit=1]
+data modify entity <target> <targetPath> set from entity <source> <sourcePath>	data modify entity @e[limit=1] a set from entity @e[limit=1] a
+data modify entity <target> <targetPath> set from storage <source>	data modify entity @e[limit=1] a set from storage minecraft:stone
+data modify entity <target> <targetPath> set from storage <source> <sourcePath>	data modify entity @e[limit=1] a set from storage minecraft:stone a
+data modify entity <target> <targetPath> set string block <source>	data modify entity @e[limit=1] a set string block 0 64 0
+data modify entity <target> <targetPath> set string block <source> <sourcePath>	data modify entity @e[limit=1] a set string block 0 64 0 a
+data modify entity <target> <targetPath> set string block <source> <sourcePath> <start>	data modify entity @e[limit=1] a set string block 0 64 0 a 1
+data modify entity <target> <targetPath> set string block <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a set string block 0 64 0 a 1 1
+data modify entity <target> <targetPath> set string entity <source>	data modify entity @e[limit=1] a set string entity @e[limit=1]
+data modify entity <target> <targetPath> set string entity <source> <sourcePath>	data modify entity @e[limit=1] a set string entity @e[limit=1] a
+data modify entity <target> <targetPath> set string entity <source> <sourcePath> <start>	data modify entity @e[limit=1] a set string entity @e[limit=1] a 1
+data modify entity <target> <targetPath> set string entity <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a set string entity @e[limit=1] a 1 1
+data modify entity <target> <targetPath> set string storage <source>	data modify entity @e[limit=1] a set string storage minecraft:stone
+data modify entity <target> <targetPath> set string storage <source> <sourcePath>	data modify entity @e[limit=1] a set string storage minecraft:stone a
+data modify entity <target> <targetPath> set string storage <source> <sourcePath> <start>	data modify entity @e[limit=1] a set string storage minecraft:stone a 1
+data modify entity <target> <targetPath> set string storage <source> <sourcePath> <start> <end>	data modify entity @e[limit=1] a set string storage minecraft:stone a 1 1
+data modify entity <target> <targetPath> set value <value>	data modify entity @e[limit=1] a set value 1
+data modify storage <target> <targetPath> append compute block <computePos> float <provider>	data modify storage minecraft:stone a append compute block 0 64 0 float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> append compute block <computePos> integer <provider>	data modify storage minecraft:stone a append compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> append compute default float <provider>	data modify storage minecraft:stone a append compute default float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> append compute default integer <provider>	data modify storage minecraft:stone a append compute default integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> append compute entity <computeTarget> float <provider>	data modify storage minecraft:stone a append compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> append compute entity <computeTarget> integer <provider>	data modify storage minecraft:stone a append compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> append from block <source>	data modify storage minecraft:stone a append from block 0 64 0
+data modify storage <target> <targetPath> append from block <source> <sourcePath>	data modify storage minecraft:stone a append from block 0 64 0 a
+data modify storage <target> <targetPath> append from entity <source>	data modify storage minecraft:stone a append from entity @e[limit=1]
+data modify storage <target> <targetPath> append from entity <source> <sourcePath>	data modify storage minecraft:stone a append from entity @e[limit=1] a
+data modify storage <target> <targetPath> append from storage <source>	data modify storage minecraft:stone a append from storage minecraft:stone
+data modify storage <target> <targetPath> append from storage <source> <sourcePath>	data modify storage minecraft:stone a append from storage minecraft:stone a
+data modify storage <target> <targetPath> append string block <source>	data modify storage minecraft:stone a append string block 0 64 0
+data modify storage <target> <targetPath> append string block <source> <sourcePath>	data modify storage minecraft:stone a append string block 0 64 0 a
+data modify storage <target> <targetPath> append string block <source> <sourcePath> <start>	data modify storage minecraft:stone a append string block 0 64 0 a 1
+data modify storage <target> <targetPath> append string block <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a append string block 0 64 0 a 1 1
+data modify storage <target> <targetPath> append string entity <source>	data modify storage minecraft:stone a append string entity @e[limit=1]
+data modify storage <target> <targetPath> append string entity <source> <sourcePath>	data modify storage minecraft:stone a append string entity @e[limit=1] a
+data modify storage <target> <targetPath> append string entity <source> <sourcePath> <start>	data modify storage minecraft:stone a append string entity @e[limit=1] a 1
+data modify storage <target> <targetPath> append string entity <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a append string entity @e[limit=1] a 1 1
+data modify storage <target> <targetPath> append string storage <source>	data modify storage minecraft:stone a append string storage minecraft:stone
+data modify storage <target> <targetPath> append string storage <source> <sourcePath>	data modify storage minecraft:stone a append string storage minecraft:stone a
+data modify storage <target> <targetPath> append string storage <source> <sourcePath> <start>	data modify storage minecraft:stone a append string storage minecraft:stone a 1
+data modify storage <target> <targetPath> append string storage <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a append string storage minecraft:stone a 1 1
+data modify storage <target> <targetPath> append value <value>	data modify storage minecraft:stone a append value 1
+data modify storage <target> <targetPath> insert <index> compute block <computePos> float <provider>	data modify storage minecraft:stone a insert 1 compute block 0 64 0 float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> insert <index> compute block <computePos> integer <provider>	data modify storage minecraft:stone a insert 1 compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> insert <index> compute default float <provider>	data modify storage minecraft:stone a insert 1 compute default float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> insert <index> compute default integer <provider>	data modify storage minecraft:stone a insert 1 compute default integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> insert <index> compute entity <computeTarget> float <provider>	data modify storage minecraft:stone a insert 1 compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> insert <index> compute entity <computeTarget> integer <provider>	data modify storage minecraft:stone a insert 1 compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> insert <index> from block <source>	data modify storage minecraft:stone a insert 1 from block 0 64 0
+data modify storage <target> <targetPath> insert <index> from block <source> <sourcePath>	data modify storage minecraft:stone a insert 1 from block 0 64 0 a
+data modify storage <target> <targetPath> insert <index> from entity <source>	data modify storage minecraft:stone a insert 1 from entity @e[limit=1]
+data modify storage <target> <targetPath> insert <index> from entity <source> <sourcePath>	data modify storage minecraft:stone a insert 1 from entity @e[limit=1] a
+data modify storage <target> <targetPath> insert <index> from storage <source>	data modify storage minecraft:stone a insert 1 from storage minecraft:stone
+data modify storage <target> <targetPath> insert <index> from storage <source> <sourcePath>	data modify storage minecraft:stone a insert 1 from storage minecraft:stone a
+data modify storage <target> <targetPath> insert <index> string block <source>	data modify storage minecraft:stone a insert 1 string block 0 64 0
+data modify storage <target> <targetPath> insert <index> string block <source> <sourcePath>	data modify storage minecraft:stone a insert 1 string block 0 64 0 a
+data modify storage <target> <targetPath> insert <index> string block <source> <sourcePath> <start>	data modify storage minecraft:stone a insert 1 string block 0 64 0 a 1
+data modify storage <target> <targetPath> insert <index> string block <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a insert 1 string block 0 64 0 a 1 1
+data modify storage <target> <targetPath> insert <index> string entity <source>	data modify storage minecraft:stone a insert 1 string entity @e[limit=1]
+data modify storage <target> <targetPath> insert <index> string entity <source> <sourcePath>	data modify storage minecraft:stone a insert 1 string entity @e[limit=1] a
+data modify storage <target> <targetPath> insert <index> string entity <source> <sourcePath> <start>	data modify storage minecraft:stone a insert 1 string entity @e[limit=1] a 1
+data modify storage <target> <targetPath> insert <index> string entity <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a insert 1 string entity @e[limit=1] a 1 1
+data modify storage <target> <targetPath> insert <index> string storage <source>	data modify storage minecraft:stone a insert 1 string storage minecraft:stone
+data modify storage <target> <targetPath> insert <index> string storage <source> <sourcePath>	data modify storage minecraft:stone a insert 1 string storage minecraft:stone a
+data modify storage <target> <targetPath> insert <index> string storage <source> <sourcePath> <start>	data modify storage minecraft:stone a insert 1 string storage minecraft:stone a 1
+data modify storage <target> <targetPath> insert <index> string storage <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a insert 1 string storage minecraft:stone a 1 1
+data modify storage <target> <targetPath> insert <index> value <value>	data modify storage minecraft:stone a insert 1 value 1
+data modify storage <target> <targetPath> merge compute block <computePos> float <provider>	data modify storage minecraft:stone a merge compute block 0 64 0 float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> merge compute block <computePos> integer <provider>	data modify storage minecraft:stone a merge compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> merge compute default float <provider>	data modify storage minecraft:stone a merge compute default float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> merge compute default integer <provider>	data modify storage minecraft:stone a merge compute default integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> merge compute entity <computeTarget> float <provider>	data modify storage minecraft:stone a merge compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> merge compute entity <computeTarget> integer <provider>	data modify storage minecraft:stone a merge compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> merge from block <source>	data modify storage minecraft:stone a merge from block 0 64 0
+data modify storage <target> <targetPath> merge from block <source> <sourcePath>	data modify storage minecraft:stone a merge from block 0 64 0 a
+data modify storage <target> <targetPath> merge from entity <source>	data modify storage minecraft:stone a merge from entity @e[limit=1]
+data modify storage <target> <targetPath> merge from entity <source> <sourcePath>	data modify storage minecraft:stone a merge from entity @e[limit=1] a
+data modify storage <target> <targetPath> merge from storage <source>	data modify storage minecraft:stone a merge from storage minecraft:stone
+data modify storage <target> <targetPath> merge from storage <source> <sourcePath>	data modify storage minecraft:stone a merge from storage minecraft:stone a
+data modify storage <target> <targetPath> merge string block <source>	data modify storage minecraft:stone a merge string block 0 64 0
+data modify storage <target> <targetPath> merge string block <source> <sourcePath>	data modify storage minecraft:stone a merge string block 0 64 0 a
+data modify storage <target> <targetPath> merge string block <source> <sourcePath> <start>	data modify storage minecraft:stone a merge string block 0 64 0 a 1
+data modify storage <target> <targetPath> merge string block <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a merge string block 0 64 0 a 1 1
+data modify storage <target> <targetPath> merge string entity <source>	data modify storage minecraft:stone a merge string entity @e[limit=1]
+data modify storage <target> <targetPath> merge string entity <source> <sourcePath>	data modify storage minecraft:stone a merge string entity @e[limit=1] a
+data modify storage <target> <targetPath> merge string entity <source> <sourcePath> <start>	data modify storage minecraft:stone a merge string entity @e[limit=1] a 1
+data modify storage <target> <targetPath> merge string entity <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a merge string entity @e[limit=1] a 1 1
+data modify storage <target> <targetPath> merge string storage <source>	data modify storage minecraft:stone a merge string storage minecraft:stone
+data modify storage <target> <targetPath> merge string storage <source> <sourcePath>	data modify storage minecraft:stone a merge string storage minecraft:stone a
+data modify storage <target> <targetPath> merge string storage <source> <sourcePath> <start>	data modify storage minecraft:stone a merge string storage minecraft:stone a 1
+data modify storage <target> <targetPath> merge string storage <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a merge string storage minecraft:stone a 1 1
+data modify storage <target> <targetPath> merge value <value>	data modify storage minecraft:stone a merge value 1
+data modify storage <target> <targetPath> prepend compute block <computePos> float <provider>	data modify storage minecraft:stone a prepend compute block 0 64 0 float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> prepend compute block <computePos> integer <provider>	data modify storage minecraft:stone a prepend compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> prepend compute default float <provider>	data modify storage minecraft:stone a prepend compute default float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> prepend compute default integer <provider>	data modify storage minecraft:stone a prepend compute default integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> prepend compute entity <computeTarget> float <provider>	data modify storage minecraft:stone a prepend compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> prepend compute entity <computeTarget> integer <provider>	data modify storage minecraft:stone a prepend compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> prepend from block <source>	data modify storage minecraft:stone a prepend from block 0 64 0
+data modify storage <target> <targetPath> prepend from block <source> <sourcePath>	data modify storage minecraft:stone a prepend from block 0 64 0 a
+data modify storage <target> <targetPath> prepend from entity <source>	data modify storage minecraft:stone a prepend from entity @e[limit=1]
+data modify storage <target> <targetPath> prepend from entity <source> <sourcePath>	data modify storage minecraft:stone a prepend from entity @e[limit=1] a
+data modify storage <target> <targetPath> prepend from storage <source>	data modify storage minecraft:stone a prepend from storage minecraft:stone
+data modify storage <target> <targetPath> prepend from storage <source> <sourcePath>	data modify storage minecraft:stone a prepend from storage minecraft:stone a
+data modify storage <target> <targetPath> prepend string block <source>	data modify storage minecraft:stone a prepend string block 0 64 0
+data modify storage <target> <targetPath> prepend string block <source> <sourcePath>	data modify storage minecraft:stone a prepend string block 0 64 0 a
+data modify storage <target> <targetPath> prepend string block <source> <sourcePath> <start>	data modify storage minecraft:stone a prepend string block 0 64 0 a 1
+data modify storage <target> <targetPath> prepend string block <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a prepend string block 0 64 0 a 1 1
+data modify storage <target> <targetPath> prepend string entity <source>	data modify storage minecraft:stone a prepend string entity @e[limit=1]
+data modify storage <target> <targetPath> prepend string entity <source> <sourcePath>	data modify storage minecraft:stone a prepend string entity @e[limit=1] a
+data modify storage <target> <targetPath> prepend string entity <source> <sourcePath> <start>	data modify storage minecraft:stone a prepend string entity @e[limit=1] a 1
+data modify storage <target> <targetPath> prepend string entity <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a prepend string entity @e[limit=1] a 1 1
+data modify storage <target> <targetPath> prepend string storage <source>	data modify storage minecraft:stone a prepend string storage minecraft:stone
+data modify storage <target> <targetPath> prepend string storage <source> <sourcePath>	data modify storage minecraft:stone a prepend string storage minecraft:stone a
+data modify storage <target> <targetPath> prepend string storage <source> <sourcePath> <start>	data modify storage minecraft:stone a prepend string storage minecraft:stone a 1
+data modify storage <target> <targetPath> prepend string storage <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a prepend string storage minecraft:stone a 1 1
+data modify storage <target> <targetPath> prepend value <value>	data modify storage minecraft:stone a prepend value 1
+data modify storage <target> <targetPath> set compute block <computePos> float <provider>	data modify storage minecraft:stone a set compute block 0 64 0 float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> set compute block <computePos> integer <provider>	data modify storage minecraft:stone a set compute block 0 64 0 integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> set compute default float <provider>	data modify storage minecraft:stone a set compute default float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> set compute default integer <provider>	data modify storage minecraft:stone a set compute default integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> set compute entity <computeTarget> float <provider>	data modify storage minecraft:stone a set compute entity @e[limit=1] float minecraft:brewing/speed_default
+data modify storage <target> <targetPath> set compute entity <computeTarget> integer <provider>	data modify storage minecraft:stone a set compute entity @e[limit=1] integer minecraft:brewing/uses_default
+data modify storage <target> <targetPath> set from block <source>	data modify storage minecraft:stone a set from block 0 64 0
+data modify storage <target> <targetPath> set from block <source> <sourcePath>	data modify storage minecraft:stone a set from block 0 64 0 a
+data modify storage <target> <targetPath> set from entity <source>	data modify storage minecraft:stone a set from entity @e[limit=1]
+data modify storage <target> <targetPath> set from entity <source> <sourcePath>	data modify storage minecraft:stone a set from entity @e[limit=1] a
+data modify storage <target> <targetPath> set from storage <source>	data modify storage minecraft:stone a set from storage minecraft:stone
+data modify storage <target> <targetPath> set from storage <source> <sourcePath>	data modify storage minecraft:stone a set from storage minecraft:stone a
+data modify storage <target> <targetPath> set string block <source>	data modify storage minecraft:stone a set string block 0 64 0
+data modify storage <target> <targetPath> set string block <source> <sourcePath>	data modify storage minecraft:stone a set string block 0 64 0 a
+data modify storage <target> <targetPath> set string block <source> <sourcePath> <start>	data modify storage minecraft:stone a set string block 0 64 0 a 1
+data modify storage <target> <targetPath> set string block <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a set string block 0 64 0 a 1 1
+data modify storage <target> <targetPath> set string entity <source>	data modify storage minecraft:stone a set string entity @e[limit=1]
+data modify storage <target> <targetPath> set string entity <source> <sourcePath>	data modify storage minecraft:stone a set string entity @e[limit=1] a
+data modify storage <target> <targetPath> set string entity <source> <sourcePath> <start>	data modify storage minecraft:stone a set string entity @e[limit=1] a 1
+data modify storage <target> <targetPath> set string entity <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a set string entity @e[limit=1] a 1 1
+data modify storage <target> <targetPath> set string storage <source>	data modify storage minecraft:stone a set string storage minecraft:stone
+data modify storage <target> <targetPath> set string storage <source> <sourcePath>	data modify storage minecraft:stone a set string storage minecraft:stone a
+data modify storage <target> <targetPath> set string storage <source> <sourcePath> <start>	data modify storage minecraft:stone a set string storage minecraft:stone a 1
+data modify storage <target> <targetPath> set string storage <source> <sourcePath> <start> <end>	data modify storage minecraft:stone a set string storage minecraft:stone a 1 1
+data modify storage <target> <targetPath> set value <value>	data modify storage minecraft:stone a set value 1
+data remove block <target> <path>	data remove block 0 64 0 a
+data remove entity <target> <path>	data remove entity @e[limit=1] a
+data remove storage <target> <path>	data remove storage minecraft:stone a
+datapack create <id> <description>	datapack create a "a"
+datapack disable <name>	datapack disable a
+datapack enable <name>	datapack enable a
+datapack enable <name> after <existing>	datapack enable a after a
+datapack enable <name> before <existing>	datapack enable a before a
+datapack enable <name> first	datapack enable a first
+datapack enable <name> last	datapack enable a last
+datapack list	datapack list
+datapack list available	datapack list available
+datapack list enabled	datapack list enabled
+debug function <name>	debug function minecraft:f
+debug start	debug start
+debug stop	debug stop
+defaultgamemode <gamemode>	defaultgamemode survival
+deop <targets>	deop @a
+dialog clear <targets>	dialog clear @a
+dialog show <targets> <dialog>	dialog show @a minecraft:x
+difficulty	difficulty
+difficulty easy	difficulty easy
+difficulty hard	difficulty hard
+difficulty normal	difficulty normal
+difficulty peaceful	difficulty peaceful
+effect clear	effect clear
+effect clear <targets>	effect clear @e
+effect clear <targets> <effect>	effect clear @e minecraft:speed
+effect give <targets> <effect>	effect give @e minecraft:speed
+effect give <targets> <effect> infinite	effect give @e minecraft:speed infinite
+effect give <targets> <effect> infinite <amplifier>	effect give @e minecraft:speed infinite 1
+effect give <targets> <effect> infinite <amplifier> <hideParticles>	effect give @e minecraft:speed infinite 1 true
+effect give <targets> <effect> <seconds>	effect give @e minecraft:speed 1
+effect give <targets> <effect> <seconds> <amplifier>	effect give @e minecraft:speed 1 1
+effect give <targets> <effect> <seconds> <amplifier> <hideParticles>	effect give @e minecraft:speed 1 1 true
+enchant <targets> <enchantment>	enchant @e minecraft:sharpness
+enchant <targets> <enchantment> <level>	enchant @e minecraft:sharpness 1
+experience add <target> <amount>	experience add @a 1
+experience add <target> <amount> levels	experience add @a 1 levels
+experience add <target> <amount> points	experience add @a 1 points
+experience query <target> levels	experience query @p levels
+experience query <target> points	experience query @p points
+experience set <target> <amount>	experience set @a 1
+experience set <target> <amount> levels	experience set @a 1 levels
+experience set <target> <amount> points	experience set @a 1 points
+fetchprofile entity <entity>	fetchprofile entity @e[limit=1]
+fetchprofile id <id>	fetchprofile id 00000000-0000-0000-0000-000000000000
+fetchprofile name <name>	fetchprofile name a
+fill <from> <to> <block>	fill 0 64 0 0 64 0 minecraft:stone
+fill <from> <to> <block> destroy	fill 0 64 0 0 64 0 minecraft:stone destroy
+fill <from> <to> <block> hollow	fill 0 64 0 0 64 0 minecraft:stone hollow
+fill <from> <to> <block> keep	fill 0 64 0 0 64 0 minecraft:stone keep
+fill <from> <to> <block> outline	fill 0 64 0 0 64 0 minecraft:stone outline
+fill <from> <to> <block> replace	fill 0 64 0 0 64 0 minecraft:stone replace
+fill <from> <to> <block> replace <filter>	fill 0 64 0 0 64 0 minecraft:stone replace minecraft:stone
+fill <from> <to> <block> replace <filter> destroy	fill 0 64 0 0 64 0 minecraft:stone replace minecraft:stone destroy
+fill <from> <to> <block> replace <filter> hollow	fill 0 64 0 0 64 0 minecraft:stone replace minecraft:stone hollow
+fill <from> <to> <block> replace <filter> outline	fill 0 64 0 0 64 0 minecraft:stone replace minecraft:stone outline
+fill <from> <to> <block> replace <filter> strict	fill 0 64 0 0 64 0 minecraft:stone replace minecraft:stone strict
+fill <from> <to> <block> strict	fill 0 64 0 0 64 0 minecraft:stone strict
+fillbiome <from> <to> <biome>	fillbiome 0 64 0 0 64 0 minecraft:plains
+fillbiome <from> <to> <biome> replace <filter>	fillbiome 0 64 0 0 64 0 minecraft:plains replace minecraft:plains
+forceload add <from>	forceload add 0 0
+forceload add <from> <to>	forceload add 0 0 0 0
+forceload query	forceload query
+forceload query <pos>	forceload query 0 0
+forceload remove all	forceload remove all
+forceload remove <from>	forceload remove 0 0
+forceload remove <from> <to>	forceload remove 0 0 0 0
+function <name>	function minecraft:f
+function <name> <arguments>	function minecraft:f {}
+function <name> with block <source>	function minecraft:f with block 0 64 0
+function <name> with block <source> <path>	function minecraft:f with block 0 64 0 a
+function <name> with entity <source>	function minecraft:f with entity @e[limit=1]
+function <name> with entity <source> <path>	function minecraft:f with entity @e[limit=1] a
+function <name> with storage <source>	function minecraft:f with storage minecraft:stone
+function <name> with storage <source> <path>	function minecraft:f with storage minecraft:stone a
+gamemode <gamemode>	gamemode survival
+gamemode <gamemode> <target>	gamemode survival @a
+gamerule advance_time	gamerule advance_time
+gamerule advance_time <value>	gamerule advance_time true
+gamerule advance_weather	gamerule advance_weather
+gamerule advance_weather <value>	gamerule advance_weather true
+gamerule allow_entering_nether_using_portals	gamerule allow_entering_nether_using_portals
+gamerule allow_entering_nether_using_portals <value>	gamerule allow_entering_nether_using_portals true
+gamerule block_drops	gamerule block_drops
+gamerule block_drops <value>	gamerule block_drops true
+gamerule block_explosion_drop_decay	gamerule block_explosion_drop_decay
+gamerule block_explosion_drop_decay <value>	gamerule block_explosion_drop_decay true
+gamerule command_block_output	gamerule command_block_output
+gamerule command_block_output <value>	gamerule command_block_output true
+gamerule command_blocks_work	gamerule command_blocks_work
+gamerule command_blocks_work <value>	gamerule command_blocks_work true
+gamerule drowning_damage	gamerule drowning_damage
+gamerule drowning_damage <value>	gamerule drowning_damage true
+gamerule elytra_movement_check	gamerule elytra_movement_check
+gamerule elytra_movement_check <value>	gamerule elytra_movement_check true
+gamerule ender_pearls_vanish_on_death	gamerule ender_pearls_vanish_on_death
+gamerule ender_pearls_vanish_on_death <value>	gamerule ender_pearls_vanish_on_death true
+gamerule entity_drops	gamerule entity_drops
+gamerule entity_drops <value>	gamerule entity_drops true
+gamerule fall_damage	gamerule fall_damage
+gamerule fall_damage <value>	gamerule fall_damage true
+gamerule fire_damage	gamerule fire_damage
+gamerule fire_damage <value>	gamerule fire_damage true
+gamerule fire_spread_radius_around_player	gamerule fire_spread_radius_around_player
+gamerule fire_spread_radius_around_player <value>	gamerule fire_spread_radius_around_player 1
+gamerule forgive_dead_players	gamerule forgive_dead_players
+gamerule forgive_dead_players <value>	gamerule forgive_dead_players true
+gamerule freeze_damage	gamerule freeze_damage
+gamerule freeze_damage <value>	gamerule freeze_damage true
+gamerule global_sound_events	gamerule global_sound_events
+gamerule global_sound_events <value>	gamerule global_sound_events true
+gamerule immediate_respawn	gamerule immediate_respawn
+gamerule immediate_respawn <value>	gamerule immediate_respawn true
+gamerule keep_inventory	gamerule keep_inventory
+gamerule keep_inventory <value>	gamerule keep_inventory true
+gamerule lava_source_conversion	gamerule lava_source_conversion
+gamerule lava_source_conversion <value>	gamerule lava_source_conversion true
+gamerule limited_crafting	gamerule limited_crafting
+gamerule limited_crafting <value>	gamerule limited_crafting true
+gamerule locator_bar	gamerule locator_bar
+gamerule locator_bar <value>	gamerule locator_bar true
+gamerule log_admin_commands	gamerule log_admin_commands
+gamerule log_admin_commands <value>	gamerule log_admin_commands true
+gamerule max_block_modifications	gamerule max_block_modifications
+gamerule max_block_modifications <value>	gamerule max_block_modifications 1
+gamerule max_command_forks	gamerule max_command_forks
+gamerule max_command_forks <value>	gamerule max_command_forks 1
+gamerule max_command_sequence_length	gamerule max_command_sequence_length
+gamerule max_command_sequence_length <value>	gamerule max_command_sequence_length 1
+gamerule max_entity_cramming	gamerule max_entity_cramming
+gamerule max_entity_cramming <value>	gamerule max_entity_cramming 1
+gamerule max_minecart_speed	gamerule max_minecart_speed
+gamerule max_minecart_speed <value>	gamerule max_minecart_speed 1
+gamerule max_snow_accumulation_height	gamerule max_snow_accumulation_height
+gamerule max_snow_accumulation_height <value>	gamerule max_snow_accumulation_height 1
+gamerule minecraft:advance_time	gamerule minecraft:advance_time
+gamerule minecraft:advance_time <value>	gamerule minecraft:advance_time true
+gamerule minecraft:advance_weather	gamerule minecraft:advance_weather
+gamerule minecraft:advance_weather <value>	gamerule minecraft:advance_weather true
+gamerule minecraft:allow_entering_nether_using_portals	gamerule minecraft:allow_entering_nether_using_portals
+gamerule minecraft:allow_entering_nether_using_portals <value>	gamerule minecraft:allow_entering_nether_using_portals true
+gamerule minecraft:block_drops	gamerule minecraft:block_drops
+gamerule minecraft:block_drops <value>	gamerule minecraft:block_drops true
+gamerule minecraft:block_explosion_drop_decay	gamerule minecraft:block_explosion_drop_decay
+gamerule minecraft:block_explosion_drop_decay <value>	gamerule minecraft:block_explosion_drop_decay true
+gamerule minecraft:command_block_output	gamerule minecraft:command_block_output
+gamerule minecraft:command_block_output <value>	gamerule minecraft:command_block_output true
+gamerule minecraft:command_blocks_work	gamerule minecraft:command_blocks_work
+gamerule minecraft:command_blocks_work <value>	gamerule minecraft:command_blocks_work true
+gamerule minecraft:drowning_damage	gamerule minecraft:drowning_damage
+gamerule minecraft:drowning_damage <value>	gamerule minecraft:drowning_damage true
+gamerule minecraft:elytra_movement_check	gamerule minecraft:elytra_movement_check
+gamerule minecraft:elytra_movement_check <value>	gamerule minecraft:elytra_movement_check true
+gamerule minecraft:ender_pearls_vanish_on_death	gamerule minecraft:ender_pearls_vanish_on_death
+gamerule minecraft:ender_pearls_vanish_on_death <value>	gamerule minecraft:ender_pearls_vanish_on_death true
+gamerule minecraft:entity_drops	gamerule minecraft:entity_drops
+gamerule minecraft:entity_drops <value>	gamerule minecraft:entity_drops true
+gamerule minecraft:fall_damage	gamerule minecraft:fall_damage
+gamerule minecraft:fall_damage <value>	gamerule minecraft:fall_damage true
+gamerule minecraft:fire_damage	gamerule minecraft:fire_damage
+gamerule minecraft:fire_damage <value>	gamerule minecraft:fire_damage true
+gamerule minecraft:fire_spread_radius_around_player	gamerule minecraft:fire_spread_radius_around_player
+gamerule minecraft:fire_spread_radius_around_player <value>	gamerule minecraft:fire_spread_radius_around_player 1
+gamerule minecraft:forgive_dead_players	gamerule minecraft:forgive_dead_players
+gamerule minecraft:forgive_dead_players <value>	gamerule minecraft:forgive_dead_players true
+gamerule minecraft:freeze_damage	gamerule minecraft:freeze_damage
+gamerule minecraft:freeze_damage <value>	gamerule minecraft:freeze_damage true
+gamerule minecraft:global_sound_events	gamerule minecraft:global_sound_events
+gamerule minecraft:global_sound_events <value>	gamerule minecraft:global_sound_events true
+gamerule minecraft:immediate_respawn	gamerule minecraft:immediate_respawn
+gamerule minecraft:immediate_respawn <value>	gamerule minecraft:immediate_respawn true
+gamerule minecraft:keep_inventory	gamerule minecraft:keep_inventory
+gamerule minecraft:keep_inventory <value>	gamerule minecraft:keep_inventory true
+gamerule minecraft:lava_source_conversion	gamerule minecraft:lava_source_conversion
+gamerule minecraft:lava_source_conversion <value>	gamerule minecraft:lava_source_conversion true
+gamerule minecraft:limited_crafting	gamerule minecraft:limited_crafting
+gamerule minecraft:limited_crafting <value>	gamerule minecraft:limited_crafting true
+gamerule minecraft:locator_bar	gamerule minecraft:locator_bar
+gamerule minecraft:locator_bar <value>	gamerule minecraft:locator_bar true
+gamerule minecraft:log_admin_commands	gamerule minecraft:log_admin_commands
+gamerule minecraft:log_admin_commands <value>	gamerule minecraft:log_admin_commands true
+gamerule minecraft:max_block_modifications	gamerule minecraft:max_block_modifications
+gamerule minecraft:max_block_modifications <value>	gamerule minecraft:max_block_modifications 1
+gamerule minecraft:max_command_forks	gamerule minecraft:max_command_forks
+gamerule minecraft:max_command_forks <value>	gamerule minecraft:max_command_forks 1
+gamerule minecraft:max_command_sequence_length	gamerule minecraft:max_command_sequence_length
+gamerule minecraft:max_command_sequence_length <value>	gamerule minecraft:max_command_sequence_length 1
+gamerule minecraft:max_entity_cramming	gamerule minecraft:max_entity_cramming
+gamerule minecraft:max_entity_cramming <value>	gamerule minecraft:max_entity_cramming 1
+gamerule minecraft:max_minecart_speed	gamerule minecraft:max_minecart_speed
+gamerule minecraft:max_minecart_speed <value>	gamerule minecraft:max_minecart_speed 1
+gamerule minecraft:max_snow_accumulation_height	gamerule minecraft:max_snow_accumulation_height
+gamerule minecraft:max_snow_accumulation_height <value>	gamerule minecraft:max_snow_accumulation_height 1
+gamerule minecraft:mob_drops	gamerule minecraft:mob_drops
+gamerule minecraft:mob_drops <value>	gamerule minecraft:mob_drops true
+gamerule minecraft:mob_explosion_drop_decay	gamerule minecraft:mob_explosion_drop_decay
+gamerule minecraft:mob_explosion_drop_decay <value>	gamerule minecraft:mob_explosion_drop_decay true
+gamerule minecraft:mob_griefing	gamerule minecraft:mob_griefing
+gamerule minecraft:mob_griefing <value>	gamerule minecraft:mob_griefing true
+gamerule minecraft:natural_health_regeneration	gamerule minecraft:natural_health_regeneration
+gamerule minecraft:natural_health_regeneration <value>	gamerule minecraft:natural_health_regeneration true
+gamerule minecraft:player_movement_check	gamerule minecraft:player_movement_check
+gamerule minecraft:player_movement_check <value>	gamerule minecraft:player_movement_check true
+gamerule minecraft:players_nether_portal_creative_delay	gamerule minecraft:players_nether_portal_creative_delay
+gamerule minecraft:players_nether_portal_creative_delay <value>	gamerule minecraft:players_nether_portal_creative_delay 1
+gamerule minecraft:players_nether_portal_default_delay	gamerule minecraft:players_nether_portal_default_delay
+gamerule minecraft:players_nether_portal_default_delay <value>	gamerule minecraft:players_nether_portal_default_delay 1
+gamerule minecraft:players_sleeping_percentage	gamerule minecraft:players_sleeping_percentage
+gamerule minecraft:players_sleeping_percentage <value>	gamerule minecraft:players_sleeping_percentage 1
+gamerule minecraft:projectiles_can_break_blocks	gamerule minecraft:projectiles_can_break_blocks
+gamerule minecraft:projectiles_can_break_blocks <value>	gamerule minecraft:projectiles_can_break_blocks true
+gamerule minecraft:pvp	gamerule minecraft:pvp
+gamerule minecraft:pvp <value>	gamerule minecraft:pvp true
+gamerule minecraft:raids	gamerule minecraft:raids
+gamerule minecraft:raids <value>	gamerule minecraft:raids true
+gamerule minecraft:random_tick_speed	gamerule minecraft:random_tick_speed
+gamerule minecraft:random_tick_speed <value>	gamerule minecraft:random_tick_speed 1
+gamerule minecraft:reduced_debug_info	gamerule minecraft:reduced_debug_info
+gamerule minecraft:reduced_debug_info <value>	gamerule minecraft:reduced_debug_info true
+gamerule minecraft:respawn_radius	gamerule minecraft:respawn_radius
+gamerule minecraft:respawn_radius <value>	gamerule minecraft:respawn_radius 1
+gamerule minecraft:send_command_feedback	gamerule minecraft:send_command_feedback
+gamerule minecraft:send_command_feedback <value>	gamerule minecraft:send_command_feedback true
+gamerule minecraft:show_advancement_messages	gamerule minecraft:show_advancement_messages
+gamerule minecraft:show_advancement_messages <value>	gamerule minecraft:show_advancement_messages true
+gamerule minecraft:show_death_messages	gamerule minecraft:show_death_messages
+gamerule minecraft:show_death_messages <value>	gamerule minecraft:show_death_messages true
+gamerule minecraft:spawn_mobs	gamerule minecraft:spawn_mobs
+gamerule minecraft:spawn_mobs <value>	gamerule minecraft:spawn_mobs true
+gamerule minecraft:spawn_monsters	gamerule minecraft:spawn_monsters
+gamerule minecraft:spawn_monsters <value>	gamerule minecraft:spawn_monsters true
+gamerule minecraft:spawn_patrols	gamerule minecraft:spawn_patrols
+gamerule minecraft:spawn_patrols <value>	gamerule minecraft:spawn_patrols true
+gamerule minecraft:spawn_phantoms	gamerule minecraft:spawn_phantoms
+gamerule minecraft:spawn_phantoms <value>	gamerule minecraft:spawn_phantoms true
+gamerule minecraft:spawn_wandering_traders	gamerule minecraft:spawn_wandering_traders
+gamerule minecraft:spawn_wandering_traders <value>	gamerule minecraft:spawn_wandering_traders true
+gamerule minecraft:spawn_wardens	gamerule minecraft:spawn_wardens
+gamerule minecraft:spawn_wardens <value>	gamerule minecraft:spawn_wardens true
+gamerule minecraft:spawner_blocks_work	gamerule minecraft:spawner_blocks_work
+gamerule minecraft:spawner_blocks_work <value>	gamerule minecraft:spawner_blocks_work true
+gamerule minecraft:spectators_generate_chunks	gamerule minecraft:spectators_generate_chunks
+gamerule minecraft:spectators_generate_chunks <value>	gamerule minecraft:spectators_generate_chunks true
+gamerule minecraft:spread_vines	gamerule minecraft:spread_vines
+gamerule minecraft:spread_vines <value>	gamerule minecraft:spread_vines true
+gamerule minecraft:tnt_explodes	gamerule minecraft:tnt_explodes
+gamerule minecraft:tnt_explodes <value>	gamerule minecraft:tnt_explodes true
+gamerule minecraft:tnt_explosion_drop_decay	gamerule minecraft:tnt_explosion_drop_decay
+gamerule minecraft:tnt_explosion_drop_decay <value>	gamerule minecraft:tnt_explosion_drop_decay true
+gamerule minecraft:universal_anger	gamerule minecraft:universal_anger
+gamerule minecraft:universal_anger <value>	gamerule minecraft:universal_anger true
+gamerule minecraft:water_source_conversion	gamerule minecraft:water_source_conversion
+gamerule minecraft:water_source_conversion <value>	gamerule minecraft:water_source_conversion true
+gamerule mob_drops	gamerule mob_drops
+gamerule mob_drops <value>	gamerule mob_drops true
+gamerule mob_explosion_drop_decay	gamerule mob_explosion_drop_decay
+gamerule mob_explosion_drop_decay <value>	gamerule mob_explosion_drop_decay true
+gamerule mob_griefing	gamerule mob_griefing
+gamerule mob_griefing <value>	gamerule mob_griefing true
+gamerule natural_health_regeneration	gamerule natural_health_regeneration
+gamerule natural_health_regeneration <value>	gamerule natural_health_regeneration true
+gamerule player_movement_check	gamerule player_movement_check
+gamerule player_movement_check <value>	gamerule player_movement_check true
+gamerule players_nether_portal_creative_delay	gamerule players_nether_portal_creative_delay
+gamerule players_nether_portal_creative_delay <value>	gamerule players_nether_portal_creative_delay 1
+gamerule players_nether_portal_default_delay	gamerule players_nether_portal_default_delay
+gamerule players_nether_portal_default_delay <value>	gamerule players_nether_portal_default_delay 1
+gamerule players_sleeping_percentage	gamerule players_sleeping_percentage
+gamerule players_sleeping_percentage <value>	gamerule players_sleeping_percentage 1
+gamerule projectiles_can_break_blocks	gamerule projectiles_can_break_blocks
+gamerule projectiles_can_break_blocks <value>	gamerule projectiles_can_break_blocks true
+gamerule pvp	gamerule pvp
+gamerule pvp <value>	gamerule pvp true
+gamerule raids	gamerule raids
+gamerule raids <value>	gamerule raids true
+gamerule random_tick_speed	gamerule random_tick_speed
+gamerule random_tick_speed <value>	gamerule random_tick_speed 1
+gamerule reduced_debug_info	gamerule reduced_debug_info
+gamerule reduced_debug_info <value>	gamerule reduced_debug_info true
+gamerule respawn_radius	gamerule respawn_radius
+gamerule respawn_radius <value>	gamerule respawn_radius 1
+gamerule send_command_feedback	gamerule send_command_feedback
+gamerule send_command_feedback <value>	gamerule send_command_feedback true
+gamerule show_advancement_messages	gamerule show_advancement_messages
+gamerule show_advancement_messages <value>	gamerule show_advancement_messages true
+gamerule show_death_messages	gamerule show_death_messages
+gamerule show_death_messages <value>	gamerule show_death_messages true
+gamerule spawn_mobs	gamerule spawn_mobs
+gamerule spawn_mobs <value>	gamerule spawn_mobs true
+gamerule spawn_monsters	gamerule spawn_monsters
+gamerule spawn_monsters <value>	gamerule spawn_monsters true
+gamerule spawn_patrols	gamerule spawn_patrols
+gamerule spawn_patrols <value>	gamerule spawn_patrols true
+gamerule spawn_phantoms	gamerule spawn_phantoms
+gamerule spawn_phantoms <value>	gamerule spawn_phantoms true
+gamerule spawn_wandering_traders	gamerule spawn_wandering_traders
+gamerule spawn_wandering_traders <value>	gamerule spawn_wandering_traders true
+gamerule spawn_wardens	gamerule spawn_wardens
+gamerule spawn_wardens <value>	gamerule spawn_wardens true
+gamerule spawner_blocks_work	gamerule spawner_blocks_work
+gamerule spawner_blocks_work <value>	gamerule spawner_blocks_work true
+gamerule spectators_generate_chunks	gamerule spectators_generate_chunks
+gamerule spectators_generate_chunks <value>	gamerule spectators_generate_chunks true
+gamerule spread_vines	gamerule spread_vines
+gamerule spread_vines <value>	gamerule spread_vines true
+gamerule tnt_explodes	gamerule tnt_explodes
+gamerule tnt_explodes <value>	gamerule tnt_explodes true
+gamerule tnt_explosion_drop_decay	gamerule tnt_explosion_drop_decay
+gamerule tnt_explosion_drop_decay <value>	gamerule tnt_explosion_drop_decay true
+gamerule universal_anger	gamerule universal_anger
+gamerule universal_anger <value>	gamerule universal_anger true
+gamerule water_source_conversion	gamerule water_source_conversion
+gamerule water_source_conversion <value>	gamerule water_source_conversion true
+give <targets> <item>	give @a minecraft:stone
+give <targets> <item> <count>	give @a minecraft:stone 1
+help	help
+help <command>	help a
+item fill block <target> <slots> from block <source> <sourceSlots>	item fill block 0 64 0 container.0 from block 0 64 0 container.0
+item fill block <target> <slots> from block <source> <sourceSlots> <modifier>	item fill block 0 64 0 container.0 from block 0 64 0 container.0 minecraft:x
+item fill block <target> <slots> from entity <source> <sourceSlots>	item fill block 0 64 0 container.0 from entity @e container.0
+item fill block <target> <slots> from entity <source> <sourceSlots> <modifier>	item fill block 0 64 0 container.0 from entity @e container.0 minecraft:x
+item fill block <target> <slots> with <item>	item fill block 0 64 0 container.0 with minecraft:stone
+item fill block <target> <slots> with <item> <count>	item fill block 0 64 0 container.0 with minecraft:stone 1
+item fill entity <target> <slots> from block <source> <sourceSlots>	item fill entity @e container.0 from block 0 64 0 container.0
+item fill entity <target> <slots> from block <source> <sourceSlots> <modifier>	item fill entity @e container.0 from block 0 64 0 container.0 minecraft:x
+item fill entity <target> <slots> from entity <source> <sourceSlots>	item fill entity @e container.0 from entity @e container.0
+item fill entity <target> <slots> from entity <source> <sourceSlots> <modifier>	item fill entity @e container.0 from entity @e container.0 minecraft:x
+item fill entity <target> <slots> with <item>	item fill entity @e container.0 with minecraft:stone
+item fill entity <target> <slots> with <item> <count>	item fill entity @e container.0 with minecraft:stone 1
+item modify block <target> <slots> <modifier>	item modify block 0 64 0 container.0 minecraft:x
+item modify entity <target> <slots> <modifier>	item modify entity @e container.0 minecraft:x
+item override block <target> <slots> from block <source> <sourceSlots>	item override block 0 64 0 container.0 from block 0 64 0 container.0
+item override block <target> <slots> from block <source> <sourceSlots> <modifier>	item override block 0 64 0 container.0 from block 0 64 0 container.0 minecraft:x
+item override block <target> <slots> from entity <source> <sourceSlots>	item override block 0 64 0 container.0 from entity @e container.0
+item override block <target> <slots> from entity <source> <sourceSlots> <modifier>	item override block 0 64 0 container.0 from entity @e container.0 minecraft:x
+item override block <target> <slots> with <item>	item override block 0 64 0 container.0 with minecraft:stone
+item override block <target> <slots> with <item> <count>	item override block 0 64 0 container.0 with minecraft:stone 1
+item override entity <target> <slots> from block <source> <sourceSlots>	item override entity @e container.0 from block 0 64 0 container.0
+item override entity <target> <slots> from block <source> <sourceSlots> <modifier>	item override entity @e container.0 from block 0 64 0 container.0 minecraft:x
+item override entity <target> <slots> from entity <source> <sourceSlots>	item override entity @e container.0 from entity @e container.0
+item override entity <target> <slots> from entity <source> <sourceSlots> <modifier>	item override entity @e container.0 from entity @e container.0 minecraft:x
+item override entity <target> <slots> with <item>	item override entity @e container.0 with minecraft:stone
+item override entity <target> <slots> with <item> <count>	item override entity @e container.0 with minecraft:stone 1
+item replace block <target> <slots> from block <source> <sourceSlots>	item replace block 0 64 0 container.0 from block 0 64 0 container.0
+item replace block <target> <slots> from block <source> <sourceSlots> <modifier>	item replace block 0 64 0 container.0 from block 0 64 0 container.0 minecraft:x
+item replace block <target> <slots> from entity <source> <sourceSlots>	item replace block 0 64 0 container.0 from entity @e container.0
+item replace block <target> <slots> from entity <source> <sourceSlots> <modifier>	item replace block 0 64 0 container.0 from entity @e container.0 minecraft:x
+item replace block <target> <slots> with <item>	item replace block 0 64 0 container.0 with minecraft:stone
+item replace block <target> <slots> with <item> <count>	item replace block 0 64 0 container.0 with minecraft:stone 1
+item replace entity <target> <slots> from block <source> <sourceSlots>	item replace entity @e container.0 from block 0 64 0 container.0
+item replace entity <target> <slots> from block <source> <sourceSlots> <modifier>	item replace entity @e container.0 from block 0 64 0 container.0 minecraft:x
+item replace entity <target> <slots> from entity <source> <sourceSlots>	item replace entity @e container.0 from entity @e container.0
+item replace entity <target> <slots> from entity <source> <sourceSlots> <modifier>	item replace entity @e container.0 from entity @e container.0 minecraft:x
+item replace entity <target> <slots> with <item>	item replace entity @e container.0 with minecraft:stone
+item replace entity <target> <slots> with <item> <count>	item replace entity @e container.0 with minecraft:stone 1
+jfr start	jfr start
+jfr stop	jfr stop
+kick <targets>	kick @a
+kick <targets> <reason>	kick @a hi
+kill	kill
+kill <targets>	kill @e
+list	list
+list uuids	list uuids
+locate biome <biome>	locate biome minecraft:plains
+locate poi <poi>	locate poi minecraft:armorer
+locate structure <structure>	locate structure minecraft:stone
+loot give <players> fish <loot_table> <pos>	loot give @a fish minecraft:blocks/stone 0 64 0
+loot give <players> fish <loot_table> <pos> mainhand	loot give @a fish minecraft:blocks/stone 0 64 0 mainhand
+loot give <players> fish <loot_table> <pos> offhand	loot give @a fish minecraft:blocks/stone 0 64 0 offhand
+loot give <players> fish <loot_table> <pos> <tool>	loot give @a fish minecraft:blocks/stone 0 64 0 minecraft:stone
+loot give <players> kill <target>	loot give @a kill @e[limit=1]
+loot give <players> loot <loot_table>	loot give @a loot minecraft:blocks/stone
+loot give <players> mine <pos>	loot give @a mine 0 64 0
+loot give <players> mine <pos> mainhand	loot give @a mine 0 64 0 mainhand
+loot give <players> mine <pos> offhand	loot give @a mine 0 64 0 offhand
+loot give <players> mine <pos> <tool>	loot give @a mine 0 64 0 minecraft:stone
+loot insert <targetPos> fish <loot_table> <pos>	loot insert 0 64 0 fish minecraft:blocks/stone 0 64 0
+loot insert <targetPos> fish <loot_table> <pos> mainhand	loot insert 0 64 0 fish minecraft:blocks/stone 0 64 0 mainhand
+loot insert <targetPos> fish <loot_table> <pos> offhand	loot insert 0 64 0 fish minecraft:blocks/stone 0 64 0 offhand
+loot insert <targetPos> fish <loot_table> <pos> <tool>	loot insert 0 64 0 fish minecraft:blocks/stone 0 64 0 minecraft:stone
+loot insert <targetPos> kill <target>	loot insert 0 64 0 kill @e[limit=1]
+loot insert <targetPos> loot <loot_table>	loot insert 0 64 0 loot minecraft:blocks/stone
+loot insert <targetPos> mine <pos>	loot insert 0 64 0 mine 0 64 0
+loot insert <targetPos> mine <pos> mainhand	loot insert 0 64 0 mine 0 64 0 mainhand
+loot insert <targetPos> mine <pos> offhand	loot insert 0 64 0 mine 0 64 0 offhand
+loot insert <targetPos> mine <pos> <tool>	loot insert 0 64 0 mine 0 64 0 minecraft:stone
+loot replace block <targetPos> <slot> <count> fish <loot_table> <pos>	loot replace block 0 64 0 container.0 1 fish minecraft:blocks/stone 0 64 0
+loot replace block <targetPos> <slot> <count> fish <loot_table> <pos> mainhand	loot replace block 0 64 0 container.0 1 fish minecraft:blocks/stone 0 64 0 mainhand
+loot replace block <targetPos> <slot> <count> fish <loot_table> <pos> offhand	loot replace block 0 64 0 container.0 1 fish minecraft:blocks/stone 0 64 0 offhand
+loot replace block <targetPos> <slot> <count> fish <loot_table> <pos> <tool>	loot replace block 0 64 0 container.0 1 fish minecraft:blocks/stone 0 64 0 minecraft:stone
+loot replace block <targetPos> <slot> <count> kill <target>	loot replace block 0 64 0 container.0 1 kill @e[limit=1]
+loot replace block <targetPos> <slot> <count> loot <loot_table>	loot replace block 0 64 0 container.0 1 loot minecraft:blocks/stone
+loot replace block <targetPos> <slot> <count> mine <pos>	loot replace block 0 64 0 container.0 1 mine 0 64 0
+loot replace block <targetPos> <slot> <count> mine <pos> mainhand	loot replace block 0 64 0 container.0 1 mine 0 64 0 mainhand
+loot replace block <targetPos> <slot> <count> mine <pos> offhand	loot replace block 0 64 0 container.0 1 mine 0 64 0 offhand
+loot replace block <targetPos> <slot> <count> mine <pos> <tool>	loot replace block 0 64 0 container.0 1 mine 0 64 0 minecraft:stone
+loot replace block <targetPos> <slot> fish <loot_table> <pos>	loot replace block 0 64 0 container.0 fish minecraft:blocks/stone 0 64 0
+loot replace block <targetPos> <slot> fish <loot_table> <pos> mainhand	loot replace block 0 64 0 container.0 fish minecraft:blocks/stone 0 64 0 mainhand
+loot replace block <targetPos> <slot> fish <loot_table> <pos> offhand	loot replace block 0 64 0 container.0 fish minecraft:blocks/stone 0 64 0 offhand
+loot replace block <targetPos> <slot> fish <loot_table> <pos> <tool>	loot replace block 0 64 0 container.0 fish minecraft:blocks/stone 0 64 0 minecraft:stone
+loot replace block <targetPos> <slot> kill <target>	loot replace block 0 64 0 container.0 kill @e[limit=1]
+loot replace block <targetPos> <slot> loot <loot_table>	loot replace block 0 64 0 container.0 loot minecraft:blocks/stone
+loot replace block <targetPos> <slot> mine <pos>	loot replace block 0 64 0 container.0 mine 0 64 0
+loot replace block <targetPos> <slot> mine <pos> mainhand	loot replace block 0 64 0 container.0 mine 0 64 0 mainhand
+loot replace block <targetPos> <slot> mine <pos> offhand	loot replace block 0 64 0 container.0 mine 0 64 0 offhand
+loot replace block <targetPos> <slot> mine <pos> <tool>	loot replace block 0 64 0 container.0 mine 0 64 0 minecraft:stone
+loot replace entity <entities> <slot> <count> fish <loot_table> <pos>	loot replace entity @e container.0 1 fish minecraft:blocks/stone 0 64 0
+loot replace entity <entities> <slot> <count> fish <loot_table> <pos> mainhand	loot replace entity @e container.0 1 fish minecraft:blocks/stone 0 64 0 mainhand
+loot replace entity <entities> <slot> <count> fish <loot_table> <pos> offhand	loot replace entity @e container.0 1 fish minecraft:blocks/stone 0 64 0 offhand
+loot replace entity <entities> <slot> <count> fish <loot_table> <pos> <tool>	loot replace entity @e container.0 1 fish minecraft:blocks/stone 0 64 0 minecraft:stone
+loot replace entity <entities> <slot> <count> kill <target>	loot replace entity @e container.0 1 kill @e[limit=1]
+loot replace entity <entities> <slot> <count> loot <loot_table>	loot replace entity @e container.0 1 loot minecraft:blocks/stone
+loot replace entity <entities> <slot> <count> mine <pos>	loot replace entity @e container.0 1 mine 0 64 0
+loot replace entity <entities> <slot> <count> mine <pos> mainhand	loot replace entity @e container.0 1 mine 0 64 0 mainhand
+loot replace entity <entities> <slot> <count> mine <pos> offhand	loot replace entity @e container.0 1 mine 0 64 0 offhand
+loot replace entity <entities> <slot> <count> mine <pos> <tool>	loot replace entity @e container.0 1 mine 0 64 0 minecraft:stone
+loot replace entity <entities> <slot> fish <loot_table> <pos>	loot replace entity @e container.0 fish minecraft:blocks/stone 0 64 0
+loot replace entity <entities> <slot> fish <loot_table> <pos> mainhand	loot replace entity @e container.0 fish minecraft:blocks/stone 0 64 0 mainhand
+loot replace entity <entities> <slot> fish <loot_table> <pos> offhand	loot replace entity @e container.0 fish minecraft:blocks/stone 0 64 0 offhand
+loot replace entity <entities> <slot> fish <loot_table> <pos> <tool>	loot replace entity @e container.0 fish minecraft:blocks/stone 0 64 0 minecraft:stone
+loot replace entity <entities> <slot> kill <target>	loot replace entity @e container.0 kill @e[limit=1]
+loot replace entity <entities> <slot> loot <loot_table>	loot replace entity @e container.0 loot minecraft:blocks/stone
+loot replace entity <entities> <slot> mine <pos>	loot replace entity @e container.0 mine 0 64 0
+loot replace entity <entities> <slot> mine <pos> mainhand	loot replace entity @e container.0 mine 0 64 0 mainhand
+loot replace entity <entities> <slot> mine <pos> offhand	loot replace entity @e container.0 mine 0 64 0 offhand
+loot replace entity <entities> <slot> mine <pos> <tool>	loot replace entity @e container.0 mine 0 64 0 minecraft:stone
+loot spawn <targetPos> fish <loot_table> <pos>	loot spawn 0 64 0 fish minecraft:blocks/stone 0 64 0
+loot spawn <targetPos> fish <loot_table> <pos> mainhand	loot spawn 0 64 0 fish minecraft:blocks/stone 0 64 0 mainhand
+loot spawn <targetPos> fish <loot_table> <pos> offhand	loot spawn 0 64 0 fish minecraft:blocks/stone 0 64 0 offhand
+loot spawn <targetPos> fish <loot_table> <pos> <tool>	loot spawn 0 64 0 fish minecraft:blocks/stone 0 64 0 minecraft:stone
+loot spawn <targetPos> kill <target>	loot spawn 0 64 0 kill @e[limit=1]
+loot spawn <targetPos> loot <loot_table>	loot spawn 0 64 0 loot minecraft:blocks/stone
+loot spawn <targetPos> mine <pos>	loot spawn 0 64 0 mine 0 64 0
+loot spawn <targetPos> mine <pos> mainhand	loot spawn 0 64 0 mine 0 64 0 mainhand
+loot spawn <targetPos> mine <pos> offhand	loot spawn 0 64 0 mine 0 64 0 offhand
+loot spawn <targetPos> mine <pos> <tool>	loot spawn 0 64 0 mine 0 64 0 minecraft:stone
+me <action>	me hi
+msg <targets> <message>	msg @a hi
+op <targets>	op @a
+pardon <targets>	pardon @a
+pardon-ip <target>	pardon-ip a
+particle <name>	particle minecraft:flame
+particle <name> <pos>	particle minecraft:flame 0 64 0
+particle <name> <pos> <delta> <speed> <count>	particle minecraft:flame 0 64 0 0 64 0 1.0 1
+particle <name> <pos> <delta> <speed> <count> force	particle minecraft:flame 0 64 0 0 64 0 1.0 1 force
+particle <name> <pos> <delta> <speed> <count> force <viewers>	particle minecraft:flame 0 64 0 0 64 0 1.0 1 force @a
+particle <name> <pos> <delta> <speed> <count> normal	particle minecraft:flame 0 64 0 0 64 0 1.0 1 normal
+particle <name> <pos> <delta> <speed> <count> normal <viewers>	particle minecraft:flame 0 64 0 0 64 0 1.0 1 normal @a
+perf start	perf start
+perf stop	perf stop
+place feature <feature>	place feature minecraft:oak
+place feature <feature> <pos>	place feature minecraft:oak 0 64 0
+place jigsaw <pool> <target> <max_depth>	place jigsaw minecraft:overworld minecraft:stone 1
+place jigsaw <pool> <target> <max_depth> <position>	place jigsaw minecraft:overworld minecraft:stone 1 0 64 0
+place structure <structure>	place structure minecraft:overworld
+place structure <structure> <pos>	place structure minecraft:overworld 0 64 0
+place template <template>	place template minecraft:stone
+place template <template> <pos>	place template minecraft:stone 0 64 0
+place template <template> <pos> <rotation>	place template minecraft:stone 0 64 0 none
+place template <template> <pos> <rotation> <mirror>	place template minecraft:stone 0 64 0 none none
+place template <template> <pos> <rotation> <mirror> <integrity>	place template minecraft:stone 0 64 0 none none 1.0
+place template <template> <pos> <rotation> <mirror> <integrity> <seed>	place template minecraft:stone 0 64 0 none none 1.0 1
+place template <template> <pos> <rotation> <mirror> <integrity> <seed> strict	place template minecraft:stone 0 64 0 none none 1.0 1 strict
+playsound <sound>	playsound minecraft:entity.pig.ambient
+playsound <sound> ambient	playsound minecraft:entity.pig.ambient ambient
+playsound <sound> ambient <targets>	playsound minecraft:entity.pig.ambient ambient @a
+playsound <sound> ambient <targets> <pos>	playsound minecraft:entity.pig.ambient ambient @a 0 64 0
+playsound <sound> ambient <targets> <pos> <volume>	playsound minecraft:entity.pig.ambient ambient @a 0 64 0 1.0
+playsound <sound> ambient <targets> <pos> <volume> <pitch>	playsound minecraft:entity.pig.ambient ambient @a 0 64 0 1.0 1.0
+playsound <sound> ambient <targets> <pos> <volume> <pitch> <minVolume>	playsound minecraft:entity.pig.ambient ambient @a 0 64 0 1.0 1.0 1.0
+playsound <sound> block	playsound minecraft:entity.pig.ambient block
+playsound <sound> block <targets>	playsound minecraft:entity.pig.ambient block @a
+playsound <sound> block <targets> <pos>	playsound minecraft:entity.pig.ambient block @a 0 64 0
+playsound <sound> block <targets> <pos> <volume>	playsound minecraft:entity.pig.ambient block @a 0 64 0 1.0
+playsound <sound> block <targets> <pos> <volume> <pitch>	playsound minecraft:entity.pig.ambient block @a 0 64 0 1.0 1.0
+playsound <sound> block <targets> <pos> <volume> <pitch> <minVolume>	playsound minecraft:entity.pig.ambient block @a 0 64 0 1.0 1.0 1.0
+playsound <sound> hostile	playsound minecraft:entity.pig.ambient hostile
+playsound <sound> hostile <targets>	playsound minecraft:entity.pig.ambient hostile @a
+playsound <sound> hostile <targets> <pos>	playsound minecraft:entity.pig.ambient hostile @a 0 64 0
+playsound <sound> hostile <targets> <pos> <volume>	playsound minecraft:entity.pig.ambient hostile @a 0 64 0 1.0
+playsound <sound> hostile <targets> <pos> <volume> <pitch>	playsound minecraft:entity.pig.ambient hostile @a 0 64 0 1.0 1.0
+playsound <sound> hostile <targets> <pos> <volume> <pitch> <minVolume>	playsound minecraft:entity.pig.ambient hostile @a 0 64 0 1.0 1.0 1.0
+playsound <sound> master	playsound minecraft:entity.pig.ambient master
+playsound <sound> master <targets>	playsound minecraft:entity.pig.ambient master @a
+playsound <sound> master <targets> <pos>	playsound minecraft:entity.pig.ambient master @a 0 64 0
+playsound <sound> master <targets> <pos> <volume>	playsound minecraft:entity.pig.ambient master @a 0 64 0 1.0
+playsound <sound> master <targets> <pos> <volume> <pitch>	playsound minecraft:entity.pig.ambient master @a 0 64 0 1.0 1.0
+playsound <sound> master <targets> <pos> <volume> <pitch> <minVolume>	playsound minecraft:entity.pig.ambient master @a 0 64 0 1.0 1.0 1.0
+playsound <sound> music	playsound minecraft:entity.pig.ambient music
+playsound <sound> music <targets>	playsound minecraft:entity.pig.ambient music @a
+playsound <sound> music <targets> <pos>	playsound minecraft:entity.pig.ambient music @a 0 64 0
+playsound <sound> music <targets> <pos> <volume>	playsound minecraft:entity.pig.ambient music @a 0 64 0 1.0
+playsound <sound> music <targets> <pos> <volume> <pitch>	playsound minecraft:entity.pig.ambient music @a 0 64 0 1.0 1.0
+playsound <sound> music <targets> <pos> <volume> <pitch> <minVolume>	playsound minecraft:entity.pig.ambient music @a 0 64 0 1.0 1.0 1.0
+playsound <sound> neutral	playsound minecraft:entity.pig.ambient neutral
+playsound <sound> neutral <targets>	playsound minecraft:entity.pig.ambient neutral @a
+playsound <sound> neutral <targets> <pos>	playsound minecraft:entity.pig.ambient neutral @a 0 64 0
+playsound <sound> neutral <targets> <pos> <volume>	playsound minecraft:entity.pig.ambient neutral @a 0 64 0 1.0
+playsound <sound> neutral <targets> <pos> <volume> <pitch>	playsound minecraft:entity.pig.ambient neutral @a 0 64 0 1.0 1.0
+playsound <sound> neutral <targets> <pos> <volume> <pitch> <minVolume>	playsound minecraft:entity.pig.ambient neutral @a 0 64 0 1.0 1.0 1.0
+playsound <sound> player	playsound minecraft:entity.pig.ambient player
+playsound <sound> player <targets>	playsound minecraft:entity.pig.ambient player @a
+playsound <sound> player <targets> <pos>	playsound minecraft:entity.pig.ambient player @a 0 64 0
+playsound <sound> player <targets> <pos> <volume>	playsound minecraft:entity.pig.ambient player @a 0 64 0 1.0
+playsound <sound> player <targets> <pos> <volume> <pitch>	playsound minecraft:entity.pig.ambient player @a 0 64 0 1.0 1.0
+playsound <sound> player <targets> <pos> <volume> <pitch> <minVolume>	playsound minecraft:entity.pig.ambient player @a 0 64 0 1.0 1.0 1.0
+playsound <sound> record	playsound minecraft:entity.pig.ambient record
+playsound <sound> record <targets>	playsound minecraft:entity.pig.ambient record @a
+playsound <sound> record <targets> <pos>	playsound minecraft:entity.pig.ambient record @a 0 64 0
+playsound <sound> record <targets> <pos> <volume>	playsound minecraft:entity.pig.ambient record @a 0 64 0 1.0
+playsound <sound> record <targets> <pos> <volume> <pitch>	playsound minecraft:entity.pig.ambient record @a 0 64 0 1.0 1.0
+playsound <sound> record <targets> <pos> <volume> <pitch> <minVolume>	playsound minecraft:entity.pig.ambient record @a 0 64 0 1.0 1.0 1.0
+playsound <sound> ui	playsound minecraft:entity.pig.ambient ui
+playsound <sound> ui <targets>	playsound minecraft:entity.pig.ambient ui @a
+playsound <sound> ui <targets> <pos>	playsound minecraft:entity.pig.ambient ui @a 0 64 0
+playsound <sound> ui <targets> <pos> <volume>	playsound minecraft:entity.pig.ambient ui @a 0 64 0 1.0
+playsound <sound> ui <targets> <pos> <volume> <pitch>	playsound minecraft:entity.pig.ambient ui @a 0 64 0 1.0 1.0
+playsound <sound> ui <targets> <pos> <volume> <pitch> <minVolume>	playsound minecraft:entity.pig.ambient ui @a 0 64 0 1.0 1.0 1.0
+playsound <sound> voice	playsound minecraft:entity.pig.ambient voice
+playsound <sound> voice <targets>	playsound minecraft:entity.pig.ambient voice @a
+playsound <sound> voice <targets> <pos>	playsound minecraft:entity.pig.ambient voice @a 0 64 0
+playsound <sound> voice <targets> <pos> <volume>	playsound minecraft:entity.pig.ambient voice @a 0 64 0 1.0
+playsound <sound> voice <targets> <pos> <volume> <pitch>	playsound minecraft:entity.pig.ambient voice @a 0 64 0 1.0 1.0
+playsound <sound> voice <targets> <pos> <volume> <pitch> <minVolume>	playsound minecraft:entity.pig.ambient voice @a 0 64 0 1.0 1.0 1.0
+playsound <sound> weather	playsound minecraft:entity.pig.ambient weather
+playsound <sound> weather <targets>	playsound minecraft:entity.pig.ambient weather @a
+playsound <sound> weather <targets> <pos>	playsound minecraft:entity.pig.ambient weather @a 0 64 0
+playsound <sound> weather <targets> <pos> <volume>	playsound minecraft:entity.pig.ambient weather @a 0 64 0 1.0
+playsound <sound> weather <targets> <pos> <volume> <pitch>	playsound minecraft:entity.pig.ambient weather @a 0 64 0 1.0 1.0
+playsound <sound> weather <targets> <pos> <volume> <pitch> <minVolume>	playsound minecraft:entity.pig.ambient weather @a 0 64 0 1.0 1.0 1.0
+posteffect add <targets> <posteffect>	posteffect add @a minecraft:x
+posteffect clear <targets>	posteffect clear @a
+posteffect list <target>	posteffect list @p
+posteffect remove <targets> <posteffect>	posteffect remove @a minecraft:x
+publish	publish
+publish <allowCommands>	publish true
+publish <allowCommands> <port>	publish true 1
+random reset *	random reset *
+random reset * <seed>	random reset * 1
+random reset * <seed> <includeWorldSeed>	random reset * 1 true
+random reset * <seed> <includeWorldSeed> <includeSequenceId>	random reset * 1 true true
+random reset <sequence>	random reset minecraft:stone
+random reset <sequence> <seed>	random reset minecraft:stone 1
+random reset <sequence> <seed> <includeWorldSeed>	random reset minecraft:stone 1 true
+random reset <sequence> <seed> <includeWorldSeed> <includeSequenceId>	random reset minecraft:stone 1 true true
+random roll <range>	random roll 1
+random roll <range> <sequence>	random roll 1 minecraft:stone
+random value <range>	random value 1
+random value <range> <sequence>	random value 1 minecraft:stone
+recipe give <targets> *	recipe give @a *
+recipe give <targets> <recipe>	recipe give @a minecraft:stick
+recipe take <targets> *	recipe take @a *
+recipe take <targets> <recipe>	recipe take @a minecraft:stick
+reload	reload
+return fail	return fail
+return <value>	return 1
+ride <target> dismount	ride @e[limit=1] dismount
+ride <target> mount <vehicle>	ride @e[limit=1] mount @e[limit=1]
+rotate <target> facing entity <facingEntity>	rotate @e[limit=1] facing entity @e[limit=1]
+rotate <target> facing entity <facingEntity> <facingAnchor>	rotate @e[limit=1] facing entity @e[limit=1] feet
+rotate <target> facing <facingLocation>	rotate @e[limit=1] facing 0 64 0
+rotate <target> <rotation>	rotate @e[limit=1] 0 0
+save-all	save-all
+save-all flush	save-all flush
+save-off	save-off
+save-on	save-on
+say <message>	say hi
+schedule clear <function>	schedule clear minecraft:stone
+schedule function <function> <time>	schedule function minecraft:f 1t
+schedule function <function> <time> append	schedule function minecraft:f 1t append
+schedule function <function> <time> replace	schedule function minecraft:f 1t replace
+scoreboard objectives add <objective> <criteria>	scoreboard objectives add a dummy
+scoreboard objectives add <objective> <criteria> <displayName>	scoreboard objectives add a dummy "a"
+scoreboard objectives list	scoreboard objectives list
+scoreboard objectives modify <objective> displayautoupdate <value>	scoreboard objectives modify o displayautoupdate true
+scoreboard objectives modify <objective> displayname <displayName>	scoreboard objectives modify o displayname "a"
+scoreboard objectives modify <objective> numberformat	scoreboard objectives modify o numberformat
+scoreboard objectives modify <objective> numberformat blank	scoreboard objectives modify o numberformat blank
+scoreboard objectives modify <objective> numberformat fixed <contents>	scoreboard objectives modify o numberformat fixed "a"
+scoreboard objectives modify <objective> numberformat styled <style>	scoreboard objectives modify o numberformat styled {}
+scoreboard objectives modify <objective> rendertype hearts	scoreboard objectives modify o rendertype hearts
+scoreboard objectives modify <objective> rendertype integer	scoreboard objectives modify o rendertype integer
+scoreboard objectives remove <objective>	scoreboard objectives remove o
+scoreboard objectives setdisplay <slot>	scoreboard objectives setdisplay sidebar
+scoreboard objectives setdisplay <slot> <objective>	scoreboard objectives setdisplay sidebar o
+scoreboard players add <targets> <objective> <score>	scoreboard players add a o 1
+scoreboard players display name <targets> <objective>	scoreboard players display name a o
+scoreboard players display name <targets> <objective> <name>	scoreboard players display name a o "a"
+scoreboard players display numberformat <targets> <objective>	scoreboard players display numberformat a o
+scoreboard players display numberformat <targets> <objective> blank	scoreboard players display numberformat a o blank
+scoreboard players display numberformat <targets> <objective> fixed <contents>	scoreboard players display numberformat a o fixed "a"
+scoreboard players display numberformat <targets> <objective> styled <style>	scoreboard players display numberformat a o styled {}
+scoreboard players enable <targets> <objective>	scoreboard players enable a o
+scoreboard players get <target> <objective>	scoreboard players get a o
+scoreboard players list	scoreboard players list
+scoreboard players list <target>	scoreboard players list a
+scoreboard players operation <targets> <targetObjective> <operation> <source> <sourceObjective>	scoreboard players operation a o = a o
+scoreboard players remove <targets> <objective> <score>	scoreboard players remove a o 1
+scoreboard players reset <targets>	scoreboard players reset a
+scoreboard players reset <targets> <objective>	scoreboard players reset a o
+scoreboard players set <targets> <objective> <score>	scoreboard players set a o 1
+seed	seed
+setblock <pos> <block>	setblock 0 64 0 minecraft:stone
+setblock <pos> <block> destroy	setblock 0 64 0 minecraft:stone destroy
+setblock <pos> <block> keep	setblock 0 64 0 minecraft:stone keep
+setblock <pos> <block> replace	setblock 0 64 0 minecraft:stone replace
+setblock <pos> <block> strict	setblock 0 64 0 minecraft:stone strict
+setidletimeout <minutes>	setidletimeout 1
+setworldspawn	setworldspawn
+setworldspawn <pos>	setworldspawn 0 64 0
+setworldspawn <pos> <rotation>	setworldspawn 0 64 0 0 0
+spawnpoint	spawnpoint
+spawnpoint <targets>	spawnpoint @a
+spawnpoint <targets> <pos>	spawnpoint @a 0 64 0
+spawnpoint <targets> <pos> <rotation>	spawnpoint @a 0 64 0 0 0
+spectate	spectate
+spectate <target>	spectate @e[limit=1]
+spectate <target> <player>	spectate @e[limit=1] @p
+spreadplayers <center> <spreadDistance> <maxRange> <respectTeams> <targets>	spreadplayers 0 0 1.0 1.0 true @e
+spreadplayers <center> <spreadDistance> <maxRange> under <maxHeight> <respectTeams> <targets>	spreadplayers 0 0 1.0 1.0 under 1 true @e
+stopsound <targets>	stopsound @a
+stopsound <targets> * <sound>	stopsound @a * minecraft:entity.pig.ambient
+stopsound <targets> ambient	stopsound @a ambient
+stopsound <targets> ambient <sound>	stopsound @a ambient minecraft:entity.pig.ambient
+stopsound <targets> block	stopsound @a block
+stopsound <targets> block <sound>	stopsound @a block minecraft:entity.pig.ambient
+stopsound <targets> hostile	stopsound @a hostile
+stopsound <targets> hostile <sound>	stopsound @a hostile minecraft:entity.pig.ambient
+stopsound <targets> master	stopsound @a master
+stopsound <targets> master <sound>	stopsound @a master minecraft:entity.pig.ambient
+stopsound <targets> music	stopsound @a music
+stopsound <targets> music <sound>	stopsound @a music minecraft:entity.pig.ambient
+stopsound <targets> neutral	stopsound @a neutral
+stopsound <targets> neutral <sound>	stopsound @a neutral minecraft:entity.pig.ambient
+stopsound <targets> player	stopsound @a player
+stopsound <targets> player <sound>	stopsound @a player minecraft:entity.pig.ambient
+stopsound <targets> record	stopsound @a record
+stopsound <targets> record <sound>	stopsound @a record minecraft:entity.pig.ambient
+stopsound <targets> ui	stopsound @a ui
+stopsound <targets> ui <sound>	stopsound @a ui minecraft:entity.pig.ambient
+stopsound <targets> voice	stopsound @a voice
+stopsound <targets> voice <sound>	stopsound @a voice minecraft:entity.pig.ambient
+stopsound <targets> weather	stopsound @a weather
+stopsound <targets> weather <sound>	stopsound @a weather minecraft:entity.pig.ambient
+stopwatch create <id>	stopwatch create minecraft:stone
+stopwatch query <id>	stopwatch query minecraft:stone
+stopwatch query <id> <scale>	stopwatch query minecraft:stone 1.0
+stopwatch remove <id>	stopwatch remove minecraft:stone
+stopwatch restart <id>	stopwatch restart minecraft:stone
+summon <entity>	summon minecraft:stone
+summon <entity> <pos>	summon minecraft:stone 0 64 0
+summon <entity> <pos> <nbt>	summon minecraft:stone 0 64 0 {}
+swing	swing
+swing <targets>	swing @e
+swing <targets> mainhand	swing @e mainhand
+swing <targets> mainhand <animation>	swing @e mainhand mainhand
+swing <targets> mainhand <animation> <duration>	swing @e mainhand mainhand 1t
+swing <targets> offhand	swing @e offhand
+swing <targets> offhand <animation>	swing @e offhand mainhand
+swing <targets> offhand <animation> <duration>	swing @e offhand mainhand 1t
+tag <targets> add <name>	tag @e add a
+tag <targets> list	tag @e list
+tag <targets> remove <name>	tag @e remove a
+team add <team>	team add a
+team add <team> <displayName>	team add a "a"
+team empty <team>	team empty t
+team join <team>	team join t
+team join <team> <members>	team join t a
+team leave <members>	team leave a
+team list	team list
+team list <team>	team list t
+team modify <team> collisionRule always	team modify t collisionRule always
+team modify <team> collisionRule never	team modify t collisionRule never
+team modify <team> collisionRule pushOtherTeams	team modify t collisionRule pushOtherTeams
+team modify <team> collisionRule pushOwnTeam	team modify t collisionRule pushOwnTeam
+team modify <team> color reset	team modify t color reset
+team modify <team> color <value>	team modify t color red
+team modify <team> deathMessageVisibility always	team modify t deathMessageVisibility always
+team modify <team> deathMessageVisibility hideForOtherTeams	team modify t deathMessageVisibility hideForOtherTeams
+team modify <team> deathMessageVisibility hideForOwnTeam	team modify t deathMessageVisibility hideForOwnTeam
+team modify <team> deathMessageVisibility never	team modify t deathMessageVisibility never
+team modify <team> displayName <displayName>	team modify t displayName "a"
+team modify <team> friendlyFire <allowed>	team modify t friendlyFire true
+team modify <team> nametagVisibility always	team modify t nametagVisibility always
+team modify <team> nametagVisibility hideForOtherTeams	team modify t nametagVisibility hideForOtherTeams
+team modify <team> nametagVisibility hideForOwnTeam	team modify t nametagVisibility hideForOwnTeam
+team modify <team> nametagVisibility never	team modify t nametagVisibility never
+team modify <team> prefix <prefix>	team modify t prefix "a"
+team modify <team> seeFriendlyInvisibles <allowed>	team modify t seeFriendlyInvisibles true
+team modify <team> suffix <suffix>	team modify t suffix "a"
+team remove <team>	team remove t
+teammsg <message>	teammsg hi
+teleport <destination>	teleport @e[limit=1]
+teleport <location>	teleport 0 64 0
+teleport <targets> <destination>	teleport @e @e[limit=1]
+teleport <targets> <location>	teleport @e 0 64 0
+teleport <targets> <location> facing entity <facingEntity>	teleport @e 0 64 0 facing entity @e[limit=1]
+teleport <targets> <location> facing entity <facingEntity> <facingAnchor>	teleport @e 0 64 0 facing entity @e[limit=1] feet
+teleport <targets> <location> facing <facingLocation>	teleport @e 0 64 0 facing 0 64 0
+teleport <targets> <location> <rotation>	teleport @e 0 64 0 0 0
+tellraw <targets> <message>	tellraw @a "a"
+test clearall	test clearall
+test clearall <radius>	test clearall 1
+test clearthat	test clearthat
+test clearthese	test clearthese
+test create <id>	test create minecraft:stone
+test create <id> <width>	test create minecraft:stone 1
+test create <id> <width> <height> <depth>	test create minecraft:stone 1 1 1
+test locate <tests>	test locate minecraft:*
+test pos	test pos
+test pos <var>	test pos a
+test resetclosest	test resetclosest
+test resetthat	test resetthat
+test resetthese	test resetthese
+test run <tests>	test run minecraft:*
+test run <tests> <numberOfTimes>	test run minecraft:* 1
+test run <tests> <numberOfTimes> <untilFailed>	test run minecraft:* 1 true
+test run <tests> <numberOfTimes> <untilFailed> <rotationSteps>	test run minecraft:* 1 true 1
+test run <tests> <numberOfTimes> <untilFailed> <rotationSteps> <testsPerRow>	test run minecraft:* 1 true 1 1
+test runclosest	test runclosest
+test runclosest <numberOfTimes>	test runclosest 1
+test runclosest <numberOfTimes> <untilFailed>	test runclosest 1 true
+test runfailed	test runfailed
+test runfailed <numberOfTimes>	test runfailed 1
+test runfailed <numberOfTimes> <untilFailed>	test runfailed 1 true
+test runfailed <numberOfTimes> <untilFailed> <rotationSteps>	test runfailed 1 true 1
+test runfailed <numberOfTimes> <untilFailed> <rotationSteps> <testsPerRow>	test runfailed 1 true 1 1
+test runfailed <onlyRequiredTests>	test runfailed true
+test runfailed <onlyRequiredTests> <numberOfTimes>	test runfailed true 1
+test runfailed <onlyRequiredTests> <numberOfTimes> <untilFailed>	test runfailed true 1 true
+test runfailed <onlyRequiredTests> <numberOfTimes> <untilFailed> <rotationSteps>	test runfailed true 1 true 1
+test runfailed <onlyRequiredTests> <numberOfTimes> <untilFailed> <rotationSteps> <testsPerRow>	test runfailed true 1 true 1 1
+test runmultiple <tests>	test runmultiple minecraft:*
+test runmultiple <tests> <amount>	test runmultiple minecraft:* 1
+test runthat	test runthat
+test runthat <numberOfTimes>	test runthat 1
+test runthat <numberOfTimes> <untilFailed>	test runthat 1 true
+test runthese	test runthese
+test runthese <numberOfTimes>	test runthese 1
+test runthese <numberOfTimes> <untilFailed>	test runthese 1 true
+test stop	test stop
+test verify <tests>	test verify minecraft:*
+tick freeze	tick freeze
+tick query	tick query
+tick rate <rate>	tick rate 1.0
+tick sprint stop	tick sprint stop
+tick sprint <time>	tick sprint 1t
+tick step	tick step
+tick step stop	tick step stop
+tick step <time>	tick step 1t
+tick unfreeze	tick unfreeze
+time add <time>	time add 1t
+time of <clock> add <time>	time of minecraft:overworld add 1t
+time of <clock> pause	time of minecraft:overworld pause
+time of <clock> query time	time of minecraft:overworld query time
+time of <clock> query <timeline>	time of minecraft:overworld query minecraft:day
+time of <clock> query <timeline> repetition	time of minecraft:overworld query minecraft:day repetition
+time of <clock> rate <rate>	time of minecraft:overworld rate 1.0
+time of <clock> resume	time of minecraft:overworld resume
+time of <clock> set <time>	time of minecraft:overworld set 1t
+time of <clock> set <timemarker>	time of minecraft:overworld set minecraft:stone
+time pause	time pause
+time query gametime	time query gametime
+time query time	time query time
+time query <timeline>	time query minecraft:day
+time query <timeline> repetition	time query minecraft:day repetition
+time rate <rate>	time rate 1.0
+time resume	time resume
+time set <time>	time set 1t
+time set <timemarker>	time set minecraft:stone
+title <targets> actionbar <title>	title @a actionbar "a"
+title <targets> clear	title @a clear
+title <targets> reset	title @a reset
+title <targets> subtitle <title>	title @a subtitle "a"
+title <targets> times <fadeIn> <stay> <fadeOut>	title @a times 1t 1t 1t
+title <targets> title <title>	title @a title "a"
+transfer <hostname>	transfer a
+transfer <hostname> <port>	transfer a 1
+transfer <hostname> <port> <players>	transfer a 1 @a
+trigger <objective>	trigger o
+trigger <objective> add <value>	trigger o add 1
+trigger <objective> set <value>	trigger o set 1
+unpublish	unpublish
+version	version
+waypoint list	waypoint list
+waypoint modify <waypoint> color <color>	waypoint modify @e[limit=1] color red
+waypoint modify <waypoint> color hex <color>	waypoint modify @e[limit=1] color hex ffffff
+waypoint modify <waypoint> color reset	waypoint modify @e[limit=1] color reset
+waypoint modify <waypoint> style reset	waypoint modify @e[limit=1] style reset
+waypoint modify <waypoint> style set <style>	waypoint modify @e[limit=1] style set minecraft:stone
+weather clear	weather clear
+weather clear <duration>	weather clear 1t
+weather rain	weather rain
+weather rain <duration>	weather rain 1t
+weather thunder	weather thunder
+weather thunder <duration>	weather thunder 1t
+whitelist add <targets>	whitelist add @a
+whitelist list	whitelist list
+whitelist off	whitelist off
+whitelist on	whitelist on
+whitelist reload	whitelist reload
+whitelist remove <targets>	whitelist remove @a
+worldborder add <distance>	worldborder add 1.0
+worldborder add <distance> <time>	worldborder add 1.0 1t
+worldborder center <pos>	worldborder center 0 0
+worldborder damage amount <damagePerBlock>	worldborder damage amount 1.0
+worldborder damage buffer <distance>	worldborder damage buffer 1.0
+worldborder get	worldborder get
+worldborder set <distance>	worldborder set 1.0
+worldborder set <distance> <time>	worldborder set 1.0 1t
+worldborder warning distance <distance>	worldborder warning distance 1
+worldborder warning time <time>	worldborder warning time 1t

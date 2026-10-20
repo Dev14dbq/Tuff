@@ -360,6 +360,8 @@ pub fn modify(ctx: &ServerContext, c: &Context, s: &Src) -> Result<Vec<Src>> {
             .or_else(|| bossbar::modify(ctx, c, s, &path))
             .or_else(|| scoreboard::modify(ctx, c, s, &path))
             .unwrap_or_else(|| {
+                #[cfg(test)]
+                super::coverage::missing(format!("execute {}", path.join(" ")));
                 tracing::warn!("execute {} is not implemented yet", path.join(" "));
                 Err(CommandError::new("command.failed", Vec::new()))
             }),
