@@ -182,6 +182,33 @@ impl PalettedContainer {
         (0..self.kind.entries).map(|i| self.get(i)).collect()
     }
 
+    /// Writes `map(value)` for every entry into `out` (index order), mapping
+    /// each palette entry once.
+    pub fn map_into<T: Copy>(&self, out: &mut [T], mut map: impl FnMut(u32) -> T) {
+        let out = &mut out[..self.kind.entries];
+        match &self.storage {
+            Storage::Single(value) => out.fill(map(*value)),
+            Storage::Indirect { palette, indices } => {
+                let mapped: Vec<T> = palette.iter().map(|&v| map(v)).collect();
+                let bits = indices.bits();
+                let per_word = (64 / bits) as usize;
+                let mask = (1u64 << bits) - 1;
+                for (chunk, &word) in out.chunks_mut(per_word).zip(indices.words()) {
+                    let mut word = word as u64;
+                    for slot in chunk {
+                        *slot = mapped[(word & mask) as usize];
+                        word >>= bits;
+                    }
+                }
+            }
+            Storage::Direct(values) => {
+                for (slot, &v) in out.iter_mut().zip(values) {
+                    *slot = map(v);
+                }
+            }
+        }
+    }
+
     /// How many entries satisfy `test`, testing each distinct value once.
     pub fn count(&self, test: impl Fn(u32) -> bool) -> usize {
         match &self.storage {

@@ -19,6 +19,8 @@
 
 use std::collections::VecDeque;
 
+pub mod region;
+
 /// Which light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
