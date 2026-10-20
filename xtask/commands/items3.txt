@@ -1,0 +1,102 @@
+gamemode creative @s
+clear @s
+tp @s 0 -60 0
+setblock 10 -60 2 minecraft:chest
+setblock 12 -60 2 minecraft:chest
+item override block 10 -60 2 container.* with minecraft:stick 2
+execute if items block 10 -60 2 container.1 *
+execute if items block 10 -60 2 container.26 *
+data get block 10 -60 2 Items
+item override block 10 -60 2 container.0 with minecraft:apple 2
+data get block 10 -60 2 Items
+item replace block 10 -60 2 container.* with minecraft:cobblestone 3
+data get block 10 -60 2 Items
+item fill block 10 -60 2 container.* with minecraft:dirt 3
+execute if items block 10 -60 2 container.1 *
+execute if items block 10 -60 2 container.26 *
+data get block 10 -60 2 Items
+item replace block 12 -60 2 container.1 with minecraft:stick 3
+item replace block 12 -60 2 container.2 with minecraft:stick 3
+item replace block 12 -60 2 container.* with minecraft:apple 4
+data get block 12 -60 2 Items
+item override block 12 -60 2 container.* with minecraft:diamond 4
+data get block 12 -60 2 Items
+item replace block 12 -60 2 container.* from block 10 -60 2 container.*
+data get block 12 -60 2 Items
+item replace entity @s hotbar.* with minecraft:stick 3
+item replace entity @s hotbar.1 with minecraft:stick 3
+item replace entity @s hotbar.* with minecraft:apple 4
+data get entity @s Inventory
+item override entity @s hotbar.* with minecraft:diamond 4
+data get entity @s Inventory
+item fill entity @s hotbar.* with minecraft:gold_ingot 4
+data get entity @s Inventory
+item replace entity @s hotbar.* from entity @s hotbar.8
+item replace entity @s hotbar.0 from entity @s hotbar.*
+item replace entity @s weapon.* with minecraft:stick
+item replace entity @s horse.chest with minecraft:stick
+item replace entity @s armor.body with minecraft:stick
+item replace entity @s saddle with minecraft:stick
+item replace entity @s horse.0 with minecraft:stick
+item replace entity @s villager.0 with minecraft:stick
+item replace entity @s enderchest.0 with minecraft:stick
+item replace entity @s player.cursor with minecraft:stick
+item replace entity @s player.crafting.0 with minecraft:stick
+item replace entity @s contents with minecraft:stick
+item replace entity @s armor.* with minecraft:stick
+data get entity @s Inventory
+loot replace entity @s hotbar.* 3 loot {pools:[{rolls:2,entries:[{type:"minecraft:item",name:"minecraft:apple"}]}]}
+data get entity @s Inventory
+loot replace entity @s hotbar.* loot {pools:[{rolls:2,entries:[{type:"minecraft:item",name:"minecraft:apple"}]}]}
+loot replace entity @s hotbar.0 1 loot {pools:[{rolls:2,entries:[{type:"minecraft:item",name:"minecraft:apple"}]}]}
+loot replace entity @s hotbar.0 loot {pools:[{rolls:1,entries:[{type:"minecraft:item",name:"minecraft:apple"}]}]}
+loot replace entity @s hotbar.* 99 loot {pools:[{rolls:1,entries:[{type:"minecraft:item",name:"minecraft:apple"}]}]}
+loot replace entity @s hotbar.* 100 loot {pools:[{rolls:1,entries:[{type:"minecraft:item",name:"minecraft:apple"}]}]}
+loot replace entity @s hotbar.* -1 loot {pools:[{rolls:1,entries:[{type:"minecraft:item",name:"minecraft:apple"}]}]}
+data get entity @s Inventory
+clear @s
+loot give @s loot {pools:[{rolls:1,entries:[{type:"minecraft:item",name:"minecraft:apple",modifier:{type:"minecraft:set_count",count:100}}]}]}
+data get entity @s Inventory
+loot give @s loot {pools:[{rolls:1,entries:[{type:"minecraft:item",name:"minecraft:apple"},{type:"minecraft:item",name:"minecraft:stick"}]}]}
+loot give @s loot {pools:[{rolls:3,entries:[{type:"minecraft:item",name:"minecraft:dirt",weight:2},{type:"minecraft:empty",weight:1}]}]}
+loot give @s loot {pools:[{rolls:1,entries:[{type:"minecraft:item",name:"minecraft:dirt",modifier:{type:"minecraft:set_count",count:0}}]}]}
+loot give @s loot {type:"minecraft:chest",pools:[{rolls:1,entries:[{type:"minecraft:item",name:"minecraft:dirt"}]}]}
+loot give @s loot minecraft:chests/simple_dungeon
+loot give @s loot minecraft:gameplay/fishing
+loot give @s loot minecraft:entities/cow
+loot give @s loot minecraft:blocks/oak_leaves
+loot give @s loot minecraft:blocks/stone
+loot give @s loot minecraft:gameplay/sniffer_digging
+loot give @s fish minecraft:gameplay/fishing 0 -61 0
+loot give @s fish minecraft:gameplay/fishing/fish 0 -61 0
+loot give @s fish minecraft:gameplay/fishing/fish 0 -61 0 mainhand
+loot give @s fish minecraft:blocks/stone 0 -61 0
+loot give @s fish minecraft:gameplay/fishing 0 -61 0 minecraft:fishing_rod
+loot give @s fish minecraft:gameplay/fishing/treasure 0 -61 0 minecraft:fishing_rod[minecraft:enchantments={"minecraft:luck_of_the_sea":3}]
+loot give @s mine 0 -61 0 minecraft:diamond_pickaxe
+loot give @s mine 0 -60 0
+loot give @s mine 10 -60 2
+loot give @s mine 10 -60 2 minecraft:diamond_pickaxe[minecraft:enchantments={"minecraft:silk_touch":1}]
+loot give @s mine 100000 -60 0
+loot give @s mine 0 500 0
+summon minecraft:cow 8 -60 8
+summon minecraft:zombie 12 -60 8
+loot give @s kill @e[type=minecraft:cow,limit=1]
+loot give @s kill @e[type=minecraft:zombie,limit=1]
+loot give @s kill @e[type=minecraft:cow]
+loot give @s kill @e[type=minecraft:pig]
+loot give @s kill @a
+loot spawn 0 -60 0 kill @e[type=minecraft:cow,limit=1]
+loot spawn 0 -60 0 loot minecraft:gameplay/fishing
+loot spawn 0 -60 0 loot {pools:[]}
+loot spawn 0 -60 0 loot {pools:[{rolls:2,entries:[{type:"minecraft:item",name:"minecraft:apple"}]}]}
+loot insert 10 -60 2 loot {pools:[{rolls:2,entries:[{type:"minecraft:item",name:"minecraft:apple"}]}]}
+loot insert 10 -60 2 loot {pools:[]}
+loot give @s loot {pools:[]}
+loot give @s loot {pools:[{rolls:1,entries:[{type:"minecraft:item",name:"minecraft:apple"}],conditions:[{condition:"minecraft:random_chance",chance:0}]}]}
+loot give @e[type=minecraft:cow] loot minecraft:blocks/stone
+loot give @e[type=minecraft:cow] mine 0 -61 0
+loot give @a loot minecraft:blocks/stone
+loot give @s loot minecraft:chests/nosuch
+loot give @s loot {nonsense:1}
+data get entity @s Inventory

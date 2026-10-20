@@ -1,0 +1,57 @@
+# Lines for `cargo xtask observe-commands --area items`: /item.
+gamemode creative @s
+tp @s 0 -60 0
+setblock 2 -60 2 minecraft:chest
+setblock 4 -60 2 minecraft:chest
+setblock 6 -60 2 minecraft:stone
+item replace block 2 -60 2 container.0 with minecraft:apple 5
+item replace block 2 -60 2 container.1 with minecraft:stick 3
+item replace block 2 -60 2 container.30 with minecraft:stick
+item replace block 6 -60 2 container.0 with minecraft:stick
+item replace block 2 -60 2 nosuch.slot with minecraft:stick
+item replace block 2 -60 2 container.* with minecraft:cobblestone 2
+item replace block 2 -60 2 container.2 with minecraft:air
+item replace block 2 -60 2 container.3 with minecraft:cobblestone 100
+item replace block 2 -60 2 container.3 with minecraft:cobblestone 0
+item replace entity @s hotbar.0 with minecraft:diamond_sword
+item replace entity @s hotbar.* with minecraft:stick 2
+item replace entity @s weapon.mainhand with minecraft:apple 3
+item replace entity @s armor.head with minecraft:carved_pumpkin
+item replace entity @s armor.* with minecraft:air
+item replace entity @s container.50 with minecraft:stick
+item replace entity @s horse.saddle with minecraft:saddle
+item replace entity @s nosuch.slot with minecraft:stick
+item replace entity @e[type=minecraft:cow] hotbar.0 with minecraft:stick
+item replace entity @a hotbar.0 with minecraft:bread
+item replace entity @s hotbar.1 from block 2 -60 2 container.1
+item replace entity @s hotbar.* from block 2 -60 2 container.0
+item replace entity @s hotbar.2 from block 6 -60 2 container.0
+item replace entity @s hotbar.2 from block 2 -60 2 container.99
+item replace block 4 -60 2 container.0 from entity @s hotbar.0
+item replace block 4 -60 2 container.* from entity @s hotbar.*
+item replace block 4 -60 2 container.1 from block 2 -60 2 container.1
+item replace block 4 -60 2 container.5 from block 2 -60 2 container.30
+item replace entity @s hotbar.4 from entity @s hotbar.0
+item replace entity @s hotbar.5 from entity @s nosuch.slot
+item replace entity @s hotbar.3 from entity @s hotbar.8
+item replace entity @s hotbar.3 from entity @s hotbar.0 minecraft:nosuch
+item override entity @s hotbar.6 with minecraft:golden_apple
+item override entity @s hotbar.6 with minecraft:golden_apple 4
+item override entity @s hotbar.* with minecraft:stick
+item override block 4 -60 2 container.7 with minecraft:stick
+item override block 4 -60 2 container.7 with minecraft:air
+item override entity @s hotbar.6 from entity @s hotbar.0
+item override block 4 -60 2 container.8 from entity @s hotbar.0
+item fill entity @s hotbar.* with minecraft:arrow
+item fill entity @s hotbar.* with minecraft:arrow 5
+item fill entity @s hotbar.* with minecraft:air
+item fill block 4 -60 2 container.* with minecraft:arrow 3
+item fill block 4 -60 2 container.* with minecraft:air
+item fill entity @s hotbar.0 from entity @s hotbar.1
+item fill entity @s hotbar.0 from block 2 -60 2 container.*
+item fill block 4 -60 2 container.0 from entity @s inventory.*
+item modify entity @s hotbar.0 minecraft:nosuch
+item modify block 2 -60 2 container.0 minecraft:nosuch
+item replace entity @s hotbar.0 with minecraft:diamond_sword
+item replace entity @s hotbar.1 with minecraft:stone
+item replace entity @s hotbar.1 with minecraft:iron_ore 3

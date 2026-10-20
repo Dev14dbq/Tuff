@@ -421,6 +421,31 @@ pub fn drop_item(ctx: &ServerContext, at: mc_protocol::Position, drop: crate::lo
     lock(&ctx.entities).push(entity);
 }
 
+/// An item entity at an exact position (`/loot spawn`, leftovers a
+/// player has no room for).
+pub fn spawn_item_at(ctx: &ServerContext, pos: [f64; 3], item: i32, count: i32) {
+    let r = |spread: f64| {
+        (crate::util::random_u64() >> 11) as f64 / (1u64 << 53) as f64 * spread - spread / 2.0
+    };
+    let entity = mc_entity::Entity {
+        id: ctx.next_entity_id(),
+        uuid: crate::util::random_uuid(),
+        kind: mc_entity::Kind::Item {
+            item,
+            count,
+            pickup_delay: 10,
+        },
+        pos,
+        vel: [r(0.2), 0.2, r(0.2)],
+        on_ground: false,
+        age: 0,
+        removed: false,
+        tags: Vec::new(),
+    };
+    let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
+    lock(&ctx.entities).push(entity);
+}
+
 /// A player throws a stack: from the eyes, along the view, not to be picked
 /// up again for 40 ticks (minecraft.wiki, "Item (entity)").
 pub fn throw_item(
