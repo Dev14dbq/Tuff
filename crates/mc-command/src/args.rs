@@ -19,6 +19,27 @@ pub trait Env {
     fn tag_exists(&self, registry: &str, tag: &str) -> bool;
     /// The properties of a block and their values; `None` for no such block.
     fn block_properties(&self, block: &str) -> Option<Vec<(String, Vec<String>)>>;
+    /// Every entry of `registry`, if the environment can list them.
+    fn entries(&self, _registry: &str) -> Option<Vec<String>> {
+        None
+    }
+}
+
+/// Whether `id` is matched by a selector like `*`, `minecraft:a*` or `*:b`.
+pub fn selector_matches(selector: &str, id: &str) -> bool {
+    fn glob(p: &[u8], s: &[u8]) -> bool {
+        match p.split_first() {
+            None => s.is_empty(),
+            Some((b'*', rest)) => (0..=s.len()).any(|i| glob(rest, &s[i..])),
+            Some((c, rest)) => s.first() == Some(c) && glob(rest, &s[1..]),
+        }
+    }
+    let full = if selector.contains(':') {
+        selector.to_owned()
+    } else {
+        format!("minecraft:{selector}")
+    };
+    glob(full.as_bytes(), id.as_bytes())
 }
 
 /// An environment that accepts everything (for tests and the client-side
@@ -1203,6 +1224,26 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
                 }
             }
             Arg::IdOrTag { id, tag }
+        }
+        "minecraft:resource_selector" => {
+            let start = r.cursor;
+            while r.can_read() && (id_char(r.peek()) || r.peek() == '*') {
+                r.skip();
+            }
+            let sel = r.input[start..r.cursor].to_owned();
+            if sel.is_empty() {
+                return Err(r.error(builtin::expected("argument.id.invalid")));
+            }
+            let reg = props["registry"].as_str().unwrap_or("");
+            if let Some(all) = env.entries(reg)
+                && !all.iter().any(|e| selector_matches(&sel, e))
+            {
+                return Err(r.error(CommandError::new(
+                    "argument.resource_selector.not_found",
+                    vec![string(&sel), string(reg)],
+                )));
+            }
+            Arg::Id(sel)
         }
         "minecraft:gamemode" => {
             let v = r.read_unquoted();

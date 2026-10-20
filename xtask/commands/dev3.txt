@@ -1,0 +1,8 @@
+# debug function
+debug function t:hello
+debug start
+debug function t:hello
+debug function t:three
+debug function t:nested
+debug function #t:nothing
+debug stop

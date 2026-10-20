@@ -9,6 +9,7 @@ mod bossbar;
 mod coverage;
 mod data;
 mod execute;
+mod devtools;
 mod functions;
 mod item;
 mod living;

@@ -555,6 +555,7 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
                 .or_else(|| living::run(r, path))
                 .or_else(|| super::item::run(r, path))
                 .or_else(|| super::loot::run(r, path))
+                .or_else(|| super::devtools::run(r, path))
                 .or_else(|| rare::run(r, path));
         }
     })
