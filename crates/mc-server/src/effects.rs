@@ -361,6 +361,15 @@ impl Effects {
             .collect()
     }
 
+    /// The modifiers the effects put on an attribute (by registry name).
+    pub fn modifiers_named(&self, name: &str) -> Vec<AttributeModifier> {
+        Attr::ALL
+            .iter()
+            .find(|a| a.name() == name)
+            .map(|&a| self.modifiers(a))
+            .unwrap_or_default()
+    }
+
     /// An attribute's value with the effects' modifiers.
     pub fn value(&self, attr: Attr) -> f64 {
         let mods = self.modifiers(attr);

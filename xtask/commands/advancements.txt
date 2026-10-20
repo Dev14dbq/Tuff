@@ -1,0 +1,52 @@
+# advancement and recipe state on a fresh player (nothing granted yet)
+advancement revoke @s everything
+advancement revoke @s everything
+advancement grant @s only minecraft:story/root
+advancement revoke @s everything
+advancement grant @s everything
+advancement grant @s everything
+advancement revoke @s only minecraft:story/root
+advancement revoke @s everything
+advancement revoke @s everything
+advancement grant @s only minecraft:story/mine_stone
+advancement grant @s only minecraft:story/mine_stone
+advancement grant @s only minecraft:story/iron_tools
+advancement grant @s from minecraft:story/mine_stone
+advancement grant @s until minecraft:story/iron_tools
+advancement grant @s through minecraft:story/mine_stone
+advancement revoke @s only minecraft:story/mine_stone
+advancement revoke @s from minecraft:story/mine_stone
+advancement revoke @s until minecraft:story/iron_tools
+advancement revoke @s through minecraft:story/mine_stone
+advancement grant @s only minecraft:husbandry/balanced_diet
+advancement revoke @s only minecraft:husbandry/balanced_diet
+advancement grant @s only minecraft:husbandry/balanced_diet minecraft:apple
+advancement grant @s only minecraft:husbandry/balanced_diet minecraft:bread
+advancement revoke @s only minecraft:husbandry/balanced_diet minecraft:apple
+advancement grant @s only minecraft:adventure/kill_all_mobs minecraft:zombie
+advancement grant @s only minecraft:story/enter_the_nether
+advancement revoke @s only minecraft:story/enter_the_nether
+advancement grant @s only minecraft:recipes/misc/bone_meal
+recipe give @s minecraft:bone_meal
+recipe take @s minecraft:bone_meal
+advancement revoke @s only minecraft:recipes/misc/bone_meal
+recipe give @s minecraft:bone_meal
+recipe take @s minecraft:bone_meal
+advancement grant @s only minecraft:recipes/misc/bone_meal
+recipe take @s minecraft:bone_meal
+recipe take @s *
+recipe give @s *
+advancement revoke @s everything
+recipe take @s minecraft:crafting_table
+advancement grant @s only minecraft:recipes/decorations/crafting_table
+recipe take @s minecraft:crafting_table
+advancement grant @s only minecraft:story/mine_diamond
+experience query @s points
+advancement grant @s everything
+experience query @s points
+advancement revoke @s everything
+advancement grant @a only minecraft:story/root
+>/advancement grant @s only minecraft:story/
+>/advancement grant @s only minecraft:husbandry/balanced_diet 
+>/recipe give @s 
+>/advancement grant @s from minecraft:story/mine_s

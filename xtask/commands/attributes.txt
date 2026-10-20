@@ -1,0 +1,281 @@
+# every attribute of a player: value, base, and the clamp limits
+attribute @s minecraft:air_drag_modifier get
+attribute @s minecraft:air_drag_modifier base get
+attribute @s minecraft:air_drag_modifier base set 100000000
+attribute @s minecraft:air_drag_modifier get
+attribute @s minecraft:air_drag_modifier base set -100000000
+attribute @s minecraft:air_drag_modifier get
+attribute @s minecraft:air_drag_modifier base reset
+attribute @s minecraft:armor get
+attribute @s minecraft:armor base get
+attribute @s minecraft:armor base set 100000000
+attribute @s minecraft:armor get
+attribute @s minecraft:armor base set -100000000
+attribute @s minecraft:armor get
+attribute @s minecraft:armor base reset
+attribute @s minecraft:armor_toughness get
+attribute @s minecraft:armor_toughness base get
+attribute @s minecraft:armor_toughness base set 100000000
+attribute @s minecraft:armor_toughness get
+attribute @s minecraft:armor_toughness base set -100000000
+attribute @s minecraft:armor_toughness get
+attribute @s minecraft:armor_toughness base reset
+attribute @s minecraft:attack_damage get
+attribute @s minecraft:attack_damage base get
+attribute @s minecraft:attack_damage base set 100000000
+attribute @s minecraft:attack_damage get
+attribute @s minecraft:attack_damage base set -100000000
+attribute @s minecraft:attack_damage get
+attribute @s minecraft:attack_damage base reset
+attribute @s minecraft:attack_knockback get
+attribute @s minecraft:attack_knockback base get
+attribute @s minecraft:attack_knockback base set 100000000
+attribute @s minecraft:attack_knockback get
+attribute @s minecraft:attack_knockback base set -100000000
+attribute @s minecraft:attack_knockback get
+attribute @s minecraft:attack_knockback base reset
+attribute @s minecraft:attack_speed get
+attribute @s minecraft:attack_speed base get
+attribute @s minecraft:attack_speed base set 100000000
+attribute @s minecraft:attack_speed get
+attribute @s minecraft:attack_speed base set -100000000
+attribute @s minecraft:attack_speed get
+attribute @s minecraft:attack_speed base reset
+attribute @s minecraft:below_name_distance get
+attribute @s minecraft:below_name_distance base get
+attribute @s minecraft:below_name_distance base set 100000000
+attribute @s minecraft:below_name_distance get
+attribute @s minecraft:below_name_distance base set -100000000
+attribute @s minecraft:below_name_distance get
+attribute @s minecraft:below_name_distance base reset
+attribute @s minecraft:block_break_speed get
+attribute @s minecraft:block_break_speed base get
+attribute @s minecraft:block_break_speed base set 100000000
+attribute @s minecraft:block_break_speed get
+attribute @s minecraft:block_break_speed base set -100000000
+attribute @s minecraft:block_break_speed get
+attribute @s minecraft:block_break_speed base reset
+attribute @s minecraft:block_interaction_range get
+attribute @s minecraft:block_interaction_range base get
+attribute @s minecraft:block_interaction_range base set 100000000
+attribute @s minecraft:block_interaction_range get
+attribute @s minecraft:block_interaction_range base set -100000000
+attribute @s minecraft:block_interaction_range get
+attribute @s minecraft:block_interaction_range base reset
+attribute @s minecraft:bounciness get
+attribute @s minecraft:bounciness base get
+attribute @s minecraft:bounciness base set 100000000
+attribute @s minecraft:bounciness get
+attribute @s minecraft:bounciness base set -100000000
+attribute @s minecraft:bounciness get
+attribute @s minecraft:bounciness base reset
+attribute @s minecraft:burning_time get
+attribute @s minecraft:burning_time base get
+attribute @s minecraft:burning_time base set 100000000
+attribute @s minecraft:burning_time get
+attribute @s minecraft:burning_time base set -100000000
+attribute @s minecraft:burning_time get
+attribute @s minecraft:burning_time base reset
+attribute @s minecraft:camera_distance get
+attribute @s minecraft:camera_distance base get
+attribute @s minecraft:camera_distance base set 100000000
+attribute @s minecraft:camera_distance get
+attribute @s minecraft:camera_distance base set -100000000
+attribute @s minecraft:camera_distance get
+attribute @s minecraft:camera_distance base reset
+attribute @s minecraft:entity_interaction_range get
+attribute @s minecraft:entity_interaction_range base get
+attribute @s minecraft:entity_interaction_range base set 100000000
+attribute @s minecraft:entity_interaction_range get
+attribute @s minecraft:entity_interaction_range base set -100000000
+attribute @s minecraft:entity_interaction_range get
+attribute @s minecraft:entity_interaction_range base reset
+attribute @s minecraft:explosion_knockback_resistance get
+attribute @s minecraft:explosion_knockback_resistance base get
+attribute @s minecraft:explosion_knockback_resistance base set 100000000
+attribute @s minecraft:explosion_knockback_resistance get
+attribute @s minecraft:explosion_knockback_resistance base set -100000000
+attribute @s minecraft:explosion_knockback_resistance get
+attribute @s minecraft:explosion_knockback_resistance base reset
+attribute @s minecraft:fall_damage_multiplier get
+attribute @s minecraft:fall_damage_multiplier base get
+attribute @s minecraft:fall_damage_multiplier base set 100000000
+attribute @s minecraft:fall_damage_multiplier get
+attribute @s minecraft:fall_damage_multiplier base set -100000000
+attribute @s minecraft:fall_damage_multiplier get
+attribute @s minecraft:fall_damage_multiplier base reset
+attribute @s minecraft:flying_speed get
+attribute @s minecraft:flying_speed base get
+attribute @s minecraft:flying_speed base set 100000000
+attribute @s minecraft:flying_speed get
+attribute @s minecraft:flying_speed base set -100000000
+attribute @s minecraft:flying_speed get
+attribute @s minecraft:flying_speed base reset
+attribute @s minecraft:follow_range get
+attribute @s minecraft:follow_range base get
+attribute @s minecraft:follow_range base set 100000000
+attribute @s minecraft:follow_range get
+attribute @s minecraft:follow_range base set -100000000
+attribute @s minecraft:follow_range get
+attribute @s minecraft:follow_range base reset
+attribute @s minecraft:friction_modifier get
+attribute @s minecraft:friction_modifier base get
+attribute @s minecraft:friction_modifier base set 100000000
+attribute @s minecraft:friction_modifier get
+attribute @s minecraft:friction_modifier base set -100000000
+attribute @s minecraft:friction_modifier get
+attribute @s minecraft:friction_modifier base reset
+attribute @s minecraft:gravity get
+attribute @s minecraft:gravity base get
+attribute @s minecraft:gravity base set 100000000
+attribute @s minecraft:gravity get
+attribute @s minecraft:gravity base set -100000000
+attribute @s minecraft:gravity get
+attribute @s minecraft:gravity base reset
+attribute @s minecraft:jump_strength get
+attribute @s minecraft:jump_strength base get
+attribute @s minecraft:jump_strength base set 100000000
+attribute @s minecraft:jump_strength get
+attribute @s minecraft:jump_strength base set -100000000
+attribute @s minecraft:jump_strength get
+attribute @s minecraft:jump_strength base reset
+attribute @s minecraft:knockback_resistance get
+attribute @s minecraft:knockback_resistance base get
+attribute @s minecraft:knockback_resistance base set 100000000
+attribute @s minecraft:knockback_resistance get
+attribute @s minecraft:knockback_resistance base set -100000000
+attribute @s minecraft:knockback_resistance get
+attribute @s minecraft:knockback_resistance base reset
+attribute @s minecraft:luck get
+attribute @s minecraft:luck base get
+attribute @s minecraft:luck base set 100000000
+attribute @s minecraft:luck get
+attribute @s minecraft:luck base set -100000000
+attribute @s minecraft:luck get
+attribute @s minecraft:luck base reset
+attribute @s minecraft:max_absorption get
+attribute @s minecraft:max_absorption base get
+attribute @s minecraft:max_absorption base set 100000000
+attribute @s minecraft:max_absorption get
+attribute @s minecraft:max_absorption base set -100000000
+attribute @s minecraft:max_absorption get
+attribute @s minecraft:max_absorption base reset
+attribute @s minecraft:max_health get
+attribute @s minecraft:max_health base get
+attribute @s minecraft:max_health base set 100000000
+attribute @s minecraft:max_health get
+attribute @s minecraft:max_health base set -100000000
+attribute @s minecraft:max_health get
+attribute @s minecraft:max_health base reset
+attribute @s minecraft:mining_efficiency get
+attribute @s minecraft:mining_efficiency base get
+attribute @s minecraft:mining_efficiency base set 100000000
+attribute @s minecraft:mining_efficiency get
+attribute @s minecraft:mining_efficiency base set -100000000
+attribute @s minecraft:mining_efficiency get
+attribute @s minecraft:mining_efficiency base reset
+attribute @s minecraft:movement_efficiency get
+attribute @s minecraft:movement_efficiency base get
+attribute @s minecraft:movement_efficiency base set 100000000
+attribute @s minecraft:movement_efficiency get
+attribute @s minecraft:movement_efficiency base set -100000000
+attribute @s minecraft:movement_efficiency get
+attribute @s minecraft:movement_efficiency base reset
+attribute @s minecraft:movement_speed get
+attribute @s minecraft:movement_speed base get
+attribute @s minecraft:movement_speed base set 100000000
+attribute @s minecraft:movement_speed get
+attribute @s minecraft:movement_speed base set -100000000
+attribute @s minecraft:movement_speed get
+attribute @s minecraft:movement_speed base reset
+attribute @s minecraft:name_tag_distance get
+attribute @s minecraft:name_tag_distance base get
+attribute @s minecraft:name_tag_distance base set 100000000
+attribute @s minecraft:name_tag_distance get
+attribute @s minecraft:name_tag_distance base set -100000000
+attribute @s minecraft:name_tag_distance get
+attribute @s minecraft:name_tag_distance base reset
+attribute @s minecraft:oxygen_bonus get
+attribute @s minecraft:oxygen_bonus base get
+attribute @s minecraft:oxygen_bonus base set 100000000
+attribute @s minecraft:oxygen_bonus get
+attribute @s minecraft:oxygen_bonus base set -100000000
+attribute @s minecraft:oxygen_bonus get
+attribute @s minecraft:oxygen_bonus base reset
+attribute @s minecraft:safe_fall_distance get
+attribute @s minecraft:safe_fall_distance base get
+attribute @s minecraft:safe_fall_distance base set 100000000
+attribute @s minecraft:safe_fall_distance get
+attribute @s minecraft:safe_fall_distance base set -100000000
+attribute @s minecraft:safe_fall_distance get
+attribute @s minecraft:safe_fall_distance base reset
+attribute @s minecraft:scale get
+attribute @s minecraft:scale base get
+attribute @s minecraft:scale base set 100000000
+attribute @s minecraft:scale get
+attribute @s minecraft:scale base set -100000000
+attribute @s minecraft:scale get
+attribute @s minecraft:scale base reset
+attribute @s minecraft:sneaking_speed get
+attribute @s minecraft:sneaking_speed base get
+attribute @s minecraft:sneaking_speed base set 100000000
+attribute @s minecraft:sneaking_speed get
+attribute @s minecraft:sneaking_speed base set -100000000
+attribute @s minecraft:sneaking_speed get
+attribute @s minecraft:sneaking_speed base reset
+attribute @s minecraft:spawn_reinforcements get
+attribute @s minecraft:spawn_reinforcements base get
+attribute @s minecraft:spawn_reinforcements base set 100000000
+attribute @s minecraft:spawn_reinforcements get
+attribute @s minecraft:spawn_reinforcements base set -100000000
+attribute @s minecraft:spawn_reinforcements get
+attribute @s minecraft:spawn_reinforcements base reset
+attribute @s minecraft:step_height get
+attribute @s minecraft:step_height base get
+attribute @s minecraft:step_height base set 100000000
+attribute @s minecraft:step_height get
+attribute @s minecraft:step_height base set -100000000
+attribute @s minecraft:step_height get
+attribute @s minecraft:step_height base reset
+attribute @s minecraft:submerged_mining_speed get
+attribute @s minecraft:submerged_mining_speed base get
+attribute @s minecraft:submerged_mining_speed base set 100000000
+attribute @s minecraft:submerged_mining_speed get
+attribute @s minecraft:submerged_mining_speed base set -100000000
+attribute @s minecraft:submerged_mining_speed get
+attribute @s minecraft:submerged_mining_speed base reset
+attribute @s minecraft:sweeping_damage_ratio get
+attribute @s minecraft:sweeping_damage_ratio base get
+attribute @s minecraft:sweeping_damage_ratio base set 100000000
+attribute @s minecraft:sweeping_damage_ratio get
+attribute @s minecraft:sweeping_damage_ratio base set -100000000
+attribute @s minecraft:sweeping_damage_ratio get
+attribute @s minecraft:sweeping_damage_ratio base reset
+attribute @s minecraft:tempt_range get
+attribute @s minecraft:tempt_range base get
+attribute @s minecraft:tempt_range base set 100000000
+attribute @s minecraft:tempt_range get
+attribute @s minecraft:tempt_range base set -100000000
+attribute @s minecraft:tempt_range get
+attribute @s minecraft:tempt_range base reset
+attribute @s minecraft:water_movement_efficiency get
+attribute @s minecraft:water_movement_efficiency base get
+attribute @s minecraft:water_movement_efficiency base set 100000000
+attribute @s minecraft:water_movement_efficiency get
+attribute @s minecraft:water_movement_efficiency base set -100000000
+attribute @s minecraft:water_movement_efficiency get
+attribute @s minecraft:water_movement_efficiency base reset
+attribute @s minecraft:waypoint_receive_range get
+attribute @s minecraft:waypoint_receive_range base get
+attribute @s minecraft:waypoint_receive_range base set 100000000
+attribute @s minecraft:waypoint_receive_range get
+attribute @s minecraft:waypoint_receive_range base set -100000000
+attribute @s minecraft:waypoint_receive_range get
+attribute @s minecraft:waypoint_receive_range base reset
+attribute @s minecraft:waypoint_transmit_range get
+attribute @s minecraft:waypoint_transmit_range base get
+attribute @s minecraft:waypoint_transmit_range base set 100000000
+attribute @s minecraft:waypoint_transmit_range get
+attribute @s minecraft:waypoint_transmit_range base set -100000000
+attribute @s minecraft:waypoint_transmit_range get
+attribute @s minecraft:waypoint_transmit_range base reset

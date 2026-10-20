@@ -1115,8 +1115,19 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
             }
         }
         "minecraft:context_int_provider" | "minecraft:context_float_provider" => {
+            let float = parser == "minecraft:context_float_provider";
             if r.can_read() && matches!(r.peek(), '{' | '[') {
-                Arg::Nbt(read_nbt(r)?)
+                let t = read_nbt(r)?;
+                if let Some(why) = provider_error(&t, float) {
+                    return Err(r.error_at(
+                        CommandError::new(
+                            "argument.resource_or_id.failed_to_parse",
+                            vec![string(&why)],
+                        ),
+                        r.input.len(),
+                    ));
+                }
+                Arg::Nbt(t)
             } else {
                 let id = read_id(r)?;
                 if !env.exists(parser, &full_id(&id)) {
@@ -1345,6 +1356,89 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
             }
             Arg::Str(name.to_owned())
         }
+        "minecraft:swing_animation" => {
+            let name = r.read_unquoted().to_owned();
+            if !matches!(name.as_str(), "none" | "whack" | "stab") {
+                return Err(r.error(CommandError::new(
+                    "argument.swing_animation.invalid",
+                    vec![string(&name)],
+                )));
+            }
+            Arg::Str(name)
+        }
+        "minecraft:hex_color" => {
+            let word = r.read_unquoted().to_owned();
+            if word.len() != 3 && word.len() != 6 {
+                return Err(r.error(CommandError::new(
+                    "argument.hexcolor.invalid",
+                    vec![string(&word)],
+                )));
+            }
+            // Three digits mean each one twice; the digits are read in
+            // pairs and a bad pair is named in the error.
+            let full: String = if word.len() == 3 {
+                word.chars().flat_map(|c| [c, c]).collect()
+            } else {
+                word.clone()
+            };
+            for pair in full.as_bytes().chunks(2) {
+                if let Some(i) = pair.iter().position(|b| !b.is_ascii_hexdigit()) {
+                    let pair = String::from_utf8_lossy(pair).into_owned();
+                    return Err(r.error(CommandError::new(
+                        "command.exception",
+                        vec![string(&format!("Error at index {i} in: \"{pair}\""))],
+                    )));
+                }
+            }
+            Arg::Str(full.to_ascii_uppercase())
+        }
+        "minecraft:dialog" => {
+            if r.can_read() && matches!(r.peek(), '{' | '[') {
+                let t = read_nbt(r)?;
+                let fail = |r: &Reader, why: String| {
+                    r.error_at(
+                        CommandError::new(
+                            "argument.resource_or_id.failed_to_parse",
+                            vec![string(&why)],
+                        ),
+                        r.input.len(),
+                    )
+                };
+                let Tag::Compound(c) = &t else {
+                    let why = format!("Not a map: {}", crate::particle::snbt(&t));
+                    return Err(fail(r, why));
+                };
+                let map = crate::particle::snbt(&t);
+                let Some(kind) = c.get("type") else {
+                    return Err(fail(r, format!("No key type in MapLike[{map}]")));
+                };
+                let kind = match kind {
+                    Tag::String(s) => full_id(s),
+                    _ => String::new(),
+                };
+                if !env.exists("minecraft:dialog_type", &kind) {
+                    return Err(fail(
+                        r,
+                        format!(
+                            "Unknown registry key in ResourceKey[minecraft:root / minecraft:dialog_type]: {kind}"
+                        ),
+                    ));
+                }
+                if c.get("title").is_none() {
+                    return Err(fail(r, format!("No key title in MapLike[{map}]")));
+                }
+                Arg::Nbt(t)
+            } else {
+                let id = read_id(r)?;
+                if !env.exists("minecraft:dialog", &full_id(&id)) {
+                    return Err(r.error(CommandError::new(
+                        "argument.resource_or_id.no_such_element",
+                        vec![string(&full_id(&id)), string("minecraft:dialog")],
+                    )));
+                }
+                Arg::Id(id)
+            }
+        }
         "minecraft:uuid" => {
             let s = r.cursor;
             while r.can_read() && (r.peek().is_ascii_hexdigit() || r.peek() == '-') {
@@ -1460,4 +1554,76 @@ pub fn plain_text(t: Tag) -> Tag {
         Tag::List(l) => crate::text::list_of(l.into_iter().map(plain_text).collect()),
         other => other,
     }
+}
+
+
+/// What makes a context provider written out in a command fail to parse
+/// (vanilla's codec complaint), or `None` when it is shaped right. Only
+/// the top level is checked.
+fn provider_error(t: &Tag, float: bool) -> Option<String> {
+    // (type, keys that must be there, in the order the codec reports them)
+    const NEEDS: [(&str, &[&str]); 33] = [
+        ("constant", &["value"]),
+        ("add", &["inputs"]),
+        ("sub", &["right", "left"]),
+        ("mul", &["inputs"]),
+        ("div", &["right", "left"]),
+        ("mod", &["right", "left"]),
+        ("floor_div", &["right", "left"]),
+        ("floor_mod", &["right", "left"]),
+        ("min", &["inputs"]),
+        ("max", &["inputs"]),
+        ("avg", &["inputs"]),
+        ("abs", &["input"]),
+        ("negate", &["input"]),
+        ("pow", &["exponent", "base"]),
+        ("binomial", &["p", "n"]),
+        ("uniform", &["max", "min"]),
+        ("weighted_list", &["distribution"]),
+        ("conditional", &["on_true", "condition"]),
+        ("number_dispatcher", &["cases"]),
+        ("from_float", &["input"]),
+        ("score", &["score", "target"]),
+        ("storage", &["path", "storage"]),
+        ("environment_attribute", &["attribute"]),
+        ("sqrt", &["input"]),
+        ("sin", &["input"]),
+        ("floor", &["input"]),
+        ("round", &["input"]),
+        ("length", &["inputs"]),
+        ("from_int", &["input"]),
+        ("enchantment_level", &["amount"]),
+        ("ceil", &["input"]),
+        ("cos", &["input"]),
+        ("tan", &["input"]),
+    ];
+    let Tag::Compound(c) = t else {
+        return Some(format!("Not a map: {}", crate::particle::snbt(t)));
+    };
+    let map = crate::particle::snbt(t);
+    let prefix = "Failed to parse either. First: Not a number; Second: ";
+    let Some(kind) = c.get("type") else {
+        return Some(format!("{prefix}No key type in MapLike[{map}]"));
+    };
+    let name = match kind {
+        Tag::String(s) => full_id(s),
+        _ => String::new(),
+    };
+    let short = name.trim_start_matches("minecraft:");
+    let float_only = ["sqrt", "sin", "floor", "round", "length", "from_int", "enchantment_level", "ceil", "cos", "tan"];
+    let allowed = NEEDS.iter().find(|(k, _)| *k == short).filter(|(k, _)| {
+        if float { *k != "from_float" } else { !float_only.contains(k) }
+    });
+    let Some((_, needs)) = allowed else {
+        let registry = if float { "context_float_provider_type" } else { "context_int_provider_type" };
+        return Some(format!(
+            "{prefix}Unknown registry key in ResourceKey[minecraft:root / minecraft:{registry}]: {name}"
+        ));
+    };
+    let missing: Vec<String> = needs
+        .iter()
+        .filter(|k| c.get(k).is_none())
+        .map(|k| format!("No key {k} in MapLike[{map}]"))
+        .collect();
+    (!missing.is_empty()).then(|| format!("{prefix}{}", missing.join("; ")))
 }

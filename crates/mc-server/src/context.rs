@@ -59,6 +59,11 @@ pub enum Direct {
     Particles(mc_protocol::packets::play::LevelParticles),
     Camera(mc_protocol::packets::play::SetCamera),
     Boss(mc_protocol::packets::play::BossEvent),
+    Transfer(mc_protocol::packets::play::Transfer),
+    DisguisedChat(mc_protocol::packets::play::DisguisedChat),
+    ShowDialog(mc_protocol::packets::play::ShowDialog),
+    ClearDialog(mc_protocol::packets::play::ClearDialog),
+    PostEffects(mc_protocol::packets::play::PostEffects),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -271,6 +276,14 @@ pub enum Event {
         entity_id: i32,
         times: u8,
     },
+    /// `/swing`: an entity swings a hand, for itself and who sees it.
+    Animate {
+        uuid: u128,
+        entity_id: i32,
+        hand: i32,
+        kind: i32,
+        duration: i32,
+    },
     /// What a player holds in the main hand changed.
     Equipment {
         uuid: u128,
@@ -369,6 +382,8 @@ pub struct ServerContext {
     /// Command storage (`/data ... storage`).
     pub storage: Mutex<crate::storage::Storage>,
     /// `/stopwatch`: when each one started.
+    /// State of the rarer commands (`/posteffect`, `/waypoint`...).
+    pub rare: Mutex<crate::commands::rare::State>,
     pub stopwatches: Mutex<std::collections::BTreeMap<String, std::time::Instant>>,
     /// Data packs, their functions and `/schedule`.
     pub packs: Mutex<crate::packs::Packs>,
@@ -632,6 +647,7 @@ impl ServerContext {
             bossbars: Mutex::new(bossbars),
             scoreboard: Mutex::new(scoreboard),
             storage: Mutex::new(storage),
+            rare: Mutex::default(),
             stopwatches: Mutex::default(),
             data,
         })

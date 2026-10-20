@@ -1,0 +1,159 @@
+# Lines for `cargo xtask observe-commands --area rare --packets transfer,show_dialog,clear_dialog,swing_animation`: transfer, dialog, waypoint, swing, fetchprofile, compute.
+# transfer
+transfer localhost 25565 @e[type=pig]
+transfer example.org 0
+transfer example.org 70000
+transfer "quoted host" 1 @a[name=Nobody]
+>/transfer 
+>/transfer localhost 
+>/transfer localhost 25565 
+
+# dialog
+dialog show @s minecraft:server_links
+dialog show @s minecraft:custom_options
+dialog show @s minecraft:nosuch
+dialog show @s {type:"minecraft:notice",title:"Hi"}
+dialog show @s {type:"minecraft:notice"}
+dialog show @s {type:"minecraft:nosuch"}
+dialog show @s {}
+dialog show @s [1]
+dialog show @a[name=Nobody] minecraft:server_links
+dialog clear @s
+dialog clear @a[name=Nobody]
+>/dialog show @s 
+>/dialog show @s minecraft:
+>/dialog clear 
+
+# waypoint
+waypoint list
+waypoint modify @s color red
+waypoint modify @s color nosuch
+waypoint modify @s color hex FF0000
+waypoint modify @s color hex 0f0
+waypoint modify @s color hex 12345
+waypoint modify @s color hex GG0000
+waypoint modify @s color reset
+waypoint modify @s style set minecraft:bowtie
+waypoint modify @s style set nosuch:style
+waypoint modify @s style reset
+waypoint list
+summon pig 0 -60 0 {Tags:["probe"]}
+waypoint list
+waypoint modify @e[tag=probe,limit=1] color red
+waypoint list
+waypoint modify @e[tag=probe,limit=1] style set minecraft:bowtie
+waypoint modify @e[tag=probe,limit=1] color hex 123456
+waypoint modify @e[tag=probe,limit=1] color reset
+waypoint list
+waypoint modify @e[type=item,limit=1] color red
+summon item 0 -60 0 {Item:{id:"minecraft:stone"},Tags:["probe2"]}
+waypoint modify @e[tag=probe2,limit=1] color red
+kill @e[tag=probe2]
+>/waypoint modify @s color 
+>/waypoint modify @s color hex 
+>/waypoint modify @s style set 
+>/waypoint modify @s 
+
+# swing
+swing
+swing @s
+swing @s mainhand
+swing @s offhand
+swing @s mainhand whack
+swing @s mainhand nosuch
+swing @s mainhand whack 5
+swing @s offhand stab 3
+swing @s offhand none
+swing @s offhand stab 0
+swing @e[tag=probe]
+swing @e[type=item]
+>/swing @s mainhand 
+>/swing @s 
+
+# fetchprofile
+fetchprofile entity @s
+fetchprofile entity @e[tag=probe,limit=1]
+fetchprofile entity @e[type=item,limit=1]
+fetchprofile name Notch
+seed
+seed
+seed
+fetchprofile name Nobody_Here_xz
+seed
+seed
+seed
+fetchprofile id 069a79f4-44e9-4726-a5be-fca90e38aaf5
+seed
+seed
+seed
+fetchprofile id 00000000-0000-0000-0000-000000000000
+seed
+seed
+seed
+fetchprofile name bad name
+>/fetchprofile name 
+
+# compute
+compute default integer 5
+compute default integer minecraft:brewing/uses_default
+compute default integer minecraft:cooking/time_coal
+compute default integer minecraft:cooking/fast_burn_time_reduction_factor
+compute default integer minecraft:nosuch
+compute default integer #minecraft:nosuch
+compute default integer {type:"minecraft:div",left:7,right:2}
+compute default integer {type:"minecraft:div",left:-7,right:2}
+compute default integer {type:"minecraft:div",left:7,right:0}
+compute default integer {type:"minecraft:nosuch"}
+compute default integer {}
+compute default integer {type:"minecraft:constant"}
+compute default integer {type:"minecraft:constant",value:4}
+compute default integer {type:"minecraft:add"}
+compute default integer {type:"minecraft:add",values:[1,2,3]}
+compute default integer {type:"minecraft:sub"}
+compute default integer {type:"minecraft:mul"}
+compute default integer {type:"minecraft:div"}
+compute default integer {type:"minecraft:mod"}
+compute default integer {type:"minecraft:floor_div"}
+compute default integer {type:"minecraft:floor_mod"}
+compute default integer {type:"minecraft:min"}
+compute default integer {type:"minecraft:max"}
+compute default integer {type:"minecraft:avg"}
+compute default integer {type:"minecraft:abs"}
+compute default integer {type:"minecraft:negate"}
+compute default integer {type:"minecraft:pow"}
+compute default integer {type:"minecraft:binomial"}
+compute default integer {type:"minecraft:uniform"}
+compute default integer {type:"minecraft:weighted_list"}
+compute default integer {type:"minecraft:conditional"}
+compute default integer {type:"minecraft:number_dispatcher"}
+compute default integer {type:"minecraft:from_float"}
+compute default integer {type:"minecraft:score"}
+compute default integer {type:"minecraft:storage"}
+compute default integer {type:"minecraft:environment_attribute"}
+compute default float 2.5
+compute default float minecraft:cooking/speed_default
+compute default float minecraft:cooking/fast_speed_multiplier
+compute default float {type:"minecraft:constant",value:2.5}
+compute default float {type:"minecraft:div",left:7,right:2}
+compute default float {type:"minecraft:div",left:7,right:2} 2
+compute default float {type:"minecraft:div",left:7,right:0}
+compute default float {type:"minecraft:div",left:1,right:3}
+compute default float {type:"minecraft:div",left:1,right:3} 10
+compute default float {type:"minecraft:sqrt"}
+compute default float {type:"minecraft:sin"}
+compute default float {type:"minecraft:floor"}
+compute default float {type:"minecraft:round"}
+compute default float {type:"minecraft:length"}
+compute default float {type:"minecraft:from_int"}
+compute default float {type:"minecraft:enchantment_level"}
+compute default float {type:"minecraft:uniform"}
+compute block 0 -60 0 integer minecraft:cooking/time_coal
+compute block 0 -60 0 float minecraft:cooking/speed_default
+compute block 0 -60 0 integer minecraft:compostable/always_add_one
+compute entity @s integer minecraft:brewing/uses_default
+compute entity @e[tag=probe,limit=1] float minecraft:brewing/speed_default
+compute entity @e[type=item,limit=1] float minecraft:brewing/speed_default
+>/compute default integer 
+>/compute default integer minecraft:
+>/compute default float 
+kill @e[tag=probe]

@@ -12,7 +12,7 @@ use mc_protocol::packets::play::{ItemStack, TickingState, TickingStep};
 use super::target::{self, Target, player_name};
 use super::world::{apply, in_world, put_block_data};
 use super::{Result, Run, Src, Who, data, execute};
-use super::{bossbar, functions, living, place, places, rare, scoreboard, scores, team};
+use super::{bossbar, functions, gear, living, place, places, progress, rare, scoreboard, scores, team};
 use crate::context::{Event, ServerContext};
 use crate::rules;
 use crate::tick::lock;
@@ -556,6 +556,8 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
                 .or_else(|| super::item::run(r, path))
                 .or_else(|| super::loot::run(r, path))
                 .or_else(|| super::devtools::run(r, path))
+                .or_else(|| gear::run(r, path))
+                .or_else(|| progress::run(r, path))
                 .or_else(|| rare::run(r, path));
         }
     })
@@ -2626,6 +2628,9 @@ fn random(r: &mut Run, roll: bool) -> Result<i32> {
         return Err(err("commands.random.error.range_too_large", Vec::new()));
     }
     let value = min + (crate::util::random_u64() % span as u64) as i64;
+    if let Some(seq) = r.string("sequence") {
+        lock(&r.ctx.rare).use_sequence(&mc_command::args::full_id(&seq));
+    }
     if roll {
         let line = translate(
             "commands.random.roll",

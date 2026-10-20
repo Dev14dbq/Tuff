@@ -199,7 +199,9 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             // Packets sent to the player come before the reply, as in
             // vanilla, so the reply then goes the same way.
             let after = outcome.events.iter().any(|e| match e {
-                Event::Direct { uuid, .. } | Event::Message { uuid, .. } => *uuid == actor,
+                Event::Direct { uuid, .. }
+                | Event::Message { uuid, .. }
+                | Event::Animate { uuid, .. } => *uuid == actor,
                 Event::Scoreboard(_) | Event::BiomesChanged { .. } => true,
                 _ => false,
             });
