@@ -1118,6 +1118,8 @@ async fn play(
                             Direct::MobEffect(p) => writer.queue(&p)?,
                             Direct::RemoveMobEffect(p) => writer.queue(&p)?,
                             Direct::DefaultSpawn(p) => writer.queue(&p)?,
+                            Direct::Particles(p) => writer.queue(&p)?,
+                            Direct::Camera(p) => writer.queue(&p)?,
                         }
                     }
                     Ok(Event::Border) => {

@@ -56,6 +56,8 @@ pub enum Direct {
     MobEffect(mc_protocol::packets::play::UpdateMobEffect),
     RemoveMobEffect(mc_protocol::packets::play::RemoveMobEffect),
     DefaultSpawn(mc_protocol::packets::play::SetDefaultSpawnPosition),
+    Particles(mc_protocol::packets::play::LevelParticles),
+    Camera(mc_protocol::packets::play::SetCamera),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -351,6 +353,8 @@ pub struct ServerContext {
     pub game_rules: Mutex<crate::rules::GameRules>,
     pub weather: Mutex<crate::weather::Weather>,
     pub border: Mutex<crate::border::Border>,
+    /// Force-loaded chunks (`/forceload`).
+    pub forced: Mutex<crate::forced::Forced>,
     /// The world spawn (`/setworldspawn` moves it).
     pub spawn: Mutex<crate::players::Respawn>,
     next_entity_id: AtomicI32,
@@ -531,6 +535,7 @@ impl ServerContext {
         );
         let weather = crate::weather::Weather::load(world.folder(), data.version.world_version);
         let border = crate::border::Border::load(world.folder(), data.version.world_version);
+        let forced = crate::forced::Forced::load(world.folder(), data.version.world_version);
         let spawn = crate::players::Respawn {
             dimension: world.dimension.clone(),
             pos: (
@@ -599,6 +604,7 @@ impl ServerContext {
             weather: Mutex::new(weather),
             border: Mutex::new(border),
             spawn: Mutex::new(spawn),
+            forced: Mutex::new(forced),
             data,
         })
     }

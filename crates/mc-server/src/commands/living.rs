@@ -19,6 +19,10 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         },
         ["damage", "target", "amount", rest @ ..] => damage(r, rest),
         ["rotate", "target", rest @ ..] => rotate(r, rest),
+        ["spreadplayers", "center", "spreadDistance", "maxRange", ..] => spread_players(r),
+        ["spectate", rest @ ..] => spectate(r, rest),
+        ["ride", "target", "dismount"] => ride_dismount(r),
+        ["ride", "target", "mount", "vehicle"] => ride_mount(r),
         _ => return None,
     })
 }
@@ -230,4 +234,226 @@ fn rotate(r: &mut Run, rest: &[&str]) -> Result<i32> {
         true,
     );
     Ok(1)
+}
+
+fn spread_players(r: &mut Run) -> Result<i32> {
+    use mc_command::args::Arg;
+    let Some(Arg::Pos2([cx, cz])) = r.arg("center").cloned() else {
+        return Err(err("command.failed", Vec::new()));
+    };
+    let base = |c: &mc_command::args::Coord, b: f64| if c.relative { b + c.value } else { c.value };
+    let center = (base(&cx, r.src.pos[0]), base(&cz, r.src.pos[2]));
+    let spread = f64::from(r.float("spreadDistance").unwrap_or(0.0));
+    let range = f64::from(r.float("maxRange").unwrap_or(1.0));
+    let world = &r.ctx.world;
+    let top = world.min_y + world.height as i32;
+    let max_height = r.int("maxHeight").unwrap_or(top);
+    if max_height < world.min_y {
+        return Err(err(
+            "commands.spreadplayers.failed.invalid.height",
+            vec![Tag::Int(max_height), Tag::Int(world.min_y)],
+        ));
+    }
+    let teams = r.boolean("respectTeams").unwrap_or(false);
+    let targets = r.targets("targets", false)?;
+    let edge = 29_999_984.0;
+    let (min_x, max_x) = ((center.0 - range).max(-edge), (center.0 + range).min(edge));
+    let (min_z, max_z) = ((center.1 - range).max(-edge), (center.1 + range).min(edge));
+    let mut rng = crate::util::random_u64();
+    let mut unit = move || {
+        // xorshift: where they land is random anyway.
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        (rng >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let mut at: Vec<(f64, f64)> = (0..targets.len())
+        .map(|_| {
+            (
+                min_x + unit() * (max_x - min_x),
+                min_z + unit() * (max_z - min_z),
+            )
+        })
+        .collect();
+    // The ground under a column (below `max_height`), if it can be stood on.
+    let ground = |x: f64, z: f64| -> Option<i32> {
+        let blocks = &r.ctx.data.blocks;
+        let (x, z) = (x.floor() as i32, z.floor() as i32);
+        let mut y = max_height.min(top) - 1;
+        while y > world.min_y {
+            let s = world.block(mc_protocol::Position::new(x, y, z), blocks)?;
+            if !blocks.is_air(s) {
+                let name = blocks.block_name(s).unwrap_or("");
+                let bad = blocks.is_fluid(s) || name == "minecraft:fire";
+                return (!bad).then_some(y + 1);
+            }
+            y -= 1;
+        }
+        None
+    };
+    let mut settled = false;
+    for _ in 0..10_000 {
+        let mut moved = false;
+        for i in 0..at.len() {
+            let (mut px, mut pz, mut n) = (0.0, 0.0, 0);
+            for j in 0..at.len() {
+                if i == j {
+                    continue;
+                }
+                let (dx, dz) = (at[i].0 - at[j].0, at[i].1 - at[j].1);
+                let d = (dx * dx + dz * dz).sqrt();
+                if d < spread {
+                    n += 1;
+                    let d = d.max(1e-4);
+                    px += dx / d;
+                    pz += dz / d;
+                }
+            }
+            if n > 0 {
+                let len = (px * px + pz * pz).sqrt().max(1e-4);
+                at[i].0 = (at[i].0 + px / len).clamp(min_x, max_x);
+                at[i].1 = (at[i].1 + pz / len).clamp(min_z, max_z);
+                moved = true;
+            }
+            if ground(at[i].0, at[i].1).is_none() {
+                at[i] = (
+                    min_x + unit() * (max_x - min_x),
+                    min_z + unit() * (max_z - min_z),
+                );
+                moved = true;
+            }
+        }
+        if !moved {
+            settled = true;
+            break;
+        }
+    }
+    let kind = if teams { "teams" } else { "entities" };
+    if !settled {
+        return Err(err(
+            &format!("commands.spreadplayers.failed.{kind}"),
+            vec![
+                Tag::Int(targets.len() as i32),
+                Tag::Float(center.0 as f32),
+                Tag::Float(center.1 as f32),
+                Tag::String(format!("{spread:.2}")),
+            ],
+        ));
+    }
+    let mut total = 0.0;
+    for (i, t) in targets.iter().enumerate() {
+        let (x, z) = (at[i].0.floor() + 0.5, at[i].1.floor() + 0.5);
+        let y = f64::from(ground(x, z).unwrap_or(max_height));
+        if let Target::Player { uuid, pose, .. } = t {
+            let pose = crate::context::Pose { x, y, z, ..*pose };
+            r.out
+                .events
+                .push(crate::context::Event::Teleport { uuid: *uuid, pose });
+        } else if let Some(e) = crate::tick::lock(&r.ctx.entities)
+            .iter_mut()
+            .find(|e| e.uuid == t.uuid())
+        {
+            e.pos = [x, y, z];
+        }
+        let nearest = (0..at.len())
+            .filter(|&j| j != i)
+            .map(|j| ((at[i].0 - at[j].0).powi(2) + (at[i].1 - at[j].1).powi(2)).sqrt())
+            .fold(f64::MAX, f64::min);
+        if nearest < f64::MAX {
+            total += nearest;
+        }
+    }
+    let average = if at.len() > 1 {
+        total / at.len() as f64
+    } else {
+        0.0
+    };
+    r.success(
+        translate(
+            &format!("commands.spreadplayers.success.{kind}"),
+            vec![
+                Tag::Int(targets.len() as i32),
+                Tag::Float(center.0 as f32),
+                Tag::Float(center.1 as f32),
+                Tag::String(format!("{average:.2}")),
+            ],
+        ),
+        true,
+    );
+    Ok(targets.len() as i32)
+}
+
+fn spectate(r: &mut Run, rest: &[&str]) -> Result<i32> {
+    let player = if rest.contains(&"player") {
+        r.targets("player", true)?
+    } else {
+        r.targets_or_self("__self", true)?
+    };
+    let Some(Target::Player {
+        uuid, game_mode, ..
+    }) = player.first().cloned()
+    else {
+        return Err(err("argument.entity.notfound.player", Vec::new()));
+    };
+    let target = if rest.is_empty() {
+        None
+    } else {
+        r.targets("target", false)?.first().cloned()
+    };
+    if let Some(t) = &target
+        && t.uuid() == uuid
+    {
+        return Err(err("commands.spectate.self", Vec::new()));
+    }
+    if game_mode != 3 {
+        return Err(err(
+            "commands.spectate.not_spectator",
+            vec![player[0].display()],
+        ));
+    }
+    let own = crate::tick::lock(&r.ctx.players)
+        .get(&uuid)
+        .map_or(0, |p| p.entity_id);
+    let camera = match &target {
+        Some(Target::Player { uuid: u, .. }) => crate::tick::lock(&r.ctx.players)
+            .get(u)
+            .map_or(own, |p| p.entity_id),
+        Some(Target::Entity { id, .. }) => *id,
+        None => own,
+    };
+    super::run::direct(
+        r,
+        uuid,
+        crate::context::Direct::Camera(mc_protocol::packets::play::SetCamera { entity_id: camera }),
+    );
+    let msg = match &target {
+        Some(t) => translate("commands.spectate.success.started", vec![t.display()]),
+        None => translate("commands.spectate.success.stopped", Vec::new()),
+    };
+    r.success(msg, false);
+    Ok(1)
+}
+
+/// Nothing rides anything yet.
+fn ride_dismount(r: &mut Run) -> Result<i32> {
+    let t = r.targets("target", false)?;
+    let Some(t) = t.first() else {
+        return Err(err("argument.entity.notfound.entity", Vec::new()));
+    };
+    Err(err("commands.ride.not_riding", vec![t.display()]))
+}
+
+fn ride_mount(r: &mut Run) -> Result<i32> {
+    let vehicle = r.targets("vehicle", false)?;
+    let Some(v) = vehicle.first() else {
+        return Err(err("argument.entity.notfound.entity", Vec::new()));
+    };
+    if v.is_player() {
+        return Err(err(
+            "commands.ride.mount.failure.cant_ride_players",
+            Vec::new(),
+        ));
+    }
+    // Riding needs passengers on the wire, which the server has not yet.
+    Err(err("commands.ride.mount.failure.generic", Vec::new()))
 }

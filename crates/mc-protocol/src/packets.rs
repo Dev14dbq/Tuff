@@ -1071,6 +1071,53 @@ pub mod play {
         }
     }
 
+    /// Level Particles: the particle (type and options, already encoded),
+    /// whether it ignores the client's limit, whether it always shows, where,
+    /// how far it spreads, its speed and how many.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct LevelParticles {
+        pub particle: Vec<u8>,
+        pub force: bool,
+        pub always_show: bool,
+        pub pos: [f64; 3],
+        pub delta: [f32; 3],
+        pub speed: f32,
+        pub count: i32,
+    }
+    packet!(LevelParticles, Play, "minecraft:level_particles");
+    impl Encode for LevelParticles {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_slice(&self.particle);
+            out.put_bool(self.force);
+            out.put_bool(self.always_show);
+            for v in self.pos {
+                out.put_f64(v);
+            }
+            for v in self.delta {
+                out.put_f32(v);
+            }
+            // As vanilla 26.3 sends it: the speed three times, the count
+            // and a zero.
+            for _ in 0..3 {
+                out.put_f32(self.speed);
+            }
+            out.put_varint(self.count);
+            out.put_u8(0);
+        }
+    }
+
+    /// Set Camera: whose eyes the client sees through.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct SetCamera {
+        pub entity_id: i32,
+    }
+    packet!(SetCamera, Play, "minecraft:set_camera");
+    impl Encode for SetCamera {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+        }
+    }
+
     /// Combat Death: the death screen.
     #[derive(Clone, Debug)]
     pub struct PlayerCombatKill {

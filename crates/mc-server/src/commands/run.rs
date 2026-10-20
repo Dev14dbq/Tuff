@@ -140,6 +140,26 @@ impl Run<'_> {
         }
     }
 
+    /// A vec3 argument read as written, without moving whole numbers to
+    /// the block middle (`particle`'s spread).
+    pub(super) fn vec3_raw(&self, name: &str) -> Option<[f64; 3]> {
+        match self.arg(name)? {
+            Arg::Pos(Pos::World(c)) => {
+                let f = |c: &Coord, base: f64| {
+                    let v = if c.centered { c.value - 0.5 } else { c.value };
+                    if c.relative { base + v } else { v }
+                };
+                Some([
+                    f(&c[0], self.src.pos[0]),
+                    f(&c[1], self.src.pos[1]),
+                    f(&c[2], self.src.pos[2]),
+                ])
+            }
+            Arg::Pos(p) => Some(resolve(p, &self.src)),
+            _ => None,
+        }
+    }
+
     pub(super) fn block_pos(&self, name: &str) -> Option<Position> {
         let [x, y, z] = self.vec3(name)?;
         Some(Position::new(

@@ -43,6 +43,8 @@ impl Env for AnyEnv {
 pub struct Coord {
     pub value: f64,
     pub relative: bool,
+    /// 0.5 was added to a whole number (block middle) by the parser.
+    pub centered: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -156,6 +158,11 @@ pub enum Arg {
     Block(Block),
     Item(Item),
     Nbt(Tag),
+    /// A particle type and its options.
+    Particle {
+        id: String,
+        options: mc_nbt::Compound,
+    },
     Range(Range),
     Time(i32),
     /// Text as written (messages, paths, providers...).
@@ -282,16 +289,18 @@ fn coord(r: &mut Reader, int_only: bool, center: bool) -> Result<Coord> {
             f64::from(r.read_int()?)
         };
         let written = &r.input[start..r.cursor];
-        let value = if !relative && center && !int_only && !written.contains('.') {
-            value + 0.5
-        } else {
-            value
-        };
-        return Ok(Coord { value, relative });
+        let centered = !relative && center && !int_only && !written.contains('.');
+        let value = if centered { value + 0.5 } else { value };
+        return Ok(Coord {
+            value,
+            relative,
+            centered,
+        });
     }
     Ok(Coord {
         value: 0.0,
         relative,
+        centered: false,
     })
 }
 
@@ -929,8 +938,9 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
         "minecraft:entity" | "minecraft:game_profile" => {
             let s = read_selector(r, env)?;
             let flags = props["flags"].as_u64().unwrap_or(0);
+            // Vanilla points at the start of the line for these.
             if parser == "minecraft:entity" && flags & 1 != 0 && !s.single() {
-                r.cursor = start;
+                r.cursor = 0;
                 let key = if flags & 2 != 0 {
                     "argument.player.toomany"
                 } else {
@@ -939,7 +949,7 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
                 return Err(r.error(builtin::expected(key)));
             }
             if parser == "minecraft:entity" && flags & 2 != 0 && !s.players_only() {
-                r.cursor = start;
+                r.cursor = 0;
                 return Err(r.error(builtin::expected("argument.player.entities")));
             }
             Arg::Entity(Box::new(s))
@@ -982,6 +992,29 @@ pub fn parse(parser: &str, props: &Value, r: &mut Reader, env: &dyn Env) -> Resu
                 id: read_id(r)?,
                 tag,
             }
+        }
+        "minecraft:particle" => {
+            let start = r.cursor;
+            let id = read_id(r)?;
+            if !env.exists("minecraft:particle_type", &id) {
+                r.cursor = start;
+                return Err(r.error(CommandError::new("particle.notFound", vec![string(&id)])));
+            }
+            let options = if r.can_read() && r.peek() == '{' {
+                match read_nbt(r)? {
+                    Tag::Compound(c) => c,
+                    _ => mc_nbt::Compound::new(),
+                }
+            } else {
+                mc_nbt::Compound::new()
+            };
+            if let Err(why) = crate::particle::check(&id, &options) {
+                return Err(CommandError::new(
+                    "particle.invalidOptions",
+                    vec![string(&why)],
+                ));
+            }
+            Arg::Particle { id, options }
         }
         "minecraft:dimension" => {
             let id = read_id(r)?;

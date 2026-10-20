@@ -18,6 +18,12 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         ["locate", "poi", "poi"] => locate_poi(r),
         ["setworldspawn", ..] => set_world_spawn(r),
         ["spawnpoint", ..] => spawn_point(r),
+        ["particle", "name", rest @ ..] => particle(r, rest),
+        ["forceload", "add", ..] => forceload_change(r, true),
+        ["forceload", "remove", "all"] => forceload_remove_all(r),
+        ["forceload", "remove", ..] => forceload_change(r, false),
+        ["forceload", "query"] => forceload_list(r),
+        ["forceload", "query", "pos"] => forceload_query(r),
         _ => return None,
     })
 }
@@ -385,6 +391,281 @@ fn locate_poi(r: &mut Run) -> Result<i32> {
         "commands.locate.poi.not_found",
         vec![Tag::String(shown)],
     ))
+}
+
+/// A particle's type and options as the wire carries them; `None` for
+/// options this server cannot send yet (geysers, trails, vibrations).
+fn particle_bytes(ctx: &ServerContext, id: &str, o: &Compound) -> Option<Vec<u8>> {
+    use mc_command::particle::{color, float};
+    use mc_protocol::Write as _;
+    let mut out = Vec::new();
+    out.put_varint(ctx.data.builtin.id("minecraft:particle_type", id)?);
+    let block = |o: &Compound| -> Option<i32> {
+        let blocks = &ctx.data.blocks;
+        let state = match o.get("block_state")? {
+            Tag::String(name) => blocks.default_state(&mc_command::args::full_id(name))?,
+            Tag::Compound(c) => {
+                let Some(Tag::String(name)) = c.get("id") else {
+                    return None;
+                };
+                let props: Vec<(String, String)> = match c.get("Properties") {
+                    Some(Tag::Compound(p)) => p
+                        .iter()
+                        .filter_map(|(k, v)| match v {
+                            Tag::String(v) => Some((k.to_owned(), v.clone())),
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                let props: Vec<(&str, &str)> = props
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+                blocks.state_id(&mc_command::args::full_id(name), &props)?
+            }
+            _ => return None,
+        };
+        Some(state as i32)
+    };
+    match id.strip_prefix("minecraft:").unwrap_or(id) {
+        "dust" => {
+            out.put_i32(color(o.get("color")?, 3)?);
+            out.put_f32(float(o, "scale", 1.0));
+        }
+        "dust_color_transition" => {
+            out.put_i32(color(o.get("from_color")?, 3)?);
+            out.put_i32(color(o.get("to_color")?, 3)?);
+            out.put_f32(float(o, "scale", 1.0));
+        }
+        "entity_effect" | "flash" | "tinted_leaves" => out.put_i32(color(o.get("color")?, 4)?),
+        "block" | "block_crumble" | "block_marker" | "dust_pillar" | "falling_dust" => {
+            out.put_varint(block(o)?);
+        }
+        "item" => {
+            let (name, count) = match o.get("item")? {
+                Tag::String(n) => (n.clone(), 1),
+                Tag::Compound(c) => match (c.get("id"), c.get("count")) {
+                    (Some(Tag::String(n)), Some(Tag::Int(k))) => (n.clone(), *k),
+                    (Some(Tag::String(n)), _) => (n.clone(), 1),
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            out.put_varint(ctx.items.id(&mc_command::args::full_id(&name))?);
+            out.put_varint(count);
+            out.put_varint(0);
+            out.put_varint(0);
+        }
+        "sculk_charge" => out.put_f32(float(o, "roll", 0.0)),
+        "shriek" => out.put_varint(float(o, "delay", 0.0) as i32),
+        "dragon_breath" => out.put_f32(float(o, "power", 1.0)),
+        "effect" | "instant_effect" => {
+            out.put_i32(o.get("color").and_then(|c| color(c, 4)).unwrap_or(-1));
+            out.put_f32(float(o, "power", 1.0));
+        }
+        "geyser" | "geyser_base" | "geyser_plume" | "geyser_poof" | "trail" | "vibration" => {
+            return None;
+        }
+        _ => {}
+    }
+    Some(out)
+}
+
+fn particle(r: &mut Run, rest: &[&str]) -> Result<i32> {
+    let Some(Arg::Particle { id, options }) = r.arg("name").cloned() else {
+        return Err(err("command.failed", Vec::new()));
+    };
+    let pos = r.vec3("pos").unwrap_or(r.src.pos);
+    let delta = r.vec3_raw("delta").unwrap_or([0.0; 3]);
+    let speed = r.float("speed").unwrap_or(0.0);
+    let count = r.int("count").unwrap_or(0);
+    let force = rest.contains(&"force");
+    let viewers = if rest.contains(&"viewers") {
+        r.targets("viewers", true)?
+    } else {
+        super::target::everyone(r.ctx)
+            .into_iter()
+            .filter(|t| t.is_player())
+            .collect()
+    };
+    let Some(bytes) = particle_bytes(r.ctx, &id, &options) else {
+        return Err(err("commands.particle.failed", Vec::new()));
+    };
+    let packet = mc_protocol::packets::play::LevelParticles {
+        particle: bytes,
+        force,
+        always_show: false,
+        pos,
+        delta: [delta[0] as f32, delta[1] as f32, delta[2] as f32],
+        speed,
+        count,
+    };
+    // Vanilla sends within 32 blocks, or 512 when forced.
+    let range: f64 = if force { 512.0 } else { 32.0 };
+    let mut sent = 0;
+    for v in &viewers {
+        let p = v.pos();
+        let d = (p[0] - pos[0]).powi(2) + (p[1] - pos[1]).powi(2) + (p[2] - pos[2]).powi(2);
+        if d < range * range {
+            super::run::direct(
+                r,
+                v.uuid(),
+                crate::context::Direct::Particles(packet.clone()),
+            );
+            sent += 1;
+        }
+    }
+    if sent == 0 {
+        return Err(err("commands.particle.failed", Vec::new()));
+    }
+    r.success(
+        translate("commands.particle.success", vec![Tag::String(id)]),
+        true,
+    );
+    Ok(sent)
+}
+
+const OVERWORLD: &str = "minecraft:overworld";
+
+/// The chunk of a column position argument; positions past the world's
+/// edge are refused.
+fn chunk_arg(r: &Run, name: &str) -> Result<Option<(i32, i32)>> {
+    let Some(Arg::Pos2([x, z])) = r.arg(name) else {
+        return Ok(None);
+    };
+    let f = |c: &Coord, base: f64| {
+        if c.relative {
+            (base + c.value).floor() as i64
+        } else {
+            c.value.floor() as i64
+        }
+    };
+    let (x, z) = (f(x, r.src.pos[0]), f(z, r.src.pos[2]));
+    let edge = 30_000_000i64;
+    if x < -edge || x >= edge || z < -edge || z >= edge {
+        return Err(err("argument.pos.outofworld", Vec::new()));
+    }
+    Ok(Some(((x >> 4) as i32, (z >> 4) as i32)))
+}
+
+fn chunk_text(x: i32, z: i32) -> Tag {
+    Tag::String(format!("[{x}, {z}]"))
+}
+
+/// How many chunks one `/forceload` may change.
+const FORCELOAD_LIMIT: i64 = 256;
+
+fn forceload_change(r: &mut Run, add: bool) -> Result<i32> {
+    let Some(from) = chunk_arg(r, "from")? else {
+        return Err(err("command.failed", Vec::new()));
+    };
+    let to = chunk_arg(r, "to")?.unwrap_or(from);
+    let (min, max) = (
+        (from.0.min(to.0), from.1.min(to.1)),
+        (from.0.max(to.0), from.1.max(to.1)),
+    );
+    let count = i64::from(max.0 - min.0 + 1) * i64::from(max.1 - min.1 + 1);
+    if count > FORCELOAD_LIMIT {
+        return Err(err(
+            "commands.forceload.toobig",
+            vec![Tag::Int(FORCELOAD_LIMIT as i32), Tag::Long(count)],
+        ));
+    }
+    let (changed, first) = {
+        let mut forced = crate::tick::lock(&r.ctx.forced);
+        let mut changed = 0;
+        let mut first = None;
+        for x in min.0..=max.0 {
+            for z in min.1..=max.1 {
+                if forced.set(x, z, add) {
+                    changed += 1;
+                    first.get_or_insert((x, z));
+                }
+            }
+        }
+        if changed > 0 {
+            forced.save();
+        }
+        (changed, first)
+    };
+    let verb = if add { "added" } else { "removed" };
+    let Some(first) = first else {
+        return Err(err(
+            &format!("commands.forceload.{verb}.failure"),
+            Vec::new(),
+        ));
+    };
+    let msg = if changed == 1 {
+        translate(
+            &format!("commands.forceload.{verb}.single"),
+            vec![chunk_text(first.0, first.1), Tag::from(OVERWORLD)],
+        )
+    } else {
+        translate(
+            &format!("commands.forceload.{verb}.multiple"),
+            vec![
+                Tag::Int(changed),
+                Tag::from(OVERWORLD),
+                chunk_text(min.0, min.1),
+                chunk_text(max.0, max.1),
+            ],
+        )
+    };
+    r.success(msg, true);
+    Ok(changed)
+}
+
+fn forceload_remove_all(r: &mut Run) -> Result<i32> {
+    {
+        let mut forced = crate::tick::lock(&r.ctx.forced);
+        forced.clear();
+        forced.save();
+    }
+    r.success(
+        translate("commands.forceload.removed.all", vec![Tag::from(OVERWORLD)]),
+        true,
+    );
+    Ok(0)
+}
+
+fn forceload_list(r: &mut Run) -> Result<i32> {
+    let list = crate::tick::lock(&r.ctx.forced).list();
+    let shown = list
+        .iter()
+        .map(|(x, z)| format!("[{x}, {z}]"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let msg = match list.len() {
+        0 => {
+            return Err(err(
+                "commands.forceload.added.none",
+                vec![Tag::from(OVERWORLD)],
+            ));
+        }
+        1 => translate(
+            "commands.forceload.list.single",
+            vec![Tag::from(OVERWORLD), Tag::String(shown)],
+        ),
+        n => translate(
+            "commands.forceload.list.multiple",
+            vec![Tag::Int(n as i32), Tag::from(OVERWORLD), Tag::String(shown)],
+        ),
+    };
+    r.success(msg, false);
+    Ok(list.len() as i32)
+}
+
+fn forceload_query(r: &mut Run) -> Result<i32> {
+    let Some((x, z)) = chunk_arg(r, "pos")? else {
+        return Err(err("command.failed", Vec::new()));
+    };
+    let args = vec![chunk_text(x, z), Tag::from(OVERWORLD)];
+    if !crate::tick::lock(&r.ctx.forced).contains(x, z) {
+        return Err(err("commands.forceload.query.failure", args));
+    }
+    r.success(translate("commands.forceload.query.success", args), false);
+    Ok(1)
 }
 
 #[cfg(test)]

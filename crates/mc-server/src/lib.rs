@@ -14,6 +14,7 @@ mod containers;
 mod context;
 mod crafting;
 mod effects;
+mod forced;
 mod furnaces;
 mod generation;
 mod interact;
