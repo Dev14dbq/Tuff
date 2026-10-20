@@ -5,6 +5,8 @@
 //! decoration, and the terrain shaped around them (the beardifier).
 
 pub mod built;
+pub mod end_city;
+pub mod fortress;
 pub mod jigsaw;
 pub mod legacy;
 pub mod mineshaft;

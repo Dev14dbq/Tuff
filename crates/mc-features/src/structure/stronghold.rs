@@ -73,7 +73,7 @@ const WEIGHTS: [(K, i32, i32); 11] = [
 ];
 
 #[allow(clippy::too_many_arguments)]
-fn orient(
+pub(super) fn orient(
     x: i32,
     y: i32,
     z: i32,

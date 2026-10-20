@@ -31,6 +31,7 @@ pub enum Kind {
     Built(Built),
     Mineshaft(super::mineshaft::Part),
     Stronghold(super::stronghold::Part),
+    Fortress(super::fortress::Part),
     Monument(super::observed::Monument),
 }
 
@@ -49,6 +50,7 @@ pub enum Post {
         warm: bool,
     },
     Mansion,
+    EndCity,
     Portal {
         placement: u8,
         air_pocket: bool,
@@ -347,10 +349,12 @@ pub fn generate(
         }
         "mineshaft" => super::mineshaft::generate(v, r, x, z, h, ground),
         "stronghold" => super::stronghold::generate(seed, x, z, h),
+        "fortress" => super::fortress::generate(r, x, z),
         "ocean_monument" => {
             super::observed::monument(s.observed(), &s.monument_biomes, r, x, z, h, ground)
         }
         "woodland_mansion" => super::observed::mansion(s, r, x, z, h, ground),
+        "end_city" => super::end_city::generate(s, r, x, z, h, ground),
         _ => None,
     }
 }
@@ -624,6 +628,7 @@ pub fn place(
         Kind::Built(b) => super::built::place(facts, region, r, b, chunk),
         Kind::Mineshaft(part) => super::mineshaft::place(facts, region, r, part, chunk),
         Kind::Stronghold(part) => super::stronghold::place(facts, region, r, part, chunk),
+        Kind::Fortress(part) => super::fortress::place(facts, region, r, part, chunk),
         Kind::Monument(m) => super::observed::place_monument(s.observed(), facts, region, m, chunk),
     }
 }
@@ -665,7 +670,7 @@ fn place_template(
     let mut settings = t.settings.clone();
     settings.bbox = Some(chunk);
     let pos = *t.fixed.get_or_init(|| match t.post {
-        Post::Plain | Post::Mansion | Post::Portal { .. } => t.pos,
+        Post::Plain | Post::Mansion | Post::EndCity | Post::Portal { .. } => t.pos,
         Post::Igloo { offset, .. } => {
             let rel = transform(
                 P::new(3 - offset.x, 0, -offset.z),
@@ -750,6 +755,17 @@ fn place_template(
                         "minecraft:chests/underwater_ruin_small"
                     };
                     loot_chest(facts, region, r, mp, table);
+                }
+            }
+            (Post::EndCity, m) => {
+                if m.starts_with("Chest") && chunk.inside(mp.below(1)) {
+                    loot_chest(
+                        facts,
+                        region,
+                        r,
+                        mp.below(1),
+                        "minecraft:chests/end_city_treasure",
+                    );
                 }
             }
             (Post::Mansion, m) if m.starts_with("Chest") => {
