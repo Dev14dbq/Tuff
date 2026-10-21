@@ -147,6 +147,10 @@ pub enum Event {
     MobsMoved(Vec<crate::mobs::MobMove>),
     /// Entity events of mobs (`EntityEvent` statuses: 2 hurt, 3 death...).
     MobsStatus(Vec<(i32, u8)>),
+    /// Entities that moved or turned: where clients should put them.
+    EntitySync(Vec<crate::fx::Sync>),
+    /// A sound, particles or a status for clients nearby.
+    Fx(crate::fx::Fx),
     /// Light changed in these chunks.
     LightChanged(Vec<(i32, i32)>),
     /// A player started (`hand` 0 main, 1 off) or stopped (`None`) using an
@@ -420,6 +424,10 @@ pub struct ServerContext {
     /// `/stopwatch`: when each one started.
     /// State of the rarer commands (`/posteffect`, `/waypoint`...).
     pub rare: Mutex<crate::commands::rare::State>,
+    /// Bows being drawn and bobbers cast.
+    pub shooting: Mutex<crate::projectiles::State>,
+    /// Leads: who holds each leashed entity.
+    pub leashes: Mutex<crate::decor::leash::Leashes>,
     pub stopwatches: Mutex<std::collections::BTreeMap<String, std::time::Instant>>,
     /// Data packs, their functions and `/schedule`.
     pub packs: Mutex<crate::packs::Packs>,
@@ -697,6 +705,8 @@ impl ServerContext {
             scoreboard: Mutex::new(scoreboard),
             storage: Mutex::new(storage),
             rare: Mutex::default(),
+            shooting: Mutex::default(),
+            leashes: Mutex::default(),
             stopwatches: Mutex::default(),
             data,
         })

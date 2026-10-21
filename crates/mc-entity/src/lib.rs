@@ -7,6 +7,7 @@
 //! first, then the larger horizontal one — and its velocity is damped.
 //! Blocks collide as full cubes for now; shapes come later.
 
+pub mod extra;
 pub mod mob;
 pub mod nav;
 pub mod physics;
@@ -30,6 +31,12 @@ pub enum Kind {
         /// Hit points (5); explosions and fire take them.
         health: f32,
     },
+    /// Arrows, thrown things, fireworks and bobbers.
+    Projectile(extra::Projectile),
+    /// Frames, paintings, armor stands and lead knots.
+    Hung(extra::Hung),
+    /// Boats and minecarts.
+    Vehicle(extra::Vehicle),
     /// Primed TNT, exploding when the fuse runs out.
     Tnt {
         fuse: i32,
@@ -73,15 +80,40 @@ pub struct Entity {
 impl Entity {
     /// Width and height of the collision box.
     pub fn size(&self) -> (f64, f64) {
-        match self.kind {
+        match &self.kind {
             Kind::FallingBlock { .. } | Kind::Tnt { .. } => (0.98, 0.98),
             Kind::Item { .. } => (0.25, 0.25),
-            Kind::Mob(ref m) => m.species.size(),
+            Kind::Mob(m) => m.species.size(),
             Kind::ExperienceOrb { .. } => (0.5, 0.5),
+            Kind::Projectile(p) => match &p.shot {
+                extra::Shot::Arrow(_) => (0.5, 0.5),
+                extra::Shot::Cloud { radius, .. } => (f64::from(*radius) * 2.0, 0.5),
+                _ => (0.25, 0.25),
+            },
+            Kind::Hung(h) => match &h.decor {
+                extra::Decor::Stand(s) if s.marker => (0.0, 0.0),
+                extra::Decor::Stand(s) if s.small => (0.25, 0.9875),
+                extra::Decor::Stand(_) => (0.5, 1.975),
+                extra::Decor::LeashKnot => (0.375, 0.5),
+                // Thin boxes are cut to the wall in `Entity::aabb`.
+                _ => (0.75, 0.75),
+            },
+            Kind::Vehicle(v) => match &v.craft {
+                extra::Craft::Boat { .. } => (1.375, 0.5625),
+                extra::Craft::Minecart(_) => (0.98, 0.7),
+            },
         }
     }
 
     pub fn aabb(&self) -> Aabb {
+        if let Kind::Hung(h) = &self.kind
+            && matches!(
+                h.decor,
+                extra::Decor::Frame(_) | extra::Decor::Painting { .. }
+            )
+        {
+            return self.wall_box(h);
+        }
         let (w, h) = self.size();
         Aabb {
             min: [self.pos[0] - w / 2.0, self.pos[1], self.pos[2] - w / 2.0],
@@ -89,6 +121,33 @@ impl Entity {
                 self.pos[0] + w / 2.0,
                 self.pos[1] + h,
                 self.pos[2] + w / 2.0,
+            ],
+        }
+    }
+
+    /// The thin box of a frame or painting on its wall: 1/16 deep, and as
+    /// wide as the picture along the wall.
+    fn wall_box(&self, h: &extra::Hung) -> Aabb {
+        let (w, t) = match &h.decor {
+            extra::Decor::Painting { size, .. } => (f64::from(size.0), f64::from(size.1)),
+            _ => (0.75, 0.75),
+        };
+        let depth = 0.0625 / 2.0;
+        let half = match h.facing {
+            2 | 3 => [w / 2.0, t / 2.0, depth],
+            4 | 5 => [depth, t / 2.0, w / 2.0],
+            _ => [w / 2.0, depth, w / 2.0],
+        };
+        Aabb {
+            min: [
+                self.pos[0] - half[0],
+                self.pos[1] - half[1],
+                self.pos[2] - half[2],
+            ],
+            max: [
+                self.pos[0] + half[0],
+                self.pos[1] + half[1],
+                self.pos[2] + half[2],
             ],
         }
     }

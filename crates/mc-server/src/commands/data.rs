@@ -287,6 +287,7 @@ fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
                 _ => {}
             }
         }
+        _ => {}
     }
     c
 }

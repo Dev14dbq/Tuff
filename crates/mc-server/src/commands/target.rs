@@ -266,6 +266,13 @@ pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
                 "minecraft:experience_orb".to_owned(),
                 "entity.minecraft.experience_orb".to_owned(),
             ),
+            other => {
+                let name = crate::fx::type_name(other).unwrap_or_default();
+                (
+                    format!("minecraft:{name}"),
+                    format!("entity.minecraft.{name}"),
+                )
+            }
         };
         let mut key = Compound::new();
         key.insert("translate", name_key.as_str());

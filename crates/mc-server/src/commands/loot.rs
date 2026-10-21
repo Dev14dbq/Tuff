@@ -17,7 +17,7 @@ use crate::loot::{Drop, Ent, LootCtx, LootEnv, Tool};
 use crate::tick::lock;
 
 /// What loot tables ask of the server.
-pub(super) struct Env<'a>(pub &'a ServerContext);
+pub(crate) struct Env<'a>(pub &'a ServerContext);
 
 impl LootEnv for Env<'_> {
     fn tag(&self, registry: &str, tag: &str) -> Vec<String> {

@@ -92,6 +92,35 @@ impl MobState {
     }
 }
 
+/// A player clicked a mob: a hit, or a use of the held item.
+pub fn clicked(
+    ctx: &ServerContext,
+    who: &crate::interact::Actor,
+    target: i32,
+    hand: i32,
+    attack: bool,
+) {
+    let name = lock(&ctx.players)
+        .get(&who.uuid)
+        .map(|p| p.profile.name.clone())
+        .unwrap_or_default();
+    let by = Actor {
+        uuid: who.uuid,
+        entity_id: who.entity_id,
+        name,
+        pos: [who.pose.x, who.pose.y, who.pose.z],
+    };
+    if attack {
+        let held = lock(&ctx.inventories)
+            .get(&who.uuid)
+            .and_then(|h| h.main_hand().map(|s| s.item));
+        ctx.mobs
+            .hit(target, by, crate::vitals::melee_damage(ctx, held));
+    } else {
+        ctx.mobs.use_on(target, by, hand);
+    }
+}
+
 /// A new mob of this species (not yet in the world).
 pub fn new_mob(ctx: &ServerContext, species: Species, pos: [f64; 3]) -> Entity {
     let mut mob = Mob::new(species, crate::util::random_u64());

@@ -14,7 +14,7 @@ mod functions;
 mod gear;
 mod item;
 mod living;
-mod loot;
+pub(crate) mod loot;
 pub(crate) mod place;
 mod places;
 mod progress;

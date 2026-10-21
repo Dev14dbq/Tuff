@@ -199,6 +199,14 @@ impl Kind {
         format!("minecraft:{}", self.name)
     }
 
+    /// The colour of its particles (RGB).
+    pub fn color(&self) -> u32 {
+        match self.look {
+            Look::Color(c) => c,
+            Look::Particle(_) => 0xffffff,
+        }
+    }
+
     /// The translation key of its name.
     pub fn key(&self) -> String {
         format!("effect.minecraft.{}", self.name)
