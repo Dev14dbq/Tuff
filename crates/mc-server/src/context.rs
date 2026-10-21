@@ -315,6 +315,16 @@ pub enum Event {
         entity_id: i32,
         status: i8,
     },
+    /// A sound at a place; players within 16 blocks of it hear it (volume
+    /// 1), by the sound event's registry name.
+    WorldSound {
+        pos: [f64; 3],
+        sound: &'static str,
+        /// `SoundSource` id: 4 blocks, 7 players...
+        category: i32,
+        volume: f32,
+        pitch: f32,
+    },
     /// An explosion; players within 64 blocks see it, those it pushed with
     /// their knockback.
     Explosion {

@@ -607,11 +607,8 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         }
     }
 
-    for blast in blasts {
-        for (id, uuid) in crate::explosion::explode(ctx, level, &mut entities, &blast) {
-            removed.push(id);
-            let _ = uuid;
-        }
+    for (id, _) in crate::explosion::explode_all(ctx, level, &mut entities, &blasts) {
+        removed.push(id);
     }
     // Mobs hurt by the blast.
     for e in entities.iter_mut() {
