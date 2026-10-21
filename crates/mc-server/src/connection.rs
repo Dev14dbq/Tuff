@@ -1122,6 +1122,25 @@ async fn play(
                     Ok(Event::Hurt { uuid: who, entity_id: hurt, damage_type, direct }) if who == uuid || visible.contains(&who) => {
                         writer.queue(&play::DamageEvent { entity_id: hurt, damage_type, direct })?;
                     }
+                    Ok(Event::WorldSound { pos, sound, category, volume, pitch }) => {
+                        let reach = 16.0 * f64::from(volume.max(1.0));
+                        let (dx, dy, dz) = (pose.x - pos[0], pose.y - pos[1], pose.z - pos[2]);
+                        if dx * dx + dy * dy + dz * dz <= reach * reach
+                            && let Some(id) = ctx.data.builtin.id("minecraft:sound_event", sound)
+                        {
+                            writer.queue(&play::Sound {
+                                id: Some(id),
+                                name: String::new(),
+                                category,
+                                x: pos[0],
+                                y: pos[1],
+                                z: pos[2],
+                                volume,
+                                pitch,
+                                seed: crate::util::random_u64() as i64,
+                            })?;
+                        }
+                    }
                     Ok(Event::EntitiesData(packets)) => {
                         for packet in packets {
                             if seen_entities.contains(&packet.entity_id) {
@@ -1505,6 +1524,8 @@ fn send_block_changes(
     view: &ChunkView,
     changes: Vec<(Position, u32)>,
 ) -> Result<()> {
+    // Sections in the order their first change came.
+    let mut index: mc_tick::fast::FastMap<(i32, i32, i32), usize> = Default::default();
     type Section = ((i32, i32, i32), Vec<(Position, u32)>);
     let mut sections: Vec<Section> = Vec::new();
     for (position, state) in changes {
@@ -1512,10 +1533,11 @@ fn send_block_changes(
             continue;
         }
         let key = (position.x >> 4, position.y >> 4, position.z >> 4);
-        match sections.iter_mut().find(|(k, _)| *k == key) {
-            Some((_, list)) => list.push((position, state)),
-            None => sections.push((key, vec![(position, state)])),
-        }
+        let at = *index.entry(key).or_insert_with(|| {
+            sections.push((key, Vec::new()));
+            sections.len() - 1
+        });
+        sections[at].1.push((position, state));
     }
     for (section, list) in sections {
         if let [(position, state)] = list[..] {

@@ -398,6 +398,18 @@ pub fn dig(
         return outcome;
     }
     outcome.updates.push((position, left));
+    // Unstable TNT lights when it is broken (not in creative).
+    if actor.game_mode != CREATIVE
+        && blocks.block_name(state) == Some("minecraft:tnt")
+        && blocks.property(state, "unstable") == Some("true")
+        && ctx.game_rule_bool("minecraft:tnt_explodes")
+    {
+        let tnt =
+            crate::explosion::primed(ctx, position, crate::explosion::TNT_FUSE, Some(actor.uuid));
+        crate::explosion::primed_sound(ctx, &tnt);
+        let _ = ctx.events.send(Event::EntitySpawned(tnt.clone()));
+        ctx.entities.lock().expect("entities lock").push(tnt);
+    }
     if blocks
         .block_name(state)
         .and_then(crate::containers::kind_of)
@@ -590,6 +602,26 @@ pub fn use_item_on(
                 return refuse(outcome);
             }
         }
+        let pitch = if tool == "minecraft:fire_charge" {
+            (crate::util::random_u64() >> 40) as f32 / (1u64 << 24) as f32 * 0.4 + 1.0
+        } else {
+            (crate::util::random_u64() >> 40) as f32 / (1u64 << 24) as f32 * 0.4 + 0.8
+        };
+        outcome.events.push(Event::WorldSound {
+            pos: [
+                f64::from(clicked.x) + 0.5,
+                f64::from(clicked.y) + 0.5,
+                f64::from(clicked.z) + 0.5,
+            ],
+            sound: if tool == "minecraft:fire_charge" {
+                "minecraft:item.firecharge.use"
+            } else {
+                "minecraft:item.flintandsteel.use"
+            },
+            category: 4,
+            volume: 1.0,
+            pitch,
+        });
         if tool == "minecraft:fire_charge" {
             if actor.game_mode != CREATIVE {
                 replace_held(ctx, &mut outcome, actor, hand, None);
@@ -1279,5 +1311,33 @@ mod tests {
             }]
         ));
         assert_eq!((entities[0].pos[0], entities[0].pos[1]), (1.5, -60.0));
+    }
+
+    #[test]
+    fn breaking_unstable_tnt_lights_it() {
+        let Some((ctx, actor)) = with_flint(0) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let tnt = ctx
+            .data
+            .blocks
+            .state_id("minecraft:tnt", &[("unstable", "true")])
+            .unwrap();
+        let at = Position::new(1, -60, 0);
+        WorldLevel::new(&ctx).set_block(at, tnt);
+        dig(&ctx, actor, dig::FINISH, at, 1, 1);
+        assert!(
+            ctx.data
+                .blocks
+                .is_air(ctx.world.block(at, &ctx.data.blocks).unwrap())
+        );
+        assert!(matches!(
+            ctx.entities.lock().unwrap()[..],
+            [mc_entity::Entity {
+                kind: mc_entity::Kind::Tnt { fuse: 80, .. },
+                ..
+            }]
+        ));
     }
 }

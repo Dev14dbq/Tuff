@@ -10,7 +10,6 @@
 //!
 //! Block shapes count as full cubes where they stop motion, for exposure.
 
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use mc_entity::{Entity, Kind};
@@ -20,7 +19,7 @@ use mc_tick::Level as _;
 use mc_tick::rng::Rng;
 
 use crate::context::{Event, ServerContext};
-use crate::level::{WorldLevel, to_pos, to_position};
+use crate::level::WorldLevel;
 use crate::tick::lock;
 
 /// Ticks a lit TNT burns.
@@ -59,6 +58,17 @@ pub fn primed(ctx: &ServerContext, p: Position, fuse: i32, owner: Option<u128>) 
     }
 }
 
+/// The hiss of a lit fuse.
+pub fn primed_sound(ctx: &ServerContext, tnt: &Entity) {
+    let _ = ctx.events.send(Event::WorldSound {
+        pos: tnt.pos,
+        sound: "minecraft:entity.tnt.primed",
+        category: 4,
+        volume: 1.0,
+        pitch: 1.0,
+    });
+}
+
 /// Fuse of TNT set off by another explosion: 10 to 29 ticks.
 pub fn chained_fuse(rng: &mut Rng) -> i32 {
     (rng.below((TNT_FUSE / 4) as u32) as i32) + TNT_FUSE / 8
@@ -77,6 +87,7 @@ pub fn ignite(
     }
     level.set_block(p, ctx.shapes.air());
     let entity = primed(ctx, p, TNT_FUSE, owner);
+    primed_sound(ctx, &entity);
     let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
     lock(&ctx.entities).push(entity);
     true
@@ -411,12 +422,6 @@ pub fn blast_resistance(name: &str) -> f32 {
     6.0
 }
 
-/// Strength a ray loses in the block `state`, `None` for nothing.
-fn resistance(ctx: &ServerContext, state: u32) -> Option<f32> {
-    let r = *table(ctx).get(state as usize)?;
-    (r >= 0.0).then_some(r)
-}
-
 /// What the explosion needs to know about its source.
 #[derive(Clone, Copy, Debug)]
 pub struct Blast {
@@ -440,62 +445,267 @@ impl Blast {
     }
 }
 
-/// The blocks the rays reach (air among them), each once.
+/// Cells each side of the centre the block cache covers: rays reach about
+/// 7 blocks, exposure checks the entities up to 9 away.
+const CACHE_R: i32 = 11;
+/// Marks a cached block that stops motion.
+const SOLID: u32 = 1 << 31;
+/// The rays reach 7 blocks; this much is read in one go.
+const EAGER_R: i32 = 8;
+const CACHE_SIDE: usize = (2 * CACHE_R + 1) as usize;
+
+/// What one explosion at a time needs, kept between them: the blocks around
+/// the centre read once, and room for the rays' results.
+pub struct Scratch {
+    stamp: u32,
+    base: [i32; 3],
+    /// (stamp, state) of each block of the cube around the centre.
+    cells: Vec<(u32, u32)>,
+    /// The blocks read in one go.
+    cube: Vec<u32>,
+    /// Running sums of the blocks that stop motion in that cube, so "is
+    /// there any in this box" is eight lookups.
+    solids: Vec<u32>,
+    /// Resistance of each block of that cube (`-1`: none), and which of
+    /// them the current explosion has taken.
+    resist: Vec<f32>,
+    eager_taken: Vec<u32>,
+    eager_min: [i32; 3],
+    positions: Vec<Position>,
+    candidates: Vec<u32>,
+}
+
+impl Default for Scratch {
+    fn default() -> Self {
+        let n = CACHE_SIDE * CACHE_SIDE * CACHE_SIDE;
+        Self {
+            stamp: 0,
+            base: [0; 3],
+            cells: vec![(0, 0); n],
+            cube: vec![0; (2 * EAGER_R as usize + 1).pow(3)],
+            solids: vec![0; (2 * EAGER_R as usize + 2).pow(3)],
+            resist: vec![-1.0; (2 * EAGER_R as usize + 1).pow(3)],
+            eager_taken: vec![0; (2 * EAGER_R as usize + 1).pow(3)],
+            eager_min: [0; 3],
+            positions: Vec::new(),
+            candidates: Vec::new(),
+        }
+    }
+}
+
+impl Scratch {
+    /// Starts an explosion at `center`: nothing is cached yet.
+    fn begin(&mut self, ctx: &ServerContext, center: [f64; 3]) {
+        self.stamp = self.stamp.wrapping_add(1);
+        if self.stamp == 0 {
+            self.cells.fill((0, 0));
+            self.eager_taken.fill(0);
+            self.stamp = 1;
+        }
+        self.base = std::array::from_fn(|i| center[i].floor() as i32 - CACHE_R);
+        // The part the rays can reach is read in one go.
+        const EAGER: i32 = 2 * EAGER_R + 1;
+        let min = self.base.map(|b| b + CACHE_R - EAGER_R);
+        let mut cube = std::mem::take(&mut self.cube);
+        ctx.world
+            .read_cube(min, EAGER, ctx.rules.air, &ctx.data.blocks, &mut cube);
+        for dx in 0..EAGER {
+            for dy in 0..EAGER {
+                let src = ((dx * EAGER + dy) * EAGER) as usize;
+                let dst = (((dx + CACHE_R - EAGER_R) as usize * CACHE_SIDE
+                    + (dy + CACHE_R - EAGER_R) as usize)
+                    * CACHE_SIDE)
+                    + (CACHE_R - EAGER_R) as usize;
+                for dz in 0..EAGER as usize {
+                    let state = cube[src + dz];
+                    self.cells[dst + dz] = (
+                        self.stamp,
+                        state | (u32::from(ctx.rules.blocks_motion(state)) << 31),
+                    );
+                }
+            }
+        }
+        let table = table(ctx);
+        for (r, &state) in self.resist.iter_mut().zip(&cube) {
+            *r = table.get(state as usize).copied().unwrap_or(-1.0);
+        }
+        self.eager_min = min;
+        self.cube = cube;
+    }
+
+    /// Sums up the solid blocks of the cube just read (after `begin`).
+    fn index_solids(&mut self, ctx: &ServerContext) {
+        const N: usize = 2 * EAGER_R as usize + 1;
+        const M: usize = N + 1;
+        // sums[(x * M + y) * M + z] = solids with all of x', y', z' below.
+        for x in 0..N {
+            for y in 0..N {
+                for z in 0..N {
+                    let solid = u32::from(ctx.rules.blocks_motion(self.cube[(x * N + y) * N + z]));
+                    let at = |x: usize, y: usize, z: usize| self.solids[(x * M + y) * M + z];
+                    let v = solid
+                        + at(x, y + 1, z + 1)
+                        + at(x + 1, y, z + 1)
+                        + at(x + 1, y + 1, z)
+                        + at(x, y, z)
+                        - at(x, y, z + 1)
+                        - at(x, y + 1, z)
+                        - at(x + 1, y, z);
+                    self.solids[((x + 1) * M + y + 1) * M + z + 1] = v;
+                }
+            }
+        }
+    }
+
+    /// Whether no block of the cells `lo..=hi` stops motion; `false` when
+    /// that is not known (the box leaves what was read in one go).
+    fn open(&self, lo: [i32; 3], hi: [i32; 3]) -> bool {
+        const N: i32 = 2 * EAGER_R + 1;
+        const M: usize = N as usize + 1;
+        let (a, b): ([i32; 3], [i32; 3]) = (
+            std::array::from_fn(|i| lo[i] - self.eager_min[i]),
+            std::array::from_fn(|i| hi[i] - self.eager_min[i] + 1),
+        );
+        if (0..3).any(|i| a[i] < 0 || b[i] > N) {
+            return false;
+        }
+        let at =
+            |x: i32, y: i32, z: i32| self.solids[(x as usize * M + y as usize) * M + z as usize];
+        let sum = at(b[0], b[1], b[2])
+            + at(a[0], a[1], b[2])
+            + at(a[0], b[1], a[2])
+            + at(b[0], a[1], a[2])
+            - at(a[0], b[1], b[2])
+            - at(b[0], a[1], b[2])
+            - at(b[0], b[1], a[2])
+            - at(a[0], a[1], a[2]);
+        sum == 0
+    }
+
+    fn index(&self, x: i32, y: i32, z: i32) -> Option<usize> {
+        let (dx, dy, dz) = (x - self.base[0], y - self.base[1], z - self.base[2]);
+        let side = CACHE_SIDE as i32;
+        ((0..side).contains(&dx) && (0..side).contains(&dy) && (0..side).contains(&dz))
+            .then(|| (dx as usize * CACHE_SIDE + dy as usize) * CACHE_SIDE + dz as usize)
+    }
+
+    /// The block at `x, y, z` (its top bit: it stops motion), read from the
+    /// world once per explosion.
+    #[inline]
+    fn block(&mut self, ctx: &ServerContext, level: &WorldLevel, x: i32, y: i32, z: i32) -> u32 {
+        let Some(i) = self.index(x, y, z) else {
+            let state = level.block(mc_tick::BlockPos::new(x, y, z));
+            return state | (u32::from(ctx.rules.blocks_motion(state)) << 31);
+        };
+        let (stamp, value) = self.cells[i];
+        if stamp == self.stamp {
+            return value;
+        }
+        let state = level.block(mc_tick::BlockPos::new(x, y, z));
+        let value = state | (u32::from(ctx.rules.blocks_motion(state)) << 31);
+        self.cells[i] = (self.stamp, value);
+        value
+    }
+}
+
+/// The unit directions of the rays: the surface of a 16×16×16 grid.
+fn directions() -> &'static [[f64; 3]] {
+    static DIRS: OnceLock<Vec<[f64; 3]>> = OnceLock::new();
+    DIRS.get_or_init(|| {
+        let mut out = Vec::new();
+        for x in 0..16 {
+            for y in 0..16 {
+                for z in 0..16 {
+                    if x != 0 && x != 15 && y != 0 && y != 15 && z != 0 && z != 15 {
+                        continue;
+                    }
+                    let mut d = [
+                        f64::from(x) / 15.0 * 2.0 - 1.0,
+                        f64::from(y) / 15.0 * 2.0 - 1.0,
+                        f64::from(z) / 15.0 * 2.0 - 1.0,
+                    ];
+                    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                    for v in &mut d {
+                        *v /= len;
+                    }
+                    out.push(d);
+                }
+            }
+        }
+        out
+    })
+}
+
+/// The blocks the rays reach (air among them), each once, into
+/// `sc.positions`.
 fn blown_positions(
     ctx: &ServerContext,
     level: &WorldLevel,
     blast: &Blast,
     rng: &mut Rng,
-) -> Vec<Position> {
-    let mut seen: HashMap<(i32, i32, i32), ()> = HashMap::new();
-    let mut out = Vec::new();
+    sc: &mut Scratch,
+) {
+    let table = table(ctx);
     let step = f64::from(0.3f32);
-    for x in 0..16 {
-        for y in 0..16 {
-            for z in 0..16 {
-                if x != 0 && x != 15 && y != 0 && y != 15 && z != 0 && z != 15 {
-                    continue;
+    let (min_y, max_y) = (ctx.world.min_y, ctx.world.min_y + ctx.world.height as i32);
+    sc.positions.clear();
+    const N: i32 = 2 * EAGER_R + 1;
+    let stamp = sc.stamp;
+    let min = sc.eager_min;
+    for d in directions() {
+        let mut strength = blast.power * (0.7 + rng.unit() as f32 * 0.6);
+        let mut at = blast.center;
+        while strength > 0.0 {
+            let (x, y, z) = (
+                at[0].floor() as i32,
+                at[1].floor() as i32,
+                at[2].floor() as i32,
+            );
+            if y < min_y || y >= max_y {
+                break;
+            }
+            let (rx, ry, rz) = (x - min[0], y - min[1], z - min[2]);
+            let (resistance, fresh) =
+                if (0..N).contains(&rx) && (0..N).contains(&ry) && (0..N).contains(&rz) {
+                    let i = ((rx * N + ry) * N + rz) as usize;
+                    let fresh = sc.eager_taken[i] != stamp;
+                    (sc.resist[i], (i, fresh))
+                } else {
+                    // Beyond what was read (rays do not get this far).
+                    let state = sc.block(ctx, level, x, y, z) & !SOLID;
+                    (
+                        table.get(state as usize).copied().unwrap_or(-1.0),
+                        (usize::MAX, true),
+                    )
+                };
+            if resistance >= 0.0 {
+                strength -= (resistance + 0.3) * 0.3;
+            }
+            if strength > 0.0 {
+                if fresh.0 != usize::MAX {
+                    sc.eager_taken[fresh.0] = stamp;
                 }
-                let mut d = [
-                    f64::from(x) / 15.0 * 2.0 - 1.0,
-                    f64::from(y) / 15.0 * 2.0 - 1.0,
-                    f64::from(z) / 15.0 * 2.0 - 1.0,
-                ];
-                let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                for v in &mut d {
-                    *v /= len;
-                }
-                let mut strength = blast.power * (0.7 + rng.unit() as f32 * 0.6);
-                let mut at = blast.center;
-                while strength > 0.0 {
-                    let p = to_pos(Position::new(
-                        at[0].floor() as i32,
-                        at[1].floor() as i32,
-                        at[2].floor() as i32,
-                    ));
-                    if !level.in_world(p) {
-                        break;
-                    }
-                    if let Some(r) = resistance(ctx, level.block(p)) {
-                        strength -= (r + 0.3) * 0.3;
-                    }
-                    if strength > 0.0 && seen.insert((p.x, p.y, p.z), ()).is_none() {
-                        out.push(to_position(p));
-                    }
-                    for i in 0..3 {
-                        at[i] += d[i] * step;
-                    }
-                    strength -= 0.225_000_01;
+                if fresh.1 {
+                    sc.positions.push(Position::new(x, y, z));
                 }
             }
+            at[0] += d[0] * step;
+            at[1] += d[1] * step;
+            at[2] += d[2] * step;
+            strength -= 0.225_000_01;
         }
     }
-    out
 }
 
 /// Whether a ray from `from` to `to` passes through no block that stops
 /// motion (voxel traversal).
-fn clear(ctx: &ServerContext, level: &WorldLevel, from: [f64; 3], to: [f64; 3]) -> bool {
+fn clear(
+    ctx: &ServerContext,
+    level: &WorldLevel,
+    sc: &mut Scratch,
+    from: [f64; 3],
+    to: [f64; 3],
+) -> bool {
     let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
     let mut cell = [
         from[0].floor() as i32,
@@ -528,8 +738,7 @@ fn clear(ctx: &ServerContext, level: &WorldLevel, from: [f64; 3], to: [f64; 3]) 
         }
     });
     loop {
-        let state = level.block(mc_tick::BlockPos::new(cell[0], cell[1], cell[2]));
-        if ctx.rules.blocks_motion(state) {
+        if sc.block(ctx, level, cell[0], cell[1], cell[2]) & SOLID != 0 {
             return false;
         }
         if cell == end {
@@ -554,10 +763,18 @@ fn clear(ctx: &ServerContext, level: &WorldLevel, from: [f64; 3], to: [f64; 3]) 
 fn exposure(
     ctx: &ServerContext,
     level: &WorldLevel,
+    sc: &mut Scratch,
     center: [f64; 3],
     min: [f64; 3],
     max: [f64; 3],
 ) -> f64 {
+    // Nothing in the way anywhere between the box and the centre: every ray
+    // is clear.
+    let lo: [i32; 3] = std::array::from_fn(|i| min[i].min(center[i]).floor() as i32);
+    let hi: [i32; 3] = std::array::from_fn(|i| max[i].max(center[i]).floor() as i32);
+    if sc.open(lo, hi) {
+        return 1.0;
+    }
     let size: [f64; 3] = std::array::from_fn(|i| max[i] - min[i]);
     let delta: [f64; 3] = std::array::from_fn(|i| 1.0 / (size[i] * 2.0 + 1.0));
     let offset = |i: usize| (1.0 - (1.0 / delta[i]).floor() * delta[i]) / 2.0;
@@ -573,7 +790,7 @@ fn exposure(
                     min[1] + size[1] * y,
                     min[2] + size[2] * z + offset(2),
                 ];
-                if clear(ctx, level, p, center) {
+                if clear(ctx, level, sc, p, center) {
                     seen += 1;
                 }
                 total += 1;
@@ -586,26 +803,140 @@ fn exposure(
     f64::from(seen) / f64::from(total.max(1))
 }
 
-/// The explosion of `blast`: blocks go (with their drops), entities in
-/// `entities` and players are hurt and pushed. Returns the entities it
-/// removed (id, uuid).
-pub fn explode(
+/// Entities by the cell of their position, so a blast looks at the few near
+/// it. Entities only join during a batch (the vector is not reordered), and
+/// their positions do not change meanwhile.
+pub struct Grid {
+    cells: mc_tick::fast::FastMap<(i32, i32, i32), Vec<u32>>,
+}
+
+const CELL: f64 = 8.0;
+
+fn cell_of(pos: [f64; 3]) -> (i32, i32, i32) {
+    (
+        (pos[0] / CELL).floor() as i32,
+        (pos[1] / CELL).floor() as i32,
+        (pos[2] / CELL).floor() as i32,
+    )
+}
+
+impl Grid {
+    fn new(entities: &[Entity]) -> Self {
+        let mut grid = Self {
+            cells: Default::default(),
+        };
+        for (i, e) in entities.iter().enumerate() {
+            if !e.removed {
+                grid.add(i, e.pos);
+            }
+        }
+        grid
+    }
+
+    fn add(&mut self, index: usize, pos: [f64; 3]) {
+        self.cells
+            .entry(cell_of(pos))
+            .or_default()
+            .push(index as u32);
+    }
+
+    /// Indices of the entities whose position is within `reach` of `c` (and
+    /// then some: the cells touched).
+    fn near(&self, c: [f64; 3], reach: f64, out: &mut Vec<u32>) {
+        out.clear();
+        let lo = cell_of([c[0] - reach, c[1] - reach, c[2] - reach]);
+        let hi = cell_of([c[0] + reach, c[1] + reach, c[2] + reach]);
+        for x in lo.0..=hi.0 {
+            for y in lo.1..=hi.1 {
+                for z in lo.2..=hi.2 {
+                    if let Some(v) = self.cells.get(&(x, y, z)) {
+                        out.extend_from_slice(v);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A player as an explosion sees them.
+struct Victim {
+    uuid: u128,
+    mode: i32,
+    pose: crate::context::Pose,
+    flying: bool,
+}
+
+/// One explosion on its own.
+#[cfg(test)]
+fn explode(
     ctx: &ServerContext,
     level: &mut WorldLevel,
     entities: &mut Vec<Entity>,
     blast: &Blast,
 ) -> Vec<(i32, u128)> {
+    explode_all(ctx, level, entities, std::slice::from_ref(blast))
+}
+
+/// The explosions of one tick, one after another: blocks go (with their
+/// drops), entities in `entities` and players are hurt and pushed. Returns
+/// the entities they removed (id, uuid).
+pub fn explode_all(
+    ctx: &ServerContext,
+    level: &mut WorldLevel,
+    entities: &mut Vec<Entity>,
+    blasts: &[Blast],
+) -> Vec<(i32, u128)> {
+    if blasts.is_empty() {
+        return Vec::new();
+    }
+    let mut sc = Scratch::default();
+    let mut grid = Grid::new(entities);
     let mut rng = rng();
-    let mut positions = blown_positions(ctx, level, blast, &mut rng);
-    let count = positions.len() as i32;
-    let blocks = &ctx.data.blocks;
     let decay = ctx.game_rule_bool("minecraft:tnt_explosion_drop_decay");
+    let victims: Vec<Victim> = lock(&ctx.players)
+        .values()
+        .filter_map(|p| {
+            p.pose.map(|pose| Victim {
+                uuid: p.profile.uuid,
+                mode: p.game_mode,
+                pose,
+                flying: p.flying,
+            })
+        })
+        .collect();
+    let mut gone = Vec::new();
+    for blast in blasts {
+        explode_one(
+            ctx, level, entities, &mut grid, &mut sc, &mut rng, &victims, decay, blast, &mut gone,
+        );
+    }
+    gone
+}
+
+#[allow(clippy::too_many_arguments)]
+fn explode_one(
+    ctx: &ServerContext,
+    level: &mut WorldLevel,
+    entities: &mut Vec<Entity>,
+    grid: &mut Grid,
+    sc: &mut Scratch,
+    rng: &mut Rng,
+    victims: &[Victim],
+    decay: bool,
+    blast: &Blast,
+    gone: &mut Vec<(i32, u128)>,
+) {
+    sc.begin(ctx, blast.center);
+    blown_positions(ctx, level, blast, rng, sc);
+    let count = sc.positions.len() as i32;
+    let blocks = &ctx.data.blocks;
     // Shuffled, as vanilla does before dropping.
-    for i in (1..positions.len()).rev() {
-        positions.swap(i, rng.below(i as u32 + 1) as usize);
+    for i in (1..sc.positions.len()).rev() {
+        let j = rng.below(i as u32 + 1) as usize;
+        sc.positions.swap(i, j);
     }
     let mut drops: Vec<(Position, crate::loot::Drop)> = Vec::new();
-    for p in positions {
+    for &p in &sc.positions {
         let Some(state) = ctx.world.block(p, blocks) else {
             continue;
         };
@@ -617,12 +948,14 @@ pub fn explode(
         };
         if name == "minecraft:tnt" {
             // Other TNT is set off with a short fuse.
-            let mut tnt = primed(ctx, p, chained_fuse(&mut rng), None);
+            let mut tnt = primed(ctx, p, chained_fuse(rng), None);
             if let Kind::Tnt { owner, .. } = &mut tnt.kind {
                 *owner = blast.owner;
             }
             level.set_block(p, ctx.shapes.air());
+            primed_sound(ctx, &tnt);
             let _ = ctx.events.send(Event::EntitySpawned(tnt.clone()));
+            grid.add(entities.len(), tnt.pos);
             entities.push(tnt);
             continue;
         }
@@ -650,18 +983,23 @@ pub fn explode(
         level.set_block(p, ctx.shapes.air());
     }
     merge_and_drop(ctx, drops);
+    // The blocks are gone: what entities see is read afresh.
+    sc.begin(ctx, blast.center);
+    sc.index_solids(ctx);
 
     // Entities within twice the power.
     let reach = f64::from(blast.power) * 2.0;
     let c = blast.center;
-    let mut gone = Vec::new();
     let mut knockback: Vec<(u128, [f64; 3])> = Vec::new();
-    let near = |min: [f64; 3], max: [f64; 3]| {
-        (0..3).all(|i| min[i] <= c[i] + reach + 1.0 && max[i] >= c[i] - reach - 1.0)
-    };
-    for e in entities.iter_mut().filter(|e| !e.removed) {
+    let mut candidates = std::mem::take(&mut sc.candidates);
+    grid.near(c, reach + 2.0, &mut candidates);
+    for &i in &candidates {
+        let e = &mut entities[i as usize];
+        if e.removed {
+            continue;
+        }
         let b = e.aabb();
-        if !near(b.min, b.max) {
+        if !(0..3).all(|i| b.min[i] <= c[i] + reach + 1.0 && b.max[i] >= c[i] - reach - 1.0) {
             continue;
         }
         let dist =
@@ -683,7 +1021,7 @@ pub fn explode(
         for v in &mut dir {
             *v /= len;
         }
-        let impact = (1.0 - dist) * exposure(ctx, level, c, b.min, b.max);
+        let impact = (1.0 - dist) * exposure(ctx, level, sc, c, b.min, b.max);
         if let Kind::Item { health, .. } = &mut e.kind {
             *health -= damage(impact, reach);
             if *health <= 0.0 {
@@ -696,19 +1034,19 @@ pub fn explode(
             *v += d * impact;
         }
     }
+    sc.candidates = candidates;
 
     // Players.
-    let players: Vec<(u128, i32, i32, crate::context::Pose, bool)> = lock(&ctx.players)
-        .values()
-        .filter_map(|p| {
-            p.pose
-                .map(|pose| (p.profile.uuid, p.entity_id, p.game_mode, pose, p.flying))
-        })
-        .collect();
     let attacker = blast
         .owner
         .and_then(|o| lock(&ctx.players).get(&o).map(|p| p.profile.name.clone()));
-    for (uuid, _, mode, pose, flying) in players {
+    for &Victim {
+        uuid,
+        mode,
+        pose,
+        flying,
+    } in victims
+    {
         // Spectators and flying creative players are out of it.
         if mode == 3 || (mode == 1 && flying) {
             continue;
@@ -731,7 +1069,7 @@ pub fn explode(
         for v in &mut dir {
             *v /= len;
         }
-        let impact = (1.0 - dist) * exposure(ctx, level, c, min, max);
+        let impact = (1.0 - dist) * exposure(ctx, level, sc, c, min, max);
         let (kind, key) = if attacker.is_some() {
             (
                 "minecraft:player_explosion",
@@ -759,7 +1097,6 @@ pub fn explode(
         sound: ctx.explosion_sound,
         knockback,
     });
-    gone
 }
 
 /// `⌊(i² + i) / 2 × 7 × reach + 1⌋`.
@@ -830,6 +1167,57 @@ mod tests {
             removed: false,
             tags: Vec::new(),
         }
+    }
+
+    /// A cube of TNT set off in the middle, ticked until nothing is left.
+    /// `cargo test -p mc-server --release mass_tnt_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn mass_tnt_cost() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let tnt = block(&ctx, "minecraft:tnt");
+        let (nx, ny, nz) = (24, 24, 24);
+        let started = std::time::Instant::now();
+        {
+            let mut level = WorldLevel::new(&ctx);
+            for x in 0..nx {
+                for y in 0..ny {
+                    for z in 0..nz {
+                        level.set_block(Position::new(x, -60 + y, z), tnt);
+                    }
+                }
+            }
+            let _ = level.into_changes();
+        }
+        eprintln!("placed {} TNT in {:?}", nx * ny * nz, started.elapsed());
+        let mut level = WorldLevel::new(&ctx);
+        ignite(
+            &ctx,
+            &mut level,
+            Position::new(nx / 2, -60 + ny / 2, nz / 2),
+            None,
+        );
+        drop(level);
+        let mut total = std::time::Duration::ZERO;
+        let mut worst = std::time::Duration::ZERO;
+        for tick in 1..=400 {
+            let t = std::time::Instant::now();
+            crate::tick::run_scheduled_ticks(&ctx);
+            let took = t.elapsed();
+            total += took;
+            worst = worst.max(took);
+            let n = lock(&ctx.entities).len();
+            if tick % 10 == 0 || took.as_millis() > 200 {
+                eprintln!("tick {tick}: {took:?}, {n} entities");
+            }
+            if n == 0 && tick > 5 {
+                break;
+            }
+        }
+        eprintln!("total {total:?}, worst tick {worst:?}");
     }
 
     #[test]
