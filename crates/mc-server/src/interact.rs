@@ -344,6 +344,10 @@ pub fn dig(
         ack: Some(sequence),
         ..Outcome::default()
     };
+    if status == 5 {
+        crate::projectiles::release(ctx, actor);
+        return outcome;
+    }
     let (world, blocks) = (&ctx.world, &ctx.data.blocks);
     // Hitting a block puts out fire on the face hit.
     if status == dig::START
@@ -577,6 +581,22 @@ pub fn use_item_on(
             entity_id: actor.entity_id,
             times: 1,
         });
+        return outcome;
+    }
+    if let Some(name) = held_name
+        && use_blocks
+        && (crate::decor::place(ctx, &mut outcome, actor, hand, name, clicked, face)
+            || crate::vehicles::place_cart(ctx, &mut outcome, actor, hand, name, clicked)
+            || crate::projectiles::use_on_block(
+                ctx,
+                &mut outcome,
+                actor,
+                hand,
+                name,
+                clicked,
+                cursor,
+            ))
+    {
         return outcome;
     }
     if let Some(tool @ ("minecraft:flint_and_steel" | "minecraft:fire_charge")) = held_name {
@@ -825,7 +845,7 @@ fn replace_held(
 /// The first block the player looks at within reach, and the face the look
 /// enters it through. Blocks count as full cubes; fluids are looked through
 /// unless `sources` (then only source blocks stop the look).
-fn look_at(
+pub(crate) fn look_at(
     ctx: &ServerContext,
     actor: Actor,
     yaw: f32,
@@ -908,6 +928,14 @@ fn look_at(
 pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f32) -> Outcome {
     let mut outcome = Outcome::default();
     if actor.game_mode == SPECTATOR {
+        return outcome;
+    }
+    if let Some(done) = crate::projectiles::use_item(ctx, actor, hand, yaw, pitch) {
+        return done;
+    }
+    if let Some(h) = crate::held::held(ctx, actor.uuid, hand)
+        && crate::vehicles::place_boat(ctx, &mut outcome, actor, hand, &h.name, yaw, pitch)
+    {
         return outcome;
     }
     let held = ctx
