@@ -262,6 +262,10 @@ pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
                     m.species.id().trim_start_matches("minecraft:")
                 ),
             ),
+            mc_entity::Kind::ExperienceOrb { .. } => (
+                "minecraft:experience_orb".to_owned(),
+                "entity.minecraft.experience_orb".to_owned(),
+            ),
         };
         let mut key = Compound::new();
         key.insert("translate", name_key.as_str());

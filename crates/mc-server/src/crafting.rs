@@ -39,6 +39,10 @@ pub struct Cooking {
     pub result: ItemStack,
     /// Ticks at normal speed.
     pub time: i32,
+    /// The recipe's registry name.
+    pub name: String,
+    /// Experience points one smelt is worth.
+    pub xp: f32,
 }
 
 #[derive(Debug, Default)]
@@ -107,6 +111,8 @@ impl Recipes {
                         input,
                         result,
                         time: json["cookingtime"].as_i64().unwrap_or(200) as i32,
+                        name: name.to_string(),
+                        xp: json["experience"].as_f64().unwrap_or(0.0) as f32,
                     });
                 }
                 continue;

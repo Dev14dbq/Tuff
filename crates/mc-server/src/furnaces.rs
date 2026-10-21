@@ -220,6 +220,62 @@ fn store(ctx: &ServerContext, p: Position, block: &str, progress: &Progress) {
     ctx.world.set_block_entity(be, blocks);
 }
 
+/// Notes one more smelt of recipe `recipe` for the experience owed to
+/// whoever takes the output (`RecipesUsed`).
+fn used_recipe(ctx: &ServerContext, p: Position, block: &str, recipe: &str) {
+    let blocks = &ctx.data.blocks;
+    let mut be = ctx
+        .world
+        .block_entity(p, blocks)
+        .unwrap_or(mc_world::BlockEntity {
+            x: p.x,
+            y: p.y,
+            z: p.z,
+            id: block.to_owned(),
+            data: mc_nbt::Compound::new(),
+        });
+    let mut used = match be.data.get("RecipesUsed") {
+        Some(Tag::Compound(c)) => c.clone(),
+        _ => mc_nbt::Compound::new(),
+    };
+    let n = match used.get(recipe) {
+        Some(Tag::Int(n)) => *n,
+        _ => 0,
+    };
+    used.insert(recipe, Tag::Int(n + 1));
+    be.data.insert("RecipesUsed", Tag::Compound(used));
+    ctx.world.set_block_entity(be, blocks);
+}
+
+/// Clears the smelts owed and returns the experience points they earn: each
+/// recipe's total, rounded down, plus one more by chance of the fraction.
+pub fn collect_xp(ctx: &ServerContext, p: Position) -> i32 {
+    let blocks = &ctx.data.blocks;
+    let Some(mut be) = ctx.world.block_entity(p, blocks) else {
+        return 0;
+    };
+    let Some(Tag::Compound(used)) = be.data.remove("RecipesUsed") else {
+        return 0;
+    };
+    let mut points = 0;
+    for (recipe, n) in used.iter() {
+        let Tag::Int(n) = n else { continue };
+        if let Some(r) = ctx.recipes.cooking.iter().find(|r| r.name == *recipe) {
+            points += crate::xp::roll_fraction(r.xp * *n as f32);
+        }
+    }
+    ctx.world.set_block_entity(be, blocks);
+    points
+}
+
+/// Whether the block at `p` is a furnace, blast furnace or smoker.
+pub fn is_furnace(ctx: &ServerContext, p: Position) -> bool {
+    ctx.world
+        .block(p, &ctx.data.blocks)
+        .and_then(|s| ctx.data.blocks.block_name(s))
+        .is_some_and(|n| recipe_kind(n).is_some())
+}
+
 /// Progress of the furnace at `p` as its window shows it.
 pub fn progress(ctx: &ServerContext, p: Position) -> Progress {
     lock(&ctx.furnaces)
@@ -343,6 +399,7 @@ fn tick_one(ctx: &ServerContext, p: Position, before: Progress) -> Option<Progre
                 None => r.result.clone(),
             });
             changed.extend([0, 2]);
+            used_recipe(ctx, p, name, &r.name);
         }
     } else if progress.lit == 0 && progress.cook > 0 {
         progress.cook = (progress.cook - 2).max(0);

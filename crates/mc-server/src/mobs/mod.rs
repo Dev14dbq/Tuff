@@ -296,6 +296,22 @@ fn die(ctx: &ServerContext, entity: &mut Entity, by_player: bool, status: &mut V
     m.nav.stop();
     status.push((entity.id, 3));
     let pos = entity.pos;
+    // Experience for what a player killed: 5 for monsters, 1-3 for animals.
+    if by_player && let Kind::Mob(m) = &mut entity.kind {
+        let xp = match m.species.category() {
+            mc_entity::mob::Category::Monster => 5,
+            mc_entity::mob::Category::Creature => 1 + m.below(3) as i32,
+        };
+        crate::xp::spawn(ctx, [pos[0], pos[1] + 0.3, pos[2]], xp);
+    }
+    // Experience for what a player killed: 5 for monsters, 1-3 for animals.
+    if by_player && let Kind::Mob(m) = &mut entity.kind {
+        let xp = match m.species.category() {
+            mc_entity::mob::Category::Monster => 5,
+            mc_entity::mob::Category::Creature => 1 + m.below(3) as i32,
+        };
+        crate::xp::spawn(ctx, [pos[0], pos[1] + 0.3, pos[2]], xp);
+    }
     for drop in loot(ctx, entity, by_player) {
         crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 0.3, pos[2]], drop.item, drop.count);
     }

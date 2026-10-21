@@ -160,6 +160,63 @@ pub fn grow_tree(level: &mut WorldLevel, p: BlockPos, state: u32) -> bool {
     true
 }
 
+/// The highest `age` of the crops bone meal speeds up, and how much it adds.
+fn crop_age(name: &str) -> Option<(i32, bool)> {
+    Some(match name {
+        "wheat" | "carrots" | "potatoes" | "melon_stem" | "pumpkin_stem" => (7, true),
+        "beetroots" | "sweet_berry_bush" => (3, false),
+        "cocoa" => (2, false),
+        "torchflower_crop" => (1, false),
+        _ => return None,
+    })
+}
+
+/// Bone meal on the block at `p` (minecraft.wiki, "Bone Meal"): crops and
+/// stems age by two to five stages (other plants by one), saplings grow
+/// 45% of the time. Returns whether the block could use it, so whether the
+/// meal is used up.
+pub fn bone_meal(level: &mut WorldLevel, p: Position) -> bool {
+    let ctx = level.logic();
+    let state = level.block(BlockPos::new(p.x, p.y, p.z));
+    let Some(name) = ctx
+        .shapes
+        .block_name(state)
+        .map(|n| n.trim_start_matches("minecraft:").to_owned())
+    else {
+        return false;
+    };
+    let roll = crate::util::random_u64();
+    if name.ends_with("_sapling") {
+        if ctx.shapes.property(state, "stage").is_none() {
+            return false;
+        }
+        if (roll >> 11) as f64 / (1u64 << 53) as f64 >= 0.45 {
+            return true;
+        }
+        if ctx.shapes.property(state, "stage") == Some("0") {
+            level.set_block(p, ctx.shapes.with(state, "stage", "1"));
+        } else {
+            grow_tree(level, BlockPos::new(p.x, p.y, p.z), state);
+        }
+        return true;
+    }
+    let Some((max, wide)) = crop_age(&name) else {
+        return false;
+    };
+    let age: i32 = ctx
+        .shapes
+        .property(state, "age")
+        .and_then(|a| a.parse().ok())
+        .unwrap_or(max);
+    if age >= max {
+        return false;
+    }
+    let add = if wide { 2 + (roll % 4) as i32 } else { 1 };
+    let new = (age + add).min(max);
+    level.set_block(p, ctx.shapes.with(state, "age", &new.to_string()));
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

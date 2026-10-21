@@ -1636,6 +1636,7 @@ fn spawn_entity(
         mc_entity::Kind::Item { .. } => (ctx.entity_types.item, 0),
         mc_entity::Kind::Tnt { .. } => (ctx.entity_types.tnt, 0),
         mc_entity::Kind::Mob(m) => (crate::mobs::type_id(ctx, m.species), 0),
+        mc_entity::Kind::ExperienceOrb { .. } => (ctx.entity_types.experience_orb, 0),
     };
     let (yaw, pitch, head_yaw) = match &entity.kind {
         mc_entity::Kind::Mob(m) => (m.yaw, m.pitch, m.head_yaw),
@@ -1672,6 +1673,15 @@ fn spawn_entity(
                         damage,
                         ..play::ItemStack::new(item, count)
                     })),
+                )],
+            })?;
+        }
+        mc_entity::Kind::ExperienceOrb { value, .. } => {
+            writer.queue(&play::SetEntityData {
+                entity_id: entity.id,
+                entries: vec![(
+                    play::metadata::EXPERIENCE_ORB_VALUE,
+                    play::MetadataValue::VarInt(value),
                 )],
             })?;
         }

@@ -505,7 +505,7 @@ pub fn scatter_item(
 
 /// How far around a player items are picked up: the player's box grown by
 /// one block sideways and half a block up and down.
-fn picks_up(pose: &crate::context::Pose, item: &mc_entity::Entity) -> bool {
+pub(crate) fn picks_up(pose: &crate::context::Pose, item: &mc_entity::Entity) -> bool {
     let b = item.aabb();
     pose.x - 1.3 < b.max[0]
         && pose.x + 1.3 > b.min[0]
@@ -567,6 +567,14 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             }
             // Mobs have their own tick.
             mc_entity::Kind::Mob(_) => {}
+            mc_entity::Kind::ExperienceOrb { .. } => {
+                mc_entity::fall_with(entity, &Solid(level), mc_entity::ORB_GRAVITY);
+                if entity.on_ground {
+                    entity.vel[0] *= 0.6;
+                    entity.vel[2] *= 0.6;
+                }
+                crate::xp::tick(ctx, entity, &players);
+            }
             mc_entity::Kind::Item { pickup_delay, .. } => {
                 mc_entity::fall(entity, &Solid(level));
                 if entity.on_ground {
@@ -622,6 +630,21 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         }
     }
     level.entity_boxes = None;
+    if entities
+        .iter()
+        .any(|e| e.age % 20 == 0 && matches!(e.kind, mc_entity::Kind::ExperienceOrb { .. }))
+    {
+        crate::xp::merge(&mut entities);
+        for e in entities
+            .iter()
+            .filter(|e| e.removed && matches!(e.kind, mc_entity::Kind::ExperienceOrb { .. }))
+        {
+            if !removed.contains(&e.id) {
+                removed.push(e.id);
+                gone.push(e.uuid);
+            }
+        }
+    }
     for blast in blasts {
         for (id, uuid) in crate::explosion::explode(ctx, level, &mut entities, &blast) {
             removed.push(id);

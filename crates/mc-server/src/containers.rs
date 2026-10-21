@@ -343,6 +343,16 @@ pub fn change(
             continue;
         }
         let new = stack.as_ref().map(|h| h.resolve(&before));
+        // Taking from a furnace's output pays the experience it earned.
+        if *slot == 2
+            && open.slots[2].as_ref().map_or(0, |s| s.count) > new.as_ref().map_or(0, |s| s.count)
+            && crate::furnaces::is_furnace(ctx, p)
+        {
+            let points = crate::furnaces::collect_xp(ctx, p);
+            if points > 0 {
+                crate::xp::award(ctx, uuid, points, true);
+            }
+        }
         if new.as_ref().map(|s| s.item) != open.slots[*slot].as_ref().map(|s| s.item) {
             open.components.remove(slot);
         }
