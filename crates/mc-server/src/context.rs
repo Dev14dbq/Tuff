@@ -366,6 +366,8 @@ pub struct ServerContext {
     pub entity_items: Mutex<HashMap<i32, mc_nbt::Compound>>,
     /// Hopper minecarts resting after taking an item: ticks left, by id.
     pub cart_rests: Mutex<HashMap<i32, i32>>,
+    /// Daylight detectors in loaded chunks.
+    pub daylight: Mutex<std::collections::HashSet<(i32, i32, i32)>>,
     /// What broken blocks drop.
     pub loot: crate::loot::BlockLoot,
     /// Crafting recipes.
@@ -671,6 +673,7 @@ impl ServerContext {
             containers: Mutex::new(HashMap::new()),
             entity_items: Mutex::new(HashMap::new()),
             cart_rests: Mutex::new(HashMap::new()),
+            daylight: Mutex::new(Default::default()),
             loot: crate::loot::BlockLoot::load(&data),
             recipes: crate::crafting::Recipes::load(&data),
             trades: crate::trading::Trades::load(&data, &items),

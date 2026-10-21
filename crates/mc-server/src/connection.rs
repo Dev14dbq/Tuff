@@ -673,8 +673,8 @@ async fn play(
                 if let Some((position, kind)) = outcome.open.take() {
                     windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
                 }
-                if let Some(position) = outcome.open_sign.take() {
-                    writer.queue(&play::OpenSignEditor { position, front: true })?;
+                if let Some((position, front)) = outcome.open_sign.take() {
+                    writer.queue(&play::OpenSignEditor { position, front })?;
                 }
                 if let Some((position, menu)) = outcome.open_menu.take() {
                     windows.open_menu(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, menu)?;

@@ -40,6 +40,9 @@ pub trait Level {
     /// A wet sponge dried at `p`: it hisses and steams.
     fn sponge_dried(&mut self, _p: BlockPos) {}
 
+    /// A world event (sound and particles clients play) at `p`.
+    fn level_event(&mut self, _event: i32, _p: BlockPos, _data: i32) {}
+
     /// Turns the block that was at `p` into a falling block entity.
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32);
 

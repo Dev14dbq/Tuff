@@ -19,8 +19,15 @@ pub enum Behaviour {
     },
     /// Pumpkin and melon stems.
     Stem,
-    /// Sugar cane and cactus grow up to three high.
+    /// Sugar cane grows up to three high.
     Column,
+    /// Cactus grows up to three high and may flower.
+    Cactus,
+    /// Bamboo grows up to 16 high; a shoot becomes bamboo.
+    Bamboo,
+    BambooSapling,
+    /// Pointed dripstone drips into cauldrons.
+    Dripstone,
     NetherWart,
     SweetBerries,
     Cocoa,
@@ -45,7 +52,11 @@ impl Behaviour {
             "beetroots" => Self::Crop { max: 3 },
             "torchflower_crop" => Self::Crop { max: 2 },
             "pumpkin_stem" | "melon_stem" => Self::Stem,
-            "sugar_cane" | "cactus" => Self::Column,
+            "sugar_cane" => Self::Column,
+            "cactus" => Self::Cactus,
+            "bamboo" => Self::Bamboo,
+            "bamboo_sapling" => Self::BambooSapling,
+            "pointed_dripstone" => Self::Dripstone,
             "nether_wart" => Self::NetherWart,
             "sweet_berry_bush" => Self::SweetBerries,
             "cocoa" => Self::Cocoa,
@@ -86,6 +97,32 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut 
         Behaviour::Crop { max } => crop(level, ctx, p, state, u32::from(max), rng),
         Behaviour::Stem => stem(level, ctx, p, state, rng),
         Behaviour::Column => column(level, ctx, p, state),
+        Behaviour::Cactus => cactus(level, ctx, p, state, rng),
+        Behaviour::Bamboo => {
+            let above = p.offset(Dir::Up);
+            if int(ctx, state, "stage") == 0
+                && rng.below(3) == 0
+                && level.in_world(above)
+                && ctx.shapes.is_air(level.block(above))
+                && level.brightness(above) >= 9
+            {
+                let height = bamboo_below(level, ctx, p) + 1;
+                if height < 16 {
+                    grow_bamboo(level, ctx, p, state, height, rng);
+                }
+            }
+        }
+        Behaviour::BambooSapling => {
+            let above = p.offset(Dir::Up);
+            if rng.below(3) == 0
+                && level.in_world(above)
+                && ctx.shapes.is_air(level.block(above))
+                && level.brightness(above) >= 9
+            {
+                grow_shoot(level, ctx, p);
+            }
+        }
+        Behaviour::Dripstone => crate::cauldron::dripstone_tick(level, ctx, p, rng),
         Behaviour::NetherWart => {
             let age = int(ctx, state, "age");
             if age < 3 && rng.below(10) == 0 {
@@ -288,6 +325,150 @@ fn column(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
     } else {
         grow(level, ctx, p, state, age + 1);
     }
+}
+
+/// Cactus: like sugar cane, but a cactus that has grown half way (age 8)
+/// may sprout a flower on top instead (one time in ten, one in four on a
+/// full column).
+fn cactus(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut Rng) {
+    let above = p.offset(Dir::Up);
+    if !level.in_world(above) || !ctx.shapes.is_air(level.block(above)) {
+        return;
+    }
+    let block = ctx.shapes.block_index(state);
+    let age = int(ctx, state, "age");
+    let mut height = 1;
+    while ctx
+        .shapes
+        .block_index(level.block(BlockPos::new(p.x, p.y - height, p.z)))
+        == block
+    {
+        height += 1;
+        if height == 3 && age == 15 {
+            return;
+        }
+    }
+    if age == 8
+        && let Some(flower) = ctx.shapes.default_state("minecraft:cactus_flower")
+        && crate::support::can_survive(level, ctx, above, flower)
+    {
+        let chance = if height >= 3 { 0.25 } else { 0.1 };
+        if rng.unit() <= chance {
+            set_block(level, ctx, above, flower, Flags::ALL);
+            return;
+        }
+    } else if age == 15 && height < 3 {
+        let young = ctx.shapes.with(state, "age", "0");
+        set_block(level, ctx, above, young, Flags::ALL);
+        set_block(level, ctx, p, young, Flags::NONE);
+        return;
+    }
+    if age < 15 {
+        grow(level, ctx, p, state, age + 1);
+    }
+}
+
+fn is_bamboo(ctx: Ctx, state: u32) -> bool {
+    name(ctx, state) == "bamboo"
+}
+
+/// Bamboo blocks right below `p`, at most 15.
+pub fn bamboo_below(level: &dyn Level, ctx: Ctx, p: BlockPos) -> u32 {
+    let mut n = 0;
+    while n < 16
+        && is_bamboo(
+            ctx,
+            level.block(BlockPos::new(p.x, p.y - n as i32 - 1, p.z)),
+        )
+    {
+        n += 1;
+    }
+    n
+}
+
+/// Bamboo blocks right above `p`, at most 15.
+pub fn bamboo_above(level: &dyn Level, ctx: Ctx, p: BlockPos) -> u32 {
+    let mut n = 0;
+    while n < 16
+        && is_bamboo(
+            ctx,
+            level.block(BlockPos::new(p.x, p.y + n as i32 + 1, p.z)),
+        )
+    {
+        n += 1;
+    }
+    n
+}
+
+/// Bamboo at `p` (`height` tall with it) grows one block: the new top has
+/// leaves, large ones once the stalk below has some (which then thin out
+/// below it); stalks over 10 high may stop growing.
+pub fn grow_bamboo(
+    level: &mut dyn Level,
+    ctx: Ctx,
+    p: BlockPos,
+    state: u32,
+    height: u32,
+    rng: &mut Rng,
+) {
+    let below = level.block(p.offset(Dir::Down));
+    let two_below = p.offset(Dir::Down).offset(Dir::Down);
+    let below2 = level.block(two_below);
+    let has_leaves = |s: u32| {
+        ctx.shapes
+            .property(s, "leaves")
+            .is_some_and(|l| l != "none")
+    };
+    let mut leaves = "none";
+    if height >= 1 {
+        if !is_bamboo(ctx, below) || !has_leaves(below) {
+            leaves = "small";
+        } else {
+            leaves = "large";
+            if is_bamboo(ctx, below2) {
+                let small = ctx.shapes.with(below, "leaves", "small");
+                set_block(level, ctx, p.offset(Dir::Down), small, Flags::ALL);
+                let bare = ctx.shapes.with(below2, "leaves", "none");
+                set_block(level, ctx, two_below, bare, Flags::ALL);
+            }
+        }
+    }
+    let age = if int(ctx, state, "age") == 1 || is_bamboo(ctx, below2) {
+        "1"
+    } else {
+        "0"
+    };
+    let stage = if (height >= 11 && rng.unit() < 0.25) || height == 15 {
+        "1"
+    } else {
+        "0"
+    };
+    let Some(base) = ctx.shapes.default_state("minecraft:bamboo") else {
+        return;
+    };
+    let top = ctx.shapes.with(
+        ctx.shapes
+            .with(ctx.shapes.with(base, "age", age), "leaves", leaves),
+        "stage",
+        stage,
+    );
+    set_block(level, ctx, p.offset(Dir::Up), top, Flags::ALL);
+}
+
+/// A bamboo shoot grows: bamboo with small leaves above it, and the shoot
+/// becomes bamboo.
+pub fn grow_shoot(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+    let Some(base) = ctx.shapes.default_state("minecraft:bamboo") else {
+        return;
+    };
+    set_block(
+        level,
+        ctx,
+        p.offset(Dir::Up),
+        ctx.shapes.with(base, "leaves", "small"),
+        Flags::ALL,
+    );
+    set_block(level, ctx, p, base, Flags::ALL);
 }
 
 /// Kelp and vines: the tip grows on into water (kelp) or air (vines), the

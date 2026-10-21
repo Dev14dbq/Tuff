@@ -19,7 +19,7 @@ const SIMULATION_DISTANCE: i32 = 10;
 
 /// The chunks that tick: within simulation distance of a player, and
 /// force-loaded ones.
-fn ticking_chunks(ctx: &ServerContext) -> Vec<(i32, i32)> {
+pub(crate) fn ticking_chunks(ctx: &ServerContext) -> Vec<(i32, i32)> {
     let radius = SIMULATION_DISTANCE.min(i32::from(ctx.config.view_distance));
     let centres: HashSet<(i32, i32)> = lock(&ctx.players)
         .values()

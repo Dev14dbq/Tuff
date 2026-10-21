@@ -495,6 +495,7 @@ impl World {
                     | "minecraft:furnace"
                     | "minecraft:blast_furnace"
                     | "minecraft:smoker"
+                    | "minecraft:daylight_detector"
             )
         });
         let mut woken = self.woken.lock().expect("woken lock");
@@ -699,6 +700,24 @@ impl World {
                 .contains_y(p.y)
                 .then(|| chunk.block((p.x & 15) as usize, p.y, (p.z & 15) as usize))
         })
+    }
+
+    /// The y just above the highest block at `x, z` for which `counts` holds
+    /// (a heightmap's top), scanning the loaded chunk under one lock;
+    /// `None` where no chunk is loaded.
+    pub fn top_where(&self, x: i32, z: i32, counts: impl Fn(u32) -> bool) -> Option<i32> {
+        let chunks = self.chunks.lock().expect("chunks lock");
+        let chunk = chunks.get(&(x >> 4, z >> 4))?.chunk.as_ref()?;
+        let (lx, lz) = ((x & 15) as usize, (z & 15) as usize);
+        let top = chunk.min_y + chunk.height() as i32;
+        let mut y = top - 1;
+        while y >= chunk.min_y {
+            if counts(chunk.block(lx, y, lz)) {
+                return Some(y + 1);
+            }
+            y -= 1;
+        }
+        Some(chunk.min_y)
     }
 
     /// The blocks of the cube from `min`, `side` blocks each way, into `out`

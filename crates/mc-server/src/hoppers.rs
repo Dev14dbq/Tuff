@@ -683,7 +683,11 @@ pub fn tick_carts(ctx: &ServerContext) {
         );
         let pulled = match kind_at(ctx, above) {
             Some((k, name)) => {
-                let src = Store { at: above, kind: k, name };
+                let src = Store {
+                    at: above,
+                    kind: k,
+                    name,
+                };
                 move_one(ctx, src, Dir::Down, dst, Dir::Up)
             }
             None => false,
@@ -890,8 +894,10 @@ mod tests {
         let blocks = &ctx.data.blocks;
         let hopper = Position::new(0, -60, 0);
         WorldLevel::new(&ctx).set_block(hopper, blocks.default_state("minecraft:hopper").unwrap());
-        WorldLevel::new(&ctx)
-            .set_block(Position::new(0, -59, 0), blocks.default_state("minecraft:rail").unwrap());
+        WorldLevel::new(&ctx).set_block(
+            Position::new(0, -59, 0),
+            blocks.default_state("minecraft:rail").unwrap(),
+        );
         // A chest minecart on the rail over the hopper is emptied into it.
         let chest = cart(&ctx, Cart::Chest, [0.5, -59.0, 0.5]);
         let chest_kind = containers::entity_kind("minecraft:chest_minecart").unwrap();
@@ -911,7 +917,9 @@ mod tests {
         ));
         let hopper_kind = containers::kind_of("minecraft:hopper").unwrap();
         assert_eq!(
-            containers::slots(&ctx, hopper, hopper_kind)[0].as_ref().map(|s| s.count),
+            containers::slots(&ctx, hopper, hopper_kind)[0]
+                .as_ref()
+                .map(|s| s.count),
             Some(1)
         );
         assert_eq!(
@@ -924,7 +932,12 @@ mod tests {
         let box_at = Position::new(5, -59, 0);
         WorldLevel::new(&ctx).set_block(box_at, blocks.default_state("minecraft:chest").unwrap());
         let chest_block = containers::kind_of("minecraft:chest").unwrap();
-        containers::put(&ctx, box_at, chest_block, &[(0, Some(ItemStack::new(stick, 1)))]);
+        containers::put(
+            &ctx,
+            box_at,
+            chest_block,
+            &[(0, Some(ItemStack::new(stick, 1)))],
+        );
         let hc = cart(&ctx, Cart::Hopper, [5.5, -60.0, 0.5]);
         tick_carts(&ctx);
         let hc_kind = containers::entity_kind("minecraft:hopper_minecart").unwrap();

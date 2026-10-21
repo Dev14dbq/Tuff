@@ -276,8 +276,9 @@ pub struct Outcome {
     pub open_crafting: bool,
     /// The player opened a block's menu (beacon, anvil...).
     pub open_menu: Option<(Position, crate::menus::Menu)>,
-    /// The player placed a sign: its editor opens.
-    pub open_sign: Option<Position>,
+    /// The player placed or clicked a sign: its editor opens on that side
+    /// (`true` the front).
+    pub open_sign: Option<(Position, bool)>,
 }
 
 /// Who is acting.
@@ -572,6 +573,12 @@ pub fn use_item_on(
         });
         return outcome;
     }
+    // Cauldrons, cakes, flower pots, signs, berries...
+    if use_blocks
+        && crate::blockuse::use_block(ctx, &mut outcome, actor, hand, clicked, face, cursor)
+    {
+        return outcome;
+    }
     // Composters, jukeboxes, bells, beds, respawn anchors.
     if use_blocks && crate::useblocks::try_use(ctx, &mut outcome, actor, hand, clicked, face) {
         return outcome;
@@ -605,6 +612,11 @@ pub fn use_item_on(
         }
         outcome
     };
+    // Axes, hoes, shovels, bone meal, honeycomb and stacking candles act
+    // on the block.
+    if crate::blockuse::use_item_on(ctx, &mut outcome, actor, hand, clicked, face, cursor) {
+        return outcome;
+    }
     // Flint and steel and fire charges light fire.
     let held_name = held.and_then(|item| ctx.items.name(item.item));
     // Spawn eggs of villagers and wandering traders.
@@ -767,7 +779,7 @@ pub fn use_item_on(
                 },
                 &ctx.data.blocks,
             );
-            outcome.open_sign = Some(p);
+            outcome.open_sign = Some((p, true));
         }
     }
     // The answer: the clicked block, then the placed ones.
@@ -1215,7 +1227,7 @@ pub fn clone_item(block: &str, items: &crate::items::Items) -> Option<i32> {
 }
 
 /// The block entity of a sign block, if it is one.
-fn sign_entity(block: &str) -> Option<&'static str> {
+pub(crate) fn sign_entity(block: &str) -> Option<&'static str> {
     if block.ends_with("_hanging_sign") {
         Some("minecraft:hanging_sign")
     } else if block.ends_with("_sign") {

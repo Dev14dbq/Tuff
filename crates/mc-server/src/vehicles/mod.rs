@@ -281,7 +281,13 @@ pub fn destroy(ctx: &ServerContext, e: &mut Entity, fresh: &mut Vec<Entity>, dro
     let (items, viewers) = crate::containers::entity_gone(ctx, e.id);
     for stack in items {
         if let Some(name) = ctx.items.name(stack.item) {
-            fresh.extend(crate::decor::dropped(ctx, e.pos, name, stack.count, stack.damage));
+            fresh.extend(crate::decor::dropped(
+                ctx,
+                e.pos,
+                name,
+                stack.count,
+                stack.damage,
+            ));
         }
     }
     if !viewers.is_empty() {

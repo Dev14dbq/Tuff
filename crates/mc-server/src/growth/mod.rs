@@ -11,6 +11,8 @@ use mc_tick::{BlockPos, Level as _};
 
 use crate::level::{WorldLevel, to_position};
 
+mod more;
+
 /// What a sapling grows into.
 struct Species {
     /// Features for the single sapling; empty if it cannot grow alone.
@@ -53,6 +55,14 @@ fn species(name: &str) -> Option<Species> {
             single: &["cherry"],
             mega: &[],
         },
+        "azalea" | "flowering_azalea" => Species {
+            single: &["azalea_tree"],
+            mega: &[],
+        },
+        "mangrove_propagule" => Species {
+            single: &["mangrove", "tall_mangrove"],
+            mega: &[],
+        },
         _ => return None,
     })
 }
@@ -76,6 +86,8 @@ fn has_flowers(level: &WorldLevel, ctx: mc_tick::Ctx, p: BlockPos) -> bool {
 fn pick(name: &str, options: &[&'static str], flowers: bool, roll: u32) -> String {
     let base = match name {
         "oak_sapling" => options[usize::from(roll.is_multiple_of(10))],
+        // Mostly the tall one.
+        "mangrove_propagule" => options[usize::from(roll % 100 < 85)],
         _ => options[(roll as usize) % options.len()],
     };
     let bees = flowers && matches!(name, "oak_sapling" | "birch_sapling" | "cherry_sapling");
@@ -186,11 +198,23 @@ pub fn bone_meal(level: &mut WorldLevel, p: Position) -> bool {
         return false;
     };
     let roll = crate::util::random_u64();
-    if name.ends_with("_sapling") {
+    if name.ends_with("_sapling") || name == "mangrove_propagule" {
         if ctx.shapes.property(state, "stage").is_none() {
             return false;
         }
-        if (roll >> 11) as f64 / (1u64 << 53) as f64 >= 0.45 {
+        if ctx.shapes.property(state, "hanging") == Some("true") {
+            let age: i32 = ctx
+                .shapes
+                .property(state, "age")
+                .and_then(|a| a.parse().ok())
+                .unwrap_or(4);
+            if age >= 4 {
+                return false;
+            }
+            level.set_block(p, ctx.shapes.with(state, "age", &(age + 1).to_string()));
+            return true;
+        }
+        if unit(roll) >= 0.45 {
             return true;
         }
         if ctx.shapes.property(state, "stage") == Some("0") {
@@ -199,6 +223,9 @@ pub fn bone_meal(level: &mut WorldLevel, p: Position) -> bool {
             grow_tree(level, BlockPos::new(p.x, p.y, p.z), state);
         }
         return true;
+    }
+    if let Some(used) = more::bone_meal(level, p, state, &name, roll) {
+        return used;
     }
     let Some((max, wide)) = crop_age(&name) else {
         return false;
@@ -215,6 +242,11 @@ pub fn bone_meal(level: &mut WorldLevel, p: Position) -> bool {
     let new = (age + add).min(max);
     level.set_block(p, ctx.shapes.with(state, "age", &new.to_string()));
     true
+}
+
+/// A roll as a number in 0..1.
+fn unit(roll: u64) -> f64 {
+    (roll >> 11) as f64 / (1u64 << 53) as f64
 }
 
 #[cfg(test)]

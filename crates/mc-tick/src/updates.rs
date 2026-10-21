@@ -217,6 +217,7 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     gravity::block_tick(level, ctx, p, kind);
     crate::fire::block_tick(level, ctx, p, kind);
     crate::leaves::block_tick(level, ctx, p, kind);
+    crate::cauldron::block_tick(level, ctx, p, kind);
     let state = level.block(p);
     if ctx.shapes.block_index(state) == kind
         && crate::support::check(ctx, state) == crate::support::Check::Tick

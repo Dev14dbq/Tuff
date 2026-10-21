@@ -62,6 +62,11 @@ impl<'a> WorldLevel<'a> {
         }
     }
 
+    /// An entity that joins the world when this level is done.
+    pub fn spawn(&mut self, entity: mc_entity::Entity) {
+        self.spawned.push(entity);
+    }
+
     /// Sets a block with all updates (as a player or `/setblock` does).
     pub fn set_block(&mut self, p: Position, state: u32) -> bool {
         let logic = self.logic();
@@ -156,6 +161,9 @@ impl Level for WorldLevel<'_> {
         }
         if ctx.data.blocks.block_name(state) == Some("minecraft:beacon") {
             crate::beacons::placed(ctx, to_position(p));
+        }
+        if ctx.data.blocks.block_name(state) == Some("minecraft:daylight_detector") {
+            crate::daylight::placed(ctx, to_position(p));
         }
         if !ctx.world.same_light(old, state) {
             self.unlit.push((to_position(p), old));
@@ -433,7 +441,11 @@ impl Level for WorldLevel<'_> {
     }
 
     fn sponge_dried(&mut self, p: BlockPos) {
-        let at = [f64::from(p.x) + 0.5, f64::from(p.y) + 0.5, f64::from(p.z) + 0.5];
+        let at = [
+            f64::from(p.x) + 0.5,
+            f64::from(p.y) + 0.5,
+            f64::from(p.z) + 0.5,
+        ];
         crate::fx::sound(
             self.ctx,
             "block.fire.extinguish",
@@ -444,6 +456,15 @@ impl Level for WorldLevel<'_> {
         );
         // World event 2009: water evaporating (large smoke).
         crate::fx::level_event(self.ctx, 2009, at, 0);
+    }
+
+    fn level_event(&mut self, event: i32, p: BlockPos, data: i32) {
+        crate::fx::level_event(
+            self.ctx,
+            event,
+            [f64::from(p.x), f64::from(p.y), f64::from(p.z)],
+            data,
+        );
     }
 
     fn container_transfer(

@@ -226,7 +226,16 @@ fn emitted(level: &dyn Level, ctx: Ctx, at: BlockPos, state: u32, toward: Dir, w
             level.comparator_output(at)
         }
         Part::Wire if wires && wire_points(ctx, state, toward) => wire_power(ctx, state),
-        _ => crate::rails::emits(ctx, state, toward, false),
+        _ => crate::rails::emits(ctx, state, toward, false).max(other_power(ctx, state)),
+    }
+}
+
+/// Weak power of the other sources that hold it in a `power` property:
+/// daylight detectors and targets.
+fn other_power(ctx: Ctx, state: u32) -> u8 {
+    match ctx.shapes.block_name(state) {
+        Some("minecraft:daylight_detector" | "minecraft:target") => level_of(ctx, state, "power"),
+        _ => 0,
     }
 }
 

@@ -190,7 +190,9 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             lock(&ctx.time).advance();
             crate::commands::run_functions(&ctx, &mut control);
             run_scheduled_ticks(&ctx);
+            crate::precipitation::tick(&ctx);
             crate::random_ticks::tick(&ctx);
+            crate::daylight::tick(&ctx, lock(&ctx.time).age);
             crate::effects::tick(&ctx, count as i64);
             crate::vitals::tick(&ctx);
             crate::vitals::tick_using(&ctx);
@@ -275,6 +277,7 @@ pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     for (p, id) in ctx.world.take_woken() {
         match id.as_str() {
             "minecraft:hopper" => crate::hoppers::register(ctx, p),
+            "minecraft:daylight_detector" => crate::daylight::register(ctx, p),
             _ => crate::furnaces::wake(ctx, p),
         }
     }
@@ -336,7 +339,9 @@ fn minecart_boxes(entities: &[mc_entity::Entity]) -> Vec<CartBox> {
         .iter()
         .filter(|e| !e.removed)
         .filter_map(|e| match &e.kind {
-            mc_entity::Kind::Vehicle(v) if matches!(v.craft, mc_entity::extra::Craft::Minecart(_)) => {
+            mc_entity::Kind::Vehicle(v)
+                if matches!(v.craft, mc_entity::extra::Craft::Minecart(_)) =>
+            {
                 let kind = crate::containers::entity_kind(&crate::vehicles::item_of(&v.craft));
                 Some((e.id, e.aabb(), kind))
             }
@@ -464,6 +469,12 @@ pub fn drop_item(ctx: &ServerContext, at: mc_protocol::Position, drop: crate::lo
         removed: false,
         tags: Vec::new(),
     };
+    let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
+    lock(&ctx.entities).push(entity);
+}
+
+/// Adds a new entity to the world and shows it to everyone.
+pub fn spawn_entity(ctx: &ServerContext, entity: mc_entity::Entity) {
     let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
     lock(&ctx.entities).push(entity);
 }
@@ -704,7 +715,11 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         if let Some(boxes) = level.entity_boxes.as_mut() {
             boxes[i] = entity.aabb();
         }
-        if let Some(m) = level.minecarts.iter_mut().find(|(id, _, _)| *id == entity.id) {
+        if let Some(m) = level
+            .minecarts
+            .iter_mut()
+            .find(|(id, _, _)| *id == entity.id)
+        {
             m.1 = entity.aabb();
         }
         if !entity.removed {
