@@ -672,6 +672,40 @@ impl World {
         })
     }
 
+    /// The blocks of the cube from `min`, `side` blocks each way, into `out`
+    /// (x-major, then y, then z); `air` where nothing is loaded. One visit
+    /// per chunk instead of one per block.
+    pub fn read_cube(&self, min: [i32; 3], side: i32, air: u32, blocks: &Blocks, out: &mut [u32]) {
+        out.fill(air);
+        let side_u = side as usize;
+        for cx in (min[0] >> 4)..=((min[0] + side - 1) >> 4) {
+            for cz in (min[2] >> 4)..=((min[2] + side - 1) >> 4) {
+                self.with_slot(cx, cz, blocks, |slot| {
+                    let Some(chunk) = slot.chunk.as_ref() else {
+                        return;
+                    };
+                    let x0 = min[0].max(cx << 4);
+                    let x1 = (min[0] + side).min((cx << 4) + 16);
+                    let z0 = min[2].max(cz << 4);
+                    let z1 = (min[2] + side).min((cz << 4) + 16);
+                    for y in min[1]..min[1] + side {
+                        if !chunk.contains_y(y) {
+                            continue;
+                        }
+                        for x in x0..x1 {
+                            let row =
+                                ((x - min[0]) as usize * side_u + (y - min[1]) as usize) * side_u;
+                            for z in z0..z1 {
+                                out[row + (z - min[2]) as usize] =
+                                    chunk.block((x & 15) as usize, y, (z & 15) as usize);
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    }
+
     /// Fixes light after the block at `p` changed. Returns the chunks whose
     /// light changed (their packets are dropped and they are marked changed).
     pub fn relight(&self, p: Position) -> Vec<(i32, i32)> {

@@ -386,6 +386,7 @@ impl Level for WorldLevel<'_> {
         }
         let entity =
             crate::explosion::primed(self.ctx, to_position(p), crate::explosion::TNT_FUSE, None);
+        crate::explosion::primed_sound(self.ctx, &entity);
         self.spawned.push(entity);
         true
     }

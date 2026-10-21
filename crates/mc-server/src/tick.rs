@@ -717,11 +717,9 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             }
         }
     }
-    for blast in blasts {
-        for (id, uuid) in crate::explosion::explode(ctx, level, &mut entities, &blast) {
-            removed.push(id);
-            gone.push(uuid);
-        }
+    for (id, uuid) in crate::explosion::explode_all(ctx, level, &mut entities, &blasts) {
+        removed.push(id);
+        gone.push(uuid);
     }
     if !fuses.is_empty() {
         let _ = ctx.events.send(Event::EntitiesData(fuses));
