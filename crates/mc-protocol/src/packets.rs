@@ -614,6 +614,21 @@ pub mod play {
         ContainerClose {
             window: i32,
         },
+        /// A button of a window (enchanting offer, stonecutter recipe, loom
+        /// pattern...).
+        ContainerButtonClick {
+            window: i32,
+            button: i32,
+        },
+        /// The text typed into an anvil's name field.
+        RenameItem {
+            name: String,
+        },
+        /// The effects chosen at a beacon (`minecraft:mob_effect` ids).
+        SetBeacon {
+            primary: Option<i32>,
+            secondary: Option<i32>,
+        },
         /// Left click on an entity.
         Attack {
             entity_id: i32,
@@ -953,6 +968,21 @@ pub mod play {
                 "minecraft:container_close" => Serverbound::ContainerClose {
                     window: r.varint()?,
                 },
+                "minecraft:container_button_click" => Serverbound::ContainerButtonClick {
+                    window: r.varint()?,
+                    button: r.varint()?,
+                },
+                "minecraft:rename_item" => Serverbound::RenameItem {
+                    name: r.string(50)?,
+                },
+                "minecraft:set_beacon" => {
+                    let mut effect = || -> Result<Option<i32>> {
+                        Ok(if r.bool()? { Some(r.varint()?) } else { None })
+                    };
+                    let primary = effect()?;
+                    let secondary = effect()?;
+                    Serverbound::SetBeacon { primary, secondary }
+                }
                 "minecraft:attack" => Serverbound::Attack {
                     entity_id: r.varint()?,
                 },

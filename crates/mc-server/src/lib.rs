@@ -8,6 +8,7 @@
 mod auth;
 mod blocks;
 mod border;
+mod beacons;
 mod bossbars;
 mod commands;
 mod connection;
@@ -30,6 +31,7 @@ mod hoppers;
 mod interact;
 mod items;
 mod level;
+mod menus;
 mod lists;
 pub mod logs;
 mod loot;

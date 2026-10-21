@@ -675,6 +675,9 @@ async fn play(
                 if let Some(position) = outcome.open_sign.take() {
                     writer.queue(&play::OpenSignEditor { position, front: true })?;
                 }
+                if let Some((position, menu)) = outcome.open_menu.take() {
+                    windows.open_menu(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, menu)?;
+                }
                 if std::mem::take(&mut outcome.open_crafting) {
                     windows.open_crafting(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose })?;
                 }
@@ -750,6 +753,9 @@ async fn play(
                     play::Serverbound::ContainerClick { window, slot, button, mode, changed, carried, .. } => {
                         let click = windows::Click { window, slot, button, mode, changed, carried };
                         windows.click(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, click)?;
+                    }
+                    play::Serverbound::SetBeacon { primary, secondary } => {
+                        windows.set_beacon(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, primary, secondary)?;
                     }
                     play::Serverbound::ContainerClose { window } => {
                         windows.close(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window)?;

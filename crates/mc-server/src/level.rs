@@ -153,6 +153,9 @@ impl Level for WorldLevel<'_> {
         if ctx.data.blocks.block_name(state) == Some("minecraft:hopper") {
             crate::hoppers::register(ctx, to_position(p));
         }
+        if ctx.data.blocks.block_name(state) == Some("minecraft:beacon") {
+            crate::beacons::placed(ctx, to_position(p));
+        }
         if !ctx.world.same_light(old, state) {
             self.unlit.push((to_position(p), old));
         }

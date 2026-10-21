@@ -274,6 +274,8 @@ pub struct Outcome {
     pub open: Option<(Position, crate::containers::Kind)>,
     /// The player opened a crafting table.
     pub open_crafting: bool,
+    /// The player opened a block's menu (beacon, anvil...).
+    pub open_menu: Option<(Position, crate::menus::Menu)>,
     /// The player placed a sign: its editor opens.
     pub open_sign: Option<Position>,
 }
@@ -507,6 +509,20 @@ pub fn use_item_on(
         && block_at(clicked).and_then(|s| blocks.block_name(s)) == Some("minecraft:crafting_table")
     {
         outcome.open_crafting = true;
+        outcome.events.push(Event::Swing {
+            uuid: actor.uuid,
+            entity_id: actor.entity_id,
+            times: 1,
+        });
+        return outcome;
+    }
+    // Beacons, anvils and the like open their menus.
+    if use_blocks
+        && let Some(menu) = block_at(clicked)
+            .and_then(|s| blocks.block_name(s))
+            .and_then(crate::menus::Menu::of_block)
+    {
+        outcome.open_menu = Some((clicked, menu));
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,
             entity_id: actor.entity_id,

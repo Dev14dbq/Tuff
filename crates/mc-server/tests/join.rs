@@ -2736,3 +2736,124 @@ async fn execute_tests_items_biomes_and_stopwatches() {
     assert!(!text.contains("command.failed"), "{text}");
     let _ = stop.send(());
 }
+
+/// Right-clicks the block at `position` (the top face).
+async fn use_block(bot: &mut Bot, position: mc_protocol::Position, sequence: i32) {
+    let mut use_on = Vec::new();
+    use_on.put_varint(0);
+    use_on.put_position(position);
+    use_on.put_varint(1);
+    for c in [0.5f32, 1.0, 0.5] {
+        use_on.put_f32(c);
+    }
+    use_on.put_bool(false);
+    use_on.put_bool(false);
+    use_on.put_varint(sequence);
+    bot.send("minecraft:use_item_on", use_on).await;
+}
+
+/// A creative-mode client puts `count` of `item` into window slot `slot` of
+/// the inventory.
+async fn creative_slot(bot: &mut Bot, slot: i16, item: i32, count: i32) {
+    let mut body = Vec::new();
+    body.put_i16(slot);
+    for v in [count, item, 0, 0] {
+        body.put_varint(v);
+    }
+    bot.send("minecraft:set_creative_mode_slot", body).await;
+}
+
+/// A hashed stack with no components, as clients send in clicks.
+fn hashed(item: i32, count: i32) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.put_bool(true);
+    b.put_varint(item);
+    b.put_varint(count);
+    b.put_varint(0);
+    b.put_varint(0);
+    b
+}
+
+#[tokio::test]
+async fn beacons_sell_effects_for_a_payment_and_give_them() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Bea".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let (mut bea, _) = join_offline(addr, ctx.ids.clone(), "Bea").await;
+    let ingot = ctx
+        .data
+        .builtin
+        .id("minecraft:item", "minecraft:iron_ingot")
+        .unwrap();
+    for line in [
+        "fill 1 -61 1 3 -61 3 minecraft:iron_block",
+        "setblock 2 -60 2 minecraft:beacon",
+    ] {
+        chat_command(&mut bea, line).await;
+    }
+    creative_slot(&mut bea, 36, ingot, 1).await;
+    let beacon = mc_protocol::Position::new(2, -60, 2);
+    use_block(&mut bea, beacon, 1).await;
+    let (_, screen) = bea.recv_until("minecraft:open_screen").await;
+    let mut r = Reader::new(&screen);
+    let window = r.varint().unwrap();
+    let menu = ctx
+        .data
+        .builtin
+        .id("minecraft:menu", "minecraft:beacon")
+        .unwrap();
+    assert_eq!(r.varint().unwrap(), menu);
+    let (_, content) = bea.recv_until("minecraft:container_set_content").await;
+    let mut r = Reader::new(&content);
+    assert_eq!(r.varint().unwrap(), window);
+    r.varint().unwrap();
+    assert_eq!(r.length_prefix().unwrap(), 1 + 36, "payment, then the inventory");
+    // The pyramid is one layer high.
+    let (_, data) = bea.recv_until("minecraft:container_set_data").await;
+    let mut r = Reader::new(&data);
+    assert_eq!((r.varint().unwrap(), r.i16().unwrap(), r.i16().unwrap()), (window, 0, 1));
+
+    // Shift-click the ingot into the payment slot (hotbar 0 is slot 1 + 27).
+    let mut click = Vec::new();
+    click.put_varint(window);
+    click.put_varint(2);
+    click.put_i16(28);
+    click.put_i8(0);
+    click.put_varint(1);
+    click.put_varint(2);
+    click.put_i16(0);
+    click.extend(hashed(ingot, 1));
+    click.put_i16(28);
+    click.put_bool(false);
+    click.put_bool(false);
+    bea.send("minecraft:container_click", click).await;
+    // Speed (effect 0) as the primary effect.
+    let mut choice = Vec::new();
+    choice.put_bool(true);
+    choice.put_varint(0);
+    choice.put_bool(false);
+    bea.send("minecraft:set_beacon", choice).await;
+    chat_command(&mut bea, "tick rate 400").await;
+    let (_, effect) = bea.recv_until("minecraft:update_mob_effect").await;
+    let mut r = Reader::new(&effect);
+    r.varint().unwrap();
+    // Speed I for (9 + 2) seconds.
+    assert_eq!((r.varint().unwrap(), r.varint().unwrap(), r.varint().unwrap()), (0, 0, 220));
+    let be = ctx
+        .world
+        .block_entity(beacon, &ctx.data.blocks)
+        .expect("beacon block entity");
+    assert_eq!(
+        be.data.get("primary_effect"),
+        Some(&Tag::String("minecraft:speed".into()))
+    );
+    assert_eq!(be.data.get("Levels"), Some(&Tag::Int(1)));
+    let _ = stop.send(());
+}
