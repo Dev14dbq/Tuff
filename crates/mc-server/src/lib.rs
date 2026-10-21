@@ -38,6 +38,7 @@ mod rules;
 mod scoreboard;
 mod storage;
 mod tick;
+mod trading;
 mod util;
 mod vitals;
 mod weather;

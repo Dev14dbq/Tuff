@@ -256,6 +256,22 @@ fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
             }
         }
         mc_entity::Kind::FallingBlock { .. } => {}
+        mc_entity::Kind::Merchant(m) => {
+            if !m.wandering {
+                let mut data = Compound::new();
+                data.insert("level", Tag::Int(m.level));
+                data.insert(
+                    "profession",
+                    Tag::String(format!(
+                        "minecraft:{}",
+                        m.profession.as_deref().unwrap_or("none")
+                    )),
+                );
+                data.insert("type", Tag::String(m.variant.clone()));
+                c.insert("VillagerData", Tag::Compound(data));
+                c.insert("Xp", Tag::Int(m.xp));
+            }
+        }
     }
     c
 }

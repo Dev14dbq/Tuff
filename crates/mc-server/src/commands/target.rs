@@ -255,6 +255,14 @@ pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
                 "minecraft:tnt".to_owned(),
                 "entity.minecraft.tnt".to_owned(),
             ),
+            mc_entity::Kind::Merchant(m) if m.wandering => (
+                "minecraft:wandering_trader".to_owned(),
+                "entity.minecraft.wandering_trader".to_owned(),
+            ),
+            mc_entity::Kind::Merchant(_) => (
+                "minecraft:villager".to_owned(),
+                "entity.minecraft.villager".to_owned(),
+            ),
         };
         let mut key = Compound::new();
         key.insert("translate", name_key.as_str());

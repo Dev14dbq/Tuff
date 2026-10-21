@@ -8,6 +8,7 @@
 //! Blocks collide as full cubes for now; shapes come later.
 
 pub mod physics;
+pub mod trade;
 
 pub use physics::{Aabb, Collide, move_entity};
 
@@ -33,6 +34,8 @@ pub enum Kind {
         /// The player who lit it.
         owner: Option<u128>,
     },
+    /// A villager or a wandering trader.
+    Merchant(Box<trade::Merchant>),
 }
 
 impl Kind {
@@ -69,6 +72,7 @@ impl Entity {
         match self.kind {
             Kind::FallingBlock { .. } | Kind::Tnt { .. } => (0.98, 0.98),
             Kind::Item { .. } => (0.25, 0.25),
+            Kind::Merchant(_) => (0.6, 1.95),
         }
     }
 

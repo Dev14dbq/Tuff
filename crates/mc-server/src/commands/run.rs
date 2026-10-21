@@ -2190,6 +2190,11 @@ fn summon(r: &mut Run) -> Result<i32> {
             };
             mc_entity::Kind::FallingBlock { state }
         }
+        "minecraft:villager" | "minecraft:wandering_trader" => {
+            let merchant = crate::trading::new_merchant(r.ctx, &kind, at)
+                .ok_or_else(|| err("commands.summon.failed", Vec::new()))?;
+            merchant.kind
+        }
         _ => return Err(err("commands.summon.failed", Vec::new())),
     };
     let entity = mc_entity::Entity {
