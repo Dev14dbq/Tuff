@@ -8,6 +8,7 @@
 mod auth;
 mod blocks;
 mod border;
+mod combat;
 mod beacons;
 mod bossbars;
 mod commands;

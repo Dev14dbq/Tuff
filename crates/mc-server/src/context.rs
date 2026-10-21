@@ -64,6 +64,8 @@ pub enum Direct {
     ShowDialog(mc_protocol::packets::play::ShowDialog),
     ClearDialog(mc_protocol::packets::play::ClearDialog),
     PostEffects(mc_protocol::packets::play::PostEffects),
+    /// A push (knockback): the player's own velocity.
+    Motion(mc_protocol::packets::play::SetEntityMotion),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
