@@ -54,6 +54,9 @@ pub struct World {
     light: mc_light::Tables,
     /// Fluid ticks generation left for chunks players already have.
     live_ticks: Mutex<Vec<(mc_tick::BlockPos, u32)>>,
+    /// Block entities that tick (hoppers, furnaces) in chunks read from disk
+    /// since the last call to [`World::take_woken`].
+    woken: Mutex<Vec<(Position, String)>>,
     /// Loaded chunks whose light a new neighbour changed.
     relit: Mutex<Vec<(i32, i32)>>,
     /// New chunks are lit with their neighbours outside the chunks lock;
@@ -252,6 +255,7 @@ impl World {
             folder: None,
             light,
             live_ticks: Mutex::new(Vec::new()),
+            woken: Mutex::new(Vec::new()),
             relit: Mutex::new(Vec::new()),
             lighting: crate::util::Claims::default(),
             no_autosave: std::sync::atomic::AtomicBool::new(false),
@@ -368,6 +372,7 @@ impl World {
             folder: Some(dir.to_owned()),
             light,
             live_ticks: Mutex::new(Vec::new()),
+            woken: Mutex::new(Vec::new()),
             relit: Mutex::new(Vec::new()),
             lighting: crate::util::Claims::default(),
             no_autosave: std::sync::atomic::AtomicBool::new(false),
@@ -480,6 +485,27 @@ impl World {
         f(slot)
     }
 
+    /// Remembers the block entities of a chunk just read that tick on their
+    /// own, so they run without waiting for a block update.
+    fn wake_ticking(&self, chunk: &Chunk) {
+        let ticking = chunk.block_entities.iter().filter(|be| {
+            matches!(
+                be.id.as_str(),
+                "minecraft:hopper"
+                    | "minecraft:furnace"
+                    | "minecraft:blast_furnace"
+                    | "minecraft:smoker"
+            )
+        });
+        let mut woken = self.woken.lock().expect("woken lock");
+        woken.extend(ticking.map(|be| (Position::new(be.x, be.y, be.z), be.id.clone())));
+    }
+
+    /// Ticking block entities of chunks read from disk since the last call.
+    pub fn take_woken(&self) -> Vec<(Position, String)> {
+        std::mem::take(&mut *self.woken.lock().expect("woken lock"))
+    }
+
     /// The chunk, and whether it was generated just now.
     fn load(&self, x: i32, z: i32, blocks: &Blocks) -> (Option<Box<Chunk>>, bool) {
         match &self.source {
@@ -489,7 +515,10 @@ impl World {
                 (Some(Box::new(chunk)), false)
             }
             Source::Anvil(anvil) => match anvil.load(x, z, blocks, self.min_y, self.height) {
-                Ok(Some(chunk)) => (Some(chunk), false),
+                Ok(Some(chunk)) => {
+                    self.wake_ticking(&chunk);
+                    (Some(chunk), false)
+                }
                 Ok(None) => match &anvil.generation {
                     Some(g) => (Some(self.generate(g, x, z, anvil, blocks)), true),
                     None => (None, false),

@@ -272,6 +272,12 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
 /// goes to everyone.
 pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     let now = lock(&ctx.time).age;
+    for (p, id) in ctx.world.take_woken() {
+        match id.as_str() {
+            "minecraft:hopper" => crate::hoppers::register(ctx, p),
+            _ => crate::furnaces::wake(ctx, p),
+        }
+    }
     let relit = ctx.world.take_relit();
     if !relit.is_empty() {
         let _ = ctx.events.send(Event::LightChanged(relit));

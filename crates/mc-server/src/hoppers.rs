@@ -594,6 +594,11 @@ pub fn tick(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     let all: Vec<_> = lock(&ctx.hoppers).iter().copied().collect();
     for key in all {
         let p = Position::new(key.0, key.1, key.2);
+        // Hoppers in unloaded chunks wait; loading the chunk wakes them again.
+        if !ctx.world.is_loaded(p) {
+            lock(&ctx.hoppers).remove(&key);
+            continue;
+        }
         let is_hopper = ctx
             .world
             .block(p, &ctx.data.blocks)
