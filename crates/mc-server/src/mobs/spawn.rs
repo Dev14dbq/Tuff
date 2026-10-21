@@ -397,8 +397,14 @@ pub fn tick(
             }
         }
     }
+    // Natural spawning after generation follows the rules: `spawn_mobs`
+    // for all of it, `spawn_monsters` for monsters.
+    let (spawn_mobs, spawn_monsters) = {
+        let rules = lock(&ctx.game_rules);
+        (rules.bool("spawn_mobs"), rules.bool("spawn_monsters"))
+    };
     // Animals, now and then.
-    if now % ANIMAL_PERIOD == 0 {
+    if spawn_mobs && now % ANIMAL_PERIOD == 0 {
         for &chunk in &list {
             if creatures + out.len() as i32 >= creature_cap.max(1) {
                 break;
@@ -409,7 +415,7 @@ pub fn tick(
         }
     }
     // Monsters, every tick, in a few chunks picked at random.
-    if difficulty > 0 && monsters < monster_cap {
+    if spawn_mobs && spawn_monsters && difficulty > 0 && monsters < monster_cap {
         for _ in 0..MONSTER_TRIES {
             let chunk = list[below(list.len() as u32) as usize];
             if let Some(b) = in_biome(chunk.0 * 16 + 8, chunk.1 * 16 + 8, biomes) {

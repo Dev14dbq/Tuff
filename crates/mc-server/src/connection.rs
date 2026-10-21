@@ -469,7 +469,7 @@ async fn play(
     let mut pose = session
         .saved
         .as_ref()
-        .map_or_else(|| world_spawn_pose(&ctx), |s| s.pose);
+        .map_or_else(|| world_spawn_pose(&ctx, me.game_mode), |s| s.pose);
     let (x, y, z) = (pose.x, pose.y, pose.z);
 
     writer.queue(&play::Login {
@@ -2304,17 +2304,59 @@ impl PacketWriter {
     }
 }
 
-/// Where new players appear: the middle of the world spawn's block.
-fn world_spawn_pose(ctx: &ServerContext) -> Pose {
+/// Where new players appear: the middle of the world spawn's block, or,
+/// except in adventure mode, the top of a random column within
+/// `respawn_radius` of it, as vanilla picks one.
+fn world_spawn_pose(ctx: &ServerContext, game_mode: i32) -> Pose {
     let spawn = ctx.spawn.lock().expect("spawn lock").clone();
-    Pose {
+    let mut pose = Pose {
         x: f64::from(spawn.pos.0) + 0.5,
         y: f64::from(spawn.pos.1),
         z: f64::from(spawn.pos.2) + 0.5,
         yaw: spawn.yaw,
         pitch: spawn.pitch,
         on_ground: true,
+    };
+    if game_mode == 2 || spawn.dimension != "minecraft:overworld" {
+        return pose;
     }
+    let radius = ctx.game_rules.lock().expect("rules lock").int("respawn_radius").max(0);
+    let side = i64::from(radius) * 2 + 1;
+    let count = (side * side).min(i64::from(i32::MAX));
+    // Every column once, in a random order: a fixed step coprime to the count.
+    let step = (count / 2 + 1..=count).chain(1..=count / 2).find(|&n| gcd(n, count) == 1).unwrap_or(1);
+    let start = (crate::util::random_u64() % count as u64) as i64;
+    for i in 0..count {
+        let q = (start + step * i) % count;
+        let (x, z) = (spawn.pos.0 + (q % side) as i32 - radius, spawn.pos.2 + (q / side) as i32 - radius);
+        if let Some(y) = respawn_surface(ctx, x, z) {
+            (pose.x, pose.y, pose.z) = (f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
+            break;
+        }
+    }
+    pose
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+/// The height a player can stand at on top of column x, z: above its
+/// highest block, which is not a fluid, with room for the player.
+fn respawn_surface(ctx: &ServerContext, x: i32, z: i32) -> Option<i32> {
+    let blocks = &ctx.data.blocks;
+    let world = &ctx.world;
+    let top = world.min_y + world.height as i32 - 1;
+    let state = |y: i32| world.block(Position::new(x, y, z), blocks);
+    let mut y = top;
+    while y >= world.min_y && blocks.is_air(state(y)?) {
+        y -= 1;
+    }
+    if y < world.min_y || blocks.is_fluid(state(y)?) {
+        return None;
+    }
+    let clear = |y: i32| state(y).is_none_or(|s| blocks.is_air(s));
+    (clear(y + 1) && clear(y + 2)).then_some(y + 1)
 }
 
 /// Where a player respawns and in which dimension: their own point if
@@ -2360,17 +2402,18 @@ fn respawn_target(ctx: &ServerContext, uuid: u128) -> (String, Pose) {
                     },
                 )
             } else {
-                spawn_target(ctx)
+                spawn_target(ctx, uuid)
             }
         }
-        None => spawn_target(ctx),
+        None => spawn_target(ctx, uuid),
     }
 }
 
-fn spawn_target(ctx: &ServerContext) -> (String, Pose) {
+fn spawn_target(ctx: &ServerContext, uuid: u128) -> (String, Pose) {
+    let game_mode = ctx.players.lock().expect("players lock").get(&uuid).map_or(0, |p| p.game_mode);
     (
         ctx.spawn.lock().expect("spawn lock").dimension.clone(),
-        world_spawn_pose(ctx),
+        world_spawn_pose(ctx, game_mode),
     )
 }
 
