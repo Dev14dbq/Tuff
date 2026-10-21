@@ -953,7 +953,7 @@ async fn players_come_back_where_they_left_with_their_items() {
         count: 7,
         item: stone,
         damage: 0,
-        has_component_changes: false,
+        components: Default::default(),
     });
     let target = (spawn.0 + 3.0, spawn.1, spawn.2 - 1.5);
     let mut moved = Vec::new();
@@ -2814,11 +2814,18 @@ async fn beacons_sell_effects_for_a_payment_and_give_them() {
     let mut r = Reader::new(&content);
     assert_eq!(r.varint().unwrap(), window);
     r.varint().unwrap();
-    assert_eq!(r.length_prefix().unwrap(), 1 + 36, "payment, then the inventory");
+    assert_eq!(
+        r.length_prefix().unwrap(),
+        1 + 36,
+        "payment, then the inventory"
+    );
     // The pyramid is one layer high.
     let (_, data) = bea.recv_until("minecraft:container_set_data").await;
     let mut r = Reader::new(&data);
-    assert_eq!((r.varint().unwrap(), r.i16().unwrap(), r.i16().unwrap()), (window, 0, 1));
+    assert_eq!(
+        (r.varint().unwrap(), r.i16().unwrap(), r.i16().unwrap()),
+        (window, 0, 1)
+    );
 
     // Shift-click the ingot into the payment slot (hotbar 0 is slot 1 + 27).
     let mut click = Vec::new();
@@ -2845,7 +2852,14 @@ async fn beacons_sell_effects_for_a_payment_and_give_them() {
     let mut r = Reader::new(&effect);
     r.varint().unwrap();
     // Speed I for (9 + 2) seconds.
-    assert_eq!((r.varint().unwrap(), r.varint().unwrap(), r.varint().unwrap()), (0, 0, 220));
+    assert_eq!(
+        (
+            r.varint().unwrap(),
+            r.varint().unwrap(),
+            r.varint().unwrap()
+        ),
+        (0, 0, 220)
+    );
     let be = ctx
         .world
         .block_entity(beacon, &ctx.data.blocks)

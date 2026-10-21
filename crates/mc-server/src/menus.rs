@@ -31,7 +31,9 @@ impl Menu {
     pub fn of_block(name: &str) -> Option<Menu> {
         Some(match name {
             "minecraft:beacon" => Menu::Beacon,
-            "minecraft:anvil" | "minecraft:chipped_anvil" | "minecraft:damaged_anvil" => Menu::Anvil,
+            "minecraft:anvil" | "minecraft:chipped_anvil" | "minecraft:damaged_anvil" => {
+                Menu::Anvil
+            }
             "minecraft:grindstone" => Menu::Grindstone,
             "minecraft:stonecutter" => Menu::Stonecutter,
             "minecraft:smithing_table" => Menu::Smithing,
@@ -154,14 +156,16 @@ fn repairs(ctx: &ServerContext, item: i32, material: i32) -> bool {
     let Some(it) = ctx.items.get(item) else {
         return false;
     };
-    it.repairable.iter().any(|entry| match entry.strip_prefix('#') {
-        Some(tag) => ctx
-            .recipes
-            .item_tags
-            .get(tag)
-            .is_some_and(|items| items.contains(&material)),
-        None => ctx.items.id(entry) == Some(material),
-    })
+    it.repairable
+        .iter()
+        .any(|entry| match entry.strip_prefix('#') {
+            Some(tag) => ctx
+                .recipes
+                .item_tags
+                .get(tag)
+                .is_some_and(|items| items.contains(&material)),
+            None => ctx.items.id(entry) == Some(material),
+        })
 }
 
 fn take_one(slot: &mut Option<ItemStack>, n: i32) {
@@ -233,7 +237,6 @@ impl Machine {
             && let Some(p) = ctx.players.lock().expect("players lock").get_mut(&uuid)
         {
             p.extra.ender.clone_from(&self.slots);
-            p.extra.ender_components.retain(|&i, _| self.slots[i].is_some());
         }
     }
 
@@ -286,7 +289,10 @@ impl Machine {
 
     /// The smithing recipe the three inputs make, and what it makes (the
     /// base keeps its wear).
-    fn smithing<'a>(&self, ctx: &'a ServerContext) -> Option<(&'a crate::crafting::Smithing, ItemStack)> {
+    fn smithing<'a>(
+        &self,
+        ctx: &'a ServerContext,
+    ) -> Option<(&'a crate::crafting::Smithing, ItemStack)> {
         let [Some(template), Some(base), Some(addition)] =
             [&self.slots[0], &self.slots[1], &self.slots[2]]
         else {
@@ -299,7 +305,10 @@ impl Machine {
                 && r.addition.contains(&addition.item)
         })?;
         let mut made = recipe.result.clone()?;
-        made.damage = base.damage.min(ctx.items.max_damage(made.item).saturating_sub(1)).max(0);
+        made.damage = base
+            .damage
+            .min(ctx.items.max_damage(made.item).saturating_sub(1))
+            .max(0);
         Some((recipe, made))
     }
 
@@ -401,7 +410,10 @@ impl Machine {
         let Some(state) = ctx.world.block(self.at, blocks) else {
             return;
         };
-        let facing = blocks.property(state, "facing").unwrap_or("north").to_owned();
+        let facing = blocks
+            .property(state, "facing")
+            .unwrap_or("north")
+            .to_owned();
         let next = match blocks.block_name(state) {
             Some("minecraft:anvil") => Some("minecraft:chipped_anvil"),
             Some("minecraft:chipped_anvil") => Some("minecraft:damaged_anvil"),
@@ -415,7 +427,13 @@ impl Machine {
         if let Some(new) = new {
             let mut level = crate::level::WorldLevel::new(ctx);
             let logic = level.logic();
-            mc_tick::set_block(&mut level, logic, crate::level::to_pos(self.at), new, mc_tick::Flags::ALL);
+            mc_tick::set_block(
+                &mut level,
+                logic,
+                crate::level::to_pos(self.at),
+                new,
+                mc_tick::Flags::ALL,
+            );
             let changes = level.into_changes();
             let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
             if next.is_none() {

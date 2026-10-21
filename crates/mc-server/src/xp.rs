@@ -100,7 +100,12 @@ fn mend(ctx: &ServerContext, uuid: u128, points: i32) -> i32 {
         .into_iter()
         .filter(|&s| {
             hands.slots[s].as_ref().is_some_and(|st| st.damage > 0)
-                && has_mending(hands.components.get(&s))
+                && has_mending(
+                    hands.slots[s]
+                        .as_ref()
+                        .and_then(crate::held::comps_of)
+                        .as_ref(),
+                )
         })
         .collect();
     if candidates.is_empty() {

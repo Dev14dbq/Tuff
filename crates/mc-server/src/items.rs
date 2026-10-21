@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use mc_nbt::{Compound, Tag};
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -91,61 +90,6 @@ impl Items {
     }
 }
 
-/// A stack and its other components, with any `minecraft:damage` among them
-/// moved onto the stack (where clients see it).
-pub fn split_held(
-    mut stack: mc_protocol::packets::play::ItemStack,
-    mut comps: Compound,
-) -> (mc_protocol::packets::play::ItemStack, Compound) {
-    if let Some(Tag::Int(d)) = comps.remove("minecraft:damage") {
-        stack.damage = d;
-    }
-    stack.has_component_changes = !comps.is_empty();
-    (stack, comps)
-}
-
-/// Item components for a stack worn by `damage`.
-pub fn damage_components(damage: i32) -> Compound {
-    let mut c = Compound::new();
-    if damage != 0 {
-        c.insert("minecraft:damage", Tag::Int(damage));
-    }
-    c
-}
-
-/// Saved `components` of a stack split into its damage (kept on the stack)
-/// and the rest (kept as NBT beside it), `None` if nothing is left.
-pub fn split_damage(components: Option<&Tag>) -> (i32, Option<Tag>) {
-    let Some(Tag::Compound(c)) = components else {
-        return (0, components.cloned());
-    };
-    let damage = match c.get("minecraft:damage") {
-        Some(Tag::Int(d)) => *d,
-        _ => 0,
-    };
-    let mut rest = c.clone();
-    rest.remove("minecraft:damage");
-    (damage, (!rest.is_empty()).then_some(Tag::Compound(rest)))
-}
-
-/// The `components` to save for a stack: the damage (when not 0) first,
-/// then the rest kept beside it.
-pub fn join_damage(damage: i32, rest: Option<&Tag>) -> Option<Tag> {
-    if damage == 0 {
-        return rest.cloned();
-    }
-    let mut c = Compound::new();
-    c.insert("minecraft:damage", Tag::Int(damage));
-    if let Some(Tag::Compound(rest)) = rest {
-        for (k, v) in rest.iter() {
-            if k != "minecraft:damage" {
-                c.insert(k, v.clone());
-            }
-        }
-    }
-    Some(Tag::Compound(c))
-}
-
 fn parse(name: &str, c: &Value) -> Item {
     let food = c.get("minecraft:food").map(|f| Food {
         nutrition: f["nutrition"].as_i64().unwrap_or(0) as i32,
@@ -186,7 +130,9 @@ fn parse(name: &str, c: &Value) -> Item {
             Value::String(s) => Some(s.clone()),
             other => other["song"].as_str().map(str::to_owned),
         },
-        enchantable: c["minecraft:enchantable"]["value"].as_i64().map(|v| v as i32),
+        enchantable: c["minecraft:enchantable"]["value"]
+            .as_i64()
+            .map(|v| v as i32),
         fuel: c.get("minecraft:cooking_fuel").and_then(|f| {
             Some((
                 f["burn_time"].as_str()?.to_owned(),

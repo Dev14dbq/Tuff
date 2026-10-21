@@ -8,6 +8,7 @@
 //! locations, weather, time and scoreboard values (those conditions fail),
 //! structure maps and the wear of items beyond `set_damage`.
 
+use mc_protocol::components::{Components, ItemStack};
 use std::collections::HashMap;
 
 use mc_data::McData;
@@ -32,6 +33,28 @@ pub struct Drop {
     pub count: i32,
     /// Component data the table's functions set (`custom_name`, ...).
     pub components: Compound,
+}
+
+impl Drop {
+    /// The stack it is.
+    pub fn stack(&self) -> ItemStack {
+        let (damage, components) = Components::from_nbt(&self.components);
+        ItemStack {
+            count: self.count,
+            item: self.item,
+            damage,
+            components,
+        }
+    }
+
+    /// A drop of `stack`.
+    pub fn of(stack: &ItemStack) -> Self {
+        Self {
+            item: stack.item,
+            count: stack.count,
+            components: stack.components.to_nbt(stack.damage).unwrap_or_default(),
+        }
+    }
 }
 
 /// What a table may ask the server.

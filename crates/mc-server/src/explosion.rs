@@ -962,14 +962,7 @@ fn explode_one(
         if crate::containers::kind_of(name).is_some() {
             let (items, _) = crate::containers::broken(ctx, p);
             for stack in items {
-                drops.push((
-                    p,
-                    crate::loot::Drop {
-                        item: stack.item,
-                        count: stack.count,
-                        components: crate::items::damage_components(stack.damage),
-                    },
-                ));
+                drops.push((p, crate::loot::Drop::of(&stack)));
             }
             let _ = ctx.events.send(Event::ContainerGone { position: p });
         }

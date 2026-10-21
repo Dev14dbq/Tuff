@@ -99,16 +99,10 @@ pub fn pickup(ctx: &ServerContext, p: Position) -> bool {
     };
     let mut entities = lock(&ctx.entities);
     for e in entities.iter_mut() {
-        let mc_entity::Kind::Item {
-            item,
-            count,
-            damage,
-            health,
-            ..
-        } = e.kind
-        else {
+        let Some(found) = e.kind.as_stack() else {
             continue;
         };
+        let (item, count) = (found.item, found.count);
         if e.removed
             || e.pos[0] < f64::from(p.x)
             || e.pos[0] >= f64::from(p.x) + 1.0
@@ -121,33 +115,29 @@ pub fn pickup(ctx: &ServerContext, p: Position) -> bool {
         }
         let mut slots = containers::slots(ctx, p, kind);
         let max = ctx.items.max_stack(item);
-        let comps = containers::components(ctx, p, kind);
         let room = (0..slots.len())
             .find(|&i| {
                 slots[i]
                     .as_ref()
-                    .is_some_and(|s| s.item == item && s.count < max && !comps.contains_key(&i))
+                    .is_some_and(|s| s.same_kind(&found) && s.count < max)
             })
             .or_else(|| (0..slots.len()).find(|&i| slots[i].is_none()));
         let Some(i) = room else { continue };
         let add = count.min(max - slots[i].as_ref().map_or(0, |s| s.count));
-        slots[i] = Some(ItemStack {
-            count: slots[i].as_ref().map_or(0, |s| s.count) + add,
-            item,
-            damage,
-            has_component_changes: false,
-        });
+        slots[i] = Some(found.with_count(slots[i].as_ref().map_or(0, |s| s.count) + add));
         containers::put(ctx, p, kind, &[(i, slots[i].clone())]);
         if add >= count {
             e.removed = true;
         } else {
-            e.kind = mc_entity::Kind::Item {
-                item,
-                count: count - add,
-                damage,
-                health,
-                pickup_delay: 0,
-            };
+            if let mc_entity::Kind::Item {
+                count,
+                pickup_delay,
+                ..
+            } = &mut e.kind
+            {
+                *count -= add;
+                *pickup_delay = 0;
+            }
         }
         return true;
     }
@@ -159,7 +149,7 @@ enum Behavior {
     /// It acted: one item is used up (or worn, for tools) and `leftover`
     /// (an empty bucket, a full bottle) comes back, with its components.
     Done {
-        leftover: Option<(i32, Option<Tag>)>,
+        leftover: Option<ItemStack>,
         wear: i32,
     },
     /// It tried and could not: nothing is dispensed, the item stays.
@@ -170,7 +160,7 @@ enum Behavior {
 
 fn done(leftover: Option<i32>) -> Behavior {
     Behavior::Done {
-        leftover: leftover.map(|i| (i, None)),
+        leftover: leftover.map(|i| ItemStack::new(i, 1)),
         wear: 0,
     }
 }
@@ -308,10 +298,12 @@ fn behavior(
                 Some(potion) if water => {
                     let mut contents = mc_nbt::Compound::new();
                     contents.insert("potion", "minecraft:water");
-                    let mut comps = mc_nbt::Compound::new();
-                    comps.insert("minecraft:potion_contents", Tag::Compound(contents));
+                    let mut bottle = ItemStack::new(potion, 1);
+                    bottle
+                        .components
+                        .set("potion_contents", Tag::Compound(contents));
                     Behavior::Done {
-                        leftover: Some((potion, Some(Tag::Compound(comps)))),
+                        leftover: Some(bottle),
                         wear: 0,
                     }
                 }
@@ -344,12 +336,7 @@ fn armor_slot(name: &str) -> Option<usize> {
 
 /// Armour dispensed at a player standing in front: it is put on if that
 /// slot is free.
-fn dress_player(
-    ctx: &ServerContext,
-    front: Position,
-    stack: &ItemStack,
-    comps: Option<&Tag>,
-) -> bool {
+fn dress_player(ctx: &ServerContext, front: Position, stack: &ItemStack) -> bool {
     let Some(name) = ctx.items.name(stack.item) else {
         return false;
     };
@@ -379,13 +366,7 @@ fn dress_player(
         if hands.slots[slot].is_some() {
             continue;
         }
-        hands.slots[slot] = Some(ItemStack {
-            count: 1,
-            ..stack.clone()
-        });
-        if let Some(c) = comps {
-            hands.components.insert(slot, c.clone());
-        }
+        hands.slots[slot] = Some(stack.with_count(1));
         let _ = ctx.events.send(crate::context::Event::InventorySlot {
             uuid,
             slot: slot as i16,
@@ -398,33 +379,18 @@ fn dress_player(
 
 /// Puts a returned item (an empty bucket...) into the container, merging
 /// or in a free slot. Returns whether it fit.
-fn give_back(ctx: &ServerContext, p: Position, kind: Kind, item: i32, comps: Option<Tag>) -> bool {
+fn give_back(ctx: &ServerContext, p: Position, kind: Kind, back: &ItemStack) -> bool {
     let slots = containers::slots(ctx, p, kind);
-    let held = containers::components(ctx, p, kind);
-    let max = ctx.items.max_stack(item);
-    let merge = comps.is_none().then(|| {
-        (0..slots.len()).find(|&i| {
-            slots[i]
-                .as_ref()
-                .is_some_and(|s| s.item == item && s.count < max && !held.contains_key(&i))
-        })
-    });
-    let target = merge
-        .flatten()
-        .or_else(|| (0..slots.len()).find(|&i| slots[i].is_none()));
-    let Some(i) = target else { return false };
-    let stack = ItemStack {
-        count: slots[i].as_ref().map_or(0, |s| s.count) + 1,
-        item,
-        damage: 0,
-        has_component_changes: false,
-    };
-    let comps = comps.or_else(|| {
+    let max = ctx.items.max_stack(back.item);
+    let merge = (0..slots.len()).find(|&i| {
         slots[i]
-            .is_none()
-            .then(|| Tag::Compound(Default::default()))
+            .as_ref()
+            .is_some_and(|s| s.same_kind(back) && s.count < max)
     });
-    containers::put_with(ctx, p, kind, &[(i, Some(stack), comps)]);
+    let target = merge.or_else(|| (0..slots.len()).find(|&i| slots[i].is_none()));
+    let Some(i) = target else { return false };
+    let stack = back.with_count(slots[i].as_ref().map_or(0, |s| s.count) + back.count);
+    containers::put(ctx, p, kind, &[(i, Some(stack))]);
     true
 }
 
@@ -455,12 +421,11 @@ pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, 
         transfer_from_slot(ctx, p, kind, slot, front, facing.opposite());
         return;
     }
-    let comps = containers::components(ctx, p, kind).get(&slot).cloned();
     let action = if dropper {
         Behavior::Default
     } else if let Some(name) = ctx.items.name(stack.item).map(str::to_owned) {
         match behavior(ctx, level, &name, front) {
-            Behavior::Default if dress_player(ctx, front, &stack, comps.as_ref()) => done(None),
+            Behavior::Default if dress_player(ctx, front, &stack) => done(None),
             other => other,
         }
     } else {
@@ -485,25 +450,17 @@ pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, 
                 })
             };
             let emptied = left.is_none();
-            let kept = emptied.then(|| Tag::Compound(Default::default()));
-            containers::put_with(ctx, p, kind, &[(slot, left, kept)]);
-            if let Some((item, comps)) = leftover {
+            containers::put(ctx, p, kind, &[(slot, left)]);
+            if let Some(back) = leftover {
                 // An emptied slot takes the leftover itself.
                 let placed = if emptied {
-                    let one = ItemStack {
-                        count: 1,
-                        item,
-                        damage: 0,
-                        has_component_changes: false,
-                    };
-                    let comps = comps.clone().or(Some(Tag::Compound(Default::default())));
-                    containers::put_with(ctx, p, kind, &[(slot, Some(one), comps)]);
+                    containers::put(ctx, p, kind, &[(slot, Some(back.clone()))]);
                     true
                 } else {
-                    give_back(ctx, p, kind, item, comps)
+                    give_back(ctx, p, kind, &back)
                 };
                 if !placed {
-                    crate::tick::spawn_item_at(ctx, drop_point(p, dx, dy, dz), item, 1);
+                    crate::tick::spawn_stack_at(ctx, drop_point(p, dx, dy, dz), &back);
                 }
             }
         }
@@ -512,9 +469,8 @@ pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, 
                 count: stack.count - 1,
                 ..stack.clone()
             });
-            let kept = left.is_none().then(|| Tag::Compound(Default::default()));
-            containers::put_with(ctx, p, kind, &[(slot, left, kept)]);
-            crate::tick::spawn_item_at(ctx, drop_point(p, dx, dy, dz), stack.item, 1);
+            containers::put(ctx, p, kind, &[(slot, left)]);
+            crate::tick::spawn_stack_at(ctx, drop_point(p, dx, dy, dz), &stack.with_count(1));
         }
     }
 }
@@ -540,46 +496,28 @@ fn transfer_from_slot(
         return false;
     };
     let src = containers::slots(ctx, from, from_kind);
-    let src_comps = containers::components(ctx, from, from_kind);
     let mut dst = containers::slots(ctx, to, to_kind);
-    let dst_comps = containers::components(ctx, to, to_kind);
     let Some(stack) = src[slot].clone() else {
         return false;
     };
     let into = sided_slots(to_name, dst.len(), side, true);
-    let comps = src_comps.get(&slot);
     let max = ctx.items.max_stack(stack.item);
     let merge = into.iter().copied().find(|&i| {
         dst[i]
             .as_ref()
-            .is_some_and(|d| d.item == stack.item && d.count < max && dst_comps.get(&i) == comps)
+            .is_some_and(|d| d.same_kind(&stack) && d.count < max)
     });
     let Some(t) = merge.or_else(|| into.iter().copied().find(|&i| dst[i].is_none())) else {
         return false;
     };
-    let moved = ItemStack {
-        count: dst[t].as_ref().map_or(0, |d| d.count) + 1,
-        item: stack.item,
-        damage: stack.damage,
-        has_component_changes: stack.has_component_changes,
-    };
+    let moved = stack.with_count(dst[t].as_ref().map_or(0, |d| d.count) + 1);
     dst[t] = Some(moved.clone());
-    containers::put_with(
-        ctx,
-        to,
-        to_kind,
-        &[(
-            t,
-            Some(moved),
-            comps.cloned().or(Some(Tag::Compound(Default::default()))),
-        )],
-    );
+    containers::put(ctx, to, to_kind, &[(t, Some(moved))]);
     let left = (stack.count > 1).then(|| ItemStack {
         count: stack.count - 1,
         ..stack.clone()
     });
-    let kept = left.is_none().then(|| Tag::Compound(Default::default()));
-    containers::put_with(ctx, from, from_kind, &[(slot, left, kept)]);
+    containers::put(ctx, from, from_kind, &[(slot, left)]);
     true
 }
 

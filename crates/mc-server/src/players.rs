@@ -86,10 +86,8 @@ pub struct Extra {
     pub respawn: Option<Respawn>,
     /// `/tag` (`Tags`).
     pub tags: Vec<String>,
-    /// The ender chest (`EnderItems`): 27 slots and the components kept
-    /// beside them.
+    /// The ender chest (`EnderItems`): 27 slots.
     pub ender: Vec<Option<ItemStack>>,
-    pub ender_components: std::collections::HashMap<usize, Tag>,
 }
 
 /// Container slot of each equipment key.
@@ -145,25 +143,11 @@ impl Store {
         }
     }
 
-    fn stack(&self, entry: &Compound) -> Option<(ItemStack, Option<Tag>)> {
+    fn stack(&self, entry: &Compound) -> Option<ItemStack> {
         let Some(Tag::String(id)) = entry.get("id") else {
             return None;
         };
-        let count = match entry.get("count") {
-            Some(Tag::Int(c)) => *c,
-            Some(Tag::Byte(c)) => i32::from(*c),
-            _ => 1,
-        };
-        let (damage, components) = crate::items::split_damage(entry.get("components"));
-        Some((
-            ItemStack {
-                count,
-                item: *self.item_ids.get(id)?,
-                damage,
-                has_component_changes: components.is_some(),
-            },
-            components,
-        ))
+        Some(ItemStack::from_nbt_with(entry, *self.item_ids.get(id)?))
     }
 
     /// The player's saved state, if they played here before.
@@ -214,25 +198,17 @@ impl Store {
                     Some(Tag::Byte(s)) => i32::from(*s),
                     _ => continue,
                 };
-                if let (Some(slot), Some((stack, components))) =
-                    (container_slot(index), self.stack(entry))
-                {
+                if let (Some(slot), Some(stack)) = (container_slot(index), self.stack(entry)) {
                     hands.slots[slot] = Some(stack);
-                    if let Some(components) = components {
-                        hands.components.insert(slot, components);
-                    }
                 }
             }
         }
         if let Some(Tag::Compound(equipment)) = root.get("equipment") {
             for (key, slot) in EQUIPMENT {
                 if let Some(Tag::Compound(entry)) = equipment.get(key)
-                    && let Some((stack, components)) = self.stack(entry)
+                    && let Some(stack) = self.stack(entry)
                 {
                     hands.slots[slot] = Some(stack);
-                    if let Some(components) = components {
-                        hands.components.insert(slot, components);
-                    }
                 }
             }
         }
@@ -264,7 +240,6 @@ impl Store {
         }
         vitals.dead = vitals.health <= 0.0;
         let mut ender = vec![None; 27];
-        let mut ender_components = std::collections::HashMap::new();
         if let Some(Tag::List(items)) = root.get("EnderItems") {
             for item in items {
                 let Tag::Compound(entry) = item else { continue };
@@ -272,17 +247,13 @@ impl Store {
                     continue;
                 };
                 let slot = *slot as u8 as usize;
-                if let (true, Some((stack, components))) = (slot < 27, self.stack(entry)) {
+                if let (true, Some(stack)) = (slot < 27, self.stack(entry)) {
                     ender[slot] = Some(stack);
-                    if let Some(components) = components {
-                        ender_components.insert(slot, components);
-                    }
                 }
             }
         }
         let extra = Extra {
             ender,
-            ender_components,
             respawn: match root.get("respawn") {
                 Some(Tag::Compound(c)) => Respawn::from_nbt(c),
                 _ => None,
@@ -314,15 +285,7 @@ impl Store {
         slot: usize,
     ) -> Option<Compound> {
         let stack = hands.slots[slot].as_ref()?;
-        let mut entry = Compound::new();
-        entry.insert("count", Tag::Int(stack.count));
-        entry.insert("id", Tag::String(names(stack.item)?));
-        if let Some(components) =
-            crate::items::join_damage(stack.damage, hands.components.get(&slot))
-        {
-            entry.insert("components", components);
-        }
-        Some(entry)
+        Some(stack.to_nbt_with(&names(stack.item)?))
     }
 
     /// Puts a player's state into their NBT, as vanilla saves it;
@@ -398,15 +361,13 @@ impl Store {
         let mut ender = Vec::new();
         for (slot, stack) in saved.extra.ender.iter().enumerate() {
             let Some(stack) = stack else { continue };
-            let Some(id) = names(stack.item) else { continue };
+            let Some(id) = names(stack.item) else {
+                continue;
+            };
             let mut entry = Compound::new();
             entry.insert("Slot", Tag::Byte(slot as i8));
-            entry.insert("count", Tag::Int(stack.count));
-            entry.insert("id", Tag::String(id));
-            if let Some(components) =
-                crate::items::join_damage(stack.damage, saved.extra.ender_components.get(&slot))
-            {
-                entry.insert("components", components);
+            for (k, v) in stack.to_nbt_with(&id).iter() {
+                entry.insert(k, v.clone());
             }
             ender.push(Tag::Compound(entry));
         }

@@ -412,7 +412,11 @@ impl Level for WorldLevel<'_> {
     }
 
     fn sponge_dried(&mut self, p: BlockPos) {
-        let at = [f64::from(p.x) + 0.5, f64::from(p.y) + 0.5, f64::from(p.z) + 0.5];
+        let at = [
+            f64::from(p.x) + 0.5,
+            f64::from(p.y) + 0.5,
+            f64::from(p.z) + 0.5,
+        ];
         crate::fx::sound(
             self.ctx,
             "block.fire.extinguish",

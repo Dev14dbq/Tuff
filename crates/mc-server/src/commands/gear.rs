@@ -43,8 +43,8 @@ fn definition(r: &Run, id: &str) -> Option<serde_json::Value> {
 }
 
 /// The name of an item as `getHoverName` gives it.
-fn hover_name(r: &Run, item: i32, comps: &Compound) -> String {
-    if let Some(Tag::String(n)) = comps.get("minecraft:custom_name") {
+fn hover_name(r: &Run, item: i32, stack: &mc_protocol::packets::play::ItemStack) -> String {
+    if let Some(Tag::String(n)) = stack.components.get("custom_name") {
         return n.clone();
     }
     let name = r
@@ -97,7 +97,7 @@ fn enchant(r: &mut Run) -> Result<i32> {
             }
             continue;
         };
-        let Some((stack, mut comps)) = place.get(r.ctx) else {
+        let Some(mut stack) = place.get(r.ctx) else {
             if targets.len() == 1 {
                 return Err(err("commands.enchant.failed.itemless", vec![plain(r, t)]));
             }
@@ -109,7 +109,7 @@ fn enchant(r: &mut Run) -> Result<i32> {
         } else {
             "minecraft:enchantments"
         };
-        let mut have = match comps.get(key) {
+        let mut have = match stack.components.get(key) {
             Some(Tag::Compound(c)) => c.clone(),
             _ => Compound::new(),
         };
@@ -117,11 +117,11 @@ fn enchant(r: &mut Run) -> Result<i32> {
             let other_exclusive = definition(r, other)
                 .map(|d| ids_of(r, "minecraft:enchantment", &d["exclusive_set"]))
                 .unwrap_or_default();
-            !exclusive.iter().any(|e| e == other) && !other_exclusive.contains(&id)
+            other != id && !exclusive.iter().any(|e| e == other) && !other_exclusive.contains(&id)
         });
         if !supported.contains(&item) || !compatible {
             if targets.len() == 1 {
-                let name = hover_name(r, stack.item, &comps);
+                let name = hover_name(r, stack.item, &stack);
                 return Err(err(
                     "commands.enchant.failed.incompatible",
                     vec![Tag::String(name)],
@@ -135,11 +135,11 @@ fn enchant(r: &mut Run) -> Result<i32> {
             have.insert(id.as_str(), Tag::Int(level));
         }
         if have.is_empty() {
-            comps.remove(key);
+            stack.components.reset(key);
         } else {
-            comps.insert(key, Tag::Compound(have));
+            stack.components.set(key, Tag::Compound(have));
         }
-        place.set(r.ctx, r.out, Some((stack, comps)));
+        place.set(r.ctx, r.out, Some(stack));
         done += 1;
     }
     if done == 0 {

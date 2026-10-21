@@ -133,7 +133,7 @@ impl Recipes {
                 count: json["result"]["count"].as_i64().unwrap_or(1) as i32,
                 item: *result,
                 damage: 0,
-                has_component_changes: false,
+                components: Default::default(),
             };
             let kind = json["type"].as_str().unwrap_or("");
             if kind == "minecraft:stonecutting" {
@@ -262,10 +262,19 @@ impl Recipes {
         };
         mc_protocol::packets::play::UpdateRecipes {
             property_sets: vec![
-                ("minecraft:furnace_input".into(), cooked("minecraft:smelting")),
-                ("minecraft:blast_furnace_input".into(), cooked("minecraft:blasting")),
+                (
+                    "minecraft:furnace_input".into(),
+                    cooked("minecraft:smelting"),
+                ),
+                (
+                    "minecraft:blast_furnace_input".into(),
+                    cooked("minecraft:blasting"),
+                ),
                 ("minecraft:smoker_input".into(), cooked("minecraft:smoking")),
-                ("minecraft:campfire_input".into(), cooked("minecraft:campfire_cooking")),
+                (
+                    "minecraft:campfire_input".into(),
+                    cooked("minecraft:campfire_cooking"),
+                ),
                 ("minecraft:smithing_base".into(), smith(|s| &s.base)),
                 ("minecraft:smithing_template".into(), smith(|s| &s.template)),
                 ("minecraft:smithing_addition".into(), smith(|s| &s.addition)),
@@ -379,7 +388,7 @@ mod tests {
                 count: 1,
                 item: id(n),
                 damage: 0,
-                has_component_changes: false,
+                components: Default::default(),
             })
         };
         // A log anywhere in the 2×2 grid: four planks.

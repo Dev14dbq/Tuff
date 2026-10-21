@@ -6,9 +6,9 @@
 //! the tick thread from ARCHITECTURE.md §4 arrives with world simulation.
 
 mod auth;
+mod beacons;
 mod blocks;
 mod border;
-mod beacons;
 mod bossbars;
 mod commands;
 mod connection;
@@ -31,10 +31,10 @@ mod hoppers;
 mod interact;
 mod items;
 mod level;
-mod menus;
 mod lists;
 pub mod logs;
 mod loot;
+mod menus;
 mod mobs;
 mod packs;
 mod pipeline;
@@ -47,8 +47,8 @@ mod scoreboard;
 mod storage;
 mod summon;
 mod tick;
-mod useblocks;
 mod trading;
+mod useblocks;
 mod util;
 mod vehicles;
 mod vitals;

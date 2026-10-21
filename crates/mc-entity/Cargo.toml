@@ -9,6 +9,7 @@ license.workspace = true
 
 [dependencies]
 mc-data.workspace = true
+mc-protocol.workspace = true
 mc-world.workspace = true
 
 [lints]

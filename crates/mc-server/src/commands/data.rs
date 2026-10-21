@@ -145,17 +145,8 @@ fn block_nbt(ctx: &ServerContext, p: Position) -> Option<Compound> {
     Some(c)
 }
 
-fn item_entry(ctx: &ServerContext, item: i32, count: i32, damage: i32) -> Compound {
-    let mut c = Compound::new();
-    if let Some(components) = crate::items::join_damage(damage, None) {
-        c.insert("components", components);
-    }
-    c.insert("count", Tag::Int(count));
-    c.insert(
-        "id",
-        Tag::String(crate::containers::item_name(ctx, item).unwrap_or_default()),
-    );
-    c
+fn item_entry(ctx: &ServerContext, stack: &mc_protocol::packets::play::ItemStack) -> Compound {
+    stack.to_nbt_with(&crate::containers::item_name(ctx, stack.item).unwrap_or_default())
 }
 
 /// An entity's data as vanilla shows it.
@@ -235,16 +226,13 @@ fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
     }
     match &e.kind {
         mc_entity::Kind::Item {
-            item,
-            count,
-            damage,
             pickup_delay,
             health,
+            ..
         } => {
-            c.insert(
-                "Item",
-                Tag::Compound(item_entry(ctx, *item, *count, *damage)),
-            );
+            if let Some(stack) = e.kind.as_stack() {
+                c.insert("Item", Tag::Compound(item_entry(ctx, &stack)));
+            }
             c.insert("PickupDelay", Tag::Short(*pickup_delay as i16));
             c.insert("Age", Tag::Short(e.age.min(i16::MAX as u32) as i16));
             c.insert("Health", Tag::Short(*health as i16));
@@ -483,7 +471,10 @@ pub fn write(ctx: &ServerContext, h: &Holder, mut c: Compound) -> Result<()> {
             if let Some(e) = entities.iter_mut().find(|e| e.uuid == t.uuid()) {
                 let age = int("Age");
                 if let mc_entity::Kind::Item {
+                    item,
                     count,
+                    damage,
+                    components,
                     pickup_delay,
                     ..
                 } = &mut e.kind
@@ -491,10 +482,13 @@ pub fn write(ctx: &ServerContext, h: &Holder, mut c: Compound) -> Result<()> {
                     if let Some(d) = int("PickupDelay") {
                         *pickup_delay = d;
                     }
-                    if let Some(Tag::Compound(item)) = c.get("Item")
-                        && let Some(Tag::Int(n)) = item.get("count")
+                    if let Some(Tag::Compound(saved)) = c.get("Item")
+                        && let Some(stack) = mc_protocol::packets::play::ItemStack::from_nbt(saved)
                     {
-                        *count = *n;
+                        *item = stack.item;
+                        *count = stack.count;
+                        *damage = stack.damage;
+                        *components = stack.components;
                     }
                 }
                 if let Some(a) = age {

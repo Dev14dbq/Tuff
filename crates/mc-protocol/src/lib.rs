@@ -4,6 +4,7 @@
 //! the AES/CFB8 cipher); sockets and the RSA key exchange live in `mc-server`.
 
 pub mod codec;
+pub mod components;
 pub mod crypto;
 pub mod frame;
 pub mod ids;

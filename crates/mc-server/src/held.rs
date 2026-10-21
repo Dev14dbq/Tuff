@@ -18,6 +18,11 @@ pub struct Held {
     pub comps: Option<Tag>,
 }
 
+/// A stack's components (damage aside) as saved.
+pub fn comps_of(stack: &ItemStack) -> Option<Tag> {
+    stack.components.to_nbt(0).map(Tag::Compound)
+}
+
 pub fn held(ctx: &ServerContext, uuid: u128, hand: i32) -> Option<Held> {
     let inventories = lock(&ctx.inventories);
     let hands = inventories.get(&uuid)?;
@@ -26,7 +31,7 @@ pub fn held(ctx: &ServerContext, uuid: u128, hand: i32) -> Option<Held> {
     Some(Held {
         slot,
         name: ctx.items.name(stack.item)?.to_owned(),
-        comps: hands.components.get(&slot).cloned(),
+        comps: comps_of(&stack),
         stack,
     })
 }
@@ -48,7 +53,7 @@ pub fn find(ctx: &ServerContext, uuid: u128, want: impl Fn(&str) -> bool) -> Opt
             return Some(Held {
                 slot,
                 name: name.to_owned(),
-                comps: hands.components.get(&slot).cloned(),
+                comps: comps_of(stack),
                 stack: stack.clone(),
             });
         }
@@ -81,7 +86,6 @@ pub fn consume(ctx: &ServerContext, uuid: u128, slot: usize, n: i32) {
             stack.count -= n;
             if stack.count <= 0 {
                 hands.slots[slot] = None;
-                hands.components.remove(&slot);
             }
         }
     }
@@ -106,7 +110,6 @@ pub fn wear(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32) {
         stack.damage += amount;
         if stack.damage >= max {
             hands.slots[slot] = None;
-            hands.components.remove(&slot);
             broke = true;
         }
     }

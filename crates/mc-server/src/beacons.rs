@@ -254,8 +254,16 @@ mod tests {
         assert!(primary_allowed(4, "minecraft:strength"));
         assert!(!primary_allowed(4, "minecraft:regeneration"));
         assert!(!primary_allowed(0, "minecraft:speed"));
-        assert!(!secondary_allowed(3, "minecraft:speed", "minecraft:regeneration"));
-        assert!(secondary_allowed(4, "minecraft:speed", "minecraft:regeneration"));
+        assert!(!secondary_allowed(
+            3,
+            "minecraft:speed",
+            "minecraft:regeneration"
+        ));
+        assert!(secondary_allowed(
+            4,
+            "minecraft:speed",
+            "minecraft:regeneration"
+        ));
         assert!(secondary_allowed(4, "minecraft:speed", "minecraft:speed"));
         assert!(!secondary_allowed(4, "minecraft:speed", "minecraft:haste"));
     }

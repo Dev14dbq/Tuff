@@ -86,7 +86,6 @@ pub fn kind_of(block: &str) -> Option<Kind> {
 pub struct Open {
     pub kind: Kind,
     pub slots: Vec<Option<ItemStack>>,
-    pub components: HashMap<usize, Tag>,
     /// Players with it open.
     pub viewers: Vec<u128>,
 }
@@ -102,13 +101,8 @@ pub fn item_name(ctx: &ServerContext, item: i32) -> Option<String> {
 }
 
 /// Reads `Items` of a block entity into slots.
-fn read_items(
-    ctx: &ServerContext,
-    data: &Compound,
-    size: usize,
-) -> (Vec<Option<ItemStack>>, HashMap<usize, Tag>) {
+pub fn read_items(ctx: &ServerContext, data: &Compound, size: usize) -> Vec<Option<ItemStack>> {
     let mut slots = vec![None; size];
-    let mut components = HashMap::new();
     let items = ctx.data.builtin.get("minecraft:item");
     if let Some(Tag::List(list)) = data.get("Items") {
         for entry in list {
@@ -120,42 +114,27 @@ fn read_items(
             let Some(&item) = items.and_then(|m| m.get(id)) else {
                 continue;
             };
-            let count = match e.get("count") {
-                Some(Tag::Int(c)) => *c,
-                Some(Tag::Byte(c)) => i32::from(*c),
-                _ => 1,
-            };
             let slot = *slot as u8 as usize;
             if slot < size {
-                let (damage, rest) = crate::items::split_damage(e.get("components"));
-                slots[slot] = Some(ItemStack {
-                    count,
-                    item,
-                    damage,
-                    has_component_changes: rest.is_some(),
-                });
-                if let Some(c) = rest {
-                    components.insert(slot, c);
-                }
+                slots[slot] = Some(ItemStack::from_nbt_with(e, item));
             }
         }
     }
-    (slots, components)
+    slots
 }
 
-fn write_items(ctx: &ServerContext, open: &Open) -> Tag {
+/// The `Items` list of `slots`, as chunk files keep it.
+pub fn write_items(ctx: &ServerContext, slots: &[Option<ItemStack>]) -> Tag {
     let mut list = Vec::new();
-    for (i, slot) in open.slots.iter().enumerate() {
+    for (i, slot) in slots.iter().enumerate() {
         let Some(stack) = slot else { continue };
         let Some(name) = item_name(ctx, stack.item) else {
             continue;
         };
         let mut e = Compound::new();
         e.insert("Slot", Tag::Byte(i as i8));
-        e.insert("id", Tag::String(name));
-        e.insert("count", Tag::Int(stack.count));
-        if let Some(c) = crate::items::join_damage(stack.damage, open.components.get(&i)) {
-            e.insert("components", c);
+        for (k, v) in stack.to_nbt_with(&name).iter() {
+            e.insert(k, v.clone());
         }
         list.push(Tag::Compound(e));
     }
@@ -175,7 +154,7 @@ fn store(ctx: &ServerContext, p: Position, open: &Open) {
             id: open.kind.entity.to_owned(),
             data: Compound::new(),
         });
-    be.data.insert("Items", write_items(ctx, open));
+    be.data.insert("Items", write_items(ctx, &open.slots));
     ctx.world.set_block_entity(be, blocks);
 }
 
@@ -216,7 +195,7 @@ pub fn slots(ctx: &ServerContext, p: Position, kind: Kind) -> Vec<Option<ItemSta
         return open.slots.clone();
     }
     match ctx.world.block_entity(p, &ctx.data.blocks) {
-        Some(be) => read_items(ctx, &be.data, kind.slots).0,
+        Some(be) => read_items(ctx, &be.data, kind.slots),
         None => vec![None; kind.slots],
     }
 }
@@ -224,62 +203,23 @@ pub fn slots(ctx: &ServerContext, p: Position, kind: Kind) -> Vec<Option<ItemSta
 /// Changes slots of the container at `p` (commands, furnaces): stored, seen
 /// by whoever has it open, and comparators are told.
 pub fn put(ctx: &ServerContext, p: Position, kind: Kind, changes: &[(usize, Option<ItemStack>)]) {
-    let full: Vec<_> = changes.iter().map(|(i, s)| (*i, s.clone(), None)).collect();
-    put_with(ctx, p, kind, &full);
-}
-
-/// The component data of the container's stacks, by slot.
-pub fn components(ctx: &ServerContext, p: Position, kind: Kind) -> HashMap<usize, Tag> {
-    if let Some(open) = ctx.containers.lock().expect("containers lock").get(&key(p)) {
-        return open.components.clone();
-    }
-    match ctx.world.block_entity(p, &ctx.data.blocks) {
-        Some(be) => read_items(ctx, &be.data, kind.slots).1,
-        None => HashMap::new(),
-    }
-}
-
-/// Like [`put`], with component data: `Some` replaces a slot's (an empty
-/// compound removes it), `None` keeps it while the item stays the same.
-pub fn put_with(
-    ctx: &ServerContext,
-    p: Position,
-    kind: Kind,
-    changes: &[(usize, Option<ItemStack>, Option<Tag>)],
-) {
     let mut all = ctx.containers.lock().expect("containers lock");
     let open = all.entry(key(p)).or_insert_with(|| {
-        let (slots, components) = match ctx.world.block_entity(p, &ctx.data.blocks) {
+        let slots = match ctx.world.block_entity(p, &ctx.data.blocks) {
             Some(be) => read_items(ctx, &be.data, kind.slots),
-            None => (vec![None; kind.slots], HashMap::new()),
+            None => vec![None; kind.slots],
         };
         Open {
             kind,
             slots,
-            components,
             viewers: Vec::new(),
         }
     });
-    for (slot, stack, comps) in changes {
+    for (slot, stack) in changes {
         if *slot < open.slots.len() {
-            if open.slots[*slot].as_ref().map(|s| s.item) != stack.as_ref().map(|s| s.item) {
-                open.components.remove(slot);
-            }
-            match comps {
-                Some(Tag::Compound(c)) if !c.is_empty() => {
-                    open.components.insert(*slot, Tag::Compound(c.clone()));
-                }
-                Some(_) => {
-                    open.components.remove(slot);
-                }
-                None => {}
-            }
             open.slots[*slot] = stack.clone();
         }
     }
-    let changes: Vec<(usize, Option<ItemStack>)> =
-        changes.iter().map(|(i, s, _)| (*i, s.clone())).collect();
-    let changes = &changes[..];
     store(ctx, p, open);
     let viewers = open.viewers.clone();
     if open.viewers.is_empty() {
@@ -308,11 +248,10 @@ pub fn open(ctx: &ServerContext, uuid: u128, p: Position, kind: Kind) -> Vec<Opt
             .block_entity(p, &ctx.data.blocks)
             .map(|be| be.data)
             .unwrap_or_default();
-        let (slots, components) = read_items(ctx, &data, kind.slots);
+        let slots = read_items(ctx, &data, kind.slots);
         Open {
             kind,
             slots,
-            components,
             viewers: Vec::new(),
         }
     });
@@ -359,9 +298,6 @@ pub fn change(
                 crate::xp::award(ctx, uuid, points, true);
             }
         }
-        if new.as_ref().map(|s| s.item) != open.slots[*slot].as_ref().map(|s| s.item) {
-            open.components.remove(slot);
-        }
         open.slots[*slot] = new.clone();
         done.push((*slot, new));
     }
@@ -400,7 +336,7 @@ pub fn broken(ctx: &ServerContext, p: Position) -> (Vec<ItemStack>, Vec<u128>) {
             let Some(be) = ctx.world.block_entity(p, &ctx.data.blocks) else {
                 return (Vec::new(), Vec::new());
             };
-            (read_items(ctx, &be.data, 54).0, Vec::new())
+            (read_items(ctx, &be.data, 54), Vec::new())
         }
     };
     (slots.into_iter().flatten().collect(), viewers)

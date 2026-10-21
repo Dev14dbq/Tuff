@@ -4,7 +4,7 @@
 
 use mc_command::args::{Arg, slot_range};
 use mc_command::text::translate;
-use mc_nbt::{Compound, Tag};
+use mc_nbt::Tag;
 use mc_protocol::packets::play::ItemStack;
 
 use super::item::{
@@ -80,11 +80,8 @@ fn hand_tool(r: &Run, offhand: bool) -> Option<Tool> {
     let h = inv.get(&uuid)?;
     let slot = if offhand { 45 } else { h.hand_slot(0) };
     let stack = h.slots[slot].as_ref()?;
-    let comps = h.components.get(&slot);
     let mut enchants = Vec::new();
-    if let Some(Tag::Compound(c)) = comps
-        && let Some(Tag::Compound(e)) = c.get("minecraft:enchantments")
-    {
+    if let Some(Tag::Compound(e)) = stack.components.get("enchantments") {
         for (name, level) in e.iter() {
             if let Tag::Int(l) = level {
                 enchants.push((name.to_owned(), *l));
@@ -213,10 +210,10 @@ fn roll(r: &mut Run, source: &[&str]) -> Result<Rolled> {
 /// `commands.drop.success.*` for the stacks that went somewhere.
 fn report(r: &mut Run, held: &[Held], table: &Option<String>) -> Result<i32> {
     let ctx = r.ctx;
-    let total: i32 = held.iter().map(|h| h.0.count).sum();
+    let total: i32 = held.iter().map(|h| h.count).sum();
     let msg = match (held, table) {
-        ([(s, c)], t) => {
-            let item = shown(ctx, ctx.items.name(s.item).unwrap_or(""), c);
+        ([s], t) => {
+            let item = shown(ctx, ctx.items.name(s.item).unwrap_or(""), s);
             match t {
                 Some(t) => translate(
                     "commands.drop.success.single_with_table",
@@ -247,35 +244,12 @@ fn held_of(rolled: &Rolled) -> Vec<Held> {
 
 /// Puts a stack in a player's inventory; what did not fit.
 fn give_one(ctx: &ServerContext, out: &mut Output, uuid: u128, h: &Held) -> i32 {
-    let max = ctx.items.max_stack(h.0.item);
+    let max = ctx.items.max_stack(h.item);
     let mut inv = lock(&ctx.inventories);
     let Some(hands) = inv.get_mut(&uuid) else {
-        return h.0.count;
+        return h.count;
     };
-    let mut left = h.0.count;
-    let mut changed = Vec::new();
-    if h.1.is_empty() {
-        let (n, c) = hands.insert_stack(&h.0, max);
-        left -= n;
-        changed = c;
-    } else {
-        for slot in (36..45).chain(9..36) {
-            if left == 0 {
-                break;
-            }
-            if hands.slots[slot].is_none() {
-                let n = left.min(max);
-                hands.slots[slot] = Some(ItemStack {
-                    count: n,
-                    has_component_changes: true,
-                    ..h.0.clone()
-                });
-                hands.components.insert(slot, Tag::Compound(h.1.clone()));
-                left -= n;
-                changed.push(slot);
-            }
-        }
-    }
+    let (n, changed) = hands.insert_stack(h, max);
     for slot in changed {
         out.events.push(Event::InventorySlot {
             uuid,
@@ -283,7 +257,7 @@ fn give_one(ctx: &ServerContext, out: &mut Output, uuid: u128, h: &Held) -> i32 
             item: hands.slots[slot].clone(),
         });
     }
-    left
+    h.count - n
 }
 
 fn give(r: &mut Run, rolled: Rolled) -> Result<i32> {
@@ -293,7 +267,7 @@ fn give(r: &mut Run, rolled: Rolled) -> Result<i32> {
         for h in &held {
             let left = give_one(r.ctx, r.out, t.uuid(), h);
             if left > 0 {
-                crate::tick::spawn_item_at(r.ctx, t.pos(), h.0.item, left);
+                crate::tick::spawn_stack_at(r.ctx, t.pos(), &h.with_count(left));
             }
         }
     }
@@ -304,7 +278,7 @@ fn spawn(r: &mut Run, rolled: Rolled) -> Result<i32> {
     let at = r.vec3("targetPos").unwrap_or(r.src.pos);
     let held = held_of(&rolled);
     for h in &held {
-        crate::tick::spawn_item_at(r.ctx, at, h.0.item, h.0.count);
+        crate::tick::spawn_stack_at(r.ctx, at, h);
     }
     report(r, &held, &rolled.table)
 }
@@ -316,22 +290,18 @@ fn insert(r: &mut Run, rolled: Rolled) -> Result<i32> {
     let mut inserted = Vec::new();
     for h in held {
         let mut slots = crate::containers::slots(r.ctx, p, kind);
-        let comps = crate::containers::components(r.ctx, p, kind);
-        let max = r.ctx.items.max_stack(h.0.item);
-        let mut left = h.0.count;
+        let max = r.ctx.items.max_stack(h.item);
+        let mut left = h.count;
         let mut changes = Vec::new();
-        if h.1.is_empty() {
-            for (i, s) in slots.iter_mut().enumerate() {
-                if let Some(s) = s
-                    && s.item == h.0.item
-                    && !comps.contains_key(&i)
-                    && s.count < max
-                {
-                    let n = left.min(max - s.count);
-                    s.count += n;
-                    left -= n;
-                    changes.push((i, Some(s.clone())));
-                }
+        for (i, s) in slots.iter_mut().enumerate() {
+            if let Some(s) = s
+                && s.same_kind(&h)
+                && s.count < max
+            {
+                let n = left.min(max - s.count);
+                s.count += n;
+                left -= n;
+                changes.push((i, Some(s.clone())));
             }
         }
         for (i, s) in slots.iter().enumerate() {
@@ -341,27 +311,13 @@ fn insert(r: &mut Run, rolled: Rolled) -> Result<i32> {
             if s.is_none() {
                 let n = left.min(max);
                 left -= n;
-                changes.push((
-                    i,
-                    Some(ItemStack {
-                        count: n,
-                        has_component_changes: !h.1.is_empty(),
-                        ..h.0.clone()
-                    }),
-                ));
+                changes.push((i, Some(h.with_count(n))));
             }
         }
         if left > 0 {
             continue;
         }
-        let full: Vec<_> = changes
-            .into_iter()
-            .map(|(i, s)| {
-                let c = (!h.1.is_empty()).then(|| Tag::Compound(h.1.clone()));
-                (i, s, c)
-            })
-            .collect();
-        crate::containers::put_with(r.ctx, p, kind, &full);
+        crate::containers::put(r.ctx, p, kind, &changes);
         inserted.push(h);
     }
     report(r, &inserted, &rolled.table)
@@ -383,7 +339,7 @@ fn replace(r: &mut Run, rolled: Rolled, block: bool) -> Result<i32> {
             if let Some(h) = h {
                 shown_list.push(h.clone());
             } else {
-                shown_list.push((ItemStack::new(0, 0), Compound::new()));
+                shown_list.push(ItemStack::new(0, 0));
             }
         }
     };
@@ -413,11 +369,7 @@ fn replace(r: &mut Run, rolled: Rolled, block: bool) -> Result<i32> {
     }
     // Empty padding is counted as a stack but shown as nothing.
     let n = shown_list.len();
-    let real: Vec<Held> = shown_list
-        .iter()
-        .filter(|h| h.0.count > 0)
-        .cloned()
-        .collect();
+    let real: Vec<Held> = shown_list.iter().filter(|h| h.count > 0).cloned().collect();
     if n == 1 && real.len() == 1 {
         return report(r, &real, &rolled.table);
     }
@@ -429,5 +381,5 @@ fn replace(r: &mut Run, rolled: Rolled, block: bool) -> Result<i32> {
         None => translate("commands.drop.success.multiple", vec![Tag::Int(n as i32)]),
     };
     r.success(msg, false);
-    Ok(real.iter().map(|h| h.0.count).sum())
+    Ok(real.iter().map(|h| h.count).sum())
 }

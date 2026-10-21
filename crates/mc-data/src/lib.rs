@@ -488,6 +488,36 @@ impl BuiltinRegistries {
     pub fn id(&self, registry: &str, entry: &str) -> Option<i32> {
         self.get(registry)?.get(entry).copied()
     }
+
+    /// Every registry: name and entry ids.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &HashMap<String, i32>)> {
+        self.registries.iter().map(|(k, v)| (k.as_str(), v))
+    }
+}
+
+impl McData {
+    /// Network ids of every registry: the built-in ones and the synchronized
+    /// data-driven ones (their entries in the order Registry Data sends them).
+    pub fn network_ids(&self) -> Result<HashMap<String, HashMap<String, i32>>> {
+        let mut all: HashMap<String, HashMap<String, i32>> = self
+            .builtin
+            .iter()
+            .map(|(k, v)| (k.to_owned(), v.clone()))
+            .collect();
+        let pack = self.data_pack();
+        for &registry in SYNCHRONIZED_REGISTRIES {
+            let entries = pack.registry_entries(registry)?;
+            all.insert(
+                registry.to_owned(),
+                entries
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, e)| (e, i as i32))
+                    .collect(),
+            );
+        }
+        Ok(all)
+    }
 }
 
 // ---------------------------------------------------------------------------

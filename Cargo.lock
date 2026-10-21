@@ -463,6 +463,7 @@ name = "mc-entity"
 version = "0.0.0"
 dependencies = [
  "mc-data",
+ "mc-protocol",
  "mc-world",
 ]
 

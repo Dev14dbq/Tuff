@@ -515,6 +515,12 @@ impl ServerContext {
             });
         }
 
+        mc_protocol::components::install_registries(
+            data.builtin
+                .iter()
+                .chain(synced_ids.iter().map(|(k, v)| (k.as_str(), v))),
+        );
+
         let key = if config.online_mode {
             Some(ServerKey::generate()?)
         } else {

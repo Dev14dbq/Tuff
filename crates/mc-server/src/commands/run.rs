@@ -2003,7 +2003,6 @@ fn clear(r: &mut Run) -> Result<i32> {
             left -= take;
             total += take;
             hands.slots[slot] = if take == stack.count {
-                hands.components.remove(&slot);
                 None
             } else {
                 Some(ItemStack {
@@ -2142,11 +2141,8 @@ fn summon(r: &mut Run) -> Result<i32> {
                 .items
                 .id(&mc_command::args::full_id(id))
                 .ok_or_else(|| err("commands.summon.failed", Vec::new()))?;
-            let (damage, _) = crate::items::split_damage(item.get("components"));
-            mc_entity::Kind::item(
-                item_id,
-                tag_i32(item.get("count")).unwrap_or(1),
-                damage,
+            mc_entity::Kind::stack(
+                &mc_protocol::packets::play::ItemStack::from_nbt_with(item, item_id),
                 tag_i32(nbt.get("PickupDelay")).unwrap_or(0),
             )
         }

@@ -793,7 +793,6 @@ async fn play(
                                 stack.count -= n;
                                 if stack.count <= 0 {
                                     hands.slots[slot] = None;
-                                    hands.components.remove(&slot);
                                 }
                                 changed_slot = Some((slot, hands.slots[slot].clone()));
                             }
@@ -1237,7 +1236,6 @@ async fn play(
                             let lost: Vec<play::ItemStack> = {
                                 let mut inventories = ctx.inventories.lock().expect("inventories lock");
                                 inventories.get_mut(&uuid).map_or_else(Vec::new, |hands| {
-                                    hands.components.clear();
                                     let mut all: Vec<play::ItemStack> = hands.slots.iter_mut().filter_map(Option::take).collect();
                                     all.extend(hands.carried.take());
                                     all
@@ -1816,20 +1814,12 @@ fn spawn_entity(
     }
     match entity.kind {
         mc_entity::Kind::Mob(_) => {}
-        mc_entity::Kind::Item {
-            item,
-            count,
-            damage,
-            ..
-        } => {
+        mc_entity::Kind::Item { .. } => {
             writer.queue(&play::SetEntityData {
                 entity_id: entity.id,
                 entries: vec![(
                     play::metadata::ITEM,
-                    play::MetadataValue::Item(Some(play::ItemStack {
-                        damage,
-                        ..play::ItemStack::new(item, count)
-                    })),
+                    play::MetadataValue::Item(entity.kind.as_stack()),
                 )],
             })?;
         }

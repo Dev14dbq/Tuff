@@ -374,7 +374,7 @@ fn tick_one(ctx: &ServerContext, p: Position, before: Progress) -> Option<Progre
                 count: 1,
                 item,
                 damage: 0,
-                has_component_changes: false,
+                components: Default::default(),
             })
         } else {
             None

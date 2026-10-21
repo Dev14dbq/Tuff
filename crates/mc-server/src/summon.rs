@@ -43,8 +43,10 @@ fn stack(ctx: &ServerContext, tag: Option<&Tag>) -> Option<(i32, i32)> {
         return None;
     };
     let item = ctx.items.id(&mc_command::args::full_id(id))?;
-    let (damage, _) = crate::items::split_damage(c.get("components"));
-    Some((item, damage))
+    Some((
+        item,
+        mc_protocol::packets::play::ItemStack::from_nbt_with(c, item).damage,
+    ))
 }
 
 /// What to summon for `name` (`minecraft:arrow`): its kind, and the place

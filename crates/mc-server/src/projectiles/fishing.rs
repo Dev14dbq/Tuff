@@ -123,15 +123,7 @@ fn catch(ctx: &ServerContext, actor: Actor, at: [f64; 3], luck: i32) {
         let entity = Entity {
             id: ctx.next_entity_id(),
             uuid: crate::util::random_uuid(),
-            kind: Kind::item(
-                drop.item,
-                drop.count,
-                match drop.components.get("minecraft:damage") {
-                    Some(mc_nbt::Tag::Int(v)) => *v,
-                    _ => 0,
-                },
-                10,
-            ),
+            kind: Kind::stack(&drop.stack(), 10),
             pos: at,
             vel: [d[0] * 0.1, d[1] * 0.1 + flat.sqrt() * 0.08, d[2] * 0.1],
             on_ground: false,

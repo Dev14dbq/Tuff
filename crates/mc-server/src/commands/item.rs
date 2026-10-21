@@ -19,7 +19,7 @@ use crate::loot::{Drop, LootCtx};
 use crate::tick::lock;
 
 /// A stack with its component data.
-pub(super) type Held = (ItemStack, Compound);
+pub(super) type Held = ItemStack;
 
 /// Somewhere a stack can sit.
 #[derive(Clone, Debug)]
@@ -41,61 +41,32 @@ pub(super) enum Place {
     Refused,
 }
 
-fn comps_of(tag: Option<&Tag>) -> Compound {
-    match tag {
-        Some(Tag::Compound(c)) => c.clone(),
-        _ => Compound::new(),
-    }
-}
-
 impl Place {
     pub(super) fn get(&self, ctx: &ServerContext) -> Option<Held> {
         match self {
             Place::Window { uuid, idx } => {
                 let inv = lock(&ctx.inventories);
                 let h = inv.get(uuid)?;
-                Some((h.slots.get(*idx)?.clone()?, comps_of(h.components.get(idx))))
+                h.slots.get(*idx)?.clone()
             }
             Place::Carried(uuid) => {
                 let inv = lock(&ctx.inventories);
-                Some((inv.get(uuid)?.carried.clone()?, Compound::new()))
+                inv.get(uuid)?.carried.clone()
             }
             Place::Block { pos, kind, idx } => {
-                let stack = containers::slots(ctx, *pos, *kind).get(*idx)?.clone()?;
-                let comps = containers::components(ctx, *pos, *kind);
-                Some((stack, comps_of(comps.get(idx))))
+                containers::slots(ctx, *pos, *kind).get(*idx)?.clone()
             }
             Place::ItemEntity(uuid) => lock(&ctx.entities)
                 .iter()
                 .filter(|e| e.uuid == *uuid)
-                .find_map(|e| match &e.kind {
-                    mc_entity::Kind::Item {
-                        item,
-                        count,
-                        damage,
-                        ..
-                    } => Some((
-                        ItemStack {
-                            damage: *damage,
-                            ..ItemStack::new(*item, *count)
-                        },
-                        Compound::new(),
-                    )),
-                    _ => None,
-                }),
+                .find_map(|e| e.kind.as_stack()),
             Place::Void | Place::Refused => None,
         }
     }
 
     /// Puts a stack (or nothing) in the place; false if it takes none.
     pub(super) fn set(&self, ctx: &ServerContext, out: &mut Output, held: Option<Held>) -> bool {
-        let (stack, comps) = match held {
-            Some((s, c)) => {
-                let (s, c) = crate::items::split_held(s, c);
-                (Some(s), c)
-            }
-            None => (None, Compound::new()),
-        };
+        let stack = held;
         match self {
             Place::Window { uuid, idx } => {
                 let mut inv = lock(&ctx.inventories);
@@ -103,11 +74,6 @@ impl Place {
                     return false;
                 };
                 h.slots[*idx].clone_from(&stack);
-                if comps.is_empty() {
-                    h.components.remove(idx);
-                } else {
-                    h.components.insert(*idx, Tag::Compound(comps));
-                }
                 out.events.push(Event::InventorySlot {
                     uuid: *uuid,
                     slot: *idx as i16,
@@ -124,30 +90,15 @@ impl Place {
                 true
             }
             Place::Block { pos, kind, idx } => {
-                containers::put_with(
-                    ctx,
-                    *pos,
-                    *kind,
-                    &[(*idx, stack, Some(Tag::Compound(comps)))],
-                );
+                containers::put(ctx, *pos, *kind, &[(*idx, stack)]);
                 true
             }
             Place::ItemEntity(uuid) => {
                 let mut entities = lock(&ctx.entities);
                 for e in entities.iter_mut().filter(|e| e.uuid == *uuid) {
-                    if let mc_entity::Kind::Item {
-                        item,
-                        count,
-                        damage,
-                        ..
-                    } = &mut e.kind
-                    {
+                    if let mc_entity::Kind::Item { pickup_delay, .. } = e.kind {
                         match &stack {
-                            Some(s) => {
-                                *item = s.item;
-                                *count = s.count;
-                                *damage = s.damage;
-                            }
+                            Some(s) => e.kind = mc_entity::Kind::stack(s, pickup_delay),
                             None => e.removed = true,
                         }
                     }
@@ -273,28 +224,17 @@ pub(super) fn block_places(p: Position, kind: Kind, slots: &str) -> Vec<Place> {
 }
 
 pub(super) fn to_drop(h: &Held) -> Drop {
-    Drop {
-        item: h.0.item,
-        count: h.0.count,
-        components: {
-            let mut c = crate::items::damage_components(h.0.damage);
-            for (k, v) in h.1.iter() {
-                c.insert(k, v.clone());
-            }
-            c
-        },
-    }
+    Drop::of(h)
 }
 
 pub(super) fn from_drop(d: &Drop) -> Option<Held> {
-    (d.count > 0)
-        .then(|| crate::items::split_held(ItemStack::new(d.item, d.count), d.components.clone()))
+    (d.count > 0).then(|| d.stack())
 }
 
 /// An item as messages show it: its custom name if it has one.
-pub(super) fn shown(ctx: &ServerContext, name: &str, comps: &Compound) -> Tag {
+pub(super) fn shown(ctx: &ServerContext, name: &str, stack: &ItemStack) -> Tag {
     let mut tag = super::run::item_display(ctx, name);
-    if let (Tag::Compound(c), Some(custom)) = (&mut tag, comps.get("minecraft:custom_name"))
+    if let (Tag::Compound(c), Some(custom)) = (&mut tag, stack.components.get("custom_name"))
         && let Some(Tag::List(with)) = c.get_mut("with")
         && let Some(Tag::Compound(inner)) = with.first_mut()
     {
@@ -314,6 +254,21 @@ pub(super) fn modified(
     ctx.loot
         .modify(&super::loot::Env(ctx), &cx, modifier, &mut drops);
     drops.iter().find_map(from_drop)
+}
+
+/// `stack` with the components (as saved) of an item argument added.
+pub(super) fn with_components(mut stack: ItemStack, comps: &Compound) -> ItemStack {
+    let (damage, patch) = mc_protocol::components::Components::from_nbt(comps);
+    if damage != 0 {
+        stack.damage = damage;
+    }
+    for (name, value) in patch.iter() {
+        match value {
+            Some(v) => stack.components.set(name, v.clone()),
+            None => stack.components.set_removed(name),
+        }
+    }
+    stack
 }
 
 /// `Components` of an item argument (`[minecraft:custom_name='"Q"']`).
@@ -416,9 +371,9 @@ fn item(r: &mut Run, mode: Mode, block: bool, rest: &[&str]) -> Result<i32> {
                 ));
             }
             let held = (item.id != "minecraft:air" && count > 0).then(|| {
-                crate::items::split_held(
+                with_components(
                     ItemStack::new(id, count),
-                    item_components(item.components.as_deref()),
+                    &item_components(item.components.as_deref()),
                 )
             });
             Source::With(held)
@@ -448,11 +403,9 @@ fn item(r: &mut Run, mode: Mode, block: bool, rest: &[&str]) -> Result<i32> {
     };
     let known_display = |r: &Run| match r.arg("item") {
         Some(Arg::Item(i)) => {
-            let comps = known
-                .as_ref()
-                .and_then(|h| h.as_ref().map(|h| h.1.clone()))
-                .unwrap_or_default();
-            shown(r.ctx, &i.id, &comps)
+            let plain = ItemStack::new(0, 1);
+            let stack = known.as_ref().and_then(Option::as_ref).unwrap_or(&plain);
+            shown(r.ctx, &i.id, stack)
         }
         _ => Tag::from(""),
     };
@@ -544,7 +497,7 @@ fn failure(
     }
     if with_known {
         let text = match known {
-            Some(Some((s, _))) => format!("{} {}", s.count, r.ctx.items.name(s.item).unwrap_or("")),
+            Some(Some(s)) => format!("{} {}", s.count, r.ctx.items.name(s.item).unwrap_or("")),
             _ => "0 minecraft:air".to_owned(),
         };
         return err(

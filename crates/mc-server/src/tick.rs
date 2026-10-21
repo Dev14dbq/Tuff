@@ -416,15 +416,7 @@ pub fn drop_item(ctx: &ServerContext, at: mc_protocol::Position, drop: crate::lo
     let entity = mc_entity::Entity {
         id: ctx.next_entity_id(),
         uuid: crate::util::random_uuid(),
-        kind: mc_entity::Kind::item(
-            drop.item,
-            drop.count,
-            match drop.components.get("minecraft:damage") {
-                Some(mc_nbt::Tag::Int(d)) => *d,
-                _ => 0,
-            },
-            10,
-        ),
+        kind: mc_entity::Kind::stack(&drop.stack(), 10),
         pos: [
             f64::from(at.x) + 0.5 + r(0.5),
             f64::from(at.y) + 0.25 + r(0.5),
@@ -443,13 +435,26 @@ pub fn drop_item(ctx: &ServerContext, at: mc_protocol::Position, drop: crate::lo
 /// An item entity at an exact position (`/loot spawn`, leftovers a
 /// player has no room for).
 pub fn spawn_item_at(ctx: &ServerContext, pos: [f64; 3], item: i32, count: i32) {
+    spawn_stack_at(
+        ctx,
+        pos,
+        &mc_protocol::packets::play::ItemStack::new(item, count),
+    );
+}
+
+/// [`spawn_item_at`] for a stack with components.
+pub fn spawn_stack_at(
+    ctx: &ServerContext,
+    pos: [f64; 3],
+    stack: &mc_protocol::packets::play::ItemStack,
+) {
     let r = |spread: f64| {
         (crate::util::random_u64() >> 11) as f64 / (1u64 << 53) as f64 * spread - spread / 2.0
     };
     let entity = mc_entity::Entity {
         id: ctx.next_entity_id(),
         uuid: crate::util::random_uuid(),
-        kind: mc_entity::Kind::item(item, count, 0, 10),
+        kind: mc_entity::Kind::stack(stack, 10),
         pos,
         vel: [r(0.2), 0.2, r(0.2)],
         on_ground: false,
@@ -476,7 +481,7 @@ pub fn throw_item(
     let entity = mc_entity::Entity {
         id: ctx.next_entity_id(),
         uuid: crate::util::random_uuid(),
-        kind: mc_entity::Kind::item(stack.item, stack.count, stack.damage, 40),
+        kind: mc_entity::Kind::stack(&stack, 40),
         pos: [pose.x, pose.y + 1.62 - 0.3, pose.z],
         vel: [
             -yaw.sin() * pitch.cos() * speed,
@@ -504,7 +509,7 @@ pub fn scatter_item(
     let entity = mc_entity::Entity {
         id: ctx.next_entity_id(),
         uuid: crate::util::random_uuid(),
-        kind: mc_entity::Kind::item(stack.item, stack.count, stack.damage, 40),
+        kind: mc_entity::Kind::stack(&stack, 40),
         pos: [pose.x, pose.y + 1.32, pose.z],
         vel: [angle.sin() * speed, 0.2, angle.cos() * speed],
         on_ground: false,
@@ -776,15 +781,10 @@ fn pick_up(
     entity: &mut mc_entity::Entity,
     players: &[(u128, i32, i32, crate::context::Pose)],
 ) {
-    let mc_entity::Kind::Item {
-        item,
-        count,
-        damage,
-        ..
-    } = entity.kind
-    else {
+    let Some(stack) = entity.kind.as_stack() else {
         return;
     };
+    let (item, count) = (stack.item, stack.count);
     for (uuid, player_entity, mode, pose) in players {
         if *mode == 3 || !picks_up(pose, entity) {
             continue;
@@ -793,10 +793,6 @@ fn pick_up(
         let mut inventories = lock(&ctx.inventories);
         let Some(hands) = inventories.get_mut(uuid) else {
             continue;
-        };
-        let stack = mc_protocol::packets::play::ItemStack {
-            damage,
-            ..mc_protocol::packets::play::ItemStack::new(item, count)
         };
         let (taken, changed) = hands.insert_stack(&stack, max);
         if taken == 0 {

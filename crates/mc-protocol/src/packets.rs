@@ -675,193 +675,7 @@ pub mod play {
         pub const FINISH: i32 = 2;
     }
 
-    /// Data component type ids (`minecraft:data_component_type`, 26.3).
-    pub mod component {
-        pub const DAMAGE: i32 = 3;
-    }
-
-    /// CRC32C (Castagnoli), as the client hashes component data.
-    fn crc32c(bytes: &[u8]) -> u32 {
-        const TABLE: [u32; 256] = {
-            let mut table = [0u32; 256];
-            let mut i = 0;
-            while i < 256 {
-                let mut c = i as u32;
-                let mut k = 0;
-                while k < 8 {
-                    c = if c & 1 != 0 {
-                        0x82F6_3B78 ^ (c >> 1)
-                    } else {
-                        c >> 1
-                    };
-                    k += 1;
-                }
-                table[i] = c;
-                i += 1;
-            }
-            table
-        };
-        let mut c = !0u32;
-        for &b in bytes {
-            c = TABLE[((c ^ u32::from(b)) & 0xFF) as usize] ^ (c >> 8);
-        }
-        !c
-    }
-
-    /// The hash a client sends for an integer component (the damage): the
-    /// int type tag (8) and the value, little-endian, through CRC32C.
-    pub fn int_component_hash(value: i32) -> i32 {
-        let mut bytes = [8u8; 5];
-        bytes[1..].copy_from_slice(&value.to_le_bytes());
-        crc32c(&bytes) as i32
-    }
-
-    /// An item stack in a window click: components only as hashes.
-    #[derive(Clone, Debug, PartialEq)]
-    pub struct HashedStack {
-        pub item: i32,
-        pub count: i32,
-        /// Added components: type id and data hash.
-        pub added: Vec<(i32, i32)>,
-        /// Removed (default) components by type id.
-        pub removed: Vec<i32>,
-    }
-
-    impl HashedStack {
-        pub fn decode(r: &mut Reader) -> Result<Option<Self>> {
-            if !r.bool()? {
-                return Ok(None);
-            }
-            let (item, count) = (r.varint()?, r.varint()?);
-            let n = r.length_prefix()?;
-            let mut added = Vec::with_capacity(n.min(64));
-            for _ in 0..n {
-                added.push((r.varint()?, r.i32()?));
-            }
-            let n = r.length_prefix()?;
-            let mut removed = Vec::with_capacity(n.min(64));
-            for _ in 0..n {
-                removed.push(r.varint()?);
-            }
-            Ok(Some(Self {
-                item,
-                count,
-                added,
-                removed,
-            }))
-        }
-
-        fn damage_hash(&self) -> Option<i32> {
-            self.added
-                .iter()
-                .find(|(t, _)| *t == component::DAMAGE)
-                .map(|&(_, h)| h)
-        }
-
-        fn has_others(&self) -> bool {
-            !self.removed.is_empty() || self.added.iter().any(|(t, _)| *t != component::DAMAGE)
-        }
-
-        /// Whether `stack` is what this describes, the count aside: same
-        /// item, the damage hashes alike, other changes on both or neither.
-        pub fn matches(&self, stack: &ItemStack) -> bool {
-            let damage = (stack.damage != 0).then(|| int_component_hash(stack.damage));
-            self.item == stack.item
-                && self.damage_hash() == damage
-                && self.has_others() == stack.has_component_changes
-        }
-
-        /// The stack, with its damage taken from the first of `known` that
-        /// it matches (the client only sends hashes). Without a match only
-        /// whether there are component changes is known.
-        pub fn resolve<'a>(&self, known: impl IntoIterator<Item = &'a ItemStack>) -> ItemStack {
-            let damage = known
-                .into_iter()
-                .find(|s| self.matches(s))
-                .map_or(0, |s| s.damage);
-            ItemStack {
-                count: self.count,
-                item: self.item,
-                damage,
-                has_component_changes: self.has_others()
-                    || (damage == 0 && self.damage_hash().is_some()),
-            }
-        }
-    }
-
-    /// An item stack. Of the component changes only the damage is known;
-    /// `has_component_changes` says whether there are others (servers keep
-    /// those beside the stack).
-    #[derive(Clone, Debug, PartialEq)]
-    pub struct ItemStack {
-        pub count: i32,
-        /// Id in the `minecraft:item` registry.
-        pub item: i32,
-        /// `minecraft:damage`; 0 is the default and is not sent.
-        pub damage: i32,
-        pub has_component_changes: bool,
-    }
-
-    impl ItemStack {
-        /// `count` of `item` without component changes.
-        pub fn new(item: i32, count: i32) -> Self {
-            Self {
-                count,
-                item,
-                damage: 0,
-                has_component_changes: false,
-            }
-        }
-
-        /// Whether it has any component changes (it does not stack with a
-        /// plain stack then).
-        pub fn has_changes(&self) -> bool {
-            self.damage != 0 || self.has_component_changes
-        }
-
-        /// Slot data; `None` for an empty slot. A leading damage component
-        /// is read; reading stops at any other.
-        pub fn decode(r: &mut Reader) -> Result<Option<Self>> {
-            let count = r.varint()?;
-            if count <= 0 {
-                return Ok(None);
-            }
-            let item = r.varint()?;
-            let (added, removed) = (r.varint()?, r.varint()?);
-            let mut stack = Self::new(item, count);
-            let mut read = 0;
-            while read < added && Reader::new(r.peek_rest()).varint()? == component::DAMAGE {
-                r.varint()?;
-                stack.damage = r.varint()?;
-                read += 1;
-            }
-            if read < added || removed != 0 {
-                stack.has_component_changes = true;
-                r.rest();
-            }
-            Ok(Some(stack))
-        }
-
-        /// Slot data with the damage as the only component change.
-        pub fn encode(stack: Option<&Self>, out: &mut Vec<u8>) {
-            match stack {
-                None => out.put_varint(0),
-                Some(stack) => {
-                    out.put_varint(stack.count);
-                    out.put_varint(stack.item);
-                    if stack.damage != 0 {
-                        out.put_varint(1);
-                        out.put_varint(0);
-                        out.put_varint(component::DAMAGE);
-                        out.put_varint(stack.damage);
-                    } else {
-                        out.put_varint(0);
-                        out.put_varint(0);
-                    }
-                }
-            }
-        }
-    }
+    pub use crate::components::{HashedStack, ItemStack, int_component_hash};
 
     impl Serverbound {
         pub fn decode(name: &str, r: &mut Reader) -> Result<Self> {
@@ -3163,7 +2977,7 @@ mod tests {
                     count: 1,
                     item: 163,
                     damage: 0,
-                    has_component_changes: false,
+                    components: Default::default(),
                 }),
             )],
         }
@@ -3195,12 +3009,12 @@ mod tests {
         let back = play::ItemStack::decode(&mut Reader::new(&out))
             .unwrap()
             .unwrap();
-        assert_eq!((back.damage, back.has_component_changes), (5, false));
+        assert_eq!((back.damage, back.components.is_empty()), (5, true));
         // A click names it by hash; only the damaged one matches.
         let hashed = play::HashedStack {
             item: 1005,
             count: 1,
-            added: vec![(play::component::DAMAGE, play::int_component_hash(5))],
+            added: vec![(3, play::int_component_hash(5))],
             removed: Vec::new(),
         };
         let fresh = play::ItemStack::new(1005, 1);
@@ -3253,7 +3067,7 @@ mod tests {
                     count: 1,
                     item: 1,
                     damage: 0,
-                    has_component_changes: false
+                    components: Default::default()
                 }),
             }
         );

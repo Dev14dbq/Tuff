@@ -32,9 +32,6 @@ pub struct Hands {
     pub slots: Vec<Option<ItemStack>>,
     /// Selected hotbar slot, 0..9.
     pub selected: usize,
-    /// Component data of stacks loaded from the player file, kept until the
-    /// slot changes (the network form does not carry it yet).
-    pub components: std::collections::HashMap<usize, mc_nbt::Tag>,
     /// The stack on the mouse cursor while the inventory is open.
     pub carried: Option<ItemStack>,
 }
@@ -44,7 +41,6 @@ impl Default for Hands {
         Self {
             slots: vec![None; 46],
             selected: 0,
-            components: std::collections::HashMap::new(),
             carried: None,
         }
     }
@@ -106,11 +102,7 @@ impl Hands {
             else {
                 continue;
             };
-            let new = stack.as_ref().map(|h| h.resolve(&before));
-            if new.as_ref().map(|s| s.item) != self.slots[index].as_ref().map(|s| s.item) {
-                self.components.remove(&index);
-            }
-            self.slots[index] = new;
+            self.slots[index] = stack.as_ref().map(|h| h.resolve(&before));
         }
         self.carried = carried.map(|h| h.resolve(&before));
         thrown
@@ -140,16 +132,6 @@ impl Hands {
         let target = 36 + self.suitable_hotbar_slot();
         if let Some(from) = (9..36).find(|&i| holds(&self.slots[i])) {
             self.slots.swap(from, target);
-            let (a, b) = (
-                self.components.remove(&from),
-                self.components.remove(&target),
-            );
-            if let Some(c) = a {
-                self.components.insert(target, c);
-            }
-            if let Some(c) = b {
-                self.components.insert(from, c);
-            }
             self.selected = target - 36;
             return vec![from, target];
         }
@@ -162,17 +144,13 @@ impl Hands {
             && let Some(free) = (9..36).find(|&i| self.slots[i].is_none())
         {
             self.slots[free] = self.slots[target].take();
-            if let Some(c) = self.components.remove(&target) {
-                self.components.insert(free, c);
-            }
             changed.push(free);
         }
-        self.components.remove(&target);
         self.slots[target] = Some(ItemStack {
             count: 1,
             item,
             damage: 0,
-            has_component_changes: false,
+            components: Default::default(),
         });
         self.selected = target - 36;
         changed
@@ -186,9 +164,10 @@ impl Hands {
         if let Some(i) = (0..9).map(at).find(|&i| self.slots[36 + i].is_none()) {
             return i;
         }
-        let enchanted = |slot: usize| match self.components.get(&slot) {
-            Some(mc_nbt::Tag::Compound(c)) => c.get("minecraft:enchantments").is_some(),
-            _ => false,
+        let enchanted = |slot: usize| {
+            self.slots[slot]
+                .as_ref()
+                .is_some_and(|s| s.components.get("enchantments").is_some())
         };
         (0..9)
             .map(at)
@@ -214,15 +193,13 @@ impl Hands {
         let order: Vec<usize> = (36..45).chain(9..36).collect();
         let mut changed = Vec::new();
         let mut count = stack.count;
-        if !stack.has_component_changes {
+        {
             for &slot in &order {
                 if count == 0 {
                     break;
                 }
                 if let Some(s) = &mut self.slots[slot]
-                    && s.item == stack.item
-                    && s.damage == stack.damage
-                    && !s.has_component_changes
+                    && s.same_kind(stack)
                     && s.count < max
                 {
                     let n = (max - s.count).min(count);
@@ -237,7 +214,6 @@ impl Hands {
                 break;
             }
             if self.slots[slot].is_none() {
-                self.components.remove(&slot);
                 let n = max.min(count);
                 self.slots[slot] = Some(ItemStack {
                     count: n,
@@ -425,16 +401,10 @@ pub fn dig(
             let points = crate::furnaces::collect_xp(ctx, position);
             crate::xp::spawn(ctx, centre(position), points);
         }
-        let (items, _) = crate::containers::broken(ctx, position);
-        for stack in items {
-            outcome.drops.push((
-                position,
-                crate::loot::Drop {
-                    item: stack.item,
-                    count: stack.count,
-                    components: crate::items::damage_components(stack.damage),
-                },
-            ));
+        for stack in crate::containers::broken(ctx, position).0 {
+            outcome
+                .drops
+                .push((position, crate::loot::Drop::of(&stack)));
         }
         outcome.events.push(Event::ContainerGone { position });
     }
@@ -491,14 +461,9 @@ fn centre(p: Position) -> [f64; 3] {
 fn silk_touch(ctx: &ServerContext, uuid: u128) -> bool {
     let inventories = ctx.inventories.lock().expect("inventories lock");
     inventories.get(&uuid).is_some_and(|h| {
-        let Some(mc_nbt::Tag::Compound(c)) = h.components.get(&(36 + h.selected)) else {
-            return false;
-        };
-        let Some(mc_nbt::Tag::Compound(e)) = c.get("minecraft:enchantments") else {
-            return false;
-        };
-        e.get("minecraft:silk_touch").is_some()
-            || matches!(e.get("levels"), Some(mc_nbt::Tag::Compound(l)) if l.get("minecraft:silk_touch").is_some())
+        h.main_hand().is_some_and(|s| {
+            crate::held::enchant(crate::held::comps_of(s).as_ref(), "silk_touch") > 0
+        })
     })
 }
 
@@ -788,7 +753,6 @@ pub fn use_item_on(
                 stack.count -= 1;
                 if stack.count <= 0 {
                     hands.slots[slot] = None;
-                    hands.components.remove(&slot);
                 }
             }
             outcome.events.push(Event::InventorySlot {
@@ -856,7 +820,6 @@ fn wear_held(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, hand: i32
     stack.damage += amount;
     if stack.damage >= max {
         hands.slots[slot] = None;
-        hands.components.remove(&slot);
         outcome.events.push(Event::HandBroke {
             uuid: actor.uuid,
             entity_id: actor.entity_id,
@@ -899,9 +862,8 @@ fn replace_held(
             count: 1,
             item,
             damage: 0,
-            has_component_changes: false,
+            components: Default::default(),
         });
-        hands.components.remove(&slot);
     }
     for slot in changed {
         outcome.events.push(Event::InventorySlot {

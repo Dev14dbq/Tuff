@@ -8,6 +8,7 @@ mod chunk_info;
 mod chunk_speed;
 mod extract_data;
 mod gen_speed;
+mod hash_check;
 mod observe;
 mod observe_commands;
 mod observe_structures;
@@ -51,6 +52,9 @@ Tasks:
   watch [--addr <host:port>] [--seconds <s>] [--packets <a,b,...>] [--name <player>]
       Join and print the chosen packets (hex) as they arrive, e.g. while
       running commands on a vanilla console.
+  hash-check --lines <file>
+      Check our item component hashes against a local vanilla server (one
+      `item[components]` per line; `!` first spoils a hash on purpose).
   parity <scenario file> [--verbose]
       Run the same commands on a vanilla server and on ours (fresh superflat
       worlds, game frozen) and compare a region after every step. Scenarios
@@ -94,6 +98,7 @@ fn main() -> ExitCode {
         Some("gen-speed") => gen_speed::run(&args[1..]),
         Some("similarity") => similarity::run(&args[1..]),
         Some("watch") => watch::run(&args[1..]),
+        Some("hash-check") => hash_check::run(&args[1..]),
         Some("parity") => parity::run(&args[1..]),
         Some("observe") => observe::run(&args[1..]),
         Some("observe-structures") => observe_structures::run(&args[1..]),

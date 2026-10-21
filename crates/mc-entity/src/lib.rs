@@ -27,6 +27,8 @@ pub enum Kind {
         count: i32,
         /// The stack's `minecraft:damage`.
         damage: i32,
+        /// The stack's other component changes.
+        components: mc_protocol::components::Components,
         /// Ticks before a player may pick it up.
         pickup_delay: i32,
         /// Hit points (5); explosions and fire take them.
@@ -59,8 +61,40 @@ impl Kind {
             item,
             count,
             damage,
+            components: Default::default(),
             pickup_delay,
             health: 5.0,
+        }
+    }
+
+    /// A dropped `stack`.
+    pub fn stack(stack: &mc_protocol::components::ItemStack, pickup_delay: i32) -> Self {
+        Kind::Item {
+            item: stack.item,
+            count: stack.count,
+            damage: stack.damage,
+            components: stack.components.clone(),
+            pickup_delay,
+            health: 5.0,
+        }
+    }
+
+    /// The stack of a dropped item.
+    pub fn as_stack(&self) -> Option<mc_protocol::components::ItemStack> {
+        match self {
+            Kind::Item {
+                item,
+                count,
+                damage,
+                components,
+                ..
+            } => Some(mc_protocol::components::ItemStack {
+                count: *count,
+                item: *item,
+                damage: *damage,
+                components: components.clone(),
+            }),
+            _ => None,
         }
     }
 }

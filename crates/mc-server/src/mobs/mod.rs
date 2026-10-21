@@ -342,7 +342,7 @@ fn die(ctx: &ServerContext, entity: &mut Entity, by_player: bool, status: &mut V
         crate::xp::spawn(ctx, [pos[0], pos[1] + 0.3, pos[2]], xp);
     }
     for drop in loot(ctx, entity, by_player) {
-        crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 0.3, pos[2]], drop.item, drop.count);
+        crate::tick::spawn_stack_at(ctx, [pos[0], pos[1] + 0.3, pos[2]], &drop.stack());
     }
 }
 
@@ -364,7 +364,6 @@ fn wear_shears(ctx: &ServerContext, who: &Actor, hand: i32) {
     stack.damage += 1;
     if max > 0 && stack.damage >= max {
         hands.slots[slot] = None;
-        hands.components.remove(&slot);
         let _ = ctx.events.send(Event::HandBroke {
             uuid: who.uuid,
             entity_id: who.entity_id,

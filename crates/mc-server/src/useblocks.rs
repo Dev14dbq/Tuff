@@ -50,22 +50,79 @@ pub fn compost_chance(name: &str) -> u32 {
         | "sweet_berries" | "glow_berries" | "moss_carpet" | "pale_moss_carpet"
         | "hanging_roots" | "small_dripleaf" | "mangrove_propagule" | "cherry_sapling"
         | "short_dry_grass" | "tall_dry_grass" | "bush" | "firefly_bush" => 30,
-        "cactus" | "dried_kelp_block" | "flowering_azalea_leaves" | "glow_lichen"
-        | "melon_slice" | "nether_sprouts" | "sugar_cane" | "tall_grass" | "twisting_vines"
-        | "vine" | "weeping_vines" | "sunflower_unused" | "leaf_litter" | "wildflowers" => 50,
-        "apple" | "azalea" | "beetroot" | "big_dripleaf" | "carrot" | "cocoa_beans" | "fern"
-        | "large_fern" | "lily_pad" | "melon" | "moss_block" | "pale_moss_block"
-        | "brown_mushroom" | "red_mushroom" | "nether_wart" | "potato" | "pumpkin"
-        | "carved_pumpkin" | "crimson_roots" | "warped_roots" | "sea_pickle" | "shroomlight"
-        | "spore_blossom" | "wheat" | "crimson_fungus" | "warped_fungus" | "dandelion"
-        | "poppy" | "blue_orchid" | "allium" | "azure_bluet" | "red_tulip" | "orange_tulip"
-        | "white_tulip" | "pink_tulip" | "oxeye_daisy" | "cornflower" | "lily_of_the_valley"
-        | "wither_rose" | "torchflower" | "open_eyeblossom" | "closed_eyeblossom" | "sunflower"
-        | "lilac" | "rose_bush" | "peony" | "pitcher_plant" | "cherry_leaves_unused"
+        "cactus"
+        | "dried_kelp_block"
+        | "flowering_azalea_leaves"
+        | "glow_lichen"
+        | "melon_slice"
+        | "nether_sprouts"
+        | "sugar_cane"
+        | "tall_grass"
+        | "twisting_vines"
+        | "vine"
+        | "weeping_vines"
+        | "sunflower_unused"
+        | "leaf_litter"
+        | "wildflowers" => 50,
+        "apple"
+        | "azalea"
+        | "beetroot"
+        | "big_dripleaf"
+        | "carrot"
+        | "cocoa_beans"
+        | "fern"
+        | "large_fern"
+        | "lily_pad"
+        | "melon"
+        | "moss_block"
+        | "pale_moss_block"
+        | "brown_mushroom"
+        | "red_mushroom"
+        | "nether_wart"
+        | "potato"
+        | "pumpkin"
+        | "carved_pumpkin"
+        | "crimson_roots"
+        | "warped_roots"
+        | "sea_pickle"
+        | "shroomlight"
+        | "spore_blossom"
+        | "wheat"
+        | "crimson_fungus"
+        | "warped_fungus"
+        | "dandelion"
+        | "poppy"
+        | "blue_orchid"
+        | "allium"
+        | "azure_bluet"
+        | "red_tulip"
+        | "orange_tulip"
+        | "white_tulip"
+        | "pink_tulip"
+        | "oxeye_daisy"
+        | "cornflower"
+        | "lily_of_the_valley"
+        | "wither_rose"
+        | "torchflower"
+        | "open_eyeblossom"
+        | "closed_eyeblossom"
+        | "sunflower"
+        | "lilac"
+        | "rose_bush"
+        | "peony"
+        | "pitcher_plant"
+        | "cherry_leaves_unused"
         | "pale_hanging_moss" => 65,
-        "baked_potato" | "bread" | "cookie" | "flowering_azalea" | "hay_block"
-        | "red_mushroom_block" | "brown_mushroom_block" | "mushroom_stem"
-        | "nether_wart_block" | "warped_wart_block" => 85,
+        "baked_potato"
+        | "bread"
+        | "cookie"
+        | "flowering_azalea"
+        | "hay_block"
+        | "red_mushroom_block"
+        | "brown_mushroom_block"
+        | "mushroom_stem"
+        | "nether_wart_block"
+        | "warped_wart_block" => 85,
         "cake" | "pumpkin_pie" => 100,
         _ => 0,
     }
@@ -99,7 +156,14 @@ pub fn try_use(
         "minecraft:composter" => composter(ctx, outcome, actor, hand, clicked, state, held_name),
         "minecraft:jukebox" => jukebox(ctx, outcome, actor, hand, clicked, state, held_name),
         "minecraft:bell" => {
-            fx::sound(ctx, "block.bell.use", fx::category::BLOCKS, centre(clicked), 2.0, 1.0);
+            fx::sound(
+                ctx,
+                "block.bell.use",
+                fx::category::BLOCKS,
+                centre(clicked),
+                2.0,
+                1.0,
+            );
             outcome.events.push(Event::BlockAction {
                 position: clicked,
                 action: 1,
@@ -157,7 +221,14 @@ fn composter(
                 },
             );
         }
-        fx::sound(ctx, "block.composter.empty", fx::category::BLOCKS, centre(p), 1.0, 1.0);
+        fx::sound(
+            ctx,
+            "block.composter.empty",
+            fx::category::BLOCKS,
+            centre(p),
+            1.0,
+            1.0,
+        );
         return true;
     }
     let chance = held.map_or(0, compost_chance);
@@ -171,9 +242,23 @@ fn composter(
         if let Some(new) = with(next) {
             set(ctx, outcome, p, new);
         }
-        fx::sound(ctx, "block.composter.fill_success", fx::category::BLOCKS, centre(p), 1.0, 1.0);
+        fx::sound(
+            ctx,
+            "block.composter.fill_success",
+            fx::category::BLOCKS,
+            centre(p),
+            1.0,
+            1.0,
+        );
     } else {
-        fx::sound(ctx, "block.composter.fill", fx::category::BLOCKS, centre(p), 1.0, 1.0);
+        fx::sound(
+            ctx,
+            "block.composter.fill",
+            fx::category::BLOCKS,
+            centre(p),
+            1.0,
+            1.0,
+        );
     }
     fx::level_event(ctx, 1500, centre(p), i32::from(success));
     if actor.game_mode != CREATIVE {
@@ -204,19 +289,22 @@ fn jukebox(
     let blocks = &ctx.data.blocks;
     let has = blocks.property(state, "has_record") == Some("true");
     let set_record = |value: bool| {
-        blocks.state_id("minecraft:jukebox", &[("has_record", if value { "true" } else { "false" })])
+        blocks.state_id(
+            "minecraft:jukebox",
+            &[("has_record", if value { "true" } else { "false" })],
+        )
     };
     if has {
-        let record = ctx
-            .world
-            .block_entity(p, blocks)
-            .and_then(|be| match be.data.get("RecordItem") {
-                Some(Tag::Compound(c)) => match c.get("id") {
-                    Some(Tag::String(id)) => Some(id.clone()),
+        let record =
+            ctx.world
+                .block_entity(p, blocks)
+                .and_then(|be| match be.data.get("RecordItem") {
+                    Some(Tag::Compound(c)) => match c.get("id") {
+                        Some(Tag::String(id)) => Some(id.clone()),
+                        _ => None,
+                    },
                     _ => None,
-                },
-                _ => None,
-            });
+                });
         if let Some(id) = record.and_then(|id| ctx.items.id(&id)) {
             crate::tick::drop_item(
                 ctx,
@@ -299,7 +387,12 @@ fn bed(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, p: Position, _s
         pitch: 0.0,
         forced: false,
     };
-    if let Some(pl) = ctx.players.lock().expect("players lock").get_mut(&actor.uuid) {
+    if let Some(pl) = ctx
+        .players
+        .lock()
+        .expect("players lock")
+        .get_mut(&actor.uuid)
+    {
         pl.extra.respawn = Some(respawn);
     }
     let night = {
@@ -344,7 +437,14 @@ fn anchor(
         if let Some(new) = with(charges + 1) {
             set(ctx, outcome, p, new);
         }
-        fx::sound(ctx, "block.respawn_anchor.charge", fx::category::BLOCKS, centre(p), 1.0, 1.0);
+        fx::sound(
+            ctx,
+            "block.respawn_anchor.charge",
+            fx::category::BLOCKS,
+            centre(p),
+            1.0,
+            1.0,
+        );
         if actor.game_mode != CREATIVE {
             consume_held(ctx, actor, hand);
         }
@@ -363,10 +463,22 @@ fn anchor(
         pitch: 0.0,
         forced: false,
     };
-    if let Some(pl) = ctx.players.lock().expect("players lock").get_mut(&actor.uuid) {
+    if let Some(pl) = ctx
+        .players
+        .lock()
+        .expect("players lock")
+        .get_mut(&actor.uuid)
+    {
         pl.extra.respawn = Some(respawn);
     }
-    fx::sound(ctx, "block.respawn_anchor.set_spawn", fx::category::BLOCKS, centre(p), 1.0, 1.0);
+    fx::sound(
+        ctx,
+        "block.respawn_anchor.set_spawn",
+        fx::category::BLOCKS,
+        centre(p),
+        1.0,
+        1.0,
+    );
     message(outcome, actor, "block.minecraft.set_spawn");
     true
 }
@@ -401,7 +513,11 @@ pub fn tick(ctx: &ServerContext) {
     drop(sleepers);
     let packet = {
         let mut time = ctx.time.lock().expect("time lock");
-        if let Some(clock) = time.clocks.iter_mut().find(|c| c.name == "minecraft:overworld") {
+        if let Some(clock) = time
+            .clocks
+            .iter_mut()
+            .find(|c| c.name == "minecraft:overworld")
+        {
             let today = clock.ticks.div_euclid(24000);
             clock.ticks = (today + 1) * 24000;
         }

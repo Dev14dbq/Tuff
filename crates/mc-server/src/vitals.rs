@@ -290,7 +290,6 @@ fn finish_using(ctx: &ServerContext, uuid: u128, using: &Using) {
             stack.count -= 1;
             if stack.count <= 0 {
                 hands.slots[using.slot] = None;
-                hands.components.remove(&using.slot);
             }
             changed.push(using.slot);
             if let Some(id) = info.remainder.as_deref().and_then(|n| ctx.items.id(n)) {
@@ -299,7 +298,7 @@ fn finish_using(ctx: &ServerContext, uuid: u128, using: &Using) {
                         count: 1,
                         item: id,
                         damage: 0,
-                        has_component_changes: false,
+                        components: Default::default(),
                     });
                 } else {
                     let (taken, slots) = hands.insert(id, 1, ctx.items.max_stack(id));
@@ -316,7 +315,7 @@ fn finish_using(ctx: &ServerContext, uuid: u128, using: &Using) {
                                     count: 1,
                                     item: id,
                                     damage: 0,
-                                    has_component_changes: false,
+                                    components: Default::default(),
                                 },
                             );
                             inventories = lock(&ctx.inventories);
