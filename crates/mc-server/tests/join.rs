@@ -2951,3 +2951,57 @@ async fn the_stonecutter_offers_recipes_and_uses_up_its_input() {
     assert_eq!(back, 1, "one stone was used up, one comes back");
     let _ = stop.send(());
 }
+
+#[tokio::test]
+async fn ender_chests_keep_items_per_player_and_composters_fill() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Enda".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let (mut enda, _) = join_offline(addr, ctx.ids.clone(), "Enda").await;
+    let item = |n: &str| ctx.data.builtin.id("minecraft:item", n).unwrap();
+    let torch = item("minecraft:torch");
+    chat_command(&mut enda, "setblock 2 -60 2 minecraft:ender_chest").await;
+    creative_slot(&mut enda, 36, torch, 5).await;
+    use_block(&mut enda, mc_protocol::Position::new(2, -60, 2), 1).await;
+    let (_, screen) = enda.recv_until("minecraft:open_screen").await;
+    let window = Reader::new(&screen).varint().unwrap();
+    let mut click = Vec::new();
+    click.put_varint(window);
+    click.put_varint(2);
+    click.put_i16(54);
+    click.put_i8(0);
+    click.put_varint(1);
+    click.put_varint(2);
+    click.put_i16(54);
+    click.put_bool(false);
+    click.put_i16(0);
+    click.extend(hashed(torch, 5));
+    click.put_bool(false);
+    enda.send("minecraft:container_click", click).await;
+    let mut close = Vec::new();
+    close.put_varint(window);
+    enda.send("minecraft:container_close", close).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let uuid = mc_server_uuid(&ctx, "Enda");
+    let stored = ctx.players.lock().unwrap()[&uuid].extra.ender[0].clone();
+    assert_eq!(stored.map(|s| (s.item, s.count)), Some((torch, 5)));
+
+    // A cake always fills a composter a level.
+    chat_command(&mut enda, "setblock 4 -60 2 minecraft:composter").await;
+    creative_slot(&mut enda, 36, item("minecraft:cake"), 1).await;
+    use_block(&mut enda, mc_protocol::Position::new(4, -60, 2), 2).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let state = ctx
+        .world
+        .block(mc_protocol::Position::new(4, -60, 2), &ctx.data.blocks)
+        .unwrap();
+    assert_eq!(ctx.data.blocks.property(state, "level"), Some("1"));
+    let _ = stop.send(());
+}

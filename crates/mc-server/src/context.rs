@@ -365,6 +365,8 @@ pub struct ServerContext {
     pub fuels: crate::furnaces::Fuels,
     /// Furnaces burning or cooking (tick thread).
     pub furnaces: Mutex<crate::furnaces::Active>,
+    /// Players in bed at night, since when.
+    pub sleepers: Mutex<crate::useblocks::Sleepers>,
     /// Hoppers that tick (tick thread).
     pub hoppers: Mutex<crate::hoppers::Active>,
     /// Recent redstone torch toggles by position (burnout).
@@ -658,6 +660,7 @@ impl ServerContext {
             torch_toggles: Mutex::new(HashMap::new()),
             fuels,
             furnaces: Mutex::new(HashMap::new()),
+            sleepers: Mutex::new(HashMap::new()),
             block_events: Mutex::new(Vec::new()),
             moving: Mutex::new(Vec::new()),
             difficulty: AtomicI32::new(difficulty),

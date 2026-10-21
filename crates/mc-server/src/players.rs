@@ -86,6 +86,10 @@ pub struct Extra {
     pub respawn: Option<Respawn>,
     /// `/tag` (`Tags`).
     pub tags: Vec<String>,
+    /// The ender chest (`EnderItems`): 27 slots and the components kept
+    /// beside them.
+    pub ender: Vec<Option<ItemStack>>,
+    pub ender_components: std::collections::HashMap<usize, Tag>,
 }
 
 /// Container slot of each equipment key.
@@ -259,7 +263,26 @@ impl Store {
             vitals.absorption = *a;
         }
         vitals.dead = vitals.health <= 0.0;
+        let mut ender = vec![None; 27];
+        let mut ender_components = std::collections::HashMap::new();
+        if let Some(Tag::List(items)) = root.get("EnderItems") {
+            for item in items {
+                let Tag::Compound(entry) = item else { continue };
+                let Some(Tag::Byte(slot)) = entry.get("Slot") else {
+                    continue;
+                };
+                let slot = *slot as u8 as usize;
+                if let (true, Some((stack, components))) = (slot < 27, self.stack(entry)) {
+                    ender[slot] = Some(stack);
+                    if let Some(components) = components {
+                        ender_components.insert(slot, components);
+                    }
+                }
+            }
+        }
         let extra = Extra {
+            ender,
+            ender_components,
             respawn: match root.get("respawn") {
                 Some(Tag::Compound(c)) => Respawn::from_nbt(c),
                 _ => None,
@@ -371,6 +394,26 @@ impl Store {
             root.remove("active_effects");
         } else {
             root.insert("active_effects", saved.vitals.effects.to_nbt());
+        }
+        let mut ender = Vec::new();
+        for (slot, stack) in saved.extra.ender.iter().enumerate() {
+            let Some(stack) = stack else { continue };
+            let Some(id) = names(stack.item) else { continue };
+            let mut entry = Compound::new();
+            entry.insert("Slot", Tag::Byte(slot as i8));
+            entry.insert("count", Tag::Int(stack.count));
+            entry.insert("id", Tag::String(id));
+            if let Some(components) =
+                crate::items::join_damage(stack.damage, saved.extra.ender_components.get(&slot))
+            {
+                entry.insert("components", components);
+            }
+            ender.push(Tag::Compound(entry));
+        }
+        if ender.is_empty() {
+            root.remove("EnderItems");
+        } else {
+            root.insert("EnderItems", Tag::List(ender));
         }
         root.insert("SelectedItemSlot", Tag::Int(saved.hands.selected as i32));
         let mut inventory = Vec::new();

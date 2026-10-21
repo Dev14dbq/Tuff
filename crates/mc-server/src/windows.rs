@@ -214,7 +214,7 @@ impl Windows {
         menu: Menu,
     ) -> anyhow::Result<()> {
         self.close_current(writer, who)?;
-        let machine = Machine::new(who.ctx, menu, at);
+        let machine = Machine::new(who.ctx, who.uuid, menu, at);
         let values = machine.data.clone();
         let slots = machine.slots.clone();
         self.show(

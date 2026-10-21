@@ -426,6 +426,22 @@ pub fn dig(
         }
         outcome.events.push(Event::ContainerGone { position });
     }
+    if blocks.block_name(state) == Some("minecraft:jukebox")
+        && let Some(be) = ctx.world.block_entity(position, blocks)
+        && let Some(mc_nbt::Tag::Compound(record)) = be.data.get("RecordItem")
+        && let Some(mc_nbt::Tag::String(id)) = record.get("id")
+        && let Some(item) = ctx.items.id(id)
+    {
+        outcome.drops.push((
+            position,
+            crate::loot::Drop {
+                item,
+                count: 1,
+                components: mc_nbt::Compound::new(),
+            },
+        ));
+        crate::fx::level_event(ctx, 1011, centre(position), 0);
+    }
     if actor.game_mode != CREATIVE
         && let Some(name) = blocks.block_name(state)
     {
@@ -542,6 +558,10 @@ pub fn use_item_on(
             entity_id: actor.entity_id,
             times: 1,
         });
+        return outcome;
+    }
+    // Composters, jukeboxes, bells, beds, respawn anchors.
+    if use_blocks && crate::useblocks::try_use(ctx, &mut outcome, actor, hand, clicked, face) {
         return outcome;
     }
     // Levers, doors, repeaters... react to being used instead of having

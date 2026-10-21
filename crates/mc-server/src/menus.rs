@@ -23,6 +23,7 @@ pub enum Menu {
     Loom,
     Cartography,
     Enchanting,
+    EnderChest,
 }
 
 impl Menu {
@@ -37,6 +38,7 @@ impl Menu {
             "minecraft:loom" => Menu::Loom,
             "minecraft:cartography_table" => Menu::Cartography,
             "minecraft:enchanting_table" => Menu::Enchanting,
+            "minecraft:ender_chest" => Menu::EnderChest,
             _ => return None,
         })
     }
@@ -52,6 +54,7 @@ impl Menu {
             Menu::Loom => "minecraft:loom",
             Menu::Cartography => "minecraft:cartography_table",
             Menu::Enchanting => "minecraft:enchantment",
+            Menu::EnderChest => "minecraft:generic_9x3",
         }
     }
 
@@ -65,6 +68,7 @@ impl Menu {
             Menu::Loom => "Loom",
             Menu::Cartography => "Cartography Table",
             Menu::Enchanting => "Enchant",
+            Menu::EnderChest => "Ender Chest",
         }
     }
 
@@ -74,6 +78,7 @@ impl Menu {
             Menu::Anvil | Menu::Grindstone | Menu::Cartography => 3,
             Menu::Stonecutter | Menu::Enchanting => 2,
             Menu::Smithing | Menu::Loom => 4,
+            Menu::EnderChest => 27,
         }
         // Stonecutter: input, result. Enchanting: item, lapis.
     }
@@ -81,7 +86,7 @@ impl Menu {
     /// The slot a result appears in, if the window has one.
     fn result(self) -> Option<usize> {
         match self {
-            Menu::Beacon | Menu::Enchanting => None,
+            Menu::Beacon | Menu::Enchanting | Menu::EnderChest => None,
             Menu::Anvil | Menu::Grindstone | Menu::Cartography => Some(2),
             Menu::Stonecutter => Some(1),
             Menu::Smithing | Menu::Loom => Some(3),
@@ -169,7 +174,7 @@ fn take_one(slot: &mut Option<ItemStack>, n: i32) {
 }
 
 impl Machine {
-    pub fn new(ctx: &ServerContext, menu: Menu, at: Position) -> Self {
+    pub fn new(ctx: &ServerContext, uuid: u128, menu: Menu, at: Position) -> Self {
         let mut machine = Self {
             menu,
             at,
@@ -180,6 +185,13 @@ impl Machine {
             used: 0,
             last: vec![None; menu.size()],
         };
+        if menu == Menu::EnderChest
+            && let Some(p) = ctx.players.lock().expect("players lock").get(&uuid)
+        {
+            machine.slots.clone_from(&p.extra.ender);
+            machine.slots.resize(27, None);
+            machine.last.clone_from(&machine.slots);
+        }
         machine.data = machine.values(ctx);
         machine
     }
@@ -212,6 +224,17 @@ impl Machine {
         }
         self.refresh(ctx, uuid);
         self.last.clone_from(&self.slots);
+        self.store(ctx, uuid);
+    }
+
+    /// The ender chest keeps what is in it.
+    fn store(&self, ctx: &ServerContext, uuid: u128) {
+        if self.menu == Menu::EnderChest
+            && let Some(p) = ctx.players.lock().expect("players lock").get_mut(&uuid)
+        {
+            p.extra.ender.clone_from(&self.slots);
+            p.extra.ender_components.retain(|&i, _| self.slots[i].is_some());
+        }
     }
 
     /// A button of the window was pressed (stonecutter recipe).
@@ -404,6 +427,9 @@ impl Machine {
     /// Stacks the window gives back to the player when it closes (every
     /// slot but the result).
     pub fn leftovers(&mut self) -> Vec<ItemStack> {
+        if self.menu == Menu::EnderChest {
+            return Vec::new();
+        }
         let result = self.menu.result();
         self.slots
             .iter_mut()

@@ -47,6 +47,7 @@ mod scoreboard;
 mod storage;
 mod summon;
 mod tick;
+mod useblocks;
 mod util;
 mod vehicles;
 mod vitals;

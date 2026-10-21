@@ -40,6 +40,8 @@ pub struct Item {
     pub repairable: Vec<String>,
     /// `enchantable` value (how well it takes enchantments), if it does.
     pub enchantable: Option<i32>,
+    /// `jukebox_playable`: the song's id.
+    pub jukebox_song: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -179,6 +181,10 @@ fn parse(name: &str, c: &Value) -> Item {
                 .filter_map(|v| v.as_str().map(str::to_owned))
                 .collect(),
             _ => Vec::new(),
+        },
+        jukebox_song: match &c["minecraft:jukebox_playable"] {
+            Value::String(s) => Some(s.clone()),
+            other => other["song"].as_str().map(str::to_owned),
         },
         enchantable: c["minecraft:enchantable"]["value"].as_i64().map(|v| v as i32),
         fuel: c.get("minecraft:cooking_fuel").and_then(|f| {

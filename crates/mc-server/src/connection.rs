@@ -2140,7 +2140,28 @@ fn respawn_pose(ctx: &ServerContext, uuid: u128) -> Pose {
             pitch: r.pitch,
             on_ground: true,
         },
-        _ => world_spawn_pose(ctx),
+        // A bed or a charged anchor that is still there.
+        Some(r) => {
+            let at = Position::new(r.pos.0, r.pos.1, r.pos.2);
+            let blocks = &ctx.data.blocks;
+            let state = ctx.world.block(at, blocks);
+            let name = state.and_then(|s| blocks.block_name(s));
+            let anchor_ok = name == Some("minecraft:respawn_anchor")
+                && state.is_some_and(|s| blocks.property(s, "charges") != Some("0"));
+            if name.is_some_and(|n| n.ends_with("_bed")) || anchor_ok {
+                Pose {
+                    x: f64::from(r.pos.0) + 0.5,
+                    y: f64::from(r.pos.1) + if anchor_ok { 1.0 } else { 0.6 },
+                    z: f64::from(r.pos.2) + 0.5,
+                    yaw: r.yaw,
+                    pitch: 0.0,
+                    on_ground: true,
+                }
+            } else {
+                world_spawn_pose(ctx)
+            }
+        }
+        None => world_spawn_pose(ctx),
     }
 }
 
