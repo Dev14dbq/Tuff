@@ -9,13 +9,13 @@
 use std::collections::{HashMap, HashSet};
 
 use mc_entity::Collide as _;
-use mc_entity::mob::{Category, Target};
+use mc_entity::mob::{Category, Gear, Target, slot};
 use mc_entity::nav::{Liquid, Terrain};
-use mc_entity::{Entity, Kind, Species};
+use mc_entity::{Entity, Kind, Mob, Species};
 use mc_protocol::Position;
 use serde_json::Value;
 
-use super::{Ground, new_mob, sky_darken};
+use super::{Ground, new_mob_in, sky_darken};
 use crate::context::ServerContext;
 use crate::tick::lock;
 
@@ -61,6 +61,12 @@ pub struct Spawner {
     ranged_at: i64,
     /// The spawns of the biome at the middle of a chunk.
     chunk_biomes: HashMap<(i32, i32), Option<BiomeSpawns>>,
+    /// The world seed (slime chunks), once read.
+    seed: Option<Option<i64>>,
+    /// Ticks each player has gone without sleep, and when phantoms next
+    /// look.
+    unrest: HashMap<u128, i64>,
+    phantoms_at: i64,
 }
 
 fn count(v: &Value) -> (u32, u32) {
@@ -153,9 +159,81 @@ struct Spots<'a> {
     darken: u8,
     raining: bool,
     thundering: bool,
+    nether: bool,
+    seed: Option<i64>,
+    /// Moon brightness tonight (1 full .. 0 new).
+    moon: f64,
+}
+
+/// The block tag animals of a kind spawn on.
+fn spawnable_on(species: Species) -> &'static str {
+    match species {
+        Species::Rabbit => "minecraft:rabbits_spawnable_on",
+        Species::Wolf => "minecraft:wolves_spawnable_on",
+        Species::Fox => "minecraft:foxes_spawnable_on",
+        Species::Mooshroom => "minecraft:mooshrooms_spawnable_on",
+        Species::Parrot => "minecraft:parrots_spawnable_on",
+        _ => "minecraft:animals_spawnable_on",
+    }
+}
+
+/// Java's `Random` (a 48-bit linear congruential generator), for slime
+/// chunks.
+struct JavaRandom(i64);
+
+impl JavaRandom {
+    fn new(seed: i64) -> Self {
+        Self((seed ^ 0x5DEE_CE66D) & ((1 << 48) - 1))
+    }
+
+    fn next(&mut self, bits: u32) -> i32 {
+        self.0 = (self.0.wrapping_mul(0x5DEE_CE66D).wrapping_add(0xB)) & ((1 << 48) - 1);
+        (self.0 >> (48 - bits)) as i32
+    }
+
+    fn next_int(&mut self, bound: i32) -> i32 {
+        if bound & -bound == bound {
+            return ((i64::from(bound) * i64::from(self.next(31))) >> 31) as i32;
+        }
+        loop {
+            let bits = self.next(31);
+            let val = bits % bound;
+            if bits - val + (bound - 1) >= 0 {
+                return val;
+            }
+        }
+    }
+}
+
+/// Whether slimes spawn underground in this chunk (one in ten, by seed).
+pub fn slime_chunk(seed: i64, cx: i32, cz: i32) -> bool {
+    let (x, z) = (i64::from(cx), i64::from(cz));
+    let s = seed
+        .wrapping_add((x * x * 0x4c1906) as i32 as i64)
+        .wrapping_add((x * 0x5ac0db) as i32 as i64)
+        .wrapping_add((z * z) as i32 as i64 * 0x4307a7)
+        .wrapping_add((z * 0x5f24f) as i32 as i64)
+        ^ 0x3ad8025f;
+    JavaRandom::new(s).next_int(10) == 0
 }
 
 impl Spots<'_> {
+    /// Slimes: in swamps at the height of the surface on moonlit nights, or
+    /// deep down in slime chunks.
+    fn slime_fits(&self, x: i32, y: i32, z: i32) -> bool {
+        let p = Position::new(x, y, z);
+        let swamp = self
+            .biome(x, y, z)
+            .is_some_and(|b| in_biome_tag(self.ctx, &b, "minecraft:allows_surface_slime_spawns"));
+        if swamp && (51..70).contains(&y) && rand() < 0.5 && rand() < self.moon {
+            return u32::from(self.ctx.world.brightness(p)) <= below(8);
+        }
+        let chunk = self
+            .seed
+            .is_some_and(|seed| slime_chunk(seed, x >> 4, z >> 4));
+        chunk && y < 40 && below(10) == 0
+    }
+
     fn biome(&self, x: i32, y: i32, z: i32) -> Option<String> {
         let id = self
             .ctx
@@ -196,6 +274,14 @@ impl Spots<'_> {
         let half = (w / 2.0).ceil() as i32;
         let _ = half;
         let height = h.ceil() as i32;
+        // Drowned rise from deep water.
+        if species == Species::Drowned {
+            let water = |dy| self.ground.liquid(x, y + dy, z) == Liquid::Water;
+            return water(0)
+                && water(1)
+                && self.ctx.world.block_light(Position::new(x, y, z)) == 0
+                && below(15) == 0;
+        }
         // Room for the body, not in a liquid or fire, on firm ground.
         for dy in 0..height {
             if self.ground.solid(x, y + dy, z)
@@ -221,13 +307,19 @@ impl Spots<'_> {
         let p = Position::new(x, y, z);
         match species.category() {
             Category::Creature => {
-                // Grass underfoot, in the light.
+                // Its kind of ground underfoot, in the light.
                 let below = self
                     .ctx
                     .world
                     .block(Position::new(x, y - 1, z), &self.ctx.data.blocks)
-                    .and_then(|s| self.ctx.data.blocks.block_name(s));
-                below == Some("minecraft:grass_block")
+                    .and_then(|s| self.ctx.data.blocks.block_name(s))
+                    .unwrap_or("");
+                let ground = self
+                    .ctx
+                    .commands
+                    .env
+                    .tag("minecraft:block", spawnable_on(species));
+                ground.iter().any(|g| g == below)
                     && self
                         .ctx
                         .world
@@ -236,6 +328,12 @@ impl Spots<'_> {
                         >= 9
             }
             Category::Monster => {
+                if self.nether {
+                    return self.ctx.world.block_light(p) <= 11;
+                }
+                if species == Species::Slime {
+                    return self.slime_fits(x, y, z);
+                }
                 if self.ctx.world.block_light(p) > 0 {
                     return false;
                 }
@@ -286,6 +384,19 @@ impl Spots<'_> {
                 min + below((top + 2 - min).max(1) as u32) as i32
             }
         };
+        // Drowned start in the water column instead.
+        let y = if entry.species == Species::Drowned {
+            if self.ground.liquid(x, top, z) != Liquid::Water {
+                return;
+            }
+            let bottom = (self.ctx.world.min_y..=top)
+                .rev()
+                .find(|&yy| self.ground.liquid(x, yy, z) != Liquid::Water)
+                .unwrap_or(top);
+            bottom + 1 + below((top - bottom).max(1) as u32) as i32
+        } else {
+            y
+        };
         if self.ground.solid(x, y, z) {
             return;
         }
@@ -302,7 +413,8 @@ impl Spots<'_> {
                 continue;
             }
             let pos = [f64::from(px) + 0.5, f64::from(y), f64::from(pz) + 0.5];
-            out.push(new_mob(self.ctx, entry.species, pos));
+            let biome = self.biome(px, y, pz);
+            out.push(new_mob_in(self.ctx, entry.species, pos, biome.as_deref()));
             spawned += 1;
         }
     }
@@ -320,7 +432,24 @@ pub fn tick(
 ) -> Vec<Entity> {
     let mut sp = lock(&ctx.mobs.spawner);
     let spawner = &mut *sp;
-    let biomes = spawner.biomes.get_or_insert_with(|| load_biomes(ctx));
+    let mut biome_table = spawner.biomes.take().unwrap_or_else(|| load_biomes(ctx));
+    let out = spawn_round(ctx, spawner, &biome_table, ground, entities, targets, now, day_time, difficulty);
+    spawner.biomes = Some(std::mem::take(&mut biome_table));
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_round(
+    ctx: &ServerContext,
+    spawner: &mut Spawner,
+    biomes: &HashMap<String, BiomeSpawns>,
+    ground: &Ground,
+    entities: &mut [Entity],
+    targets: &[Target],
+    now: i64,
+    day_time: i64,
+    difficulty: i32,
+) -> Vec<Entity> {
     // Chunks within range of a player that are loaded.
     if now - spawner.ranged_at >= RANGE_PERIOD || spawner.eligible.is_empty() {
         let mut chunks: HashSet<(i32, i32)> = HashSet::new();
@@ -362,7 +491,12 @@ pub fn tick(
         }
     }
     let (creature_cap, monster_cap) = (CREATURE_CAP * n / 289, MONSTER_CAP * n / 289);
+    if !ctx.game_rule_bool("minecraft:spawn_mobs") {
+        return Vec::new();
+    }
+    let seed = *spawner.seed.get_or_insert_with(|| ctx.world.seed());
     let weather = lock(&ctx.weather);
+    let phase = (day_time / 24000).rem_euclid(8);
     let spots = Spots {
         ctx,
         ground,
@@ -370,6 +504,9 @@ pub fn tick(
         darken: sky_darken(day_time),
         raining: weather.raining,
         thundering: weather.thundering,
+        nether: ctx.world.dimension == "minecraft:the_nether",
+        seed,
+        moon: [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75][phase as usize],
     };
     drop(weather);
     let mut out = Vec::new();
@@ -408,8 +545,10 @@ pub fn tick(
             }
         }
     }
+    // Phantoms come for players who have not slept for three days.
+    phantoms(ctx, (&mut spawner.unrest, &mut spawner.phantoms_at), &spots, now, difficulty, &mut out);
     // Monsters, every tick, in a few chunks picked at random.
-    if difficulty > 0 && monsters < monster_cap {
+    if difficulty > 0 && monsters < monster_cap && ctx.game_rule_bool("minecraft:spawn_monsters") {
         for _ in 0..MONSTER_TRIES {
             let chunk = list[below(list.len() as u32) as usize];
             if let Some(b) = in_biome(chunk.0 * 16 + 8, chunk.1 * 16 + 8, biomes) {
@@ -421,6 +560,290 @@ pub fn tick(
         }
     }
     out
+}
+
+/// Whether a biome is in a biome tag.
+fn in_biome_tag(ctx: &ServerContext, biome: &str, tag: &str) -> bool {
+    ctx.commands
+        .env
+        .tag("minecraft:worldgen/biome", tag)
+        .iter()
+        .any(|b| b == biome)
+}
+
+/// Whether a `biomes` field (an id, a `#tag` or a list) holds a biome.
+fn biomes_hold(ctx: &ServerContext, field: &Value, biome: &str) -> bool {
+    match field {
+        Value::String(s) => match s.strip_prefix('#') {
+            Some(tag) => in_biome_tag(ctx, biome, tag),
+            None => mc_command::args::full_id(s) == biome,
+        },
+        Value::Array(a) => a.iter().any(|v| biomes_hold(ctx, v, biome)),
+        _ => false,
+    }
+}
+
+/// Picks a data-driven variant the way spawning does: among the entries
+/// whose spawn conditions hold, those of the highest priority, at random.
+fn pick_variant(ctx: &ServerContext, species: Species, biome: Option<&str>, m: &mut Mob) -> i32 {
+    let Some(reg) = super::meta::variant_registry(species) else {
+        return 0;
+    };
+    let pack = ctx.data.data_pack();
+    let mut best: (i64, Vec<i32>) = (i64::MIN, Vec::new());
+    for (i, name) in super::meta::registry(ctx, reg).iter().enumerate() {
+        let Ok(json) = pack.read_entry(reg, name) else {
+            continue;
+        };
+        for cond in json["spawn_conditions"].as_array().into_iter().flatten() {
+            let holds = match cond.get("condition") {
+                None => true,
+                Some(c) if c["type"] == "minecraft:biome" => {
+                    biome.is_some_and(|b| biomes_hold(ctx, &c["biomes"], b))
+                }
+                Some(_) => false,
+            };
+            let priority = cond["priority"].as_i64().unwrap_or(0);
+            if holds && priority >= best.0 {
+                if priority > best.0 {
+                    best = (priority, Vec::new());
+                }
+                best.1.push(i as i32);
+            }
+        }
+    }
+    if best.1.is_empty() {
+        return 0;
+    }
+    best.1[m.below(best.1.len() as u32) as usize]
+}
+
+/// The type of villager a biome raises (zombie villagers too).
+pub fn villager_type(biome: Option<&str>) -> &'static str {
+    let b = biome.unwrap_or("");
+    let has = |w: &[&str]| w.iter().any(|w| b.contains(w));
+    if has(&["desert"]) {
+        "minecraft:desert"
+    } else if has(&["jungle", "bamboo"]) {
+        "minecraft:jungle"
+    } else if has(&["savanna", "badlands"]) {
+        "minecraft:savanna"
+    } else if has(&["snowy", "frozen", "ice", "grove", "jagged", "peaks"]) {
+        "minecraft:snow"
+    } else if has(&["swamp"]) {
+        "minecraft:swamp"
+    } else if has(&["taiga"]) {
+        "minecraft:taiga"
+    } else {
+        "minecraft:plains"
+    }
+}
+
+/// How hard the place is, after the wiki's "regional difficulty": the
+/// difficulty scaled by how long the world has run and the moon.
+pub fn regional_difficulty(difficulty: i32, world_age: i64, day_time: i64) -> f64 {
+    if difficulty == 0 {
+        return 0.0;
+    }
+    let time = ((world_age - 72_000) as f64 / 1_440_000.0).clamp(0.0, 1.0) * 0.25;
+    let phase = (day_time / 24000).rem_euclid(8);
+    let moon = [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75][phase as usize];
+    let mut chunk = (moon * 0.25f64).min(time);
+    if difficulty == 1 {
+        chunk *= 0.5;
+    }
+    f64::from(difficulty) * (0.75 + time + chunk)
+}
+
+/// The part of regional difficulty that gives monsters gear (0 to 1).
+pub fn special_multiplier(regional: f64) -> f64 {
+    ((regional - 2.0) / 2.0).clamp(0.0, 1.0)
+}
+
+fn gear(ctx: &ServerContext, name: &str) -> Option<Gear> {
+    Some(Gear {
+        item: ctx.items.id(&format!("minecraft:{name}"))?,
+        count: 1,
+        damage: 0,
+    })
+}
+
+/// Random armor for a monster, from boots up.
+fn armor(ctx: &ServerContext, m: &mut Mob, special: f64, difficulty: i32) {
+    if m.next_f64() >= 0.15 * special {
+        return;
+    }
+    let mut tier = m.below(2);
+    for _ in 0..3 {
+        if m.next_f64() < 0.095 {
+            tier += 1;
+        }
+    }
+    let material = ["leather", "golden", "chainmail", "iron", "diamond"][tier as usize];
+    let stop = if difficulty == 3 { 0.1 } else { 0.25 };
+    for (i, (s, piece)) in [
+        (slot::FEET, "boots"),
+        (slot::LEGS, "leggings"),
+        (slot::CHEST, "chestplate"),
+        (slot::HEAD, "helmet"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if i > 0 && m.next_f64() < stop {
+            break;
+        }
+        if m.gear[s].is_none() {
+            m.gear[s] = gear(ctx, &format!("{material}_{piece}"));
+        }
+    }
+}
+
+/// What a mob is born with: a sheep's wool, a variant fitting the biome,
+/// a monster's weapon and armor, a chance of being a baby. `biome` is
+/// where it spawns, when known.
+pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
+    use Species::*;
+    let Kind::Mob(m) = &mut e.kind else {
+        return;
+    };
+    let difficulty = ctx.difficulty();
+    let day_time = super::day_time(ctx);
+    let world_age = lock(&ctx.time).age;
+    let special = special_multiplier(regional_difficulty(difficulty, world_age, day_time));
+    let species = m.species;
+    match species {
+        Sheep => {
+            let roll = m.below(10_000);
+            // The wiki's natural wool colours.
+            m.set_color(match roll {
+                0..=15 => 6,
+                16..=315 => 12,
+                316..=815 => 7,
+                816..=1315 => 8,
+                1316..=1815 => 15,
+                _ => 0,
+            });
+        }
+        Cat | Cow | Wolf | Pig | Chicken => m.variant = pick_variant(ctx, species, biome, m),
+        Horse => m.variant = m.below(7) as i32 | (m.below(5) as i32) << 8,
+        Parrot => m.variant = m.below(5) as i32,
+        Fox => {
+            let snow =
+                biome.is_some_and(|b| in_biome_tag(ctx, b, "minecraft:spawns_snow_foxes"));
+            m.variant = i32::from(snow);
+        }
+        Rabbit => {
+            let tag = |t| biome.is_some_and(|b| in_biome_tag(ctx, b, t));
+            m.variant = if tag("minecraft:spawns_gold_rabbits") {
+                4
+            } else if tag("minecraft:spawns_white_rabbits") {
+                if m.below(5) == 0 { 3 } else { 1 }
+            } else {
+                match m.below(100) {
+                    0..=49 => 0,
+                    50..=89 => 2,
+                    _ => 5,
+                }
+            };
+        }
+        _ => {}
+    }
+    if species.category() == Category::Monster {
+        m.left_handed = m.next_f64() < 0.05;
+        m.can_pick_up = m.next_f64() < 0.55 * special;
+        if species.zombie() || species.skeleton() {
+            armor(ctx, m, special, difficulty);
+        }
+    }
+    let weapon = match species {
+        Skeleton | Stray => Some("bow"),
+        WitherSkeleton => Some("stone_sword"),
+        ZombifiedPiglin => Some("golden_sword"),
+        Piglin => Some(if m.below(2) == 0 { "crossbow" } else { "golden_sword" }),
+        Drowned if m.next_f64() > 0.9 => Some(if m.below(16) < 10 {
+            "trident"
+        } else {
+            "fishing_rod"
+        }),
+        Zombie | Husk | ZombieVillager
+            if m.next_f64() < if difficulty == 3 { 0.05 } else { 0.01 } =>
+        {
+            Some(if m.below(3) == 0 { "iron_sword" } else { "iron_shovel" })
+        }
+        _ => None,
+    };
+    if let Some(w) = weapon
+        && m.gear[slot::MAINHAND].is_none()
+    {
+        m.gear[slot::MAINHAND] = gear(ctx, w);
+    }
+    if species == ZombieVillager && m.villager.is_none() {
+        m.villager = Some((villager_type(biome).to_owned(), None, 1));
+    }
+    if (species.zombie() || species == Piglin) && m.next_f64() < 0.05 {
+        m.set_baby(true);
+    }
+}
+
+/// Phantoms: every minute or two, each player in the open at night who has
+/// not slept for three days or more may draw a few from the sky.
+fn phantoms(
+    ctx: &ServerContext,
+    (unrest_of, next_at): (&mut HashMap<u128, i64>, &mut i64),
+    spots: &Spots,
+    now: i64,
+    difficulty: i32,
+    out: &mut Vec<Entity>,
+) {
+    let resting: Vec<u128> = lock(&ctx.sleepers).keys().copied().collect();
+    unrest_of.retain(|u, _| spots.targets.iter().any(|t| t.uuid == *u));
+    for t in spots.targets {
+        let n = unrest_of.entry(t.uuid).or_insert(0);
+        *n = if resting.contains(&t.uuid) { 0 } else { *n + 1 };
+    }
+    if now < *next_at {
+        return;
+    }
+    *next_at = now + 1200 + i64::from(below(1200));
+    if spots.nether
+        || difficulty == 0
+        || spots.darken < 5
+        || !ctx.game_rule_bool("minecraft:spawn_phantoms")
+    {
+        return;
+    }
+    let day_time = super::day_time(ctx);
+    let world_age = lock(&ctx.time).age;
+    let regional = regional_difficulty(difficulty, world_age, day_time);
+    for t in spots.targets.iter().filter(|t| t.targetable) {
+        let unrest = unrest_of.get(&t.uuid).copied().unwrap_or(0);
+        let p = Position::new(
+            t.pos[0].floor() as i32,
+            t.pos[1].floor() as i32,
+            t.pos[2].floor() as i32,
+        );
+        if p.y < ctx.world.sea_level
+            || ctx.world.sky_light(p) < 15
+            || regional <= rand() * 3.0
+            || unrest < 72_000
+            || i64::from(below(unrest.min(u32::MAX as i64) as u32)) < 72_000
+        {
+            continue;
+        }
+        let up = 20 + below(15) as i32;
+        let at = [
+            f64::from(p.x + below(21) as i32 - 10) + 0.5,
+            f64::from(p.y + up),
+            f64::from(p.z + below(21) as i32 - 10) + 0.5,
+        ];
+        if spots.ground.solid(at[0] as i32, at[1] as i32, at[2] as i32) {
+            continue;
+        }
+        for _ in 0..1 + below(difficulty as u32 + 1) {
+            out.push(new_mob_in(ctx, Species::Phantom, at, None));
+        }
+    }
 }
 
 fn is_monster(e: &Entity) -> bool {
@@ -435,7 +858,12 @@ pub fn despawn(entities: &mut [Entity], targets: &[Target], difficulty: i32) -> 
         let Kind::Mob(m) = &e.kind else {
             continue;
         };
-        if m.species.category() != Category::Monster || m.persistent || e.removed {
+        if m.species.category() != Category::Monster
+            || m.persistent
+            || m.custom_name.is_some()
+            || !m.riders.is_empty()
+            || e.removed
+        {
             continue;
         }
         let nearest = targets
@@ -464,6 +892,35 @@ mod tests {
     use mc_entity::Mob;
 
     #[test]
+    fn slime_chunks_match_known_seed() {
+        // One in ten chunks, the same for the same seed.
+        let n = (0..100)
+            .flat_map(|x| (0..100).map(move |z| (x, z)))
+            .filter(|&(x, z)| slime_chunk(12345, x, z))
+            .count();
+        assert!((800..1200).contains(&n), "{n}");
+        assert_eq!(slime_chunk(7, 3, -4), slime_chunk(7, 3, -4));
+    }
+
+    #[test]
+    fn regional_difficulty_grows_with_time() {
+        assert_eq!(regional_difficulty(0, 0, 0), 0.0);
+        assert!((regional_difficulty(2, 0, 0) - 1.5).abs() < 1e-9);
+        let late = regional_difficulty(3, 10_000_000, 0);
+        // Hard, years in, full moon: 3 × (0.75 + 0.25 + 0.25).
+        assert!((late - 3.75).abs() < 1e-9, "{late}");
+        assert!((special_multiplier(late) - 0.875).abs() < 1e-9);
+        assert_eq!(special_multiplier(1.5), 0.0);
+    }
+
+    #[test]
+    fn villager_types_follow_biomes() {
+        assert_eq!(villager_type(Some("minecraft:desert")), "minecraft:desert");
+        assert_eq!(villager_type(Some("minecraft:snowy_plains")), "minecraft:snow");
+        assert_eq!(villager_type(None), "minecraft:plains");
+    }
+
+    #[test]
     fn counts_read_both_forms() {
         assert_eq!(count(&serde_json::json!(4)), (4, 4));
         assert_eq!(
@@ -478,7 +935,7 @@ mod tests {
     fn only_known_species_are_kept() {
         let list = serde_json::json!([
             {"type": "minecraft:cow", "count": 4, "weight": 8},
-            {"type": "minecraft:horse", "count": 4, "weight": 5},
+            {"type": "minecraft:camel", "count": 4, "weight": 5},
             {"type": "minecraft:zombie", "count": {"min_inclusive": 1, "max_inclusive": 2}, "weight": 90},
         ]);
         let e = entries(&list);
@@ -519,12 +976,7 @@ mod tests {
                 tags: Vec::new(),
             }
         };
-        let player = Target {
-            id: 9,
-            uuid: 9,
-            pos: [0.0; 3],
-            targetable: true,
-        };
+        let player = Target::at(9, 9, [0.0; 3]);
         let mut v = vec![
             mk(Species::Zombie, [200.0, 0.0, 0.0], 10),
             mk(Species::Zombie, [10.0, 0.0, 0.0], 10),

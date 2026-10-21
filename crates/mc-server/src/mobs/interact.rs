@@ -1,0 +1,553 @@
+//! What players do to mobs with what they hold (minecraft.wiki, the pages
+//! of each mob, "Breeding", "Taming", "Name Tag", "Dye", "Saddle"), and the
+//! items mobs pick up themselves.
+//!
+//! In order, a use on a mob:
+//! - a name tag with a name names it (and it never despawns);
+//! - shears take a sheep's wool; a dye colours a sheep or a pet's collar;
+//! - a bucket milks a cow (a bowl a mooshroom);
+//! - its food feeds it: a baby grows up a tenth faster, a grown-up that may
+//!   breed falls in love; a tamed wolf eats to heal;
+//! - the taming item tames it now and then (a wolf's bone one time in
+//!   three, a cat's fish one in three, a parrot's seeds one in ten); horses
+//!   are tamed by riding them;
+//! - a saddle saddles a pig or a tamed horse; a horse armor armors it;
+//! - an owner's empty hand makes a pet sit or stand;
+//! - an empty hand gets on a saddled pig or a horse;
+//! - flint and steel lights a creeper; gold makes a piglin look at it; a
+//!   golden apple starts curing a zombie villager.
+
+use mc_entity::mob::{Gear, slot};
+use mc_entity::{Entity, Kind, Species};
+use mc_protocol::packets::play::{self, SetEntityData};
+
+use super::{Actor, WOOL_COLORS};
+use crate::context::{Event, ServerContext};
+use crate::fx;
+use crate::tick::lock;
+
+/// Takes one of the held item (not in creative).
+fn consume(ctx: &ServerContext, by: &Actor, slot: usize) {
+    if by.game_mode != 1 {
+        crate::held::consume(ctx, by.uuid, slot, 1);
+    }
+}
+
+/// Swaps one of the held item for `into` (a bucket for milk).
+fn swap_one(ctx: &ServerContext, by: &Actor, slot: usize, into: &str) {
+    let Some(item) = ctx.items.id(into) else {
+        return;
+    };
+    if by.game_mode != 1 {
+        crate::held::consume(ctx, by.uuid, slot, 1);
+    }
+    let stack = play::ItemStack::new(item, 1);
+    let left = crate::held::give(ctx, by.uuid, &stack);
+    if left > 0 {
+        crate::tick::spawn_item_at(ctx, by.pos, item, left);
+    }
+}
+
+fn swing(ctx: &ServerContext, by: &Actor) {
+    let _ = ctx.events.send(Event::Swing {
+        uuid: by.uuid,
+        entity_id: by.entity_id,
+        times: 1,
+    });
+}
+
+fn dye_color(name: &str) -> Option<u8> {
+    let color = name.strip_prefix("minecraft:")?.strip_suffix("_dye")?;
+    WOOL_COLORS.iter().position(|c| *c == color).map(|i| i as u8)
+}
+
+fn tame(ctx: &ServerContext, e: &mut Entity, by: &Actor) {
+    let id = e.id;
+    let Kind::Mob(m) = &mut e.kind else {
+        return;
+    };
+    m.owner = Some(by.uuid);
+    m.tame = true;
+    m.persistent = true;
+    m.nav.stop();
+    m.target = None;
+    m.revenge = None;
+    if matches!(m.species, Species::Wolf | Species::Cat | Species::Parrot) {
+        m.sitting = true;
+    }
+    if m.species == Species::Wolf {
+        m.set_max_health(40.0);
+    }
+    m.dirty = true;
+    fx::status(ctx, id, 7);
+}
+
+/// A player used the held item on a mob.
+pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
+    let id = e.id;
+    let pos = e.pos;
+    let held = crate::held::held(ctx, by.uuid, hand);
+    let name = held.as_ref().map_or("", |h| h.name.as_str()).to_owned();
+    let hslot = held.as_ref().map_or(0, |h| h.slot);
+    let item = held.as_ref().map(|h| h.stack.item);
+    let Kind::Mob(m) = &mut e.kind else {
+        return;
+    };
+    if m.dying.is_some() {
+        return;
+    }
+    let species = m.species;
+    let tagged = |tag: Option<&str>| {
+        tag.is_some_and(|t| {
+            ctx.commands
+                .env
+                .tag("minecraft:item", t)
+                .contains(&name)
+        })
+    };
+    // A name tag.
+    if name == "minecraft:name_tag" {
+        let custom = held.as_ref().and_then(|h| match &h.comps {
+            Some(mc_nbt::Tag::Compound(c)) => match c.get("minecraft:custom_name") {
+                Some(mc_nbt::Tag::String(s)) => Some(s.clone()),
+                Some(mc_nbt::Tag::Compound(t)) => match t.get("text") {
+                    Some(mc_nbt::Tag::String(s)) => Some(s.clone()),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        });
+        if let Some(text) = custom {
+            m.custom_name = Some(text);
+            m.persistent = true;
+            m.dirty = true;
+            consume(ctx, by, hslot);
+            swing(ctx, by);
+            send_now(ctx, e);
+        }
+        return;
+    }
+    // Shears.
+    if name == "minecraft:shears" {
+        if m.can_shear() {
+            m.shear();
+            let color = WOOL_COLORS[usize::from(m.color & 15)];
+            let count = 1 + m.below(3) as i32;
+            fx::sound(ctx, "entity.sheep.shear", fx::category::PLAYERS, pos, 1.0, 1.0);
+            if by.game_mode != 1 {
+                crate::held::wear(ctx, by.uuid, hslot, 1);
+            }
+            if let Some(wool) = ctx.items.id(&format!("minecraft:{color}_wool")) {
+                crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 1.0, pos[2]], wool, count);
+            }
+            swing(ctx, by);
+            send_now(ctx, e);
+        } else if species == Species::Mooshroom && !m.is_baby() {
+            // A mooshroom gives its mushrooms and becomes a cow.
+            let mushroom = if m.variant == 1 {
+                "minecraft:brown_mushroom"
+            } else {
+                "minecraft:red_mushroom"
+            };
+            fx::sound(ctx, "entity.mooshroom.shear", fx::category::PLAYERS, pos, 1.0, 1.0);
+            if by.game_mode != 1 {
+                crate::held::wear(ctx, by.uuid, hslot, 1);
+            }
+            if let Some(i) = ctx.items.id(mushroom) {
+                crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 1.0, pos[2]], i, 5);
+            }
+            if let Some(cow) = super::hurt::convert(ctx, e, Species::Cow) {
+                let _ = ctx.events.send(Event::EntitySpawned(cow.clone()));
+                let _ = ctx.events.send(Event::EntitiesRemoved(vec![id]));
+                lock(&ctx.entities).push(cow);
+            }
+        }
+        return;
+    }
+    // Dyes.
+    if let Some(color) = dye_color(&name) {
+        if species == Species::Sheep && !m.sheared && m.color != color {
+            m.set_color(color);
+            consume(ctx, by, hslot);
+            fx::sound(ctx, "item.dye.use", fx::category::PLAYERS, pos, 1.0, 1.0);
+            send_now(ctx, e);
+            return;
+        }
+        if matches!(species, Species::Wolf | Species::Cat)
+            && m.owner == Some(by.uuid)
+            && m.collar != color
+        {
+            m.collar = color;
+            m.dirty = true;
+            consume(ctx, by, hslot);
+            send_now(ctx, e);
+            return;
+        }
+    }
+    // Milk.
+    if name == "minecraft:bucket"
+        && matches!(species, Species::Cow | Species::Mooshroom)
+        && !m.is_baby()
+    {
+        fx::sound(ctx, "entity.cow.milk", fx::category::PLAYERS, pos, 1.0, 1.0);
+        swap_one(ctx, by, hslot, "minecraft:milk_bucket");
+        return;
+    }
+    if name == "minecraft:bowl" && species == Species::Mooshroom && !m.is_baby() {
+        fx::sound(ctx, "entity.mooshroom.milk", fx::category::PLAYERS, pos, 1.0, 1.0);
+        swap_one(ctx, by, hslot, "minecraft:mushroom_stew");
+        return;
+    }
+    // Flint and steel lights a creeper.
+    if name == "minecraft:flint_and_steel" && species == Species::Creeper && !m.ignited {
+        m.ignited = true;
+        m.dirty = true;
+        fx::sound(ctx, "item.flintandsteel.use", fx::category::PLAYERS, pos, 1.0, 1.0);
+        if by.game_mode != 1 {
+            crate::held::wear(ctx, by.uuid, hslot, 1);
+        }
+        swing(ctx, by);
+        return;
+    }
+    // Curing a zombie villager.
+    if name == "minecraft:golden_apple" && species == Species::ZombieVillager && m.conversion < 0 {
+        m.conversion = 3600 + m.below(2401) as i32;
+        m.persistent = true;
+        m.dirty = true;
+        consume(ctx, by, hslot);
+        fx::status(ctx, id, 16);
+        fx::sound(ctx, "entity.zombie_villager.cure", 5, pos, 1.0, 1.0);
+        send_now(ctx, e);
+        return;
+    }
+    // Gold for a piglin.
+    if species == Species::Piglin
+        && !m.is_baby()
+        && m.charge == 0
+        && m.target.is_none()
+        && tagged(Some("minecraft:piglin_loved"))
+        && let Some(item) = item
+    {
+        m.gear[slot::OFFHAND] = Some(Gear {
+            item,
+            count: 1,
+            damage: 0,
+        });
+        m.charge = 120;
+        m.nav.stop();
+        consume(ctx, by, hslot);
+        fx::sound(ctx, "entity.piglin.admiring_item", 5, pos, 1.0, 1.0);
+        send_equipment(ctx, e);
+        return;
+    }
+    let owner = m.owner == Some(by.uuid);
+    let food = tagged(species.food_tag());
+    // Taming.
+    let taming = match species {
+        Species::Wolf => name == "minecraft:bone",
+        Species::Cat => food,
+        Species::Parrot => food,
+        _ => false,
+    };
+    if taming && !m.is_tame() && m.target.is_none() {
+        consume(ctx, by, hslot);
+        let chance = match species {
+            Species::Parrot => 10,
+            _ => 3,
+        };
+        if m.below(chance) == 0 {
+            tame(ctx, e, by);
+            send_now(ctx, e);
+        } else {
+            fx::status(ctx, id, 6);
+        }
+        return;
+    }
+    // A tamed wolf eats to heal.
+    if species == Species::Wolf && m.is_tame() && food && m.health < m.max_health {
+        let heal = item
+            .and_then(|i| ctx.items.get(i))
+            .and_then(|i| i.food.as_ref())
+            .map_or(1.0, |f| f.nutrition as f32);
+        m.health = (m.health + heal).min(m.max_health);
+        m.dirty = true;
+        consume(ctx, by, hslot);
+        send_now(ctx, e);
+        return;
+    }
+    // Horses: food heals and calms; golden food makes tamed ones breed.
+    if species.horse() && food {
+        let golden = matches!(
+            name.as_str(),
+            "minecraft:golden_carrot" | "minecraft:golden_apple" | "minecraft:enchanted_golden_apple"
+        );
+        let mut used = false;
+        if m.health < m.max_health {
+            m.health = (m.health + 2.0).min(m.max_health);
+            used = true;
+        }
+        if !m.is_tame() {
+            m.temper = (m.temper + 3).min(100);
+            used = true;
+        }
+        if golden && m.is_tame() && !m.is_baby() && m.baby_age == 0 && !m.in_love() {
+            m.fall_in_love(Some(by.uuid));
+            used = true;
+        }
+        if m.is_baby() {
+            m.baby_age = (m.baby_age + 200).min(0);
+            used = true;
+        }
+        if used {
+            consume(ctx, by, hslot);
+            fx::sound(ctx, &format!("entity.{}.eat", species.path()), fx::category::NEUTRAL, pos, 1.0, 1.0);
+            m.dirty = true;
+            send_now(ctx, e);
+            return;
+        }
+    }
+    // Breeding food.
+    if food && species.ageable() && !species.horse() {
+        if m.is_baby() {
+            m.baby_age += -m.baby_age / 10;
+            consume(ctx, by, hslot);
+            fx::particles(ctx, "minecraft:happy_villager", [pos[0], pos[1] + 0.5, pos[2]], 0.5, 0.0, 5);
+            return;
+        }
+        let may_breed = m.baby_age == 0 && !m.in_love() && (!species.tameable() || m.is_tame());
+        if may_breed {
+            m.fall_in_love(Some(by.uuid));
+            consume(ctx, by, hslot);
+            fx::status(ctx, id, 18);
+            return;
+        }
+    }
+    // Saddles and horse armor.
+    if name == "minecraft:saddle" {
+        if let Some(item) = item
+            && super::ride::saddle(ctx, e, item)
+        {
+            consume(ctx, by, hslot);
+        }
+        return;
+    }
+    if name.ends_with("_horse_armor") && species == Species::Horse && m.is_tame() && m.gear[slot::BODY].is_none() {
+        if let Some(item) = item {
+            m.gear[slot::BODY] = Some(Gear {
+                item,
+                count: 1,
+                damage: 0,
+            });
+            consume(ctx, by, hslot);
+            fx::sound(ctx, "entity.horse.armor", fx::category::NEUTRAL, pos, 0.5, 1.0);
+            send_equipment(ctx, e);
+        }
+        return;
+    }
+    // An owner's empty-handed (or non-food) use: sit or stand.
+    if owner && matches!(species, Species::Wolf | Species::Cat | Species::Parrot) && !by.sneaking {
+        m.sitting = !m.sitting;
+        m.nav.stop();
+        m.target = None;
+        m.dirty = true;
+        send_now(ctx, e);
+        return;
+    }
+    // Getting on.
+    let rideable = match species {
+        Species::Pig => m.saddled(),
+        Species::Horse | Species::Donkey | Species::Mule => !m.is_baby(),
+        _ => false,
+    };
+    if rideable && !by.sneaking && item.is_none_or(|_| !food) {
+        super::ride::mount(ctx, e, by.entity_id);
+    }
+}
+
+/// Sends the mob's metadata now.
+fn send_now(ctx: &ServerContext, e: &mut Entity) {
+    if let Kind::Mob(m) = &mut e.kind {
+        m.dirty = false;
+    }
+    super::hurt::send_data(ctx, e);
+}
+
+fn send_equipment(ctx: &ServerContext, e: &Entity) {
+    if let Kind::Mob(m) = &e.kind {
+        fx::emit(
+            ctx,
+            fx::Fx::Equip(play::SetEquipment {
+                entity_id: e.id,
+                slots: super::meta::equipment_of(m),
+            }),
+        );
+    }
+}
+
+/// How good an item is in a slot: armor points, or attack damage.
+fn worth(ctx: &ServerContext, item: i32) -> f32 {
+    ctx.items
+        .get(item)
+        .map_or(0.0, |i| i.armor * 10.0 + i.toughness + i.attack_damage)
+}
+
+/// Mobs that may pick things up take items they stand on: better armor or
+/// weapons (dropping what they had), and piglins gold.
+pub fn pick_up(ctx: &ServerContext, entities: &mut [Entity], data: &mut Vec<SetEntityData>, now: i64) {
+    let _ = (data, now);
+    let pickers: Vec<usize> = entities
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| {
+            matches!(&e.kind, Kind::Mob(m) if m.dying.is_none() && !e.removed
+                && (m.can_pick_up || m.species == Species::Piglin && !m.is_baby()))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if pickers.is_empty() || !ctx.game_rule_bool("minecraft:mob_griefing") {
+        return;
+    }
+    for i in pickers {
+        let mbox = entities[i].aabb();
+        let Some(j) = entities.iter().position(|o| {
+            matches!(o.kind, Kind::Item { pickup_delay: 0, .. })
+                && !o.removed
+                && {
+                    let b = o.aabb();
+                    b.max[0] > mbox.min[0] - 1.0
+                        && b.min[0] < mbox.max[0] + 1.0
+                        && b.max[1] > mbox.min[1]
+                        && b.min[1] < mbox.max[1]
+                        && b.max[2] > mbox.min[2] - 1.0
+                        && b.min[2] < mbox.max[2] + 1.0
+                }
+        }) else {
+            continue;
+        };
+        let Kind::Item {
+            item,
+            count,
+            damage,
+            ..
+        } = entities[j].kind
+        else {
+            continue;
+        };
+        let item_id = entities[j].id;
+        let Kind::Mob(m) = &mut entities[i].kind else {
+            continue;
+        };
+        let name = ctx.items.name(item).unwrap_or("");
+        let loved = ctx
+            .commands
+            .env
+            .tag("minecraft:item", "minecraft:piglin_loved")
+            .iter()
+            .any(|n| n == name);
+        let mut dropped = None;
+        if m.species == Species::Piglin && loved {
+            if m.charge > 0 || m.target.is_some() {
+                continue;
+            }
+            m.gear[slot::OFFHAND] = Some(Gear {
+                item,
+                count: 1,
+                damage: 0,
+            });
+            m.charge = 120;
+        } else if m.can_pick_up {
+            let Some(s) = super::meta::slot_of(ctx, item)
+                .filter(|s| matches!(*s, slot::HEAD | slot::CHEST | slot::LEGS | slot::FEET))
+                .or_else(|| (ctx.items.get(item).is_some_and(|i| i.attack_damage > 0.0)).then_some(slot::MAINHAND))
+            else {
+                continue;
+            };
+            let better = m.gear[s]
+                .as_ref()
+                .is_none_or(|g| worth(ctx, item) > worth(ctx, g.item));
+            if !better {
+                continue;
+            }
+            if let Some(old) = m.gear[s].take()
+                && m.drop_chance[s] > 1.0
+            {
+                dropped = Some(old);
+            }
+            m.gear[s] = Some(Gear {
+                item,
+                count: 1,
+                damage,
+            });
+            m.drop_chance[s] = 2.0;
+            m.persistent = true;
+        } else {
+            continue;
+        }
+        let pos = entities[i].pos;
+        let collector = entities[i].id;
+        send_equipment(ctx, &entities[i]);
+        if count > 1 {
+            if let Kind::Item { count: c, .. } = &mut entities[j].kind {
+                *c -= 1;
+            }
+        } else {
+            entities[j].removed = true;
+        }
+        let _ = ctx.events.send(Event::ItemTaken {
+            item_entity: item_id,
+            collector,
+            count: 1,
+        });
+        if count <= 1 {
+            let _ = ctx.events.send(Event::EntitiesRemoved(vec![item_id]));
+        }
+        if let Some(old) = dropped {
+            let e = Entity {
+                id: ctx.next_entity_id(),
+                uuid: crate::util::random_uuid(),
+                kind: Kind::item(old.item, old.count, old.damage, 10),
+                pos: [pos[0], pos[1] + 0.3, pos[2]],
+                vel: [0.0, 0.2, 0.0],
+                on_ground: false,
+                age: 0,
+                removed: false,
+                tags: Vec::new(),
+            };
+            let _ = ctx.events.send(Event::EntitySpawned(e.clone()));
+            lock(&ctx.entities).push(e);
+        }
+    }
+}
+
+/// Piglins look at their gold for six seconds, then barter.
+pub fn admire(ctx: &ServerContext, entities: &mut [Entity]) {
+    for e in entities.iter_mut() {
+        let Kind::Mob(m) = &mut e.kind else {
+            continue;
+        };
+        if m.species != Species::Piglin || m.charge <= 0 {
+            continue;
+        }
+        m.charge -= 1;
+        if m.charge > 0 {
+            continue;
+        }
+        let gold = m.gear[slot::OFFHAND].take();
+        let is_ingot = gold
+            .as_ref()
+            .and_then(|g| ctx.items.name(g.item))
+            .is_some_and(|n| n == "minecraft:gold_ingot");
+        send_equipment(ctx, e);
+        if is_ingot {
+            let drops = super::hurt::roll(ctx, e, "minecraft:gameplay/piglin_bartering", false, None);
+            for d in drops {
+                crate::tick::spawn_item_at(ctx, [e.pos[0], e.pos[1] + 1.0, e.pos[2]], d.item, d.count);
+            }
+        } else if let Some(g) = gold {
+            // Other gold it keeps... in its inventory, which it does not
+            // have: it drops it again.
+            crate::tick::spawn_item_at(ctx, [e.pos[0], e.pos[1] + 1.0, e.pos[2]], g.item, 1);
+        }
+    }
+}

@@ -52,6 +52,18 @@ pub struct Ent {
     /// `minecraft:cow`
     pub kind: String,
     pub on_fire: bool,
+    pub baby: bool,
+    /// Slimes and magma cubes.
+    pub size: Option<i32>,
+    /// Data components as predicates name them (`minecraft:sheep/color` →
+    /// `white`, `minecraft:chicken/variant` → `minecraft:cold`).
+    pub components: Vec<(String, String)>,
+    /// A sheep: whether it is shorn.
+    pub sheared: Option<bool>,
+    /// What it rides (`minecraft:zombie_horse`).
+    pub vehicle: Option<String>,
+    /// What it holds in the main hand.
+    pub mainhand: Option<Tool>,
 }
 
 /// The tool in a hand.
@@ -453,6 +465,23 @@ impl Eval<'_> {
         }
     }
 
+    /// A level-based value (`linear`, `constant`...) at `level`.
+    fn level_based(&self, v: &Value, level: i32) -> f32 {
+        if let Some(n) = v.as_f64() {
+            return n as f32;
+        }
+        match v["type"]
+            .as_str()
+            .map(|t| t.trim_start_matches("minecraft:"))
+        {
+            Some("linear") => {
+                self.float(&v["base"]) + self.float(&v["per_level_above_first"]) * (level - 1) as f32
+            }
+            Some("constant") => self.float(&v["value"]),
+            _ => self.float(v),
+        }
+    }
+
     fn int(&self, v: &Value) -> i32 {
         if let Some(n) = v.as_f64() {
             return n as i32;
@@ -522,7 +551,25 @@ impl Eval<'_> {
             "match_tool" => self.tool_matches(&c["predicate"]),
             "random_chance" => random() < f64::from(self.float(&c["chance"])),
             "random_chance_with_enchanted_bonus" => {
-                random() < f64::from(self.float(&c["unenchanted_chance"]))
+                let level = self.tool_level(c["enchantment"].as_str().unwrap_or(""));
+                let chance = if level > 0 {
+                    self.level_based(&c["enchanted_chance"], level)
+                } else {
+                    self.float(&c["unenchanted_chance"])
+                };
+                random() < f64::from(chance)
+            }
+            "damage_source_properties" => {
+                let p = &c["predicate"];
+                let who = match (&p["source_entity"], &p["direct_entity"]) {
+                    (Value::Null, Value::Null) => return true,
+                    (Value::Null, d) => d,
+                    (s, _) => s,
+                };
+                self.cx
+                    .killer
+                    .as_ref()
+                    .is_some_and(|k| self.entity_matches(k, who))
             }
             "table_bonus" => {
                 let level = self.tool_level(c["enchantment"].as_str().unwrap_or(""));
@@ -612,10 +659,44 @@ impl Eval<'_> {
             return true;
         };
         o.iter().all(|(k, v)| match k.as_str() {
-            "type" => self.matches_id("minecraft:entity_type", v, &e.kind),
-            "minecraft:flags" => v["is_on_fire"]
+            "type" | "minecraft:entity_type" => {
+                self.matches_id("minecraft:entity_type", v, &e.kind)
+            }
+            "minecraft:flags" => {
+                v["is_on_fire"]
+                    .as_bool()
+                    .is_none_or(|want| want == e.on_fire)
+                    && v["is_baby"].as_bool().is_none_or(|want| want == e.baby)
+            }
+            "minecraft:components" => v.as_object().into_iter().flatten().all(|(name, want)| {
+                e.components.iter().any(|(n, have)| {
+                    n == name && want.as_str().is_some_and(|w| w == have || full(w) == *have)
+                })
+            }),
+            "minecraft:type_specific/sheep" => v["sheared"]
                 .as_bool()
-                .is_none_or(|want| want == e.on_fire),
+                .is_none_or(|want| e.sheared == Some(want)),
+            "minecraft:type_specific/cube_mob" => v["size"]
+                .as_i64()
+                .is_none_or(|want| e.size == Some(want as i32)),
+            "minecraft:vehicle" => e.vehicle.as_ref().is_some_and(|kind| {
+                let ride = Ent {
+                    kind: kind.clone(),
+                    ..Ent::default()
+                };
+                self.entity_matches(&ride, v)
+            }),
+            "minecraft:equipment" => {
+                let hand = &v["mainhand"];
+                hand.is_null()
+                    || e.mainhand.as_ref().is_some_and(|tool| {
+                        let cx = LootCtx {
+                            tool: Some(tool.clone()),
+                            ..LootCtx::default()
+                        };
+                        Eval { cx: &cx, ..*self }.tool_matches(hand)
+                    })
+            }
             _ => false,
         })
     }
@@ -642,6 +723,18 @@ impl Eval<'_> {
                 for d in drops.iter_mut() {
                     let n = self.int(&f["count"]);
                     d.count = if add { d.count + n } else { n }.max(0);
+                }
+            }
+            "enchanted_count_increase" => {
+                let level = self.tool_level(f["enchantment"].as_str().unwrap_or(""));
+                if level > 0 {
+                    for d in drops.iter_mut() {
+                        let more = (self.float(&f["count"]) * level as f32).round() as i32;
+                        d.count += more;
+                        if let Some(limit) = f["limit"].as_i64().filter(|&l| l > 0) {
+                            d.count = d.count.min(limit as i32);
+                        }
+                    }
                 }
             }
             "limit_count" => {

@@ -1,36 +1,39 @@
-//! Mobs in the world: the tick that runs their goals, hits, deaths and
-//! drops, and what clients are told about them. Behaviour itself (goals,
-//! paths, movement) lives in `mc_entity::mob`; spawning in [`spawn`].
+//! Mobs in the world: the tick that runs their goals, what they do to
+//! players and each other, hits, deaths and drops, and what clients are told
+//! about them. Behaviour itself (goals, paths, movement) lives in
+//! `mc_entity::mob`; the rest here:
+//! - [`hurt`]: damage to mobs, death, loot, experience, breeding and
+//!   conversions;
+//! - [`interact`]: what players do to mobs with items in hand;
+//! - [`ride`]: saddled pigs and horses;
+//! - [`spawn`]: natural spawning, despawning and how new mobs are dressed;
+//! - [`meta`]: metadata and equipment for clients;
+//! - [`nbt`]: mobs as `/summon` and `/data` see them.
 
+pub mod hurt;
+mod interact;
+pub mod meta;
+pub mod nbt;
+pub mod ride;
 mod spawn;
 mod terrain;
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 
-use mc_entity::mob::{MobEvent, Senses, Target};
+use mc_entity::mob::{Category, Missile, MobEvent, Other, Senses, Target};
 use mc_entity::{Entity, Kind, Mob, Species};
-use mc_protocol::packets::play::{MetadataValue, SetEntityData, metadata};
+use mc_protocol::packets::play::{self, SetEntityData};
 
+use crate::combat::Blow;
 use crate::context::{Event, ServerContext};
 use crate::explosion::Blast;
+use crate::fx;
 use crate::level::WorldLevel;
 use crate::tick::lock;
 
+pub use meta::{metadata_of, type_id};
 pub use terrain::Ground;
-
-/// Entity metadata fields of mobs (indices observed from vanilla 26.3).
-mod field {
-    pub const FLAGS: u8 = 0;
-    /// `Mob` flags: 4 aggressive.
-    pub const MOB_FLAGS: u8 = 15;
-    /// Sheep: colour in the low bits, 16 shorn.
-    pub const SHEEP_WOOL: u8 = 17;
-    pub const CREEPER_SWELL: u8 = 16;
-    pub const CREEPER_POWERED: u8 = 17;
-    pub const CREEPER_IGNITED: u8 = 18;
-    /// Spider: 1 climbing.
-    pub const SPIDER_FLAGS: u8 = 16;
-}
 
 /// How far from a player mobs think (blocks).
 const ACTIVE_RANGE: f64 = 128.0;
@@ -63,27 +66,33 @@ pub struct Actor {
     pub entity_id: i32,
     pub name: String,
     pub pos: [f64; 3],
+    pub game_mode: i32,
+    pub sneaking: bool,
 }
 
 #[derive(Debug)]
 enum Pending {
-    Hit { target: i32, by: Actor, damage: f32 },
+    Hit { target: i32, by: Actor, blow: Blow },
     Use { target: i32, by: Actor, hand: i32 },
 }
 
 /// Mob state shared with connections: what players did to mobs, waiting for
-/// the tick thread, and where mobs have spawned.
+/// the tick thread, where mobs have spawned, and players in fights.
 #[derive(Debug, Default)]
 pub struct MobState {
     pending: Mutex<Vec<Pending>>,
     spawner: Mutex<spawn::Spawner>,
+    /// Players' fighting state (see [`crate::combat`]).
+    pub fighters: Mutex<crate::combat::Fighters>,
+    /// Health of villagers, which zombies hurt (20 when not listed).
+    villagers: Mutex<HashMap<i32, f32>>,
 }
 
 impl MobState {
-    /// A player hit the entity with this id (nothing happens if it is no
-    /// mob or out of reach).
-    pub fn hit(&self, target: i32, by: Actor, damage: f32) {
-        lock(&self.pending).push(Pending::Hit { target, by, damage });
+    /// A player hit the entity with this id with `blow` (nothing happens
+    /// if it is no mob or out of reach).
+    pub fn hit(&self, target: i32, by: Actor, blow: Blow) {
+        lock(&self.pending).push(Pending::Hit { target, by, blow });
     }
 
     /// A player used an item on the entity with this id.
@@ -109,34 +118,27 @@ pub fn clicked(
         entity_id: who.entity_id,
         name,
         pos: [who.pose.x, who.pose.y, who.pose.z],
+        game_mode: who.game_mode,
+        sneaking: who.sneaking,
     };
     if attack {
-        let held = lock(&ctx.inventories)
-            .get(&who.uuid)
-            .and_then(|h| h.main_hand().map(|s| s.item));
-        ctx.mobs
-            .hit(target, by, crate::vitals::melee_damage(ctx, held));
+        let blow = crate::combat::swing(ctx, who.uuid, who.pose);
+        ctx.mobs.hit(target, by, blow);
     } else {
         ctx.mobs.use_on(target, by, hand);
     }
 }
 
-/// A new mob of this species (not yet in the world).
+/// A new mob of this species (not yet in the world), as `/summon` makes
+/// it: nothing rolled for where it spawns.
 pub fn new_mob(ctx: &ServerContext, species: Species, pos: [f64; 3]) -> Entity {
-    let mut mob = Mob::new(species, crate::util::random_u64());
-    if species == Species::Sheep {
-        let roll = mob.below(10_000);
-        // The wiki's natural wool colours.
-        mob.set_color(match roll {
-            0..=15 => 6,
-            16..=315 => 12,
-            316..=815 => 7,
-            816..=1315 => 8,
-            1316..=1815 => 15,
-            _ => 0,
-        });
-    }
-    Entity {
+    new_mob_in(ctx, species, pos, None)
+}
+
+/// A new mob dressed for the biome it spawns in.
+pub fn new_mob_in(ctx: &ServerContext, species: Species, pos: [f64; 3], biome: Option<&str>) -> Entity {
+    let mob = Mob::new(species, crate::util::random_u64());
+    let mut e = Entity {
         id: ctx.next_entity_id(),
         uuid: crate::util::random_uuid(),
         kind: Kind::Mob(Box::new(mob)),
@@ -146,57 +148,19 @@ pub fn new_mob(ctx: &ServerContext, species: Species, pos: [f64; 3]) -> Entity {
         age: 0,
         removed: false,
         tags: Vec::new(),
-    }
-}
-
-/// The entity type id clients know the species by.
-pub fn type_id(ctx: &ServerContext, species: Species) -> i32 {
-    ctx.data
-        .builtin
-        .id("minecraft:entity_type", species.id())
-        .unwrap_or(0)
-}
-
-/// All the metadata fields of a mob, as sent when it appears.
-pub fn metadata_of(mob: &Mob) -> Vec<(u8, MetadataValue)> {
-    let mut v = vec![
-        (
-            field::FLAGS,
-            MetadataValue::Byte(if mob.burning > 0 { 1 } else { 0 }),
-        ),
-        (metadata::HEALTH, MetadataValue::Float(mob.health.max(0.0))),
-        (
-            field::MOB_FLAGS,
-            MetadataValue::Byte(if mob.aggressive() { 4 } else { 0 }),
-        ),
-    ];
-    match mob.species {
-        Species::Sheep => v.push((
-            field::SHEEP_WOOL,
-            MetadataValue::Byte((mob.color as i8 & 15) | if mob.sheared { 16 } else { 0 }),
-        )),
-        Species::Creeper => {
-            v.push((field::CREEPER_SWELL, MetadataValue::VarInt(mob.swell_dir)));
-            v.push((field::CREEPER_POWERED, MetadataValue::Boolean(mob.powered)));
-            v.push((field::CREEPER_IGNITED, MetadataValue::Boolean(mob.ignited)));
-        }
-        Species::Spider => v.push((
-            field::SPIDER_FLAGS,
-            MetadataValue::Byte(i8::from(mob.climbing)),
-        )),
-        _ => {}
-    }
-    v
+    };
+    spawn::dress(ctx, &mut e, biome);
+    e
 }
 
 /// The metadata a mob has right now, or `None` for other entities.
-pub fn metadata_packet(entity: &Entity) -> Option<SetEntityData> {
+pub fn metadata_packet(ctx: &ServerContext, entity: &Entity) -> Option<SetEntityData> {
     let Kind::Mob(m) = &entity.kind else {
         return None;
     };
     Some(SetEntityData {
         entity_id: entity.id,
-        entries: metadata_of(m),
+        entries: metadata_of(ctx, m, lock(&ctx.time).age),
     })
 }
 
@@ -224,7 +188,7 @@ pub fn sky_darken(day_time: i64) -> u8 {
 }
 
 /// Ticks of the overworld clock (the first clock when it has no name).
-fn day_time(ctx: &ServerContext) -> i64 {
+pub fn day_time(ctx: &ServerContext) -> i64 {
     let time = lock(&ctx.time);
     time.clocks
         .iter()
@@ -235,210 +199,154 @@ fn day_time(ctx: &ServerContext) -> i64 {
 
 fn players(ctx: &ServerContext) -> Vec<Target> {
     let vitals = lock(&ctx.vitals);
-    lock(&ctx.players)
+    let inventories = lock(&ctx.inventories);
+    let players = lock(&ctx.players);
+    let mut out: Vec<Target> = players
         .values()
         .filter_map(|p| {
             let pose = p.pose?;
             let alive = vitals.get(&p.profile.uuid).is_none_or(|v| !v.dead);
-            Some(Target {
-                id: p.entity_id,
-                uuid: p.profile.uuid,
-                pos: [pose.x, pose.y, pose.z],
-                targetable: matches!(p.game_mode, 0 | 2) && alive,
-            })
+            let hands = inventories.get(&p.profile.uuid);
+            let item = |slot: usize| {
+                hands
+                    .and_then(|h| h.slots.get(slot).cloned().flatten())
+                    .map_or(-1, |s| s.item)
+            };
+            let main = hands.map_or(-1, |h| item(h.hand_slot(0)));
+            let gold = (5..9).any(|s| {
+                let i = item(s);
+                i >= 0 && ctx.items.name(i).is_some_and(|n| n.starts_with("minecraft:golden_"))
+            });
+            let mut t = Target::at(p.entity_id, p.profile.uuid, [pose.x, pose.y, pose.z]);
+            t.targetable = matches!(p.game_mode, 0 | 2) && alive;
+            t.present = p.game_mode != 3 && alive;
+            t.held = [main, item(45)];
+            t.head = item(5);
+            t.gold = gold;
+            t.yaw = pose.yaw;
+            t.pitch = pose.pitch;
+            Some(t)
+        })
+        .collect();
+    drop((vitals, inventories, players));
+    for t in &mut out {
+        (t.hurt_by, t.hit) = crate::combat::recent(ctx, t.uuid);
+    }
+    out
+}
+
+/// Every mob and villager as the others see them.
+fn others(entities: &[Entity]) -> Vec<Other> {
+    entities
+        .iter()
+        .filter_map(|e| match &e.kind {
+            Kind::Mob(m) => {
+                let (w, h) = m.size();
+                Some(Other {
+                    id: e.id,
+                    species: Some(m.species),
+                    pos: e.pos,
+                    width: w,
+                    height: h,
+                    baby: m.is_baby(),
+                    in_love: m.in_love(),
+                    owner: m.owner,
+                    alive: m.dying.is_none() && !m.is_dead() && !e.removed,
+                })
+            }
+            Kind::Merchant(_) => Some(Other {
+                id: e.id,
+                species: None,
+                pos: e.pos,
+                width: 0.6,
+                height: 1.95,
+                baby: false,
+                in_love: false,
+                owner: None,
+                alive: !e.removed,
+            }),
+            _ => None,
         })
         .collect()
 }
 
-fn dist_sq(a: [f64; 3], b: [f64; 3]) -> f64 {
+pub(crate) fn dist_sq(a: [f64; 3], b: [f64; 3]) -> f64 {
     (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)
 }
 
-struct Env<'a>(&'a ServerContext);
-
-impl crate::loot::LootEnv for Env<'_> {
-    fn tag(&self, registry: &str, tag: &str) -> Vec<String> {
-        self.0.commands.env.tag(registry, tag)
-    }
-    fn max_stack(&self, item: i32) -> i32 {
-        self.0.items.max_stack(item)
-    }
-    fn max_damage(&self, item: i32) -> i32 {
-        self.0.items.get(item).map_or(0, |i| i.max_damage)
-    }
-    fn item_name(&self, item: i32) -> String {
-        self.0.items.name(item).unwrap_or("").to_owned()
-    }
-    fn smelt(&self, item: i32) -> Option<i32> {
-        self.0
-            .recipes
-            .cooking
-            .iter()
-            .find(|c| c.kind == "minecraft:smelting" && c.input.contains(&item))
-            .map(|c| c.result.item)
-    }
+/// Item tags and names for the mobs, from the server's tables.
+struct ItemSense<'a> {
+    ctx: &'a ServerContext,
+    tags: std::cell::RefCell<HashMap<String, Vec<String>>>,
 }
 
-/// What a dead mob leaves, from the loot tables of the data pack.
-fn loot(ctx: &ServerContext, entity: &Entity, by_player: bool) -> Vec<crate::loot::Drop> {
-    let Kind::Mob(m) = &entity.kind else {
-        return Vec::new();
-    };
-    let env = Env(ctx);
-    let cx = crate::loot::LootCtx {
-        origin: Some(entity.pos),
-        this: Some(crate::loot::Ent {
-            kind: m.species.id().to_owned(),
-            on_fire: m.burning > 0,
-        }),
-        player_kill: by_player,
-        ..Default::default()
-    };
-    let name = m.species.id().trim_start_matches("minecraft:");
-    let mut drops = Vec::new();
-    let mut roll = |table: &str| {
-        if let Some(t) = ctx.loot.table(table) {
-            drops.extend(ctx.loot.roll(&env, t, &cx));
-        }
-    };
-    roll(&format!("minecraft:entities/{name}"));
-    if m.species == Species::Sheep && !m.sheared {
-        roll(&format!(
-            "minecraft:entities/sheep/{}",
-            WOOL_COLORS[usize::from(m.color & 15)]
-        ));
-    }
-    drops
-}
-
-/// Starts a mob's death: the animation, and what it drops.
-fn die(ctx: &ServerContext, entity: &mut Entity, by_player: bool, status: &mut Vec<(i32, u8)>) {
-    let Kind::Mob(m) = &mut entity.kind else {
-        return;
-    };
-    if m.dying.is_some() {
-        return;
-    }
-    m.dying = Some(20);
-    m.health = 0.0;
-    m.target = None;
-    m.nav.stop();
-    status.push((entity.id, 3));
-    let pos = entity.pos;
-    // Experience for what a player killed: 5 for monsters, 1-3 for animals.
-    if by_player && let Kind::Mob(m) = &mut entity.kind {
-        let xp = match m.species.category() {
-            mc_entity::mob::Category::Monster => 5,
-            mc_entity::mob::Category::Creature => 1 + m.below(3) as i32,
+impl mc_entity::mob::Items for ItemSense<'_> {
+    fn tagged(&self, item: i32, tag: &str) -> bool {
+        let Some(name) = self.ctx.items.name(item) else {
+            return false;
         };
-        crate::xp::spawn(ctx, [pos[0], pos[1] + 0.3, pos[2]], xp);
-    }
-    // Experience for what a player killed: 5 for monsters, 1-3 for animals.
-    if by_player && let Kind::Mob(m) = &mut entity.kind {
-        let xp = match m.species.category() {
-            mc_entity::mob::Category::Monster => 5,
-            mc_entity::mob::Category::Creature => 1 + m.below(3) as i32,
-        };
-        crate::xp::spawn(ctx, [pos[0], pos[1] + 0.3, pos[2]], xp);
-    }
-    for drop in loot(ctx, entity, by_player) {
-        crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 0.3, pos[2]], drop.item, drop.count);
-    }
-}
-
-fn shears(ctx: &ServerContext) -> Option<i32> {
-    ctx.items.id("minecraft:shears")
-}
-
-/// Wears the shears in `hand` by one use.
-fn wear_shears(ctx: &ServerContext, who: &Actor, hand: i32) {
-    let mut inventories = lock(&ctx.inventories);
-    let Some(hands) = inventories.get_mut(&who.uuid) else {
-        return;
-    };
-    let slot = hands.hand_slot(hand);
-    let Some(stack) = &mut hands.slots[slot] else {
-        return;
-    };
-    let max = ctx.items.max_damage(stack.item);
-    stack.damage += 1;
-    if max > 0 && stack.damage >= max {
-        hands.slots[slot] = None;
-        hands.components.remove(&slot);
-        let _ = ctx.events.send(Event::HandBroke {
-            uuid: who.uuid,
-            entity_id: who.entity_id,
-            status: if hand == 1 { 48 } else { 47 },
+        let mut tags = self.tags.borrow_mut();
+        let list = tags.entry(tag.to_owned()).or_insert_with(|| {
+            self.ctx
+                .commands
+                .env
+                .tag("minecraft:item", tag.trim_start_matches('#'))
         });
+        list.iter().any(|n| n == name)
     }
-    let _ = ctx.events.send(Event::InventorySlot {
-        uuid: who.uuid,
-        slot: slot as i16,
-        item: hands.slots[slot].clone(),
-    });
+
+    fn name(&self, item: i32) -> &str {
+        self.ctx.items.name(item).unwrap_or("")
+    }
+}
+
+/// The sound category of a mob's sounds.
+pub fn category(species: Species) -> i32 {
+    match species.category() {
+        Category::Monster => 5,
+        Category::Creature => fx::category::NEUTRAL,
+    }
 }
 
 /// Applies what players did since the last tick.
-fn apply_pending(
-    ctx: &ServerContext,
-    entities: &mut [Entity],
-    pending: Vec<Pending>,
-    status: &mut Vec<(i32, u8)>,
-) {
+fn apply_pending(ctx: &ServerContext, entities: &mut [Entity], pending: Vec<Pending>, now: i64) {
     for p in pending {
         match p {
-            Pending::Hit { target, by, damage } => {
-                let Some(e) = entities.iter_mut().find(|e| e.id == target) else {
+            Pending::Hit { target, by, blow } => {
+                let Some(i) = entities.iter().position(|e| e.id == target) else {
                     continue;
                 };
-                let Kind::Mob(m) = &mut e.kind else {
+                let e = &entities[i];
+                let Kind::Mob(m) = &e.kind else {
                     continue;
                 };
                 if m.dying.is_some() || dist_sq(by.pos, e.pos) > REACH_SQ {
                     continue;
                 }
-                if m.hurt(damage, Some(by.entity_id)) {
-                    status.push((e.id, 2));
-                    // Knocked back from the attacker (strength 0.4).
-                    let (dx, dz) = (e.pos[0] - by.pos[0], e.pos[2] - by.pos[2]);
-                    let len = (dx * dx + dz * dz).sqrt().max(1e-4);
-                    e.vel[0] = e.vel[0] / 2.0 + dx / len * 0.4;
-                    e.vel[2] = e.vel[2] / 2.0 + dz / len * 0.4;
-                    e.vel[1] = (e.vel[1] / 2.0 + 0.4).min(0.4);
-                    e.on_ground = false;
-                    if m.is_dead() {
-                        die(ctx, e, true, status);
-                    }
-                }
+                hurt::player_blow(ctx, entities, i, &by, &blow, now);
             }
             Pending::Use { target, by, hand } => {
                 let Some(e) = entities.iter_mut().find(|e| e.id == target) else {
                     continue;
                 };
-                let pos = e.pos;
-                let Kind::Mob(m) = &mut e.kind else {
-                    continue;
-                };
-                if !m.can_shear() || dist_sq(by.pos, pos) > REACH_SQ {
+                if dist_sq(by.pos, e.pos) > REACH_SQ {
                     continue;
                 }
-                let held = lock(&ctx.inventories)
-                    .get(&by.uuid)
-                    .and_then(|h| h.slots[h.hand_slot(hand)].as_ref().map(|s| s.item));
-                if held.is_none() || held != shears(ctx) {
-                    continue;
-                }
-                m.shear();
-                let color = WOOL_COLORS[usize::from(m.color & 15)];
-                let count = 1 + m.below(3) as i32;
-                status.push((e.id, 0));
-                wear_shears(ctx, &by, hand);
-                if let Some(wool) = ctx.items.id(&format!("minecraft:{color}_wool")) {
-                    crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 1.0, pos[2]], wool, count);
-                }
+                interact::used(ctx, e, &by, hand);
             }
         }
     }
+}
+
+/// What mobs did this tick that needs the whole world.
+#[derive(Default)]
+struct Outcome {
+    moves: Vec<MobMove>,
+    data: Vec<SetEntityData>,
+    removed: Vec<i32>,
+    blasts: Vec<Blast>,
+    /// New entities (babies, converted mobs, split slimes).
+    fresh: Vec<Entity>,
 }
 
 /// Runs the mobs for one tick: what players did, goals and movement,
@@ -452,29 +360,28 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     let mut entities = std::mem::take(&mut *lock(&ctx.entities));
     let now = lock(&ctx.time).age;
     let day = day_time(ctx);
-    let sunny = sky_darken(day) == 0 && !lock(&ctx.weather).raining;
+    let raining = lock(&ctx.weather).raining;
+    let sunny = sky_darken(day) == 0 && !raining;
     let difficulty = ctx.difficulty();
-    let mut status: Vec<(i32, u8)> = Vec::new();
-    let mut moves: Vec<MobMove> = Vec::new();
-    let mut data: Vec<SetEntityData> = Vec::new();
-    let mut removed: Vec<i32> = Vec::new();
-    let mut blasts: Vec<Blast> = Vec::new();
+    let mut out = Outcome::default();
 
-    apply_pending(ctx, &mut entities, pending, &mut status);
+    apply_pending(ctx, &mut entities, pending, now);
 
     let ground = Ground::new(ctx);
-    let senses = Senses {
-        world: &ground,
-        players: &targets,
-        tick: now as u64,
-        difficulty,
-        sunny,
+    let items = ItemSense {
+        ctx,
+        tags: Default::default(),
     };
     let mut events = Vec::new();
-    for e in entities.iter_mut() {
+    let mut seen = others(&entities);
+    for i in 0..entities.len() {
+        let e = &mut entities[i];
         let Kind::Mob(m) = &e.kind else {
             continue;
         };
+        if e.removed {
+            continue;
+        }
         let near = targets
             .iter()
             .any(|t| dist_sq(t.pos, e.pos) <= ACTIVE_RANGE * ACTIVE_RANGE);
@@ -486,9 +393,9 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             continue;
         }
         // Monsters do not exist in peaceful.
-        if difficulty == 0 && m.species.category() == mc_entity::mob::Category::Monster {
+        if difficulty == 0 && m.species.category() == Category::Monster {
             e.removed = true;
-            removed.push(e.id);
+            out.removed.push(e.id);
             continue;
         }
         let before = (
@@ -499,86 +406,46 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             m.head_yaw,
             m.burning > 0,
         );
+        // Ridden by a player: they steer, it only lives.
+        let senses = Senses {
+            world: &ground,
+            players: &targets,
+            mobs: &seen,
+            items: &items,
+            tick: now as u64,
+            difficulty,
+            sunny,
+            raining,
+            nether: ctx.world.dimension == "minecraft:the_nether",
+        };
         events.clear();
-        mc_entity::mob::tick(e, &senses, &mut events);
-        let id = e.id;
-        for ev in events.drain(..) {
-            match ev {
-                MobEvent::Attack { target, damage } => {
-                    attack(
-                        ctx,
-                        e,
-                        target,
-                        damage,
-                        &targets,
-                        difficulty,
-                        "minecraft:mob_attack",
-                        "death.attack.mob",
-                    );
-                }
-                MobEvent::Shoot { target, damage } => {
-                    attack(
-                        ctx,
-                        e,
-                        target,
-                        damage,
-                        &targets,
-                        difficulty,
-                        "minecraft:arrow",
-                        "death.attack.arrow",
-                    );
-                }
-                MobEvent::Explode { power } => {
-                    e.removed = true;
-                    removed.push(id);
-                    blasts.push(Blast {
-                        center: [e.pos[0], e.pos[1] + 0.0625, e.pos[2]],
-                        power,
-                        source: id,
-                        owner: None,
-                    });
-                }
-                MobEvent::Egg => {
-                    if let Some(egg) = ctx.items.id("minecraft:egg") {
-                        crate::tick::spawn_item_at(
-                            ctx,
-                            [e.pos[0], e.pos[1] + 0.3, e.pos[2]],
-                            egg,
-                            1,
-                        );
-                    }
-                }
-                MobEvent::Graze { cell, block } => {
-                    let to = if block {
-                        ctx.data.blocks.default_state("minecraft:dirt")
-                    } else {
-                        Some(ctx.shapes.air())
-                    };
-                    if let Some(state) = to {
-                        level.set_block(
-                            mc_protocol::Position::new(cell[0], cell[1], cell[2]),
-                            state,
-                        );
-                    }
-                }
-                MobEvent::Status(s) => status.push((id, s)),
-                MobEvent::Hurt { amount, .. } => {
-                    if let Kind::Mob(m) = &mut e.kind
-                        && m.hurt(amount, None)
-                    {
-                        status.push((id, 2));
-                    }
-                }
-            }
+        if ride::steered(e) {
+            ride::tick(ctx, e, &senses, &mut events);
+        } else {
+            mc_entity::mob::tick(e, &senses, &mut events);
         }
+        let id = e.id;
+        // Keep what the others see of it up to date.
+        if let Some(o) = seen.iter_mut().find(|o| o.id == id)
+            && let Kind::Mob(m) = &e.kind
+        {
+            o.pos = e.pos;
+            o.in_love = m.in_love();
+            o.baby = m.is_baby();
+        }
+        for ev in events.drain(..) {
+            handle(ctx, level, &mut entities, i, ev, &targets, difficulty, now, &mut out);
+        }
+        let e = &mut entities[i];
         if e.removed {
+            out.removed.push(e.id);
             continue;
         }
         if let Kind::Mob(m) = &e.kind
             && m.is_dead()
             && m.dying.is_none()
         {
-            die(ctx, e, false, &mut status);
+            hurt::die(ctx, e, None, 0);
         }
         let Kind::Mob(m) = &mut e.kind else {
             continue;
@@ -586,7 +453,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         if (e.pos, e.on_ground, m.yaw, m.pitch, m.head_yaw)
             != (before.0, before.1, before.2, before.3, before.4)
         {
-            moves.push(MobMove {
+            out.moves.push(MobMove {
                 id: e.id,
                 pos: e.pos,
                 yaw: m.yaw,
@@ -596,18 +463,20 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             });
         }
         if std::mem::take(&mut m.dirty) || (m.burning > 0) != before.5 {
-            data.push(SetEntityData {
+            out.data.push(SetEntityData {
                 entity_id: e.id,
-                entries: metadata_of(m),
+                entries: metadata_of(ctx, m, now),
             });
         }
         if e.removed {
-            removed.push(e.id);
+            // The body is gone: a puff of smoke first.
+            fx::status(ctx, e.id, 60);
+            out.removed.push(e.id);
         }
     }
 
-    for (id, _) in crate::explosion::explode_all(ctx, level, &mut entities, &blasts) {
-        removed.push(id);
+    for (id, _) in crate::explosion::explode_all(ctx, level, &mut entities, &out.blasts) {
+        out.removed.push(id);
     }
     // Mobs hurt by the blast.
     for e in entities.iter_mut() {
@@ -615,329 +484,263 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             && m.is_dead()
             && m.dying.is_none()
         {
-            die(ctx, e, false, &mut status);
+            hurt::die(ctx, e, None, 0);
         }
     }
+    interact::pick_up(ctx, &mut entities, &mut out.data, now);
+    interact::admire(ctx, &mut entities);
 
     let spawned = spawn::tick(ctx, &ground, &mut entities, &targets, now, day, difficulty);
-    for e in &spawned {
-        let _ = ctx.events.send(Event::EntitySpawned(e.clone()));
-    }
-    entities.extend(spawned);
-    removed.extend(spawn::despawn(&mut entities, &targets, difficulty));
+    out.fresh.extend(spawned);
+    out.removed
+        .extend(spawn::despawn(&mut entities, &targets, difficulty));
     drop(ground);
 
     for e in entities.iter().filter(|e| e.removed) {
-        if matches!(e.kind, Kind::Mob(_)) && !removed.contains(&e.id) {
-            removed.push(e.id);
+        if matches!(e.kind, Kind::Mob(_)) && !out.removed.contains(&e.id) {
+            out.removed.push(e.id);
         }
     }
     entities.retain(|e| !e.removed);
+    for e in &out.fresh {
+        let _ = ctx.events.send(Event::EntitySpawned(e.clone()));
+    }
+    entities.append(&mut out.fresh);
     let mut stored = lock(&ctx.entities);
     entities.append(&mut stored);
     *stored = entities;
     drop(stored);
 
-    if !moves.is_empty() {
-        let _ = ctx.events.send(Event::MobsMoved(moves));
+    if !out.moves.is_empty() {
+        let _ = ctx.events.send(Event::MobsMoved(out.moves));
     }
-    if !status.is_empty() {
-        let _ = ctx.events.send(Event::MobsStatus(status));
+    if !out.data.is_empty() {
+        let _ = ctx.events.send(Event::EntitiesData(out.data));
     }
-    if !data.is_empty() {
-        let _ = ctx.events.send(Event::EntitiesData(data));
-    }
-    if !removed.is_empty() {
-        let _ = ctx.events.send(Event::EntitiesRemoved(removed));
+    if !out.removed.is_empty() {
+        let _ = ctx.events.send(Event::EntitiesRemoved(out.removed));
     }
 }
 
-/// A mob's blow or arrow at a player.
+/// Carries out one thing the mob at `i` did.
 #[allow(clippy::too_many_arguments)]
-fn attack(
+fn handle(
     ctx: &ServerContext,
-    mob: &Entity,
-    target: i32,
-    damage: f32,
+    level: &mut WorldLevel,
+    entities: &mut [Entity],
+    i: usize,
+    ev: MobEvent,
     targets: &[Target],
     difficulty: i32,
-    damage_type: &str,
-    death_key: &str,
+    now: i64,
+    out: &mut Outcome,
 ) {
-    let Kind::Mob(m) = &mob.kind else {
+    let id = entities[i].id;
+    let pos = entities[i].pos;
+    let Kind::Mob(m) = &mut entities[i].kind else {
         return;
     };
-    let Some(t) = targets.iter().find(|t| t.id == target) else {
+    let species = m.species;
+    match ev {
+        MobEvent::Attack { target, damage } => {
+            hurt::mob_attacks(ctx, entities, i, target, damage, targets, difficulty, now);
+        }
+        MobEvent::Shoot {
+            target,
+            aim,
+            missile,
+        } => shoot(ctx, &entities[i], target, aim, missile, difficulty),
+        MobEvent::Explode { power } => {
+            entities[i].removed = true;
+            out.blasts.push(Blast {
+                center: [pos[0], pos[1] + 0.0625, pos[2]],
+                power,
+                source: id,
+                owner: None,
+            });
+        }
+        MobEvent::Lay { item } => hurt::lay(ctx, &entities[i], item),
+        MobEvent::Graze { cell, block } => {
+            let to = if block {
+                ctx.data.blocks.default_state("minecraft:dirt")
+            } else {
+                Some(ctx.shapes.air())
+            };
+            if let Some(state) = to {
+                level.set_block(mc_protocol::Position::new(cell[0], cell[1], cell[2]), state);
+            }
+        }
+        MobEvent::Status(s) => fx::status(ctx, id, s as i8),
+        MobEvent::Hurt { amount, kind } => {
+            let harm = hurt::Harm::new(amount, kind);
+            hurt::harm(ctx, &mut entities[i], &harm);
+        }
+        MobEvent::Breed { partner } => {
+            if let Some(baby) = hurt::breed(ctx, entities, i, partner) {
+                out.fresh.push(baby);
+            }
+        }
+        MobEvent::Sound {
+            name,
+            volume,
+            pitch,
+        } => fx::sound(ctx, &name, category(species), pos, volume, pitch),
+        MobEvent::Swing => fx::emit(
+            ctx,
+            fx::Fx::Swing(play::SwingAnimation {
+                entity_id: id,
+                hand: 0,
+                kind: 1,
+                duration: 6,
+            }),
+        ),
+        MobEvent::Convert(to) => {
+            if let Some(new) = hurt::convert(ctx, &mut entities[i], to) {
+                out.fresh.push(new);
+            }
+        }
+        MobEvent::Cured => hurt::cure(ctx, &mut entities[i]),
+        MobEvent::Alert { target } => {
+            let range = species.follow_range();
+            for (j, o) in entities.iter_mut().enumerate() {
+                if j == i || dist_sq(o.pos, pos) > range * range {
+                    continue;
+                }
+                if let Kind::Mob(om) = &mut o.kind
+                    && om.species == species
+                    && om.target.is_none()
+                    && !om.is_tame()
+                {
+                    om.revenge = Some((target, 100));
+                }
+            }
+        }
+        MobEvent::BreakDoor { cell } => {
+            level.set_block(
+                mc_protocol::Position::new(cell[0], cell[1], cell[2]),
+                ctx.shapes.air(),
+            );
+            fx::sound(ctx, "entity.zombie.break_wooden_door", 5, pos, 1.0, 1.0);
+        }
+        MobEvent::Teleported => {
+            if species == Species::Enderman {
+                fx::sound(ctx, "entity.enderman.teleport", 5, pos, 1.0, 1.0);
+            }
+        }
+        MobEvent::Heal(amount) => {
+            m.health = (m.health + amount).min(m.max_health);
+            m.dirty = true;
+        }
+        MobEvent::Wear { slot, amount } => hurt::wear_gear(ctx, &mut entities[i], slot, amount),
+        MobEvent::Buck => ride::eject(ctx, &mut entities[i]),
+    }
+}
+
+/// A mob shoots or throws at its target.
+fn shoot(
+    ctx: &ServerContext,
+    e: &Entity,
+    _target: i32,
+    aim: [f64; 3],
+    missile: Missile,
+    difficulty: i32,
+) {
+    let Kind::Mob(m) = &e.kind else {
         return;
     };
-    let amount = crate::damage::scale_for_difficulty(damage, difficulty);
-    crate::vitals::try_hurt_by_entity(
-        ctx,
-        t.uuid,
-        amount,
-        damage_type,
-        death_key,
-        Some(m.species.display_name()),
-        Some(mob.id),
-    );
+    let me = (e.id, m.species.display_name());
+    let eye = [e.pos[0], e.pos[1] + m.eye_height(), e.pos[2]];
+    let d = [aim[0] - eye[0], aim[1] - eye[1], aim[2] - eye[2]];
+    let flat = d[0].hypot(d[2]);
+    let spawn = |shot, from: [f64; 3], dir: [f64; 3], speed: f64, inaccuracy: f64| {
+        let len = dir.iter().map(|c| c * c).sum::<f64>().sqrt().max(1e-9);
+        let spread = 0.0075 * inaccuracy;
+        let vel = dir.map(|c| (c / len + crate::hits::gauss() * spread) * speed);
+        crate::projectiles::spawn_by_mob(ctx, shot, me, from, vel)
+    };
+    match missile {
+        Missile::Arrow { damage, slowness } => {
+            let Some(item) = ctx.items.id("minecraft:arrow") else {
+                return;
+            };
+            let mut a = mc_entity::extra::Arrow::new(item);
+            a.damage = damage + f64::from(difficulty) * 0.11 + crate::hits::gauss() * 0.25;
+            a.pickup = mc_entity::extra::Pickup::No;
+            a.hit.push(e.id);
+            if slowness {
+                a.effects.push(("minecraft:slowness".into(), 0, 600 * 8));
+            }
+            let from = [eye[0], eye[1] - 0.1, eye[2]];
+            let dir = [d[0], aim[1] - 0.6 - from[1] + flat * 0.2, d[2]];
+            spawn(
+                mc_entity::extra::Shot::Arrow(a),
+                from,
+                dir,
+                1.6,
+                f64::from(14 - difficulty * 4),
+            );
+        }
+        Missile::Trident => {
+            let Some(item) = ctx.items.id("minecraft:trident") else {
+                return;
+            };
+            let mut a = mc_entity::extra::Arrow::new(item);
+            a.damage = 8.0;
+            a.trident = true;
+            a.pickup = mc_entity::extra::Pickup::No;
+            a.hit.push(e.id);
+            let from = [eye[0], eye[1] - 0.1, eye[2]];
+            let dir = [d[0], aim[1] - 0.6 - from[1] + flat * 0.2, d[2]];
+            spawn(
+                mc_entity::extra::Shot::Arrow(a),
+                from,
+                dir,
+                1.6,
+                f64::from(14 - difficulty * 4),
+            );
+            fx::sound(ctx, "entity.drowned.shoot", 5, e.pos, 1.0, 1.0);
+        }
+        Missile::Potion(name) => {
+            let Some(item) = ctx.items.id("minecraft:splash_potion") else {
+                return;
+            };
+            let effects = crate::projectiles::potions::effects_of(name);
+            let color = crate::projectiles::potions::color(&effects);
+            let from = [e.pos[0], e.pos[1] + m.eye_height() - 0.1, e.pos[2]];
+            let dir = [d[0], aim[1] - 1.1 - from[1] + flat * 0.2, d[2]];
+            spawn(
+                mc_entity::extra::Shot::Potion {
+                    item,
+                    lingering: false,
+                    effects,
+                    color,
+                },
+                from,
+                dir,
+                0.75,
+                8.0,
+            );
+            fx::sound(ctx, "entity.witch.throw", 5, e.pos, 1.0, 0.8 + crate::hits::rnd() as f32 * 0.4);
+        }
+        Missile::Fireball { .. } => {
+            let yaw = f64::from(m.yaw).to_radians();
+            let from = [e.pos[0] - yaw.sin() * 4.0, e.pos[1] + 2.0, e.pos[2] + yaw.cos() * 4.0];
+            let dir = [aim[0] - from[0], aim[1] - from[1], aim[2] - from[2]];
+            spawn(mc_entity::extra::Shot::Fireball { small: false }, from, dir, 1.0, 0.0);
+        }
+        Missile::SmallFireball => {
+            let spread = flat.sqrt() * 0.5;
+            let dir = [
+                d[0] + crate::hits::gauss() * spread * 0.3,
+                d[1],
+                d[2] + crate::hits::gauss() * spread * 0.3,
+            ];
+            let from = [e.pos[0], e.pos[1] + m.size().1 / 2.0 + 0.5, e.pos[2]];
+            spawn(mc_entity::extra::Shot::Fireball { small: true }, from, dir, 1.0, 0.0);
+            fx::level_event(ctx, 1018, e.pos, 0);
+        }
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn darkness_follows_the_day() {
-        assert_eq!(sky_darken(1000), 0);
-        assert_eq!(sky_darken(18000), 11);
-        assert!(sky_darken(13000) > 0 && sky_darken(13000) < 11);
-        assert_eq!(sky_darken(24000 + 100), 0);
-    }
-
-    /// A superflat server context, `None` without the game data.
-    fn flat() -> Option<ServerContext> {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
-        let data = mc_data::McData::load(&dir).ok()?;
-        ServerContext::new(crate::Config::new(dir), data).ok()
-    }
-
-    /// Puts a survival player at `pos` and loads the chunks around.
-    fn join(ctx: &ServerContext, pos: [f64; 3]) -> u128 {
-        let uuid = 0xfeed;
-        for cx in -2..=2 {
-            for cz in -2..=2 {
-                let _ = ctx.world.block(
-                    mc_protocol::Position::new(cx * 16, 0, cz * 16),
-                    &ctx.data.blocks,
-                );
-            }
-        }
-        lock(&ctx.players).insert(
-            uuid,
-            crate::context::OnlinePlayer {
-                profile: mc_protocol::packets::GameProfile {
-                    uuid,
-                    name: "Steve".into(),
-                    properties: Vec::new(),
-                },
-                game_mode: 0,
-                entity_id: 7000,
-                skin_parts: 0,
-                pose: Some(crate::context::Pose {
-                    x: pos[0],
-                    y: pos[1],
-                    z: pos[2],
-                    yaw: 0.0,
-                    pitch: 0.0,
-                    on_ground: true,
-                }),
-                main_hand: None,
-                flying: false,
-                address: None,
-                extra: Default::default(),
-            },
-        );
-        lock(&ctx.vitals).insert(uuid, crate::vitals::Vitals::default());
-        uuid
-    }
-
-    fn run(ctx: &ServerContext, ticks: usize) {
-        for _ in 0..ticks {
-            lock(&ctx.time).age += 1;
-            let mut level = WorldLevel::new(ctx);
-            tick(ctx, &mut level);
-        }
-    }
-
-    fn is_monster_entity(e: &Entity) -> bool {
-        matches!(&e.kind, Kind::Mob(m) if m.species.category() == mc_entity::mob::Category::Monster)
-    }
-
-    fn mob_of(ctx: &ServerContext, id: i32) -> Option<Entity> {
-        lock(&ctx.entities).iter().find(|e| e.id == id).cloned()
-    }
-
-    #[test]
-    fn a_zombie_comes_for_the_player_and_hurts_them() {
-        let Some(ctx) = flat() else {
-            eprintln!("skipped: no game data");
-            return;
-        };
-        ctx.difficulty
-            .store(2, std::sync::atomic::Ordering::Relaxed);
-        let uuid = join(&ctx, [0.5, -60.0, 0.5]);
-        let zombie = new_mob(&ctx, Species::Zombie, [12.5, -60.0, 0.5]);
-        let id = zombie.id;
-        lock(&ctx.entities).push(zombie);
-        run(&ctx, 200);
-        let health = lock(&ctx.vitals)[&uuid].health;
-        assert!(health < 20.0, "health {health}");
-        let z = mob_of(&ctx, id).expect("zombie still there");
-        assert!(z.pos[0] < 6.0, "{:?}", z.pos);
-    }
-
-    #[test]
-    fn hitting_a_cow_kills_it_and_it_drops_loot() {
-        let Some(ctx) = flat() else {
-            eprintln!("skipped: no game data");
-            return;
-        };
-        let _ = join(&ctx, [0.5, -60.0, 0.5]);
-        let cow = new_mob(&ctx, Species::Cow, [2.5, -60.0, 0.5]);
-        let id = cow.id;
-        lock(&ctx.entities).push(cow);
-        run(&ctx, 5);
-        let by = Actor {
-            uuid: 0xfeed,
-            entity_id: 7000,
-            name: "Steve".into(),
-            pos: [0.5, -60.0, 0.5],
-        };
-        ctx.mobs.hit(id, by.clone(), 4.0);
-        run(&ctx, 1);
-        let c = mob_of(&ctx, id).unwrap();
-        let Kind::Mob(m) = &c.kind else { panic!() };
-        assert_eq!(m.health, 6.0);
-        // The animal runs.
-        let before = c.pos;
-        run(&ctx, 40);
-        let after = mob_of(&ctx, id).unwrap().pos;
-        assert!(
-            (after[0] - before[0]).hypot(after[2] - before[2]) > 1.5,
-            "{before:?} {after:?}"
-        );
-        let near = Actor { pos: after, ..by };
-        ctx.mobs.hit(id, near, 100.0);
-        run(&ctx, 1);
-        let items = lock(&ctx.entities)
-            .iter()
-            .filter(|e| matches!(e.kind, Kind::Item { .. }))
-            .count();
-        assert!(items > 0, "no drops");
-        // The body goes after a second.
-        run(&ctx, 25);
-        assert!(mob_of(&ctx, id).is_none());
-    }
-
-    #[test]
-    fn animals_and_monsters_spawn_naturally() {
-        let Some(ctx) = flat() else {
-            eprintln!("skipped: no game data");
-            return;
-        };
-        ctx.difficulty
-            .store(2, std::sync::atomic::Ordering::Relaxed);
-        let _ = join(&ctx, [0.5, -60.0, 0.5]);
-        run(&ctx, 400);
-        let all: Vec<_> = lock(&ctx.entities).clone();
-        let animals = all
-            .iter()
-            .filter(|e| matches!(&e.kind, Kind::Mob(m) if m.species.category() == mc_entity::mob::Category::Creature))
-            .count();
-        // A superflat plains world: animals on the grass.
-        assert!(animals > 0, "no animals among {}", all.len());
-        // Monsters never appear within 24 blocks of the player.
-        for e in all.iter().filter(|e| is_monster_entity(e)) {
-            let d = ((e.pos[0] - 0.5).powi(2) + (e.pos[2] - 0.5).powi(2)).sqrt();
-            assert!(d > 20.0 || e.age > 0, "spawned too close: {:?}", e.pos);
-        }
-    }
-
-    #[test]
-    fn shears_take_the_wool() {
-        let Some(ctx) = flat() else {
-            eprintln!("skipped: no game data");
-            return;
-        };
-        let uuid = join(&ctx, [0.5, -60.0, 0.5]);
-        let mut sheep = new_mob(&ctx, Species::Sheep, [1.5, -60.0, 0.5]);
-        if let Kind::Mob(m) = &mut sheep.kind {
-            m.set_color(0);
-        }
-        let id = sheep.id;
-        lock(&ctx.entities).push(sheep);
-        let shears = ctx.items.id("minecraft:shears").unwrap();
-        {
-            let mut inv = lock(&ctx.inventories);
-            let hands = inv.entry(uuid).or_default();
-            let slot = hands.hand_slot(0);
-            hands.slots[slot] = Some(mc_protocol::packets::play::ItemStack::new(shears, 1));
-        }
-        let by = Actor {
-            uuid,
-            entity_id: 7000,
-            name: "Steve".into(),
-            pos: [0.5, -60.0, 0.5],
-        };
-        ctx.mobs.use_on(id, by.clone(), 0);
-        run(&ctx, 1);
-        let Kind::Mob(m) = &mob_of(&ctx, id).unwrap().kind else {
-            panic!()
-        };
-        assert!(m.sheared);
-        let wool = ctx.items.id("minecraft:white_wool").unwrap();
-        let dropped: i32 = lock(&ctx.entities)
-            .iter()
-            .filter_map(|e| match e.kind {
-                Kind::Item { item, count, .. } if item == wool => Some(count),
-                _ => None,
-            })
-            .sum();
-        assert!((1..=3).contains(&dropped), "{dropped}");
-        let worn = lock(&ctx.inventories)[&uuid].slots[36]
-            .as_ref()
-            .map(|s| s.damage);
-        assert_eq!(worn, Some(1));
-        // Shearing again does nothing.
-        ctx.mobs.use_on(id, by, 0);
-        run(&ctx, 1);
-        let again: i32 = lock(&ctx.entities)
-            .iter()
-            .filter_map(|e| match e.kind {
-                Kind::Item { item, count, .. } if item == wool => Some(count),
-                _ => None,
-            })
-            .sum();
-        assert_eq!(again, dropped);
-    }
-
-    #[test]
-    fn a_creeper_blows_a_hole_near_the_player() {
-        let Some(ctx) = flat() else {
-            eprintln!("skipped: no game data");
-            return;
-        };
-        ctx.difficulty
-            .store(2, std::sync::atomic::Ordering::Relaxed);
-        let uuid = join(&ctx, [0.5, -60.0, 0.5]);
-        let creeper = new_mob(&ctx, Species::Creeper, [5.5, -60.0, 0.5]);
-        let id = creeper.id;
-        lock(&ctx.entities).push(creeper);
-        run(&ctx, 160);
-        assert!(
-            mob_of(&ctx, id).is_none(),
-            "the creeper should have blown up"
-        );
-        assert!(lock(&ctx.vitals)[&uuid].health < 20.0);
-        let ground = ctx
-            .world
-            .block(mc_protocol::Position::new(0, -61, 0), &ctx.data.blocks)
-            .unwrap();
-        let _ = ground;
-    }
-
-    #[test]
-    fn metadata_describes_the_species() {
-        let mut sheep = Mob::new(Species::Sheep, 3);
-        sheep.set_color(14);
-        sheep.shear();
-        let v = metadata_of(&sheep);
-        assert!(v.contains(&(field::SHEEP_WOOL, MetadataValue::Byte(14 | 16))));
-        let creeper = Mob::new(Species::Creeper, 3);
-        assert!(
-            metadata_of(&creeper)
-                .iter()
-                .any(|(i, _)| *i == field::CREEPER_IGNITED)
-        );
-    }
-}
+mod tests;

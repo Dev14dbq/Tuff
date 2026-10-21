@@ -58,13 +58,18 @@ pub fn build(
 ) -> Option<(Kind, Option<[f64; 3]>)> {
     let n = name.trim_start_matches("minecraft:");
     if let Some(species) = mc_entity::Species::from_id(name) {
-        return Some((crate::mobs::new_mob(ctx, species, at).kind, None));
+        let mut kind = crate::mobs::new_mob(ctx, species, at).kind;
+        if let Kind::Mob(m) = &mut kind {
+            crate::mobs::nbt::apply(ctx, m, nbt);
+        }
+        return Some((kind, None));
     }
     let shot = |shot: Shot| {
         Some((
             Kind::Projectile(Projectile {
                 shot,
                 owner: None,
+                mob: None,
                 yaw: 0.0,
                 pitch: 0.0,
             }),
