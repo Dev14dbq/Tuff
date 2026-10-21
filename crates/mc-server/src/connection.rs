@@ -1672,6 +1672,7 @@ fn spawn_entity(
         mc_entity::Kind::FallingBlock { state } => (ctx.entity_types.falling_block, state as i32),
         mc_entity::Kind::Item { .. } => (ctx.entity_types.item, 0),
         mc_entity::Kind::Tnt { .. } => (ctx.entity_types.tnt, 0),
+        mc_entity::Kind::ExperienceOrb { .. } => (ctx.entity_types.experience_orb, 0),
         _ => return Ok(()),
     };
     writer.queue(&play::AddEntity {
@@ -1701,6 +1702,15 @@ fn spawn_entity(
                         damage,
                         ..play::ItemStack::new(item, count)
                     })),
+                )],
+            })?;
+        }
+        mc_entity::Kind::ExperienceOrb { value, .. } => {
+            writer.queue(&play::SetEntityData {
+                entity_id: entity.id,
+                entries: vec![(
+                    play::metadata::EXPERIENCE_ORB_VALUE,
+                    play::MetadataValue::VarInt(value),
                 )],
             })?;
         }

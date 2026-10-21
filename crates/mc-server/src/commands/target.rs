@@ -255,6 +255,10 @@ pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
                 "minecraft:tnt".to_owned(),
                 "entity.minecraft.tnt".to_owned(),
             ),
+            mc_entity::Kind::ExperienceOrb { .. } => (
+                "minecraft:experience_orb".to_owned(),
+                "entity.minecraft.experience_orb".to_owned(),
+            ),
             other => {
                 let name = crate::fx::type_name(other).unwrap_or_default();
                 (

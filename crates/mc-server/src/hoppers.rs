@@ -99,7 +99,14 @@ pub fn pickup(ctx: &ServerContext, p: Position) -> bool {
     };
     let mut entities = lock(&ctx.entities);
     for e in entities.iter_mut() {
-        let mc_entity::Kind::Item { item, count, damage, health, .. } = e.kind else {
+        let mc_entity::Kind::Item {
+            item,
+            count,
+            damage,
+            health,
+            ..
+        } = e.kind
+        else {
             continue;
         };
         if e.removed
@@ -147,11 +154,289 @@ pub fn pickup(ctx: &ServerContext, p: Position) -> bool {
     false
 }
 
+/// What a dispenser does with an item.
+enum Behavior {
+    /// It acted: one item is used up (or worn, for tools) and `leftover`
+    /// (an empty bucket, a full bottle) comes back, with its components.
+    Done {
+        leftover: Option<(i32, Option<Tag>)>,
+        wear: i32,
+    },
+    /// It tried and could not: nothing is dispensed, the item stays.
+    Failed,
+    /// No special behaviour: the item is dropped.
+    Default,
+}
+
+fn done(leftover: Option<i32>) -> Behavior {
+    Behavior::Done {
+        leftover: leftover.map(|i| (i, None)),
+        wear: 0,
+    }
+}
+
+fn centre_of(p: Position) -> [f64; 3] {
+    [f64::from(p.x) + 0.5, f64::from(p.y), f64::from(p.z) + 0.5]
+}
+
+/// The behaviour of a dispenser for `name`, acting on the block `front`.
+fn behavior(
+    ctx: &ServerContext,
+    level: &mut crate::level::WorldLevel,
+    name: &str,
+    front: Position,
+) -> Behavior {
+    let blocks = &ctx.data.blocks;
+    let state = ctx.world.block(front, blocks).unwrap_or(0);
+    let block = blocks.block_name(state).unwrap_or("");
+    let item = |n: &str| ctx.items.id(n);
+    match name {
+        "minecraft:water_bucket" | "minecraft:lava_bucket" => {
+            let fluid = if name == "minecraft:water_bucket" {
+                "minecraft:water"
+            } else {
+                "minecraft:lava"
+            };
+            let placed = if fluid == "minecraft:water"
+                && blocks.property(state, "waterlogged") == Some("false")
+            {
+                level.set_block(front, ctx.shapes.with(state, "waterlogged", "true"))
+            } else if ctx.shapes.is_air(state) || ctx.rules.is_replaceable(state) {
+                let source = ctx.shapes.default_state(fluid).unwrap_or(0);
+                let same = block == fluid && blocks.property(state, "level") == Some("0");
+                !same && level.set_block(front, source)
+            } else {
+                false
+            };
+            if placed {
+                done(item("minecraft:bucket"))
+            } else {
+                Behavior::Default
+            }
+        }
+        "minecraft:bucket" => {
+            let (new, full) = if blocks.property(state, "waterlogged") == Some("true") {
+                (
+                    ctx.shapes.with(state, "waterlogged", "false"),
+                    "minecraft:water_bucket",
+                )
+            } else if blocks.property(state, "level") != Some("0") {
+                return Behavior::Default;
+            } else {
+                match block {
+                    "minecraft:water" => (ctx.shapes.air(), "minecraft:water_bucket"),
+                    "minecraft:lava" => (ctx.shapes.air(), "minecraft:lava_bucket"),
+                    _ => return Behavior::Default,
+                }
+            };
+            match item(full) {
+                Some(full) if level.set_block(front, new) => done(Some(full)),
+                _ => Behavior::Default,
+            }
+        }
+        "minecraft:powder_snow_bucket" => Behavior::Default,
+        "minecraft:bone_meal" => {
+            if crate::growth::bone_meal(level, front) {
+                done(None)
+            } else {
+                Behavior::Failed
+            }
+        }
+        "minecraft:tnt" => {
+            let mut tnt = crate::explosion::primed(ctx, front, crate::explosion::TNT_FUSE, None);
+            tnt.pos = centre_of(front);
+            tnt.vel = [0.0; 3];
+            let _ = ctx
+                .events
+                .send(crate::context::Event::EntitySpawned(tnt.clone()));
+            lock(&ctx.entities).push(tnt);
+            done(None)
+        }
+        "minecraft:flint_and_steel" | "minecraft:fire_charge" => {
+            let lit = block.ends_with("campfire") || block.ends_with("candle");
+            let ok = if block == "minecraft:tnt" {
+                crate::explosion::ignite(ctx, level, front, None)
+            } else if lit
+                && blocks.property(state, "lit") == Some("false")
+                && blocks.property(state, "waterlogged") != Some("true")
+            {
+                level.set_block(front, ctx.shapes.with(state, "lit", "true"))
+            } else if let Some(fire) =
+                mc_tick::fire::can_light(&*level, level.logic(), crate::level::to_pos(front))
+            {
+                level.set_block(front, fire)
+            } else {
+                false
+            };
+            if !ok {
+                Behavior::Failed
+            } else if name == "minecraft:fire_charge" {
+                done(None)
+            } else {
+                Behavior::Done {
+                    leftover: None,
+                    wear: 1,
+                }
+            }
+        }
+        "minecraft:shears" => {
+            let honey = matches!(block, "minecraft:beehive" | "minecraft:bee_nest")
+                && blocks.property(state, "honey_level") == Some("5");
+            if honey {
+                level.set_block(front, ctx.shapes.with(state, "honey_level", "0"));
+                if let Some(comb) = item("minecraft:honeycomb") {
+                    crate::tick::spawn_item_at(ctx, centre_of(front), comb, 3);
+                }
+                Behavior::Done {
+                    leftover: None,
+                    wear: 1,
+                }
+            } else {
+                Behavior::Default
+            }
+        }
+        "minecraft:glass_bottle" => {
+            let honey = matches!(block, "minecraft:beehive" | "minecraft:bee_nest")
+                && blocks.property(state, "honey_level") == Some("5");
+            if honey {
+                level.set_block(front, ctx.shapes.with(state, "honey_level", "0"));
+                return done(item("minecraft:honey_bottle"));
+            }
+            let water =
+                block == "minecraft:water" || blocks.property(state, "waterlogged") == Some("true");
+            match item("minecraft:potion") {
+                Some(potion) if water => {
+                    let mut contents = mc_nbt::Compound::new();
+                    contents.insert("potion", "minecraft:water");
+                    let mut comps = mc_nbt::Compound::new();
+                    comps.insert("minecraft:potion_contents", Tag::Compound(contents));
+                    Behavior::Done {
+                        leftover: Some((potion, Some(Tag::Compound(comps)))),
+                        wear: 0,
+                    }
+                }
+                _ => Behavior::Default,
+            }
+        }
+        _ => Behavior::Default,
+    }
+}
+
+/// The inventory slot an item is worn in, if it is armour.
+fn armor_slot(name: &str) -> Option<usize> {
+    let n = name.trim_start_matches("minecraft:");
+    if n.ends_with("_helmet")
+        || n.ends_with("_head")
+        || n.ends_with("_skull")
+        || n == "carved_pumpkin"
+    {
+        Some(5)
+    } else if n.ends_with("_chestplate") || n == "elytra" {
+        Some(6)
+    } else if n.ends_with("_leggings") {
+        Some(7)
+    } else if n.ends_with("_boots") {
+        Some(8)
+    } else {
+        None
+    }
+}
+
+/// Armour dispensed at a player standing in front: it is put on if that
+/// slot is free.
+fn dress_player(
+    ctx: &ServerContext,
+    front: Position,
+    stack: &ItemStack,
+    comps: Option<&Tag>,
+) -> bool {
+    let Some(name) = ctx.items.name(stack.item) else {
+        return false;
+    };
+    let Some(slot) = armor_slot(name) else {
+        return false;
+    };
+    let (fx, fy, fz) = (f64::from(front.x), f64::from(front.y), f64::from(front.z));
+    let candidates: Vec<u128> = lock(&ctx.players)
+        .values()
+        .filter(|p| p.game_mode != 3)
+        .filter_map(|p| p.pose.map(|pose| (p.profile.uuid, pose)))
+        .filter(|(_, pose)| {
+            pose.x + 0.3 > fx
+                && pose.x - 0.3 < fx + 1.0
+                && pose.z + 0.3 > fz
+                && pose.z - 0.3 < fz + 1.0
+                && pose.y + 1.8 > fy
+                && pose.y < fy + 1.0
+        })
+        .map(|(uuid, _)| uuid)
+        .collect();
+    let mut inventories = lock(&ctx.inventories);
+    for uuid in candidates {
+        let Some(hands) = inventories.get_mut(&uuid) else {
+            continue;
+        };
+        if hands.slots[slot].is_some() {
+            continue;
+        }
+        hands.slots[slot] = Some(ItemStack {
+            count: 1,
+            ..stack.clone()
+        });
+        if let Some(c) = comps {
+            hands.components.insert(slot, c.clone());
+        }
+        let _ = ctx.events.send(crate::context::Event::InventorySlot {
+            uuid,
+            slot: slot as i16,
+            item: hands.slots[slot].clone(),
+        });
+        return true;
+    }
+    false
+}
+
+/// Puts a returned item (an empty bucket...) into the container, merging
+/// or in a free slot. Returns whether it fit.
+fn give_back(ctx: &ServerContext, p: Position, kind: Kind, item: i32, comps: Option<Tag>) -> bool {
+    let slots = containers::slots(ctx, p, kind);
+    let held = containers::components(ctx, p, kind);
+    let max = ctx.items.max_stack(item);
+    let merge = comps.is_none().then(|| {
+        (0..slots.len()).find(|&i| {
+            slots[i]
+                .as_ref()
+                .is_some_and(|s| s.item == item && s.count < max && !held.contains_key(&i))
+        })
+    });
+    let target = merge
+        .flatten()
+        .or_else(|| (0..slots.len()).find(|&i| slots[i].is_none()));
+    let Some(i) = target else { return false };
+    let stack = ItemStack {
+        count: slots[i].as_ref().map_or(0, |s| s.count) + 1,
+        item,
+        damage: 0,
+        has_component_changes: false,
+    };
+    let comps = comps.or_else(|| {
+        slots[i]
+            .is_none()
+            .then(|| Tag::Compound(Default::default()))
+    });
+    containers::put_with(ctx, p, kind, &[(i, Some(stack), comps)]);
+    true
+}
+
 /// A dropper or dispenser fires: a random stocked slot gives one item,
 /// which goes into the container in front (droppers) or out onto the
-/// ground. Per-item dispenser actions (buckets, boats, bones, eggs, TNT,
-/// arrows) are still to come: until then a dispenser drops like a dropper.
-pub fn dispense(ctx: &ServerContext, p: Position, facing: Dir, dropper: bool) {
+/// ground. A dispenser acts on the item first where it has a behaviour
+/// (buckets, bone meal, TNT, flint and steel, fire charges, shears, glass
+/// bottles, armour onto a player in front). Items that need entities the
+/// server does not have yet (boats, minecarts, arrows, eggs, spawn eggs)
+/// are dropped as by a dropper.
+pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, dropper: bool) {
+    let ctx = level.context();
     let Some((kind, _)) = kind_at(ctx, p) else {
         return;
     };
@@ -168,20 +453,78 @@ pub fn dispense(ctx: &ServerContext, p: Position, facing: Dir, dropper: bool) {
     let front = Position::new(p.x + dx, p.y + dy, p.z + dz);
     if dropper && kind_at(ctx, front).is_some() {
         transfer_from_slot(ctx, p, kind, slot, front, facing.opposite());
-    } else {
-        let left = (stack.count > 1).then(|| ItemStack {
-            count: stack.count - 1,
-            ..stack.clone()
-        });
-        let kept = left.is_none().then(|| Tag::Compound(Default::default()));
-        containers::put_with(ctx, p, kind, &[(slot, left, kept)]);
-        let at = [
-            f64::from(p.x) + 0.5 + f64::from(dx) * 0.7,
-            f64::from(p.y) + 0.5 + f64::from(dy) * 0.7 - if dy == 0 { 0.125 } else { 0.0 },
-            f64::from(p.z) + 0.5 + f64::from(dz) * 0.7,
-        ];
-        crate::tick::spawn_item_at(ctx, at, stack.item, 1);
+        return;
     }
+    let comps = containers::components(ctx, p, kind).get(&slot).cloned();
+    let action = if dropper {
+        Behavior::Default
+    } else if let Some(name) = ctx.items.name(stack.item).map(str::to_owned) {
+        match behavior(ctx, level, &name, front) {
+            Behavior::Default if dress_player(ctx, front, &stack, comps.as_ref()) => done(None),
+            other => other,
+        }
+    } else {
+        Behavior::Default
+    };
+    match action {
+        Behavior::Failed => {}
+        Behavior::Done { leftover, wear } => {
+            let max = ctx.items.max_damage(stack.item);
+            let worn = wear > 0 && max > 0;
+            let left = if worn {
+                // A tool is worn, not used up; it breaks at full damage.
+                let damage = stack.damage + wear;
+                (damage < max).then(|| ItemStack {
+                    damage,
+                    ..stack.clone()
+                })
+            } else {
+                (stack.count > 1).then(|| ItemStack {
+                    count: stack.count - 1,
+                    ..stack.clone()
+                })
+            };
+            let emptied = left.is_none();
+            let kept = emptied.then(|| Tag::Compound(Default::default()));
+            containers::put_with(ctx, p, kind, &[(slot, left, kept)]);
+            if let Some((item, comps)) = leftover {
+                // An emptied slot takes the leftover itself.
+                let placed = if emptied {
+                    let one = ItemStack {
+                        count: 1,
+                        item,
+                        damage: 0,
+                        has_component_changes: false,
+                    };
+                    let comps = comps.clone().or(Some(Tag::Compound(Default::default())));
+                    containers::put_with(ctx, p, kind, &[(slot, Some(one), comps)]);
+                    true
+                } else {
+                    give_back(ctx, p, kind, item, comps)
+                };
+                if !placed {
+                    crate::tick::spawn_item_at(ctx, drop_point(p, dx, dy, dz), item, 1);
+                }
+            }
+        }
+        Behavior::Default => {
+            let left = (stack.count > 1).then(|| ItemStack {
+                count: stack.count - 1,
+                ..stack.clone()
+            });
+            let kept = left.is_none().then(|| Tag::Compound(Default::default()));
+            containers::put_with(ctx, p, kind, &[(slot, left, kept)]);
+            crate::tick::spawn_item_at(ctx, drop_point(p, dx, dy, dz), stack.item, 1);
+        }
+    }
+}
+
+fn drop_point(p: Position, dx: i32, dy: i32, dz: i32) -> [f64; 3] {
+    [
+        f64::from(p.x) + 0.5 + f64::from(dx) * 0.7,
+        f64::from(p.y) + 0.5 + f64::from(dy) * 0.7 - if dy == 0 { 0.125 } else { 0.0 },
+        f64::from(p.z) + 0.5 + f64::from(dz) * 0.7,
+    ]
 }
 
 /// Moves one item out of a particular slot (a dropper facing a container).
@@ -261,5 +604,140 @@ pub fn tick(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         } else {
             lock(&ctx.hoppers).remove(&key);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::level::WorldLevel;
+
+    fn context() -> Option<ServerContext> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let data = mc_data::McData::load(&dir).ok()?;
+        ServerContext::new(crate::Config::new(dir), data).ok()
+    }
+
+    /// A dispenser at the origin holding `item`, facing east.
+    fn loaded(ctx: &ServerContext, item: &str, count: i32) -> Position {
+        let p = Position::new(0, -60, 0);
+        let state = ctx
+            .data
+            .blocks
+            .default_state("minecraft:dispenser")
+            .unwrap();
+        WorldLevel::new(ctx).set_block(p, state);
+        let item = ctx.items.id(item).unwrap();
+        containers::put(
+            ctx,
+            p,
+            containers::kind_of("minecraft:dispenser").unwrap(),
+            &[(0, Some(ItemStack::new(item, count)))],
+        );
+        p
+    }
+
+    fn fire(ctx: &ServerContext, p: Position) {
+        let mut level = WorldLevel::new(ctx);
+        dispense(&mut level, p, Dir::East, false);
+    }
+
+    fn slot0(ctx: &ServerContext, p: Position) -> Option<ItemStack> {
+        let kind = containers::kind_of("minecraft:dispenser").unwrap();
+        containers::slots(ctx, p, kind)[0].clone()
+    }
+
+    #[test]
+    fn bucket_pours_and_scoops() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let p = loaded(&ctx, "minecraft:water_bucket", 1);
+        fire(&ctx, p);
+        let front = Position::new(1, -60, 0);
+        let name = |ctx: &ServerContext| {
+            ctx.world
+                .block(front, &ctx.data.blocks)
+                .and_then(|s| ctx.data.blocks.block_name(s).map(str::to_owned))
+        };
+        assert_eq!(name(&ctx).as_deref(), Some("minecraft:water"));
+        assert_eq!(
+            slot0(&ctx, p).map(|s| s.item),
+            ctx.items.id("minecraft:bucket")
+        );
+        // The empty bucket takes the water back.
+        fire(&ctx, p);
+        assert_eq!(name(&ctx).as_deref(), Some("minecraft:air"));
+        assert_eq!(
+            slot0(&ctx, p).map(|s| s.item),
+            ctx.items.id("minecraft:water_bucket")
+        );
+    }
+
+    #[test]
+    fn tnt_is_primed_not_dropped() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let p = loaded(&ctx, "minecraft:tnt", 2);
+        fire(&ctx, p);
+        assert_eq!(slot0(&ctx, p).map(|s| s.count), Some(1));
+        let entities = lock(&ctx.entities);
+        assert!(matches!(
+            entities[..],
+            [mc_entity::Entity {
+                kind: mc_entity::Kind::Tnt { .. },
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn bone_meal_needs_a_plant() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let p = loaded(&ctx, "minecraft:bone_meal", 3);
+        // Nothing to grow: the meal stays and nothing drops.
+        fire(&ctx, p);
+        assert_eq!(slot0(&ctx, p).map(|s| s.count), Some(3));
+        assert!(lock(&ctx.entities).is_empty());
+        let front = Position::new(1, -60, 0);
+        let wheat = ctx.data.blocks.default_state("minecraft:wheat").unwrap();
+        WorldLevel::new(&ctx).set_block(front, wheat);
+        fire(&ctx, p);
+        assert_eq!(slot0(&ctx, p).map(|s| s.count), Some(2));
+        let age = ctx
+            .world
+            .block(front, &ctx.data.blocks)
+            .and_then(|s| ctx.data.blocks.property(s, "age").map(str::to_owned));
+        assert!(age.is_some_and(|a| a != "0"));
+    }
+
+    #[test]
+    fn flint_and_steel_wears() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let p = loaded(&ctx, "minecraft:flint_and_steel", 1);
+        fire(&ctx, p);
+        assert_eq!(slot0(&ctx, p).map(|s| s.damage), Some(1));
+        assert!(lock(&ctx.entities).is_empty());
+    }
+
+    #[test]
+    fn plain_items_drop() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let p = loaded(&ctx, "minecraft:stick", 2);
+        fire(&ctx, p);
+        assert_eq!(slot0(&ctx, p).map(|s| s.count), Some(1));
+        assert_eq!(lock(&ctx.entities).len(), 1);
     }
 }

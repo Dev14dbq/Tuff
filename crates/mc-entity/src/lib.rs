@@ -40,6 +40,8 @@ pub enum Kind {
         /// The player who lit it.
         owner: Option<u128>,
     },
+    /// Experience: `count` merged orbs of `value` points each.
+    ExperienceOrb { value: i32, count: i32 },
 }
 
 impl Kind {
@@ -76,6 +78,7 @@ impl Entity {
         match &self.kind {
             Kind::FallingBlock { .. } | Kind::Tnt { .. } => (0.98, 0.98),
             Kind::Item { .. } => (0.25, 0.25),
+            Kind::ExperienceOrb { .. } => (0.5, 0.5),
             Kind::Projectile(p) => match &p.shot {
                 extra::Shot::Arrow(_) => (0.5, 0.5),
                 extra::Shot::Cloud { radius, .. } => (f64::from(*radius) * 2.0, 0.5),
@@ -159,7 +162,15 @@ pub const DRAG: f64 = 0.98;
 
 /// One tick of falling: accelerate, move, damp.
 pub fn fall(entity: &mut Entity, world: &dyn Collide) {
-    entity.vel[1] -= GRAVITY;
+    fall_with(entity, world, GRAVITY);
+}
+
+/// Experience orbs fall more slowly.
+pub const ORB_GRAVITY: f64 = 0.03;
+
+/// `fall` with the gravity of the entity.
+pub fn fall_with(entity: &mut Entity, world: &dyn Collide, gravity: f64) {
+    entity.vel[1] -= gravity;
     let (moved, on_ground) = move_entity(entity.aabb(), entity.vel, world);
     for ((pos, vel), moved) in entity.pos.iter_mut().zip(&mut entity.vel).zip(moved) {
         *pos += moved;

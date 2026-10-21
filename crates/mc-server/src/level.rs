@@ -432,7 +432,7 @@ impl Level for WorldLevel<'_> {
     }
 
     fn dispense(&mut self, p: BlockPos, facing: mc_tick::Dir, dropper: bool) {
-        crate::hoppers::dispense(self.ctx, to_position(p), facing, dropper);
+        crate::hoppers::dispense(self, to_position(p), facing, dropper);
     }
 
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32) {
