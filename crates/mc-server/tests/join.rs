@@ -516,8 +516,21 @@ async fn placed_and_broken_blocks_are_seen_by_everyone() {
     let (mut alice, _) = join_offline(addr, ids.clone(), "Alice").await;
     let (mut bob, spawn) = join_offline(addr, ids.clone(), "Bob").await;
     assert_eq!(spawn, (0.5, -60.0, 0.5));
-    let (_, spawned) = alice.recv_until("minecraft:add_entity").await;
-    let bob_entity = Reader::new(&spawned).varint().unwrap();
+    // Mobs may spawn meanwhile: Bob is the player that appears.
+    let player = ctx
+        .data
+        .builtin
+        .id("minecraft:entity_type", "minecraft:player")
+        .unwrap();
+    let bob_entity = loop {
+        let (_, spawned) = alice.recv_until("minecraft:add_entity").await;
+        let mut r = Reader::new(&spawned);
+        let id = r.varint().unwrap();
+        r.uuid().unwrap();
+        if r.varint().unwrap() == player {
+            break id;
+        }
+    };
 
     // Bob takes stone from the creative inventory into his first hotbar slot.
     let mut slot = Vec::new();
@@ -527,9 +540,15 @@ async fn placed_and_broken_blocks_are_seen_by_everyone() {
     slot.put_varint(0);
     slot.put_varint(0);
     bob.send("minecraft:set_creative_mode_slot", slot).await;
-    let (_, equipment) = alice.recv_until("minecraft:set_equipment").await;
+    // Equipment of other players may come first.
+    let equipment = loop {
+        let (_, equipment) = alice.recv_until("minecraft:set_equipment").await;
+        if Reader::new(&equipment).varint().unwrap() == bob_entity {
+            break equipment;
+        }
+    };
     let mut r = Reader::new(&equipment);
-    assert_eq!(r.varint().unwrap(), bob_entity);
+    r.varint().unwrap();
     assert_eq!(r.u8().unwrap(), 0, "main hand, last entry");
     assert_eq!((r.varint().unwrap(), r.varint().unwrap()), (1, stone_item));
 
