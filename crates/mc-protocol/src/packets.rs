@@ -2121,6 +2121,8 @@ pub mod play {
     pub mod metadata {
         /// Dropped item entity: the stack (Slot).
         pub const ITEM: u8 = 8;
+        /// Experience orb: its value (VarInt).
+        pub const EXPERIENCE_ORB_VALUE: u8 = 8;
         /// Living entity: hand states (Byte): 1 using an item, 2 the off hand.
         pub const HAND_STATES: u8 = 8;
         /// Entity flags (Byte): 0x20 invisible, 0x40 glowing...

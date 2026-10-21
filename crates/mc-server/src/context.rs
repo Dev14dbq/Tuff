@@ -95,6 +95,7 @@ pub struct EntityTypes {
     pub falling_block: i32,
     pub item: i32,
     pub tnt: i32,
+    pub experience_orb: i32,
 }
 
 /// Things every connection in play needs to hear about.
@@ -662,6 +663,7 @@ impl ServerContext {
                 falling_block: entity_type("minecraft:falling_block")?,
                 item: entity_type("minecraft:item")?,
                 tnt: entity_type("minecraft:tnt")?,
+                experience_orb: entity_type("minecraft:experience_orb")?,
             },
             player_entity_type,
             key,

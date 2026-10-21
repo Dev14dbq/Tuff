@@ -42,6 +42,7 @@ mod util;
 mod vitals;
 mod weather;
 mod world;
+mod xp;
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};

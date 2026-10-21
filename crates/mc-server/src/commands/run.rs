@@ -2154,6 +2154,10 @@ fn summon(r: &mut Run) -> Result<i32> {
             fuse: tag_i32(nbt.get("fuse")).unwrap_or(crate::explosion::TNT_FUSE),
             owner: None,
         },
+        "minecraft:experience_orb" => mc_entity::Kind::ExperienceOrb {
+            value: tag_i32(nbt.get("Value")).unwrap_or(1).max(1),
+            count: tag_i32(nbt.get("Count")).unwrap_or(1).max(1),
+        },
         "minecraft:falling_block" => {
             let state = match nbt.get("BlockState") {
                 Some(Tag::Compound(bs)) => {
