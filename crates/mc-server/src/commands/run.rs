@@ -283,6 +283,9 @@ pub fn modify(ctx: &ServerContext, c: &Context, s: &Src) -> Result<Vec<Src>> {
                 let mut n = s.clone();
                 n.pos = t.pos();
                 n.rot = t.rot();
+                if let Target::Player { uuid, .. } = &t {
+                    n.dim = ctx.of_player(*uuid).dim;
+                }
                 n
             })
             .collect()),
@@ -344,8 +347,9 @@ pub fn modify(ctx: &ServerContext, c: &Context, s: &Src) -> Result<Vec<Src>> {
             })
         }
         ["execute", "in", "dimension"] => {
-            super::execute::dimension(ctx, c)?;
-            Ok(vec![s.clone()])
+            let name = super::execute::dimension(ctx, c)?;
+            let dim = crate::context::dimension_index(&name).unwrap_or(s.dim);
+            one(&|n| n.dim = dim)
         }
         ["execute", kind @ ("if" | "unless"), rest @ ..] => {
             let pass = condition(ctx, c, s, rest)?;
@@ -1821,7 +1825,7 @@ fn teleport(r: &mut Run, path: &[&str]) -> Result<i32> {
             if let Some(at) = facing {
                 (pose.yaw, pose.pitch) = look_at([pose.x, pose.y + EYE_HEIGHT, pose.z], at);
             }
-            r.out.events.push(Event::Teleport { uuid: *uuid, pose });
+            r.teleport(*uuid, pose);
         } else {
             let mut entities = lock(&r.ctx.entities);
             if let Some(e) = entities.iter_mut().find(|e| e.uuid == t.uuid()) {

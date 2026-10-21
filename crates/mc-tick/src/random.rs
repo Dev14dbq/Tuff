@@ -19,8 +19,23 @@ pub enum Behaviour {
     },
     /// Pumpkin and melon stems.
     Stem,
-    /// Sugar cane and cactus grow up to three high.
+    /// Sugar cane grows up to three high.
     Column,
+    /// Cactus grows up to three high and may flower.
+    Cactus,
+    /// Bamboo grows up to 16 high; a shoot becomes bamboo.
+    Bamboo,
+    BambooSapling,
+    /// Pointed dripstone drips into cauldrons.
+    Dripstone,
+    /// Glowing redstone ore goes dark.
+    RedstoneOre,
+    /// Copper ages a stage, slower beside younger copper.
+    Weathering,
+    /// Budding amethyst grows buds on its faces.
+    BuddingAmethyst,
+    /// Small mushrooms spread in the dark.
+    Mushroom,
     NetherWart,
     SweetBerries,
     Cocoa,
@@ -45,7 +60,15 @@ impl Behaviour {
             "beetroots" => Self::Crop { max: 3 },
             "torchflower_crop" => Self::Crop { max: 2 },
             "pumpkin_stem" | "melon_stem" => Self::Stem,
-            "sugar_cane" | "cactus" => Self::Column,
+            "sugar_cane" => Self::Column,
+            "cactus" => Self::Cactus,
+            "bamboo" => Self::Bamboo,
+            "bamboo_sapling" => Self::BambooSapling,
+            "pointed_dripstone" => Self::Dripstone,
+            "redstone_ore" | "deepslate_redstone_ore" => Self::RedstoneOre,
+            "budding_amethyst" => Self::BuddingAmethyst,
+            "brown_mushroom" | "red_mushroom" => Self::Mushroom,
+            _ if copper_age(name).is_some_and(|a| a < 3) => Self::Weathering,
             "nether_wart" => Self::NetherWart,
             "sweet_berry_bush" => Self::SweetBerries,
             "cocoa" => Self::Cocoa,
@@ -86,6 +109,41 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut 
         Behaviour::Crop { max } => crop(level, ctx, p, state, u32::from(max), rng),
         Behaviour::Stem => stem(level, ctx, p, state, rng),
         Behaviour::Column => column(level, ctx, p, state),
+        Behaviour::Cactus => cactus(level, ctx, p, state, rng),
+        Behaviour::Bamboo => {
+            let above = p.offset(Dir::Up);
+            if int(ctx, state, "stage") == 0
+                && rng.below(3) == 0
+                && level.in_world(above)
+                && ctx.shapes.is_air(level.block(above))
+                && level.brightness(above) >= 9
+            {
+                let height = bamboo_below(level, ctx, p) + 1;
+                if height < 16 {
+                    grow_bamboo(level, ctx, p, state, height, rng);
+                }
+            }
+        }
+        Behaviour::BambooSapling => {
+            let above = p.offset(Dir::Up);
+            if rng.below(3) == 0
+                && level.in_world(above)
+                && ctx.shapes.is_air(level.block(above))
+                && level.brightness(above) >= 9
+            {
+                grow_shoot(level, ctx, p);
+            }
+        }
+        Behaviour::Dripstone => crate::cauldron::dripstone_tick(level, ctx, p, rng),
+        Behaviour::Weathering => weather(level, ctx, p, state, rng),
+        Behaviour::BuddingAmethyst => amethyst(level, ctx, p, rng),
+        Behaviour::Mushroom => mushroom(level, ctx, p, state, rng),
+        Behaviour::RedstoneOre => {
+            if ctx.shapes.property(state, "lit") == Some("true") {
+                let dark = ctx.shapes.with(state, "lit", "false");
+                set_block(level, ctx, p, dark, Flags::ALL);
+            }
+        }
         Behaviour::NetherWart => {
             let age = int(ctx, state, "age");
             if age < 3 && rng.below(10) == 0 {
@@ -288,6 +346,310 @@ fn column(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
     } else {
         grow(level, ctx, p, state, age + 1);
     }
+}
+
+const COPPER_STAGES: [&str; 3] = ["exposed_", "weathered_", "oxidized_"];
+
+/// How weathered unwaxed copper `name` (without `minecraft:`) is, 0..3;
+/// `None` if it is not weathering copper.
+pub fn copper_age(name: &str) -> Option<usize> {
+    if name.starts_with("waxed_") || name.contains("ore") || name.starts_with("raw_") {
+        return None;
+    }
+    let stage = COPPER_STAGES
+        .iter()
+        .position(|s| name.starts_with(s))
+        .map_or(0, |i| i + 1);
+    let rest = if stage == 0 {
+        name
+    } else {
+        &name[COPPER_STAGES[stage - 1].len()..]
+    };
+    let copper = rest.contains("copper") || rest == "lightning_rod";
+    (copper && !rest.starts_with("copper_ingot")).then_some(stage)
+}
+
+/// [`copper_age`] for copper that really weathers (it has a next stage, or
+/// is fully oxidized): copper torches do not.
+fn weathering_age(ctx: Ctx, name: &str) -> Option<usize> {
+    let age = copper_age(name)?;
+    (age == 3 || ctx.shapes.default_state(&next_copper(name, age)).is_some()).then_some(age)
+}
+
+/// The next stage of copper `name` (without `minecraft:`).
+fn next_copper(name: &str, age: usize) -> String {
+    let base = if age == 0 {
+        if name == "copper_block" {
+            "copper"
+        } else {
+            name
+        }
+    } else {
+        &name[COPPER_STAGES[age - 1].len()..]
+    };
+    format!("minecraft:{}{base}", COPPER_STAGES[age])
+}
+
+/// Copper weathers (minecraft.wiki, "Oxidation"): about 1 random tick in
+/// 18 it may age, never while younger copper is within 4 blocks (Manhattan
+/// distance), and more likely the more older copper is around.
+fn weather(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut Rng) {
+    if rng.unit() >= 0.056_888_89 {
+        return;
+    }
+    let Some(age) = weathering_age(ctx, name(ctx, state)).filter(|&a| a < 3) else {
+        return;
+    };
+    let (mut same, mut older) = (0, 0);
+    for dx in -4i32..=4 {
+        for dy in -4i32..=4 {
+            for dz in -4i32..=4 {
+                if dx.abs() + dy.abs() + dz.abs() > 4 || (dx, dy, dz) == (0, 0, 0) {
+                    continue;
+                }
+                let q = BlockPos::new(p.x + dx, p.y + dy, p.z + dz);
+                let Some(other) = weathering_age(ctx, name(ctx, level.block(q))) else {
+                    continue;
+                };
+                if other < age {
+                    return;
+                }
+                if other > age {
+                    older += 1;
+                } else {
+                    same += 1;
+                }
+            }
+        }
+    }
+    let share = f64::from(older + 1) / f64::from(older + same + 1);
+    let modifier = if age == 0 { 0.75 } else { 1.0 };
+    if rng.unit() >= share * share * modifier {
+        return;
+    }
+    let next = next_copper(name(ctx, state), age);
+    if let Some(new) = ctx.shapes.renamed(state, &next) {
+        set_block(level, ctx, p, new, Flags::ALL);
+    }
+}
+
+/// Budding amethyst: one tick in five a bud starts or grows on a random
+/// face (in air or water).
+fn amethyst(level: &mut dyn Level, ctx: Ctx, p: BlockPos, rng: &mut Rng) {
+    if rng.below(5) != 0 {
+        return;
+    }
+    let d = Dir::ALL[rng.below(6) as usize];
+    let q = p.offset(d);
+    let s = level.block(q);
+    let water = name(ctx, s) == "water" && ctx.shapes.property(s, "level") == Some("0");
+    let facing = ctx.shapes.property(s, "facing") == Some(d.name());
+    let next = match name(ctx, s) {
+        _ if ctx.shapes.is_air(s) || water => "minecraft:small_amethyst_bud",
+        "small_amethyst_bud" if facing => "minecraft:medium_amethyst_bud",
+        "medium_amethyst_bud" if facing => "minecraft:large_amethyst_bud",
+        "large_amethyst_bud" if facing => "minecraft:amethyst_cluster",
+        _ => return,
+    };
+    let wet = water || ctx.shapes.property(s, "waterlogged") == Some("true");
+    let Some(base) = ctx.shapes.default_state(next) else {
+        return;
+    };
+    let new = ctx.shapes.with(
+        ctx.shapes.with(base, "facing", d.name()),
+        "waterlogged",
+        if wet { "true" } else { "false" },
+    );
+    set_block(level, ctx, q, new, Flags::ALL);
+}
+
+/// A small mushroom spreads one time in 25 to a free spot nearby where it
+/// can stand, unless five of its kind are already within 4 blocks.
+fn mushroom(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut Rng) {
+    if rng.below(25) != 0 {
+        return;
+    }
+    let kind = ctx.shapes.block_index(state);
+    let mut left = 5;
+    for dx in -4..=4 {
+        for dy in -1..=1 {
+            for dz in -4..=4 {
+                let q = BlockPos::new(p.x + dx, p.y + dy, p.z + dz);
+                if ctx.shapes.block_index(level.block(q)) == kind {
+                    left -= 1;
+                    if left <= 0 {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    let step = |from: BlockPos, rng: &mut Rng| {
+        let dy = rng.below(2) as i32 - rng.below(2) as i32;
+        BlockPos::new(
+            from.x + rng.below(3) as i32 - 1,
+            from.y + dy,
+            from.z + rng.below(3) as i32 - 1,
+        )
+    };
+    let fits = |level: &dyn Level, q: BlockPos| {
+        ctx.shapes.is_air(level.block(q)) && crate::support::can_survive(level, ctx, q, state)
+    };
+    let mut from = p;
+    let mut target = step(from, rng);
+    for _ in 0..4 {
+        if fits(level, target) {
+            from = target;
+        }
+        target = step(from, rng);
+    }
+    if fits(level, target) {
+        set_block(level, ctx, target, state, Flags::SHAPES_ONLY);
+    }
+}
+
+/// Cactus: like sugar cane, but a cactus that has grown half way (age 8)
+/// may sprout a flower on top instead (one time in ten, one in four on a
+/// full column).
+fn cactus(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut Rng) {
+    let above = p.offset(Dir::Up);
+    if !level.in_world(above) || !ctx.shapes.is_air(level.block(above)) {
+        return;
+    }
+    let block = ctx.shapes.block_index(state);
+    let age = int(ctx, state, "age");
+    let mut height = 1;
+    while ctx
+        .shapes
+        .block_index(level.block(BlockPos::new(p.x, p.y - height, p.z)))
+        == block
+    {
+        height += 1;
+        if height == 3 && age == 15 {
+            return;
+        }
+    }
+    if age == 8
+        && let Some(flower) = ctx.shapes.default_state("minecraft:cactus_flower")
+        && crate::support::can_survive(level, ctx, above, flower)
+    {
+        let chance = if height >= 3 { 0.25 } else { 0.1 };
+        if rng.unit() <= chance {
+            set_block(level, ctx, above, flower, Flags::ALL);
+            return;
+        }
+    } else if age == 15 && height < 3 {
+        let young = ctx.shapes.with(state, "age", "0");
+        set_block(level, ctx, above, young, Flags::ALL);
+        set_block(level, ctx, p, young, Flags::NONE);
+        return;
+    }
+    if age < 15 {
+        grow(level, ctx, p, state, age + 1);
+    }
+}
+
+fn is_bamboo(ctx: Ctx, state: u32) -> bool {
+    name(ctx, state) == "bamboo"
+}
+
+/// Bamboo blocks right below `p`, at most 15.
+pub fn bamboo_below(level: &dyn Level, ctx: Ctx, p: BlockPos) -> u32 {
+    let mut n = 0;
+    while n < 16
+        && is_bamboo(
+            ctx,
+            level.block(BlockPos::new(p.x, p.y - n as i32 - 1, p.z)),
+        )
+    {
+        n += 1;
+    }
+    n
+}
+
+/// Bamboo blocks right above `p`, at most 15.
+pub fn bamboo_above(level: &dyn Level, ctx: Ctx, p: BlockPos) -> u32 {
+    let mut n = 0;
+    while n < 16
+        && is_bamboo(
+            ctx,
+            level.block(BlockPos::new(p.x, p.y + n as i32 + 1, p.z)),
+        )
+    {
+        n += 1;
+    }
+    n
+}
+
+/// Bamboo at `p` (`height` tall with it) grows one block: the new top has
+/// leaves, large ones once the stalk below has some (which then thin out
+/// below it); stalks over 10 high may stop growing.
+pub fn grow_bamboo(
+    level: &mut dyn Level,
+    ctx: Ctx,
+    p: BlockPos,
+    state: u32,
+    height: u32,
+    rng: &mut Rng,
+) {
+    let below = level.block(p.offset(Dir::Down));
+    let two_below = p.offset(Dir::Down).offset(Dir::Down);
+    let below2 = level.block(two_below);
+    let has_leaves = |s: u32| {
+        ctx.shapes
+            .property(s, "leaves")
+            .is_some_and(|l| l != "none")
+    };
+    let mut leaves = "none";
+    if height >= 1 {
+        if !is_bamboo(ctx, below) || !has_leaves(below) {
+            leaves = "small";
+        } else {
+            leaves = "large";
+            if is_bamboo(ctx, below2) {
+                let small = ctx.shapes.with(below, "leaves", "small");
+                set_block(level, ctx, p.offset(Dir::Down), small, Flags::ALL);
+                let bare = ctx.shapes.with(below2, "leaves", "none");
+                set_block(level, ctx, two_below, bare, Flags::ALL);
+            }
+        }
+    }
+    let age = if int(ctx, state, "age") == 1 || is_bamboo(ctx, below2) {
+        "1"
+    } else {
+        "0"
+    };
+    let stage = if (height >= 11 && rng.unit() < 0.25) || height == 15 {
+        "1"
+    } else {
+        "0"
+    };
+    let Some(base) = ctx.shapes.default_state("minecraft:bamboo") else {
+        return;
+    };
+    let top = ctx.shapes.with(
+        ctx.shapes
+            .with(ctx.shapes.with(base, "age", age), "leaves", leaves),
+        "stage",
+        stage,
+    );
+    set_block(level, ctx, p.offset(Dir::Up), top, Flags::ALL);
+}
+
+/// A bamboo shoot grows: bamboo with small leaves above it, and the shoot
+/// becomes bamboo.
+pub fn grow_shoot(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+    let Some(base) = ctx.shapes.default_state("minecraft:bamboo") else {
+        return;
+    };
+    set_block(
+        level,
+        ctx,
+        p.offset(Dir::Up),
+        ctx.shapes.with(base, "leaves", "small"),
+        Flags::ALL,
+    );
+    set_block(level, ctx, p, base, Flags::ALL);
 }
 
 /// Kelp and vines: the tip grows on into water (kelp) or air (vines), the

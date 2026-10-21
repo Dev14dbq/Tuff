@@ -345,16 +345,6 @@ pub fn create(
     Ok(())
 }
 
-/// The overworld's features, in the biome source's order of biomes.
-pub fn features(
-    data: &McData,
-    shapes: mc_tick::Shapes,
-    biomes: &HashMap<String, u32>,
-    generator: &NoiseGenerator,
-) -> Result<mc_features::Features> {
-    dimension_features(data, shapes, biomes, generator, Dimension::Overworld)
-}
-
 /// A dimension's features, in its biome source's order of biomes.
 pub fn dimension_features(
     data: &McData,

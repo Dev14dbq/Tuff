@@ -831,9 +831,7 @@ fn sponge_soaks_water_within_range_and_wets() {
     };
     let state = |n: &str| data.blocks.default_state(n).unwrap();
     let mut w = empty_world(&data);
-    let water = shapes
-        .state("minecraft:water", &[("level", "0")])
-        .unwrap();
+    let water = shapes.state("minecraft:water", &[("level", "0")]).unwrap();
     let lava = shapes.state("minecraft:lava", &[("level", "0")]).unwrap();
     // A 9x9x9 pool of water, and one lava block that must stay.
     for x in -4..=4 {
@@ -848,11 +846,7 @@ fn sponge_soaks_water_within_range_and_wets() {
     let at = BlockPos::new(0, 4, 0);
     mc_tick::set_block(&mut w, ctx, at, state("minecraft:sponge"), Flags::ALL);
     assert_eq!(name_at(&data, &w, at), "minecraft:wet_sponge[]");
-    let left = w
-        .blocks
-        .values()
-        .filter(|&&s| s == water)
-        .count();
+    let left = w.blocks.values().filter(|&&s| s == water).count();
     // 729 water blocks, minus the sponge's and the lava's, minus 65 soaked up.
     assert_eq!(left, 729 - 2 - 65);
     let now = w.block(lava_at);
@@ -875,7 +869,13 @@ fn wet_sponge_dries_in_the_nether_and_dry_sponge_waits_for_water() {
     assert_eq!(name_at(&data, &w, at), "minecraft:wet_sponge[]");
     w.extra.warm = true;
     let other = BlockPos::new(5, 0, 0);
-    mc_tick::set_block(&mut w, ctx, other, state("minecraft:wet_sponge"), Flags::ALL);
+    mc_tick::set_block(
+        &mut w,
+        ctx,
+        other,
+        state("minecraft:wet_sponge"),
+        Flags::ALL,
+    );
     assert_eq!(name_at(&data, &w, other), "minecraft:sponge[]");
     assert_eq!(w.extra.dried, 1);
     // A dry sponge with no water around stays dry, then soaks a neighbour that

@@ -516,8 +516,21 @@ async fn placed_and_broken_blocks_are_seen_by_everyone() {
     let (mut alice, _) = join_offline(addr, ids.clone(), "Alice").await;
     let (mut bob, spawn) = join_offline(addr, ids.clone(), "Bob").await;
     assert_eq!(spawn, (0.5, -60.0, 0.5));
-    let (_, spawned) = alice.recv_until("minecraft:add_entity").await;
-    let bob_entity = Reader::new(&spawned).varint().unwrap();
+    // Mobs may spawn meanwhile: Bob is the player that appears.
+    let player = ctx
+        .data
+        .builtin
+        .id("minecraft:entity_type", "minecraft:player")
+        .unwrap();
+    let bob_entity = loop {
+        let (_, spawned) = alice.recv_until("minecraft:add_entity").await;
+        let mut r = Reader::new(&spawned);
+        let id = r.varint().unwrap();
+        r.uuid().unwrap();
+        if r.varint().unwrap() == player {
+            break id;
+        }
+    };
 
     // Bob takes stone from the creative inventory into his first hotbar slot.
     let mut slot = Vec::new();
@@ -527,9 +540,15 @@ async fn placed_and_broken_blocks_are_seen_by_everyone() {
     slot.put_varint(0);
     slot.put_varint(0);
     bob.send("minecraft:set_creative_mode_slot", slot).await;
-    let (_, equipment) = alice.recv_until("minecraft:set_equipment").await;
+    // Equipment of other players may come first.
+    let equipment = loop {
+        let (_, equipment) = alice.recv_until("minecraft:set_equipment").await;
+        if Reader::new(&equipment).varint().unwrap() == bob_entity {
+            break equipment;
+        }
+    };
     let mut r = Reader::new(&equipment);
-    assert_eq!(r.varint().unwrap(), bob_entity);
+    r.varint().unwrap();
     assert_eq!(r.u8().unwrap(), 0, "main hand, last entry");
     assert_eq!((r.varint().unwrap(), r.varint().unwrap()), (1, stone_item));
 
@@ -2814,11 +2833,18 @@ async fn beacons_sell_effects_for_a_payment_and_give_them() {
     let mut r = Reader::new(&content);
     assert_eq!(r.varint().unwrap(), window);
     r.varint().unwrap();
-    assert_eq!(r.length_prefix().unwrap(), 1 + 36, "payment, then the inventory");
+    assert_eq!(
+        r.length_prefix().unwrap(),
+        1 + 36,
+        "payment, then the inventory"
+    );
     // The pyramid is one layer high.
     let (_, data) = bea.recv_until("minecraft:container_set_data").await;
     let mut r = Reader::new(&data);
-    assert_eq!((r.varint().unwrap(), r.i16().unwrap(), r.i16().unwrap()), (window, 0, 1));
+    assert_eq!(
+        (r.varint().unwrap(), r.i16().unwrap(), r.i16().unwrap()),
+        (window, 0, 1)
+    );
 
     // Shift-click the ingot into the payment slot (hotbar 0 is slot 1 + 27).
     let mut click = Vec::new();
@@ -2845,7 +2871,14 @@ async fn beacons_sell_effects_for_a_payment_and_give_them() {
     let mut r = Reader::new(&effect);
     r.varint().unwrap();
     // Speed I for (9 + 2) seconds.
-    assert_eq!((r.varint().unwrap(), r.varint().unwrap(), r.varint().unwrap()), (0, 0, 220));
+    assert_eq!(
+        (
+            r.varint().unwrap(),
+            r.varint().unwrap(),
+            r.varint().unwrap()
+        ),
+        (0, 0, 220)
+    );
     let be = ctx
         .world
         .block_entity(beacon, &ctx.data.blocks)
@@ -3003,5 +3036,208 @@ async fn ender_chests_keep_items_per_player_and_composters_fill() {
         .block(mc_protocol::Position::new(4, -60, 2), &ctx.data.blocks)
         .unwrap();
     assert_eq!(ctx.data.blocks.property(state, "level"), Some("1"));
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn players_change_dimension_and_others_stop_seeing_them() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Traveller".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut traveller, _) = join_offline(addr, ctx.ids.clone(), "Traveller").await;
+    let (mut watcher, _) = join_offline(addr, ctx.ids.clone(), "Watcher").await;
+    let command = |text: &str| {
+        let mut body = Vec::new();
+        body.put_string(text);
+        body
+    };
+    // (The Watcher met the Traveller while joining.)
+    traveller
+        .send(
+            "minecraft:chat_command",
+            command("execute in minecraft:the_nether run tp 10824.09 65.00 8384.04"),
+        )
+        .await;
+    // A new dimension: respawn, the new position, chunks of the Nether.
+    let respawn = loop {
+        let got = tokio::time::timeout(Duration::from_secs(5), traveller.recv()).await;
+        let Ok((name, body)) = got else {
+            panic!("no respawn")
+        };
+        if name == "minecraft:respawn" {
+            break body;
+        }
+    };
+    let nether = ctx.in_dimension("minecraft:the_nether").unwrap();
+    assert_eq!(
+        Reader::new(&respawn).varint().unwrap(),
+        nether.world.dimension_type_id
+    );
+    let (_, teleport) = traveller.recv_until("minecraft:player_position").await;
+    let mut r = Reader::new(&teleport);
+    let id = r.varint().unwrap();
+    assert_eq!(
+        (r.f64().unwrap(), r.f64().unwrap(), r.f64().unwrap()),
+        (10824.09, 65.0, 8384.04)
+    );
+    let mut confirm = Vec::new();
+    confirm.put_varint(id);
+    for v in [10824.09, 65.0, 8384.04] {
+        confirm.put_f64(v);
+    }
+    confirm.put_f32(0.0);
+    confirm.put_f32(0.0);
+    traveller
+        .send("minecraft:accept_teleportation", confirm)
+        .await;
+    traveller.recv_until("minecraft:chunk_batch_finished").await;
+    assert_eq!(
+        ctx.players
+            .lock()
+            .unwrap()
+            .values()
+            .find(|p| p.profile.name == "Traveller")
+            .unwrap()
+            .dimension,
+        "minecraft:the_nether"
+    );
+    // The Watcher no longer sees them.
+    watcher.recv_until("minecraft:remove_entities").await;
+
+    // A block set in the Nether is not seen in the overworld and the other
+    // way round.
+    traveller
+        .send(
+            "minecraft:chat_command",
+            command("setblock 10824 64 8384 minecraft:netherrack"),
+        )
+        .await;
+    let netherrack = ctx
+        .data
+        .blocks
+        .default_state("minecraft:netherrack")
+        .unwrap();
+    loop {
+        let (_, update) = traveller.recv_until("minecraft:block_update").await;
+        let mut r = Reader::new(&update);
+        let _ = r.i64();
+        if r.varint().unwrap() as u32 == netherrack {
+            break;
+        }
+    }
+    assert_eq!(
+        nether.world.block(
+            mc_protocol::Position::new(10824, 64, 8384),
+            &ctx.data.blocks
+        ),
+        Some(netherrack)
+    );
+    assert_ne!(
+        ctx.world.block(
+            mc_protocol::Position::new(10824, 64, 8384),
+            &ctx.data.blocks
+        ),
+        Some(netherrack)
+    );
+
+    // And home again.
+    traveller
+        .send(
+            "minecraft:chat_command",
+            command("execute in minecraft:overworld run tp @s 0 -60 0"),
+        )
+        .await;
+    traveller.recv_until("minecraft:respawn").await;
+    watcher.recv_until("minecraft:add_entity").await;
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn standing_in_a_lit_frame_takes_a_survival_player_to_the_nether() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Builder".into()];
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut builder, _) = join_offline(addr, ctx.ids.clone(), "Builder").await;
+    let command = |text: &str| {
+        let mut body = Vec::new();
+        body.put_string(text);
+        body
+    };
+    for line in [
+        "fill -1 -61 0 2 -57 0 obsidian",
+        "fill 0 -60 0 1 -58 0 air",
+        "setblock 0 -60 0 fire",
+        "gamemode survival",
+        "tp @s 0.5 -60 0.5",
+    ] {
+        builder.send("minecraft:chat_command", command(line)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let portal = ctx.data.blocks.block_name(
+        ctx.world
+            .block(mc_protocol::Position::new(1, -59, 0), &ctx.data.blocks)
+            .unwrap(),
+    );
+    assert_eq!(portal, Some("minecraft:nether_portal"));
+    // Four seconds in the portal, then the Nether.
+    let started = std::time::Instant::now();
+    builder.recv_until("minecraft:respawn").await;
+    assert!(
+        started.elapsed() >= Duration::from_secs(3),
+        "after {:?}",
+        started.elapsed()
+    );
+    builder.recv_until("minecraft:chunk_batch_finished").await;
+    let nether = ctx.in_dimension("minecraft:the_nether").unwrap();
+    // A portal was made there, around the player.
+    let here = ctx
+        .players
+        .lock()
+        .unwrap()
+        .values()
+        .find(|p| p.profile.name == "Builder")
+        .and_then(|p| p.pose)
+        .unwrap();
+    let near = (-3..=3).any(|d| {
+        [(d, 0), (0, d)].iter().any(|&(dx, dz)| {
+            let p = mc_protocol::Position::new(
+                here.x.floor() as i32 + dx,
+                here.y.floor() as i32,
+                here.z.floor() as i32 + dz,
+            );
+            nether
+                .world
+                .block(p, &ctx.data.blocks)
+                .and_then(|s| ctx.data.blocks.block_name(s))
+                == Some("minecraft:nether_portal")
+        })
+    });
+    assert!(near, "no portal around {here:?}");
     let _ = stop.send(());
 }

@@ -237,6 +237,7 @@ fn players(ctx: &ServerContext) -> Vec<Target> {
     let vitals = lock(&ctx.vitals);
     lock(&ctx.players)
         .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
         .filter_map(|p| {
             let pose = p.pose?;
             let alive = vitals.get(&p.profile.uuid).is_none_or(|v| !v.dead);
@@ -695,7 +696,7 @@ mod tests {
     }
 
     /// A superflat server context, `None` without the game data.
-    fn flat() -> Option<ServerContext> {
+    fn flat() -> Option<std::sync::Arc<ServerContext>> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
         let data = mc_data::McData::load(&dir).ok()?;
         ServerContext::new(crate::Config::new(dir), data).ok()
@@ -731,6 +732,7 @@ mod tests {
                     pitch: 0.0,
                     on_ground: true,
                 }),
+                dimension: "minecraft:overworld".into(),
                 main_hand: None,
                 flying: false,
                 address: None,

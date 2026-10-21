@@ -23,6 +23,8 @@ use crate::util::uuid_string;
 #[derive(Clone, Debug)]
 pub struct Saved {
     pub pose: Pose,
+    /// `minecraft:overworld`, `minecraft:the_nether` or `minecraft:the_end`.
+    pub dimension: String,
     pub game_mode: i32,
     /// `abilities.flying`.
     pub flying: bool,
@@ -298,7 +300,12 @@ impl Store {
                 _ => Vec::new(),
             },
         };
+        let dimension = match root.get("Dimension") {
+            Some(Tag::String(d)) => d.clone(),
+            _ => "minecraft:overworld".to_owned(),
+        };
         Ok(Some(Saved {
+            dimension,
             pose,
             game_mode,
             flying,
@@ -338,6 +345,7 @@ impl Store {
             Tag::List(vec![Tag::Float(p.yaw), Tag::Float(p.pitch)]),
         );
         root.insert("OnGround", Tag::Byte(i8::from(p.on_ground)));
+        root.insert("Dimension", Tag::String(saved.dimension.clone()));
         root.insert("playerGameType", Tag::Int(saved.game_mode));
         // What the game mode allows, and whether the player was flying.
         let mut abilities = match root.get("abilities") {
@@ -398,7 +406,9 @@ impl Store {
         let mut ender = Vec::new();
         for (slot, stack) in saved.extra.ender.iter().enumerate() {
             let Some(stack) = stack else { continue };
-            let Some(id) = names(stack.item) else { continue };
+            let Some(id) = names(stack.item) else {
+                continue;
+            };
             let mut entry = Compound::new();
             entry.insert("Slot", Tag::Byte(slot as i8));
             entry.insert("count", Tag::Int(stack.count));
