@@ -617,6 +617,8 @@ async fn play(
     update_player(&ctx, uuid, |p| p.main_hand = main_hand);
     let mut game_mode = me.game_mode;
     let mut sneaking = false;
+    // The vehicle the player sits in.
+    let mut riding: Option<i32> = None;
     let mut windows = windows::Windows::new();
     let vitals = session
         .saved
@@ -683,7 +685,7 @@ async fn play(
                     unreachable!("play state decodes play packets")
                 };
                 // Movement sent before the client saw our teleport is stale.
-                let settled = awaiting_teleport.is_none();
+                let settled = awaiting_teleport.is_none() && riding.is_none();
                 let mut moved = false;
                 let before = pose;
                 match packet {
@@ -832,7 +834,24 @@ async fn play(
                             let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
                         }
                     }
-                    play::Serverbound::PlayerInput { flags } => sneaking = flags & 0x20 != 0,
+                    play::Serverbound::PlayerInput { flags } => {
+                        sneaking = flags & 0x20 != 0;
+                        if sneaking && riding.is_some() {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::Vehicle(crate::vehicles::Act::Dismount);
+                            let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                        }
+                    }
+                    play::Serverbound::MoveVehicle { x, y, z, yaw, pitch } if riding.is_some() && awaiting_teleport.is_none() => {
+                        if [x, y, z].iter().all(|c| c.is_finite()) {
+                            pose = Pose { x, y, z, yaw, pitch, on_ground: false };
+                            update_player(&ctx, uuid, |p| p.pose = Some(pose));
+                            view.move_to(writer, chunk_of(x), chunk_of(z)).await?;
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::Vehicle(crate::vehicles::Act::Move { pos: [x, y, z], yaw });
+                            let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                        }
+                    }
                     play::Serverbound::PlayerAbilities { flags } if matches!(game_mode, 1 | 3) => {
                         flying = flags & play::abilities::FLYING != 0 || game_mode == 3;
                         update_player(&ctx, uuid, |p| p.flying = flying);
@@ -1029,6 +1048,12 @@ async fn play(
                     }
                     Ok(Event::EntitySync(rows)) => {
                         for r in rows {
+                            // The vehicle carries the player along.
+                            if riding == Some(r.id) && (pose.x, pose.y, pose.z) != (r.pos[0], r.pos[1], r.pos[2]) {
+                                pose = Pose { x: r.pos[0], y: r.pos[1], z: r.pos[2], ..pose };
+                                update_player(&ctx, uuid, |p| p.pose = Some(pose));
+                                view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                            }
                             if seen_entities.contains(&r.id) {
                                 writer.queue(&play::EntityPositionSync {
                                     entity_id: r.id,
@@ -1048,6 +1073,13 @@ async fn play(
                     }
                     Ok(Event::Fx(fx)) => {
                         use crate::fx::Fx;
+                        if let Fx::Passengers(p) = &fx {
+                            if p.passengers.contains(&entity_id) {
+                                riding = Some(p.vehicle);
+                            } else if riding == Some(p.vehicle) {
+                                riding = None;
+                            }
+                        }
                         let wanted = match (fx.entity(), fx.at()) {
                             (Some(id), _) => seen_entities.contains(&id) || visible_entity(&ctx, id, &visible),
                             (None, Some(at)) => {
@@ -1618,6 +1650,14 @@ fn spawn_entity(
             writer.queue(&play::SetEntityData {
                 entity_id: entity.id,
                 entries: d.meta,
+            })?;
+        }
+        if let mc_entity::Kind::Vehicle(v) = &entity.kind
+            && !v.riders.is_empty()
+        {
+            writer.queue(&play::SetPassengers {
+                vehicle: entity.id,
+                passengers: v.riders.clone(),
             })?;
         }
         if !d.gear.is_empty() {

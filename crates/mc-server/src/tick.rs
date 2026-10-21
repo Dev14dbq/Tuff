@@ -134,6 +134,8 @@ pub enum Action {
     /// Using the held item without a block (buckets).
     UseItem { hand: i32, yaw: f32, pitch: f32 },
     /// A click on an entity: `attack` for the left one.
+    /// What a rider says about their vehicle.
+    Vehicle(crate::vehicles::Act),
     UseEntity {
         entity_id: i32,
         hand: i32,
@@ -559,6 +561,13 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         })
         .collect();
     crate::decor::leash::tick(ctx);
+    level.minecarts = entities
+        .iter()
+        .filter(|e| {
+            matches!(&e.kind, mc_entity::Kind::Vehicle(v) if matches!(v.craft, mc_entity::extra::Craft::Minecart(_)))
+        })
+        .map(|e| (e.id, e.aabb()))
+        .collect();
     let mut out = crate::hits::Out::default();
     let (mut moved, mut removed) = (Vec::new(), Vec::new());
     let mut gone = Vec::new();
@@ -581,6 +590,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             match entity.kind {
                 mc_entity::Kind::Projectile(_) => crate::projectiles::tick(&mut t, entity),
                 mc_entity::Kind::Hung(_) => crate::decor::tick(&mut t, entity),
+                mc_entity::Kind::Vehicle(_) => crate::vehicles::tick(&mut t, entity),
                 _ => {}
             }
         }
@@ -651,10 +661,17 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         if let Some(boxes) = level.entity_boxes.as_mut() {
             boxes[i] = entity.aabb();
         }
+        if let Some(m) = level.minecarts.iter_mut().find(|(id, _)| *id == entity.id) {
+            m.1 = entity.aabb();
+        }
         if !entity.removed {
             let (x, y, z) = entity.block_pos();
             let at = mc_tick::BlockPos::new(x, y, z);
             use mc_tick::Level as _;
+            if matches!(&entity.kind, mc_entity::Kind::Vehicle(v) if matches!(v.craft, mc_entity::extra::Craft::Minecart(_)))
+            {
+                mc_tick::rails::entity_inside(level, logic, at);
+            }
             if ctx
                 .shapes
                 .block_name(level.block(at))
@@ -671,6 +688,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         }
     }
     level.entity_boxes = None;
+    blasts.append(&mut out.blasts);
     for blast in blasts {
         for (id, uuid) in crate::explosion::explode(ctx, level, &mut entities, &blast) {
             removed.push(id);
@@ -796,6 +814,7 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             sequence,
         } => interact::use_item_on(ctx, actor, hand, position, face, cursor, sequence),
         Action::UseItem { hand, yaw, pitch } => interact::use_item(ctx, actor, hand, yaw, pitch),
+        Action::Vehicle(act) => crate::vehicles::act(ctx, actor, act),
         Action::UseEntity {
             entity_id,
             hand,

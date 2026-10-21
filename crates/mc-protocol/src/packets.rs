@@ -629,6 +629,15 @@ pub mod play {
         ClientCommand {
             action: i32,
         },
+        /// Where the vehicle the player drives is (boats are steered by the
+        /// client).
+        MoveVehicle {
+            x: f64,
+            y: f64,
+            z: f64,
+            yaw: f32,
+            pitch: f32,
+        },
         /// Keys held: 0x10 jump, 0x20 sneak, 0x40 sprint.
         PlayerInput {
             flags: u8,
@@ -947,6 +956,17 @@ pub mod play {
                 "minecraft:attack" => Serverbound::Attack {
                     entity_id: r.varint()?,
                 },
+                "minecraft:move_vehicle" => {
+                    let packet = Serverbound::MoveVehicle {
+                        x: r.f64()?,
+                        y: r.f64()?,
+                        z: r.f64()?,
+                        yaw: r.f32()?,
+                        pitch: r.f32()?,
+                    };
+                    r.rest();
+                    packet
+                }
                 "minecraft:interact" => {
                     let entity_id = r.varint()?;
                     let hand = r.varint()?;

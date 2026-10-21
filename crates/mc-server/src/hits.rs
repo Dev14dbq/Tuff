@@ -46,7 +46,7 @@ pub struct Target {
 /// An entity hurt by a projectile or a player; the tick applies it once the
 /// entities have moved.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // `by`, `with` and `kind` are for whoever reacts to the hit
 pub struct Hit {
     pub target: i32,
     pub amount: f32,
@@ -67,6 +67,8 @@ pub struct Out {
     pub spawn: Vec<Entity>,
     /// Metadata that changed.
     pub data: Vec<mc_protocol::packets::play::SetEntityData>,
+    /// Explosions to set off.
+    pub blasts: Vec<crate::explosion::Blast>,
 }
 
 pub struct Tick<'a> {
@@ -256,6 +258,7 @@ pub fn apply(
     let mut fresh = Vec::new();
     let events = match &e.kind {
         Kind::Hung(_) => crate::decor::hurt(ctx, e, &hit, &mut fresh),
+        Kind::Vehicle(_) => crate::vehicles::hurt(ctx, e, &hit, &mut fresh),
         _ => Vec::new(),
     };
     for event in events {
@@ -296,8 +299,14 @@ pub fn use_entity(
         if d2 > 36.0 {
             return outcome;
         }
-        if let Kind::Hung(_) = &e.kind {
-            crate::decor::interact(ctx, actor, e, hand, attack, at, &mut outcome, &mut fresh);
+        match &e.kind {
+            Kind::Hung(_) => {
+                crate::decor::interact(ctx, actor, e, hand, attack, at, &mut outcome, &mut fresh);
+            }
+            Kind::Vehicle(_) => {
+                crate::vehicles::interact(ctx, actor, e, hand, attack, &mut outcome, &mut fresh);
+            }
+            _ => {}
         }
     }
     crate::decor::spawn_all(ctx, fresh);

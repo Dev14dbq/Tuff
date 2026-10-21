@@ -45,6 +45,7 @@ mod storage;
 mod summon;
 mod tick;
 mod util;
+mod vehicles;
 mod vitals;
 mod weather;
 mod world;

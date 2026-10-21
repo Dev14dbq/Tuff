@@ -528,6 +528,7 @@ pub fn use_item_on(
     if let Some(name) = held_name
         && use_blocks
         && (crate::decor::place(ctx, &mut outcome, actor, hand, name, clicked, face)
+            || crate::vehicles::place_cart(ctx, &mut outcome, actor, hand, name, clicked)
             || crate::projectiles::use_on_block(
                 ctx,
                 &mut outcome,
@@ -785,7 +786,7 @@ fn replace_held(
 /// The first block the player looks at within reach, and the face the look
 /// enters it through. Blocks count as full cubes; fluids are looked through
 /// unless `sources` (then only source blocks stop the look).
-fn look_at(
+pub(crate) fn look_at(
     ctx: &ServerContext,
     actor: Actor,
     yaw: f32,
@@ -872,6 +873,11 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
     }
     if let Some(done) = crate::projectiles::use_item(ctx, actor, hand, yaw, pitch) {
         return done;
+    }
+    if let Some(h) = crate::held::held(ctx, actor.uuid, hand)
+        && crate::vehicles::place_boat(ctx, &mut outcome, actor, hand, &h.name, yaw, pitch)
+    {
+        return outcome;
     }
     let held = ctx
         .inventories
