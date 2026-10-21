@@ -430,6 +430,9 @@ pub struct Blast {
     /// The primed TNT's entity id and the player who lit it.
     pub source: i32,
     pub owner: Option<u128>,
+    /// A mob's (a creeper's): `mob_griefing` and
+    /// `mob_explosion_drop_decay` rule it, not the TNT rules.
+    pub mob: bool,
 }
 
 impl Blast {
@@ -441,6 +444,7 @@ impl Blast {
             power: POWER,
             source: entity.id,
             owner,
+            mob: false,
         }
     }
 }
@@ -929,6 +933,15 @@ fn explode_one(
 ) {
     sc.begin(ctx, blast.center);
     blown_positions(ctx, level, blast, rng, sc);
+    let decay = if blast.mob {
+        ctx.game_rule_bool("mob_explosion_drop_decay")
+    } else {
+        decay
+    };
+    if blast.mob && !ctx.game_rule_bool("mob_griefing") {
+        sc.positions.clear();
+    }
+    let block_drops = ctx.game_rule_bool("block_drops");
     let count = sc.positions.len() as i32;
     let blocks = &ctx.data.blocks;
     // Shuffled, as vanilla does before dropping.
@@ -975,12 +988,14 @@ fn explode_one(
             let _ = ctx.events.send(Event::ContainerGone { position: p });
         }
         let props = |k: &str| blocks.property(state, k).map(str::to_owned);
-        drops.extend(
-            ctx.loot
-                .drops_exploded(name, &props, decay.then_some(blast.power))
-                .into_iter()
-                .map(|d| (p, d)),
-        );
+        if block_drops {
+            drops.extend(
+                ctx.loot
+                    .drops_exploded(name, &props, decay.then_some(blast.power))
+                    .into_iter()
+                    .map(|d| (p, d)),
+            );
+        }
         level.set_block(p, ctx.shapes.air());
     }
     merge_and_drop(ctx, drops);
@@ -1113,9 +1128,6 @@ fn damage(impact: f64, reach: f64) -> f32 {
 /// thrown out at that block.
 fn merge_and_drop(ctx: &ServerContext, drops: Vec<(Position, crate::loot::Drop)>) {
     const MERGE: i32 = 16;
-    if !ctx.game_rule_bool("block_drops") {
-        return;
-    }
     let mut merged: Vec<(Position, crate::loot::Drop)> = Vec::new();
     for (p, d) in drops {
         let max = ctx.items.max_stack(d.item).min(MERGE);
@@ -1246,6 +1258,7 @@ mod tests {
             power: 4.0,
             source: 0,
             owner: None,
+            mob: false,
         };
         let gone = explode(&ctx, &mut level, &mut entities, &blast);
         let changes = level.into_changes();
@@ -1275,6 +1288,7 @@ mod tests {
             power: 4.0,
             source: 0,
             owner: None,
+            mob: false,
         };
         explode(&ctx, &mut level, &mut entities, &blast);
         drop(level);

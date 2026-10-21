@@ -442,6 +442,9 @@ pub fn try_hurt_by_entity(
     if crate::damage::ruled_out(ctx, damage_type) {
         return None;
     }
+    if attacker.is_some_and(|by| !may_harm(ctx, by, &name)) {
+        return None;
+    }
     let (packet, died) = {
         let mut all = lock(&ctx.vitals);
         let v = all.get_mut(&uuid)?;
@@ -715,6 +718,23 @@ pub fn kill(ctx: &ServerContext, uuid: u128, damage_type: &str, death_key: &str)
     hurt(ctx, uuid, f32::MAX, damage_type, death_key);
     if let (Some(mode), Some(p)) = (mode, lock(&ctx.players).get_mut(&uuid)) {
         p.game_mode = mode;
+    }
+}
+
+/// Whether player `by` may hurt player `victim`: always when `by` is not
+/// a player or is the victim; else only with `pvp` on and, when they are
+/// teammates, friendly fire allowed.
+fn may_harm(ctx: &ServerContext, by: &str, victim: &str) -> bool {
+    if by == victim || !lock(&ctx.players).values().any(|p| p.profile.name == by) {
+        return true;
+    }
+    if !ctx.game_rule_bool("pvp") {
+        return false;
+    }
+    let board = lock(&ctx.scoreboard);
+    match (board.team_of(by), board.team_of(victim)) {
+        (Some(a), Some(b)) if a.name == b.name => a.friendly_fire,
+        _ => true,
     }
 }
 

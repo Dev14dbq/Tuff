@@ -9,7 +9,7 @@ use crate::tick::lock;
 
 const AT: Position = Position { x: 0, y: -60, z: 2 };
 
-fn setup() -> Option<(ServerContext, Actor)> {
+fn setup() -> Option<(std::sync::Arc<ServerContext>, Actor)> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
     let data = mc_data::McData::load(&dir).ok()?;
     let ctx = ServerContext::new(crate::Config::new(dir), data).ok()?;

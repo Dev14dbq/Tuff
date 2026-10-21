@@ -537,6 +537,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
                         power,
                         source: id,
                         owner: None,
+                        mob: true,
                     });
                 }
                 MobEvent::Egg => {

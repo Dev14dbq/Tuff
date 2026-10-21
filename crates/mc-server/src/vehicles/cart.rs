@@ -152,6 +152,7 @@ fn step(t: &mut Tick, e: &mut Entity, v: &mut Vehicle) {
                 power: 4.0,
                 source: e.id,
                 owner: None,
+                mob: false,
             });
             return;
         }
