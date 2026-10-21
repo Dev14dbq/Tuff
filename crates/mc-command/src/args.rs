@@ -547,9 +547,43 @@ const OPTIONS: &[&str] = &[
     "predicate",
 ];
 
+/// Whether option `name` may follow the ones already read, as vanilla
+/// decides: most options once, `limit` and `sort` never on `@s`, `type`
+/// never on the player-only kinds, and nothing after a required name,
+/// game mode, team or type.
+fn applicable(name: &str, s: &Selector, seen: &[String]) -> bool {
+    let required = |v: &[(bool, String)]| v.iter().any(|(neg, _)| !neg);
+    match name {
+        "name" => !required(&s.names),
+        "gamemode" => !required(&s.gamemodes),
+        "team" => !required(&s.teams),
+        "type" => !matches!(s.kind, Some('p' | 'a' | 'r')) && !required(&s.types),
+        "limit" | "sort" => s.kind != Some('s') && !seen.iter().any(|n| n == name),
+        "tag" | "nbt" | "predicate" => true,
+        _ => !seen.iter().any(|n| n == name),
+    }
+}
+
+/// A required value after a negated one of the same option is an error
+/// at the value, as in vanilla.
+fn required_after_negated(
+    r: &mut Reader,
+    name: &str,
+    v: &[(bool, String)],
+    neg: bool,
+    at: usize,
+) -> Result<()> {
+    if !neg && v.iter().any(|(n, _)| *n) {
+        r.cursor = at;
+        return Err(r.error(builtin::invalid("argument.entity.options.inapplicable", name)));
+    }
+    Ok(())
+}
+
 fn selector_options(r: &mut Reader, s: &mut Selector, env: &dyn Env) -> Result<()> {
     r.skip();
     r.skip_whitespace();
+    let mut seen: Vec<String> = Vec::new();
     while r.can_read() && r.peek() != ']' {
         r.skip_whitespace();
         let start = r.cursor;
@@ -558,8 +592,7 @@ fn selector_options(r: &mut Reader, s: &mut Selector, env: &dyn Env) -> Result<(
             r.cursor = start;
             return Err(r.error(builtin::invalid("argument.entity.options.unknown", &name)));
         }
-        // Once a team is required, no other team test may follow.
-        if name == "team" && s.teams.iter().any(|(neg, _)| !neg) {
+        if !applicable(&name, s, &seen) {
             r.cursor = start;
             return Err(r.error(builtin::invalid(
                 "argument.entity.options.inapplicable",
@@ -578,6 +611,7 @@ fn selector_options(r: &mut Reader, s: &mut Selector, env: &dyn Env) -> Result<(
             "name" => {
                 let neg = negated(r);
                 let v = r.read_string()?;
+                required_after_negated(r, "name", &s.names, neg, value_start)?;
                 s.names.push((neg, v));
             }
             "distance" => {
@@ -639,7 +673,9 @@ fn selector_options(r: &mut Reader, s: &mut Selector, env: &dyn Env) -> Result<(
                         r.error(builtin::invalid("argument.entity.options.mode.invalid", v))
                     );
                 }
-                s.gamemodes.push((neg, v.to_owned()));
+                let v = v.to_owned();
+                required_after_negated(r, "gamemode", &s.gamemodes, neg, value_start)?;
+                s.gamemodes.push((neg, v));
             }
             "team" => {
                 let neg = negated(r);
@@ -707,6 +743,7 @@ fn selector_options(r: &mut Reader, s: &mut Selector, env: &dyn Env) -> Result<(
                 s.predicates.push((neg, v));
             }
         }
+        seen.push(name);
         r.skip_whitespace();
         if r.can_read() {
             if r.peek() == ',' {
@@ -1641,4 +1678,32 @@ fn provider_error(t: &Tag, float: bool) -> Option<String> {
         .map(|k| format!("No key {k} in MapLike[{map}]"))
         .collect();
     (!missing.is_empty()).then(|| format!("{prefix}{}", missing.join("; ")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn selector(text: &str) -> std::result::Result<Selector, String> {
+        let mut r = Reader::new(text);
+        read_selector(&mut r, &AnyEnv).map_err(|e| format!("{e:?}"))
+    }
+
+    #[test]
+    fn options_that_may_not_repeat() {
+        assert!(selector("@e[limit=1,limit=2]").is_err());
+        assert!(selector("@e[x=1,x=2]").is_err());
+        assert!(selector("@e[distance=..1,distance=..2]").is_err());
+        assert!(selector("@s[limit=1]").is_err());
+        assert!(selector("@s[sort=nearest]").is_err());
+        assert!(selector("@a[type=player]").is_err());
+        assert!(selector("@e[type=pig,type=cow]").is_err());
+        assert!(selector("@e[type=!pig,type=!cow]").is_ok());
+        assert!(selector("@e[name=a,name=b]").is_err());
+        assert!(selector("@e[name=!a,name=b]").is_err());
+        assert!(selector("@e[name=!a,name=!b]").is_ok());
+        assert!(selector("@a[gamemode=!creative,gamemode=survival]").is_err());
+        assert!(selector("@e[tag=a,tag=b,nbt={},nbt={}]").is_ok());
+        assert!(selector("@p[limit=3,sort=furthest]").is_ok());
+    }
 }

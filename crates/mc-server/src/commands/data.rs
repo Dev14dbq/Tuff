@@ -159,7 +159,7 @@ fn item_entry(ctx: &ServerContext, item: i32, count: i32, damage: i32) -> Compou
 }
 
 /// An entity's data as vanilla shows it.
-fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
+pub fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
     let uuid = Tag::IntArray(target::uuid_ints(t.uuid()));
     if t.is_player() {
         let mut root = player_defaults();

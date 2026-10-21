@@ -168,6 +168,19 @@ impl Adv {
     }
 }
 
+/// For the `advancements` selector option: whether a player has the
+/// advancement `id` (`criterion` `None`), or its criterion, done.
+pub fn has_done(ctx: &ServerContext, uuid: u128, id: &str, criterion: Option<&str>) -> bool {
+    let b = book(ctx);
+    let id = full_id(id);
+    let state = lock(&ctx.rare);
+    let have = state.progress.done.get(&uuid).and_then(|m| m.get(&id));
+    match criterion {
+        Some(c) => have.is_some_and(|h| h.contains(c)),
+        None => b.advs.get(&id).is_some_and(|a| a.complete(have)),
+    }
+}
+
 /// How an advancement is named in messages.
 fn name(id: &str, adv: &Adv) -> Tag {
     let (Some(title), Some(description)) = (&adv.title, &adv.description) else {
