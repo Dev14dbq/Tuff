@@ -314,6 +314,7 @@ pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     }
     run_block_events(ctx, &mut level);
     tick_entities(ctx, &mut level);
+    crate::trading::tick_spawner(ctx, &mut level, lock(&ctx.time).age);
     crate::mobs::tick(ctx, &mut level);
     press_plates(ctx, &mut level);
     mc_tick::pistons::tick(&mut level, logic);
@@ -590,6 +591,8 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     let (mut moved, mut removed) = (Vec::new(), Vec::new());
     let mut gone = Vec::new();
     let (mut blasts, mut fuses) = (Vec::new(), Vec::new());
+    let now = lock(&ctx.time).age;
+    let mut claimed = crate::trading::claimed_sites(&entities);
     // Plates see entities where they are at that moment of the tick.
     level.entity_boxes = Some(entities.iter().map(|e| e.aabb()).collect());
     for (i, entity) in entities.iter_mut().enumerate() {
@@ -643,6 +646,11 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                     entity.kind = mc_entity::Kind::Tnt { fuse, owner };
                     fuses.push(crate::explosion::fuse_data(entity.id, fuse));
                 }
+            }
+            mc_entity::Kind::Merchant(_) => {
+                mc_entity::fall(entity, &Solid(level));
+                entity.vel = [0.0; 3];
+                fuses.extend(crate::trading::tick(ctx, level, entity, &mut claimed, now));
             }
             // Mobs have their own tick.
             mc_entity::Kind::Mob(_) => {}

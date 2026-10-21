@@ -625,6 +625,10 @@ pub mod play {
             hand: i32,
             location: Option<[f64; 3]>,
         },
+        /// The trade chosen in a merchant window.
+        SelectTrade {
+            index: i32,
+        },
         /// 0 respawn, 1 statistics, 2 game rules.
         ClientCommand {
             action: i32,
@@ -983,6 +987,7 @@ pub mod play {
                         location,
                     }
                 }
+                "minecraft:select_trade" => Serverbound::SelectTrade { index: r.varint()? },
                 "minecraft:client_command" => Serverbound::ClientCommand {
                     action: r.varint()?,
                 },
@@ -2182,6 +2187,8 @@ pub mod play {
         pub const PLAYER_ABSORPTION: u8 = 17;
         /// Player: displayed skin parts (Byte), the bit mask from Client Information.
         pub const PLAYER_SKIN_PARTS: u8 = 16;
+        /// Villager: its type, profession and level (VillagerData).
+        pub const VILLAGER_DATA: u8 = 18;
     }
 
     /// One entity metadata value; the variant decides the serializer type id.
@@ -2195,6 +2202,9 @@ pub mod play {
         /// A list of particles: (particle type id, the ARGB colour for those
         /// that take one).
         Particles(Vec<(i32, Option<i32>)>),
+        /// A villager's type, profession (both ids in their registries) and
+        /// level.
+        VillagerData(i32, i32, i32),
         /// Three angles in degrees (armor stand poses).
         Rotations([f32; 3]),
     }
@@ -2227,6 +2237,12 @@ pub mod play {
                 MetadataValue::Boolean(v) => {
                     out.put_varint(8);
                     out.put_bool(*v);
+                }
+                MetadataValue::VillagerData(kind, profession, level) => {
+                    out.put_varint(18);
+                    out.put_varint(*kind);
+                    out.put_varint(*profession);
+                    out.put_varint(*level);
                 }
                 MetadataValue::Particles(list) => {
                     out.put_varint(17);
@@ -2691,6 +2707,74 @@ pub mod play {
             out.put_varint(self.state_id);
             out.put_i16(self.slot);
             ItemStack::encode(self.item.as_ref(), out);
+        }
+    }
+
+    /// One payment of a trade.
+    #[derive(Clone, Copy, Debug)]
+    pub struct TradeCost {
+        pub item: i32,
+        pub count: i32,
+    }
+
+    /// One trade as the client shows it.
+    #[derive(Clone, Debug)]
+    pub struct TradeOffer {
+        pub cost_a: TradeCost,
+        pub cost_b: Option<TradeCost>,
+        pub result: ItemStack,
+        pub out_of_stock: bool,
+        pub uses: i32,
+        pub max_uses: i32,
+        pub xp: i32,
+        pub special_price: i32,
+        pub price_multiplier: f32,
+        pub demand: i32,
+    }
+
+    /// Merchant Offers: the trades of the villager a window is open with.
+    #[derive(Clone, Debug)]
+    pub struct MerchantOffers {
+        pub window: i32,
+        pub offers: Vec<TradeOffer>,
+        pub level: i32,
+        pub xp: i32,
+        pub show_progress: bool,
+        pub can_restock: bool,
+    }
+    packet!(MerchantOffers, Play, "minecraft:merchant_offers");
+    impl Encode for MerchantOffers {
+        fn encode(&self, out: &mut Vec<u8>) {
+            fn cost(out: &mut Vec<u8>, c: &TradeCost) {
+                out.put_varint(c.item);
+                out.put_varint(c.count);
+                // No component the payment must have.
+                out.put_varint(0);
+            }
+            out.put_varint(self.window);
+            out.put_len(self.offers.len());
+            for o in &self.offers {
+                cost(out, &o.cost_a);
+                ItemStack::encode(Some(&o.result), out);
+                match &o.cost_b {
+                    Some(c) => {
+                        out.put_bool(true);
+                        cost(out, c);
+                    }
+                    None => out.put_bool(false),
+                }
+                out.put_bool(o.out_of_stock);
+                out.put_i32(o.uses);
+                out.put_i32(o.max_uses);
+                out.put_i32(o.xp);
+                out.put_i32(o.special_price);
+                out.put_f32(o.price_multiplier);
+                out.put_i32(o.demand);
+            }
+            out.put_varint(self.level);
+            out.put_varint(self.xp);
+            out.put_bool(self.show_progress);
+            out.put_bool(self.can_restock);
         }
     }
 

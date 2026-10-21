@@ -99,6 +99,8 @@ pub struct EntityTypes {
     pub falling_block: i32,
     pub item: i32,
     pub tnt: i32,
+    pub villager: i32,
+    pub wandering_trader: i32,
     pub experience_orb: i32,
 }
 
@@ -385,6 +387,8 @@ pub struct Shared {
     pub loot: crate::loot::BlockLoot,
     /// Crafting recipes.
     pub recipes: crate::crafting::Recipes,
+    /// What villagers and wandering traders sell.
+    pub trades: crate::trading::Trades,
     /// Health and food of players in play.
     pub vitals: Mutex<crate::vitals::AllVitals>,
     /// Stack sizes, food and more of every item.
@@ -945,6 +949,7 @@ impl ServerContext {
             inventories: Mutex::new(HashMap::new()),
             loot: crate::loot::BlockLoot::load(&data),
             recipes: crate::crafting::Recipes::load(&data),
+            trades: crate::trading::Trades::load(&data, &items),
             vitals: Mutex::new(HashMap::new()),
             items,
             using: Mutex::new(HashMap::new()),
@@ -967,6 +972,8 @@ impl ServerContext {
                 falling_block: entity_type("minecraft:falling_block")?,
                 item: entity_type("minecraft:item")?,
                 tnt: entity_type("minecraft:tnt")?,
+                villager: entity_type("minecraft:villager")?,
+                wandering_trader: entity_type("minecraft:wandering_trader")?,
                 experience_orb: entity_type("minecraft:experience_orb")?,
             },
             player_entity_type,
