@@ -2108,7 +2108,7 @@ pub(super) fn tag_i32(tag: Option<&Tag>) -> Option<i32> {
 
 fn summon(r: &mut Run) -> Result<i32> {
     let kind = r.string("entity").unwrap_or_default();
-    let at = r.vec3("pos").unwrap_or(r.src.pos);
+    let mut at = r.vec3("pos").unwrap_or(r.src.pos);
     let p = Position::new(
         at[0].floor() as i32,
         at[1].floor() as i32,
@@ -2190,7 +2190,13 @@ fn summon(r: &mut Run) -> Result<i32> {
             };
             mc_entity::Kind::FallingBlock { state }
         }
-        _ => return Err(err("commands.summon.failed", Vec::new())),
+        other => match crate::summon::build(r.ctx, other, &nbt, at, r.src.rot[0]) {
+            Some((k, place)) => {
+                at = place.unwrap_or(at);
+                k
+            }
+            None => return Err(err("commands.summon.failed", Vec::new())),
+        },
     };
     let entity = mc_entity::Entity {
         id: r.ctx.next_entity_id(),

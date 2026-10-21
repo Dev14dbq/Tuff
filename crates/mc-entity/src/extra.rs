@@ -126,6 +126,8 @@ pub struct Stand {
     /// Main hand, off hand, feet, legs, chest, head: (item, damage).
     pub gear: [Option<(i32, i32)>; 6],
     pub health: f32,
+    /// World age of the last punch, for the second one that breaks it.
+    pub last_hit: i64,
 }
 
 impl Default for Stand {
@@ -146,6 +148,7 @@ impl Default for Stand {
             ],
             gear: [None; 6],
             health: 20.0,
+            last_hit: -100,
         }
     }
 }
@@ -209,4 +212,19 @@ pub struct Vehicle {
     pub fuse: i32,
     /// What the minecart rolled on in the last tick.
     pub on_rail: bool,
+}
+
+impl Vehicle {
+    pub fn new(craft: Craft, yaw: f32) -> Self {
+        Self {
+            craft,
+            yaw,
+            riders: Vec::new(),
+            wobble: 0,
+            damage: 0.0,
+            fuel: 0,
+            fuse: -1,
+            on_rail: false,
+        }
+    }
 }

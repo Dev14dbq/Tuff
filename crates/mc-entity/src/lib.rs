@@ -124,15 +124,22 @@ impl Entity {
             _ => (0.75, 0.75),
         };
         let depth = 0.0625 / 2.0;
-        // Half extents by axis: along the wall for x/z, `t` for y.
-        let (hx, hz) = match h.facing {
-            2 | 3 => (w / 2.0, depth),
-            4 | 5 => (depth, w / 2.0),
-            _ => (w / 2.0, w / 2.0),
+        let half = match h.facing {
+            2 | 3 => [w / 2.0, t / 2.0, depth],
+            4 | 5 => [depth, t / 2.0, w / 2.0],
+            _ => [w / 2.0, depth, w / 2.0],
         };
         Aabb {
-            min: [self.pos[0] - hx, self.pos[1] - t / 2.0, self.pos[2] - hz],
-            max: [self.pos[0] + hx, self.pos[1] + t / 2.0, self.pos[2] + hz],
+            min: [
+                self.pos[0] - half[0],
+                self.pos[1] - half[1],
+                self.pos[2] - half[2],
+            ],
+            max: [
+                self.pos[0] + half[0],
+                self.pos[1] + half[1],
+                self.pos[2] + half[2],
+            ],
         }
     }
 

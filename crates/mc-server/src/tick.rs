@@ -138,6 +138,8 @@ pub enum Action {
         entity_id: i32,
         hand: i32,
         attack: bool,
+        /// Where on the entity the click landed.
+        at: Option<[f64; 3]>,
     },
 }
 
@@ -556,6 +558,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             aabb: e.aabb(),
         })
         .collect();
+    crate::decor::leash::tick(ctx);
     let mut out = crate::hits::Out::default();
     let (mut moved, mut removed) = (Vec::new(), Vec::new());
     let mut gone = Vec::new();
@@ -575,8 +578,10 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                 targets: &targets,
                 out: &mut out,
             };
-            if let mc_entity::Kind::Projectile(_) = entity.kind {
-                crate::projectiles::tick(&mut t, entity);
+            match entity.kind {
+                mc_entity::Kind::Projectile(_) => crate::projectiles::tick(&mut t, entity),
+                mc_entity::Kind::Hung(_) => crate::decor::tick(&mut t, entity),
+                _ => {}
             }
         }
         match entity.kind.clone() {
@@ -795,7 +800,8 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             entity_id,
             hand,
             attack,
-        } => crate::hits::use_entity(ctx, actor, entity_id, hand, attack),
+            at,
+        } => crate::hits::use_entity(ctx, actor, entity_id, hand, attack, at),
     }
 }
 

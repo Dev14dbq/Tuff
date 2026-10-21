@@ -419,6 +419,8 @@ pub struct ServerContext {
     pub rare: Mutex<crate::commands::rare::State>,
     /// Bows being drawn and bobbers cast.
     pub shooting: Mutex<crate::projectiles::State>,
+    /// Leads: who holds each leashed entity.
+    pub leashes: Mutex<crate::decor::leash::Leashes>,
     pub stopwatches: Mutex<std::collections::BTreeMap<String, std::time::Instant>>,
     /// Data packs, their functions and `/schedule`.
     pub packs: Mutex<crate::packs::Packs>,
@@ -695,6 +697,7 @@ impl ServerContext {
             storage: Mutex::new(storage),
             rare: Mutex::default(),
             shooting: Mutex::default(),
+            leashes: Mutex::default(),
             stopwatches: Mutex::default(),
             data,
         })

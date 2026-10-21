@@ -618,11 +618,12 @@ pub mod play {
         Attack {
             entity_id: i32,
         },
-        /// Right click on an entity (the click point and the sneak flag that
-        /// follow are not read).
+        /// Right click on an entity, with the point clicked when the packet
+        /// carries it in a form we read (three floats or doubles).
         Interact {
             entity_id: i32,
             hand: i32,
+            location: Option<[f64; 3]>,
         },
         /// 0 respawn, 1 statistics, 2 game rules.
         ClientCommand {
@@ -946,10 +947,22 @@ pub mod play {
                 "minecraft:attack" => Serverbound::Attack {
                     entity_id: r.varint()?,
                 },
-                "minecraft:interact" => Serverbound::Interact {
-                    entity_id: r.varint()?,
-                    hand: r.varint()?,
-                },
+                "minecraft:interact" => {
+                    let entity_id = r.varint()?;
+                    let hand = r.varint()?;
+                    // The click point is followed by the sneak flag.
+                    let location = match r.remaining() {
+                        13 => Some([r.f32()?.into(), r.f32()?.into(), r.f32()?.into()]),
+                        25 => Some([r.f64()?, r.f64()?, r.f64()?]),
+                        _ => None,
+                    };
+                    r.rest();
+                    Serverbound::Interact {
+                        entity_id,
+                        hand,
+                        location,
+                    }
+                }
                 "minecraft:client_command" => Serverbound::ClientCommand {
                     action: r.varint()?,
                 },

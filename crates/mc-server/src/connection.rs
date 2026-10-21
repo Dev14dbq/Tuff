@@ -843,7 +843,7 @@ async fn play(
                             .and_then(|p| p.pose.map(|at| (p.profile.uuid, at)));
                         if victim.is_none() {
                             let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                            let action = Action::UseEntity { entity_id: target, hand: 0, attack: true };
+                            let action = Action::UseEntity { entity_id: target, hand: 0, attack: true, at: None };
                             let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                         }
                         if let Some((victim, at)) = victim {
@@ -857,9 +857,9 @@ async fn play(
                             }
                         }
                     }
-                    play::Serverbound::Interact { entity_id: target, hand } if game_mode != 3 => {
+                    play::Serverbound::Interact { entity_id: target, hand, location } if game_mode != 3 => {
                         let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                        let action = Action::UseEntity { entity_id: target, hand, attack: false };
+                        let action = Action::UseEntity { entity_id: target, hand, attack: false, at: location };
                         let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::Punch => {

@@ -2,7 +2,7 @@
 //! players and other entities they can hit, rays through blocks and boxes,
 //! and what they ask the tick to do afterwards.
 
-use mc_entity::{Aabb, Entity};
+use mc_entity::{Aabb, Entity, Kind};
 use mc_protocol::Position;
 
 use crate::context::{Pose, ServerContext};
@@ -241,21 +241,65 @@ pub fn name_of(ctx: &ServerContext, uuid: u128) -> Option<String> {
 /// Carries out what an entity's tick asked for on other entities. `removed`
 /// and `gone` collect entities that went (ids, uuids).
 pub fn apply(
-    _ctx: &ServerContext,
-    _entities: &mut [Entity],
-    _removed: &mut Vec<i32>,
-    _gone: &mut Vec<u128>,
-    _hit: Hit,
+    ctx: &ServerContext,
+    entities: &mut [Entity],
+    removed: &mut Vec<i32>,
+    gone: &mut Vec<u128>,
+    hit: Hit,
 ) {
+    let Some(e) = entities
+        .iter_mut()
+        .find(|e| e.id == hit.target && !e.removed)
+    else {
+        return;
+    };
+    let mut fresh = Vec::new();
+    let events = match &e.kind {
+        Kind::Hung(_) => crate::decor::hurt(ctx, e, &hit, &mut fresh),
+        _ => Vec::new(),
+    };
+    for event in events {
+        let _ = ctx.events.send(event);
+    }
+    if e.removed {
+        removed.push(e.id);
+        gone.push(e.uuid);
+    }
+    crate::decor::spawn_all(ctx, fresh);
 }
 
 /// A player clicks an entity.
 pub fn use_entity(
-    _ctx: &ServerContext,
-    _actor: crate::interact::Actor,
-    _entity_id: i32,
-    _hand: i32,
-    _attack: bool,
+    ctx: &ServerContext,
+    actor: crate::interact::Actor,
+    entity_id: i32,
+    hand: i32,
+    attack: bool,
+    at: Option<[f64; 3]>,
 ) -> crate::interact::Outcome {
-    crate::interact::Outcome::default()
+    let mut outcome = crate::interact::Outcome::default();
+    let mut fresh = Vec::new();
+    {
+        let mut entities = crate::tick::lock(&ctx.entities);
+        let Some(e) = entities
+            .iter_mut()
+            .find(|e| e.id == entity_id && !e.removed)
+        else {
+            return outcome;
+        };
+        // Within reach of the eyes.
+        let b = e.aabb();
+        let eye = [actor.pose.x, actor.pose.y + 1.62, actor.pose.z];
+        let d2: f64 = (0..3)
+            .map(|i| (b.min[i] - eye[i]).max(eye[i] - b.max[i]).max(0.0).powi(2))
+            .sum();
+        if d2 > 36.0 {
+            return outcome;
+        }
+        if let Kind::Hung(_) = &e.kind {
+            crate::decor::interact(ctx, actor, e, hand, attack, at, &mut outcome, &mut fresh);
+        }
+    }
+    crate::decor::spawn_all(ctx, fresh);
+    outcome
 }

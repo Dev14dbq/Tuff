@@ -276,6 +276,39 @@ pub fn use_item(
     Some(outcome)
 }
 
+/// A firework rocket used on a block flies up from where it was clicked.
+pub fn use_on_block(
+    ctx: &ServerContext,
+    outcome: &mut Outcome,
+    actor: Actor,
+    hand: i32,
+    name: &str,
+    clicked: mc_protocol::Position,
+    cursor: [f32; 3],
+) -> bool {
+    if name != "minecraft:firework_rocket" {
+        return false;
+    }
+    let Some(held) = crate::held::held(ctx, actor.uuid, hand) else {
+        return false;
+    };
+    let at = [
+        f64::from(clicked.x) + f64::from(cursor[0]),
+        f64::from(clicked.y) + f64::from(cursor[1]),
+        f64::from(clicked.z) + f64::from(cursor[2]),
+    ];
+    firework::launch(ctx, actor, &held, at, false);
+    if actor.game_mode != 1 {
+        crate::held::consume(ctx, actor.uuid, held.slot, 1);
+    }
+    outcome.events.push(Event::Swing {
+        uuid: actor.uuid,
+        entity_id: actor.entity_id,
+        times: 1,
+    });
+    true
+}
+
 pub fn is_arrow(name: &str) -> bool {
     matches!(
         name,
@@ -298,7 +331,7 @@ pub fn release(ctx: &ServerContext, actor: Actor) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use mc_entity::extra::Pickup;
 

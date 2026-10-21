@@ -525,6 +525,21 @@ pub fn use_item_on(
     };
     // Flint and steel and fire charges light fire.
     let held_name = held.and_then(|item| ctx.items.name(item.item));
+    if let Some(name) = held_name
+        && use_blocks
+        && (crate::decor::place(ctx, &mut outcome, actor, hand, name, clicked, face)
+            || crate::projectiles::use_on_block(
+                ctx,
+                &mut outcome,
+                actor,
+                hand,
+                name,
+                clicked,
+                cursor,
+            ))
+    {
+        return outcome;
+    }
     if let Some(tool @ ("minecraft:flint_and_steel" | "minecraft:fire_charge")) = held_name {
         // TNT turns into primed TNT instead.
         let tnt = use_blocks
