@@ -261,6 +261,22 @@ fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
             c.insert("Age", Tag::Short(e.age.min(i16::MAX as u32) as i16));
         }
         mc_entity::Kind::FallingBlock { .. } => {}
+        mc_entity::Kind::Merchant(m) => {
+            if !m.wandering {
+                let mut data = Compound::new();
+                data.insert("level", Tag::Int(m.level));
+                data.insert(
+                    "profession",
+                    Tag::String(format!(
+                        "minecraft:{}",
+                        m.profession.as_deref().unwrap_or("none")
+                    )),
+                );
+                data.insert("type", Tag::String(m.variant.clone()));
+                c.insert("VillagerData", Tag::Compound(data));
+                c.insert("Xp", Tag::Int(m.xp));
+            }
+        }
         mc_entity::Kind::Mob(m) => {
             c.insert("Health", Tag::Float(m.health));
             c.insert(

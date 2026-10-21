@@ -48,6 +48,7 @@ mod storage;
 mod summon;
 mod tick;
 mod useblocks;
+mod trading;
 mod util;
 mod vehicles;
 mod vitals;

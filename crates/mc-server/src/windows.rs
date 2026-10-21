@@ -14,6 +14,7 @@ use super::{PacketWriter, change_hands};
 use crate::containers;
 use crate::context::{Event, Pose, ServerContext};
 use crate::menus::{Machine, Menu};
+use crate::trading;
 
 enum Kind {
     /// One container, or a large chest made of two (window slots in order).
@@ -22,6 +23,14 @@ enum Kind {
     Crafting { grid: Vec<Option<ItemStack>> },
     /// A menu with slots of its own (beacon, anvil...).
     Machine(Box<Machine>),
+    /// A villager's trades: 0 and 1 payment, 2 result (not shared, not
+    /// stored).
+    Merchant {
+        entity: i32,
+        grid: Vec<Option<ItemStack>>,
+        /// The trade the player picked.
+        selected: Option<usize>,
+    },
 }
 
 impl Kind {
@@ -29,7 +38,7 @@ impl Kind {
     fn part_of(&self, slot: usize) -> Option<(Position, usize)> {
         match self {
             Kind::Container { parts } => open_part(parts, slot),
-            Kind::Crafting { .. } | Kind::Machine(_) => None,
+            Kind::Crafting { .. } | Kind::Machine(_) | Kind::Merchant { .. } => None,
         }
     }
 
@@ -56,6 +65,7 @@ impl Kind {
             Kind::Container { parts } => parts.iter().map(|(_, n)| n).sum(),
             Kind::Crafting { .. } => 10,
             Kind::Machine(m) => m.slots.len(),
+            Kind::Merchant { .. } => 3,
         }
     }
 }
@@ -333,8 +343,8 @@ impl Windows {
                         .get(&(p.x, p.y, p.z))
                         .and_then(|o| o.slots.get(local).cloned().flatten())
                 }),
-                Kind::Crafting { grid } => grid[s].clone(),
                 Kind::Machine(m) => m.slots.get(s).cloned().flatten(),
+                Kind::Crafting { grid } | Kind::Merchant { grid, .. } => grid[s].clone(),
             };
             if let Some(stack) = before {
                 let count = if click.button == 1 { stack.count } else { 1 };
@@ -353,7 +363,7 @@ impl Windows {
                     .cloned()
                     .collect()
             }
-            Kind::Crafting { grid } => grid
+            Kind::Crafting { grid } | Kind::Merchant { grid, .. } => grid
                 .iter()
                 .flatten()
                 .filter(|s| s.has_changes())
@@ -384,6 +394,8 @@ impl Windows {
             crate::tick::throw_item(ctx, pose, stack);
         }
         let id = open.id;
+        let mut settle = None;
+        let mut machine_shown = None;
         match &mut open.kind {
             Kind::Container { parts } => {
                 for &(p, _) in parts.iter() {
@@ -428,8 +440,237 @@ impl Windows {
                 let taken = result.is_some_and(|r| result_before.is_some() && m.slots[r].is_none());
                 let shown = m.slots.clone();
                 m.settle(ctx, uuid, taken);
-                self.sync_machine(writer, who, shown)?;
+                machine_shown = Some(shown);
             }
+            Kind::Merchant { grid, .. } => {
+                settle = Some(grid.clone());
+                for (s, stack) in theirs {
+                    let known: Vec<&ItemStack> = hand_stacks.iter().chain(&window_stacks).collect();
+                    grid[s] = stack.map(|h| h.resolve(known.iter().copied()));
+                }
+            }
+        }
+        if let Some(shown) = machine_shown {
+            self.sync_machine(writer, who, shown)?;
+        }
+        if let Some(before) = settle {
+            self.settle_trade(writer, who, before, click.mode)?;
+        }
+        Ok(())
+    }
+
+    /// Opens the trades of the merchant `entity`, if it has any.
+    pub fn open_merchant(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        entity: i32,
+    ) -> anyhow::Result<()> {
+        self.close_current(writer, who)?;
+        let Some(snap) = trading::open(who.ctx, who.uuid, entity) else {
+            return Ok(());
+        };
+        self.show(
+            writer,
+            who,
+            "minecraft:merchant",
+            &snap.title,
+            vec![None; 3],
+            Kind::Merchant {
+                entity,
+                grid: vec![None; 3],
+                selected: None,
+            },
+        )?;
+        writer.queue(&trading::offers_packet(self.next_id, &snap))
+    }
+
+    /// The client picked a trade: what was in the payment slots goes back
+    /// to the inventory and the payments move in from it.
+    pub fn select_trade(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        index: i32,
+    ) -> anyhow::Result<()> {
+        let Some(mut open) = self.open.take() else {
+            return Ok(());
+        };
+        let result = self.fill_payments(writer, who, &mut open, index);
+        self.open = Some(open);
+        result
+    }
+
+    fn fill_payments(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        open: &mut Open,
+        index: i32,
+    ) -> anyhow::Result<()> {
+        let Who {
+            ctx,
+            uuid,
+            entity_id,
+            ..
+        } = who;
+        let id = open.id;
+        let Kind::Merchant {
+            entity,
+            grid,
+            selected,
+        } = &mut open.kind
+        else {
+            return Ok(());
+        };
+        let Some(snap) = trading::snapshot(ctx, uuid, *entity) else {
+            return Ok(());
+        };
+        let Some(offer) = usize::try_from(index).ok().and_then(|i| snap.offers.get(i)) else {
+            return Ok(());
+        };
+        *selected = usize::try_from(index).ok();
+        if offer.out_of_stock() {
+            return Ok(());
+        }
+        let back: Vec<ItemStack> = grid[..2].iter_mut().filter_map(Option::take).collect();
+        self.set_slot(writer, id, 0, None)?;
+        self.set_slot(writer, id, 1, None)?;
+        self.give_back(writer, who, back)?;
+        for (slot, cost) in [Some(offer.cost_a), offer.cost_b]
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, c)| Some((i, c?)))
+        {
+            let max = ctx.items.max_stack(cost.item);
+            let mut have = 0;
+            let mut changed = Vec::new();
+            change_hands(ctx, uuid, entity_id, |hands| {
+                for (p, held) in hands.slots.iter_mut().enumerate().take(45).skip(9) {
+                    let Some(stack) = held
+                        .as_mut()
+                        .filter(|s| s.item == cost.item && !s.has_changes())
+                    else {
+                        continue;
+                    };
+                    let take = stack.count.min(max - have);
+                    if take <= 0 {
+                        continue;
+                    }
+                    stack.count -= take;
+                    have += take;
+                    if stack.count == 0 {
+                        *held = None;
+                    }
+                    changed.push((p, held.clone()));
+                }
+            });
+            for (p, item) in changed {
+                self.set_slot(writer, 0, p, item)?;
+            }
+            if have > 0 {
+                let stack = ItemStack::new(cost.item, have);
+                grid[slot] = Some(stack.clone());
+                self.set_slot(writer, id, slot, Some(stack))?;
+            }
+        }
+        let made = trading::find_offer(
+            ctx,
+            &snap.offers,
+            *selected,
+            grid[0].as_ref(),
+            grid[1].as_ref(),
+        )
+        .map(|i| ItemStack::new(snap.offers[i].result.item, snap.offers[i].result.count));
+        grid[2] = made.clone();
+        self.set_slot(writer, id, 2, made)
+    }
+
+    /// After a click in a merchant window: a result taken is a trade made;
+    /// the payments and the result are worked out again.
+    fn settle_trade(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        before: Vec<Option<ItemStack>>,
+        mode: i32,
+    ) -> anyhow::Result<()> {
+        let Some(mut open) = self.open.take() else {
+            return Ok(());
+        };
+        let result = self.settle(writer, who, &mut open, before, mode);
+        self.open = Some(open);
+        result
+    }
+
+    fn settle(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        open: &mut Open,
+        before: Vec<Option<ItemStack>>,
+        mode: i32,
+    ) -> anyhow::Result<()> {
+        let Who { ctx, uuid, .. } = who;
+        let id = open.id;
+        let Kind::Merchant {
+            entity,
+            grid,
+            selected,
+        } = &mut open.kind
+        else {
+            return Ok(());
+        };
+        let Some(mut snap) = trading::snapshot(ctx, uuid, *entity) else {
+            return Ok(());
+        };
+        let mut traded = false;
+        if before[2].is_some()
+            && grid[2].is_none()
+            && let Some(i) = trading::find_offer(
+                ctx,
+                &snap.offers,
+                *selected,
+                before[0].as_ref(),
+                before[1].as_ref(),
+            )
+        {
+            // What the client says it paid tells how many a quick move made.
+            let reported = grid.clone();
+            *grid = before;
+            let times = trading::pay(
+                ctx,
+                &snap.offers[i],
+                grid,
+                &reported,
+                if mode == 1 { i32::MAX } else { 1 },
+            );
+            if times > 0
+                && let Some(s) = trading::complete(ctx, uuid, *entity, i, times)
+            {
+                snap = s;
+                *selected = Some(i);
+                traded = true;
+            }
+        }
+        let made = trading::find_offer(
+            ctx,
+            &snap.offers,
+            *selected,
+            grid[0].as_ref(),
+            grid[1].as_ref(),
+        )
+        .map(|i| ItemStack::new(snap.offers[i].result.item, snap.offers[i].result.count));
+        let changed = made != grid[2];
+        grid[2] = made.clone();
+        if traded {
+            let slots = grid.clone();
+            for (slot, item) in slots.into_iter().enumerate() {
+                self.set_slot(writer, id, slot, item)?;
+            }
+            writer.queue(&trading::offers_packet(id, &snap))?;
+        } else if changed {
+            self.set_slot(writer, id, 2, made)?;
         }
         Ok(())
     }
@@ -593,6 +834,11 @@ impl Windows {
             }
             Kind::Machine(mut m) => {
                 let left = m.leftovers();
+                self.give_back(writer, who, left)?;
+            }
+            Kind::Merchant { entity, grid, .. } => {
+                trading::close(ctx, uuid, entity);
+                let left: Vec<ItemStack> = grid.into_iter().take(2).flatten().collect();
                 self.give_back(writer, who, left)?;
             }
         }

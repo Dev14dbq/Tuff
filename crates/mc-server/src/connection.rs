@@ -761,6 +761,22 @@ async fn play(
                     play::Serverbound::SetBeacon { primary, secondary } => {
                         windows.set_beacon(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, primary, secondary)?;
                     }
+                    play::Serverbound::Interact { entity_id: target, .. }
+                        if game_mode != 3 && crate::trading::is_merchant(&ctx, target) =>
+                    {
+                        let near = ctx.entities.lock().expect("entities lock").iter()
+                            .find(|e| e.id == target)
+                            .is_some_and(|e| {
+                                let (dx, dy, dz) = (e.pos[0] - pose.x, e.pos[1] - pose.y, e.pos[2] - pose.z);
+                                dx * dx + dy * dy + dz * dz <= 36.0
+                            });
+                        if near {
+                            windows.open_merchant(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, target)?;
+                        }
+                    }
+                    play::Serverbound::SelectTrade { index } => {
+                        windows.select_trade(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, index)?;
+                    }
                     play::Serverbound::ContainerClose { window } => {
                         windows.close(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window)?;
                     }
@@ -1773,6 +1789,8 @@ fn spawn_entity(
         mc_entity::Kind::FallingBlock { state } => (ctx.entity_types.falling_block, *state as i32),
         mc_entity::Kind::Item { .. } => (ctx.entity_types.item, 0),
         mc_entity::Kind::Tnt { .. } => (ctx.entity_types.tnt, 0),
+        mc_entity::Kind::Merchant(m) if m.wandering => (ctx.entity_types.wandering_trader, 0),
+        mc_entity::Kind::Merchant(_) => (ctx.entity_types.villager, 0),
         mc_entity::Kind::Mob(m) => (crate::mobs::type_id(ctx, m.species), 0),
         mc_entity::Kind::ExperienceOrb { .. } => (ctx.entity_types.experience_orb, 0),
         _ => return Ok(()),
@@ -1827,6 +1845,9 @@ fn spawn_entity(
         // Only a fuse other than the default is sent.
         mc_entity::Kind::Tnt { fuse, .. } if fuse != crate::explosion::TNT_FUSE => {
             writer.queue(&crate::explosion::fuse_data(entity.id, fuse))?;
+        }
+        mc_entity::Kind::Merchant(ref m) if !m.wandering => {
+            writer.queue(&crate::trading::villager_data(ctx, entity.id, m))?;
         }
         _ => {}
     }

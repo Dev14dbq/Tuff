@@ -607,6 +607,33 @@ pub fn use_item_on(
     };
     // Flint and steel and fire charges light fire.
     let held_name = held.and_then(|item| ctx.items.name(item.item));
+    // Spawn eggs of villagers and wandering traders.
+    if let Some(egg @ ("minecraft:villager_spawn_egg" | "minecraft:wandering_trader_spawn_egg")) =
+        held_name
+    {
+        let at = offset(clicked, face);
+        let kind = egg.trim_end_matches("_spawn_egg");
+        if let Some(entity) = crate::trading::new_merchant(
+            ctx,
+            kind,
+            [
+                f64::from(at.x) + 0.5,
+                f64::from(at.y),
+                f64::from(at.z) + 0.5,
+            ],
+        ) {
+            crate::trading::spawn(ctx, entity);
+            if actor.game_mode != CREATIVE {
+                replace_held(ctx, &mut outcome, actor, hand, None);
+            }
+        }
+        outcome.events.push(Event::Swing {
+            uuid: actor.uuid,
+            entity_id: actor.entity_id,
+            times: 1,
+        });
+        return refuse(outcome);
+    }
     if let Some(name) = held_name
         && use_blocks
         && (crate::decor::place(ctx, &mut outcome, actor, hand, name, clicked, face)
