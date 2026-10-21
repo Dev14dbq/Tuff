@@ -32,6 +32,14 @@ pub trait Level {
         false
     }
 
+    /// Water cannot stay here (the Nether): wet sponges dry at once.
+    fn ultrawarm(&self) -> bool {
+        false
+    }
+
+    /// A wet sponge dried at `p`: it hisses and steams.
+    fn sponge_dried(&mut self, _p: BlockPos) {}
+
     /// Turns the block that was at `p` into a falling block entity.
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32);
 

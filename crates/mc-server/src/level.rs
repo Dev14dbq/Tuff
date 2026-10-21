@@ -403,6 +403,24 @@ impl Level for WorldLevel<'_> {
 
     fn torch_fizz(&mut self, _p: BlockPos) {}
 
+    fn ultrawarm(&self) -> bool {
+        self.ctx.world.dimension.contains("nether")
+    }
+
+    fn sponge_dried(&mut self, p: BlockPos) {
+        let at = [f64::from(p.x) + 0.5, f64::from(p.y) + 0.5, f64::from(p.z) + 0.5];
+        crate::fx::sound(
+            self.ctx,
+            "block.fire.extinguish",
+            crate::fx::category::BLOCKS,
+            at,
+            1.0,
+            0.8,
+        );
+        // World event 2009: water evaporating (large smoke).
+        crate::fx::level_event(self.ctx, 2009, at, 0);
+    }
+
     fn container_transfer(
         &mut self,
         from: BlockPos,

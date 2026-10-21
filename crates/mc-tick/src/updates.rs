@@ -69,6 +69,7 @@ fn set_with_limit(
     fluids::on_place(level, ctx, p, state);
     crate::fire::on_place(level, ctx, p, old, state);
     redstone::on_place(level, ctx, p, old, state);
+    crate::sponge::on_place(level, ctx, p, old, state);
     if ctx.shapes.block_index(old) != ctx.shapes.block_index(state) {
         crate::rails::on_place(level, ctx, p, state);
         crate::hopper::on_place(level, ctx, p, state);
@@ -198,6 +199,7 @@ pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: Blo
         return;
     }
     fluids::neighbor_changed(level, ctx, p);
+    crate::sponge::neighbor_changed(level, ctx, p);
     redstone::neighbor_changed(level, ctx, p);
     powered_tnt(level, ctx, p);
     crate::rails::neighbor_changed(level, ctx, p);
