@@ -7,371 +7,46 @@
 //! running goal that shares a control with it has a lower priority (a larger
 //! number); those are stopped. Target goals work the same way on their own
 //! list and only choose whom the mob goes after.
+//!
+//! - [`species`]: what each kind is (size, attributes, food, sounds);
+//! - [`goals`]: the goals and the selector;
+//! - [`body`]: steering, walking, swimming and flying.
+
+mod body;
+mod brains;
+pub mod goals;
+pub mod species;
+
+pub use goals::{Goal, Slot};
+pub use species::{Category, Sound, Species};
 
 use crate::Entity;
 use crate::Kind;
-use crate::nav::{Cell, Graze, Liquid, Nav, PathParams, Terrain, standable};
-use crate::physics::{Aabb, move_entity};
+use crate::nav::{Cell, Nav, Terrain};
 
 pub const MOVE: u8 = 1;
 pub const LOOK: u8 = 2;
 pub const JUMP: u8 = 4;
 pub const TARGET: u8 = 8;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Species {
-    Cow,
-    Sheep,
-    Pig,
-    Chicken,
-    Zombie,
-    Skeleton,
-    Creeper,
-    Spider,
+/// Equipment slots, numbered as the equipment packet numbers them.
+pub mod slot {
+    pub const MAINHAND: usize = 0;
+    pub const OFFHAND: usize = 1;
+    pub const FEET: usize = 2;
+    pub const LEGS: usize = 3;
+    pub const CHEST: usize = 4;
+    pub const HEAD: usize = 5;
+    pub const BODY: usize = 6;
+    pub const SADDLE: usize = 7;
 }
 
-/// Spawn categories.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Category {
-    Creature,
-    Monster,
-}
-
-impl Species {
-    pub const ALL: [Species; 8] = [
-        Species::Cow,
-        Species::Sheep,
-        Species::Pig,
-        Species::Chicken,
-        Species::Zombie,
-        Species::Skeleton,
-        Species::Creeper,
-        Species::Spider,
-    ];
-
-    /// The registry name.
-    pub fn id(self) -> &'static str {
-        match self {
-            Species::Cow => "minecraft:cow",
-            Species::Sheep => "minecraft:sheep",
-            Species::Pig => "minecraft:pig",
-            Species::Chicken => "minecraft:chicken",
-            Species::Zombie => "minecraft:zombie",
-            Species::Skeleton => "minecraft:skeleton",
-            Species::Creeper => "minecraft:creeper",
-            Species::Spider => "minecraft:spider",
-        }
-    }
-
-    pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|s| s.id() == id)
-    }
-
-    /// The name death messages show.
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Species::Cow => "Cow",
-            Species::Sheep => "Sheep",
-            Species::Pig => "Pig",
-            Species::Chicken => "Chicken",
-            Species::Zombie => "Zombie",
-            Species::Skeleton => "Skeleton",
-            Species::Creeper => "Creeper",
-            Species::Spider => "Spider",
-        }
-    }
-
-    pub fn category(self) -> Category {
-        match self {
-            Species::Cow | Species::Sheep | Species::Pig | Species::Chicken => Category::Creature,
-            _ => Category::Monster,
-        }
-    }
-
-    /// Width and height of the collision box.
-    pub fn size(self) -> (f64, f64) {
-        match self {
-            Species::Cow => (0.9, 1.4),
-            Species::Sheep => (0.9, 1.3),
-            Species::Pig => (0.9, 0.9),
-            Species::Chicken => (0.4, 0.7),
-            Species::Zombie => (0.6, 1.95),
-            Species::Skeleton => (0.6, 1.99),
-            Species::Creeper => (0.6, 1.7),
-            Species::Spider => (1.4, 0.9),
-        }
-    }
-
-    pub fn eye_height(self) -> f64 {
-        match self {
-            Species::Cow => 1.3,
-            Species::Sheep => 1.235,
-            Species::Pig => 0.765,
-            Species::Chicken => 0.644,
-            Species::Zombie => 1.74,
-            Species::Skeleton => 1.74,
-            Species::Creeper => 1.445,
-            Species::Spider => 0.65,
-        }
-    }
-
-    pub fn max_health(self) -> f32 {
-        match self {
-            Species::Cow | Species::Pig => 10.0,
-            Species::Sheep => 8.0,
-            Species::Chicken => 4.0,
-            Species::Zombie | Species::Skeleton | Species::Creeper => 20.0,
-            Species::Spider => 16.0,
-        }
-    }
-
-    /// The `movement_speed` attribute.
-    pub fn speed(self) -> f64 {
-        match self {
-            Species::Cow => 0.2,
-            Species::Sheep => 0.23,
-            Species::Pig | Species::Chicken | Species::Skeleton | Species::Creeper => 0.25,
-            Species::Zombie => 0.23,
-            Species::Spider => 0.3,
-        }
-    }
-
-    /// The `follow_range` attribute.
-    pub fn follow_range(self) -> f64 {
-        match self {
-            Species::Zombie => 35.0,
-            _ => 16.0,
-        }
-    }
-
-    /// The `attack_damage` attribute at normal difficulty (0 for those that
-    /// do not bite).
-    pub fn attack_damage(self) -> f32 {
-        match self {
-            Species::Zombie => 3.0,
-            Species::Spider => 2.0,
-            _ => 0.0,
-        }
-    }
-
-    /// Whether sunlight sets it on fire.
-    pub fn burns_in_sun(self) -> bool {
-        matches!(self, Species::Zombie | Species::Skeleton)
-    }
-
-    /// Blocks of headroom a path through the world must leave.
-    pub fn body_height(self) -> i32 {
-        self.size().1.ceil() as i32
-    }
-
-    /// Whether falls hurt it.
-    pub fn takes_fall_damage(self) -> bool {
-        self != Species::Chicken
-    }
-
-    fn brain(self) -> Brain {
-        use Goal::*;
-        let slot = |priority, flags, goal| Slot {
-            priority,
-            flags,
-            goal,
-            running: false,
-        };
-        let float = slot(0, JUMP, Float);
-        let look = |p, range| slot(p, LOOK, LookAtPlayer { range, left: 0 });
-        let random_look = |p| {
-            slot(
-                p,
-                MOVE | LOOK,
-                RandomLook {
-                    left: 0,
-                    angle: 0.0,
-                },
-            )
-        };
-        let stroll = |p, speed, avoid_water| {
-            slot(
-                p,
-                MOVE,
-                Stroll {
-                    speed,
-                    interval: 120,
-                    avoid_water,
-                },
-            )
-        };
-        let panic = |speed| slot(1, MOVE, Panic { speed });
-        let hurt_by = |p| slot(p, TARGET, HurtBy);
-        let nearest = |p, fickle| {
-            slot(
-                p,
-                TARGET,
-                Nearest {
-                    range: self.follow_range(),
-                    fickle,
-                    unseen: 0,
-                },
-            )
-        };
-        let melee = |p, fickle| slot(p, MOVE | LOOK, Melee { speed: 1.0, fickle });
-        let (goals, targets) = match self {
-            Species::Cow | Species::Pig => (
-                vec![
-                    float,
-                    panic(if self == Species::Cow { 2.0 } else { 1.25 }),
-                    stroll(6, 1.0, true),
-                    look(7, 6.0),
-                    random_look(8),
-                ],
-                vec![],
-            ),
-            Species::Sheep => (
-                vec![
-                    float,
-                    panic(1.25),
-                    slot(5, MOVE | LOOK | JUMP, EatGrass { left: 0 }),
-                    stroll(6, 1.0, true),
-                    look(7, 6.0),
-                    random_look(8),
-                ],
-                vec![],
-            ),
-            Species::Chicken => (
-                vec![
-                    float,
-                    panic(1.4),
-                    stroll(6, 1.0, true),
-                    look(7, 6.0),
-                    random_look(8),
-                ],
-                vec![],
-            ),
-            Species::Zombie => (
-                vec![
-                    float,
-                    melee(2, false),
-                    stroll(7, 1.0, true),
-                    look(8, 8.0),
-                    random_look(8),
-                ],
-                vec![hurt_by(1), nearest(2, false)],
-            ),
-            Species::Skeleton => (
-                vec![
-                    float,
-                    slot(
-                        3,
-                        MOVE,
-                        Avoid {
-                            range: 4.0,
-                            speed: 1.2,
-                        },
-                    ),
-                    slot(
-                        4,
-                        MOVE | LOOK,
-                        Bow {
-                            cooldown: 20,
-                            drawn: 0,
-                            range: 15.0,
-                        },
-                    ),
-                    stroll(5, 1.0, true),
-                    look(6, 8.0),
-                    random_look(6),
-                ],
-                vec![hurt_by(1), nearest(2, false)],
-            ),
-            Species::Creeper => (
-                vec![
-                    Slot {
-                        priority: 1,
-                        ..float
-                    },
-                    slot(2, MOVE, Swell),
-                    melee(4, false),
-                    stroll(5, 0.8, true),
-                    look(6, 8.0),
-                    random_look(6),
-                ],
-                vec![nearest(1, false), hurt_by(2)],
-            ),
-            Species::Spider => (
-                vec![
-                    Slot {
-                        priority: 1,
-                        ..float
-                    },
-                    slot(3, MOVE | JUMP, Leap),
-                    melee(4, true),
-                    stroll(5, 0.8, true),
-                    look(6, 8.0),
-                    random_look(6),
-                ],
-                vec![hurt_by(1), nearest(2, true)],
-            ),
-        };
-        Brain { goals, targets }
-    }
-}
-
+/// An item a mob wears or holds.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Slot {
-    pub priority: u8,
-    pub flags: u8,
-    pub goal: Goal,
-    pub running: bool,
-}
-
-/// What a goal does, with the state it keeps while running.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Goal {
-    /// Swim up out of water.
-    Float,
-    /// Run off after being hurt.
-    Panic { speed: f64 },
-    /// Wander to a random place now and then.
-    Stroll {
-        speed: f64,
-        /// On average one start in this many ticks.
-        interval: u32,
-        avoid_water: bool,
-    },
-    /// Watch a player that comes close.
-    LookAtPlayer { range: f64, left: i32 },
-    /// Turn the head to a random side.
-    RandomLook { left: i32, angle: f64 },
-    /// Chase the target and hit it.
-    Melee {
-        speed: f64,
-        /// Gives up on its own at times (spiders by day).
-        fickle: bool,
-    },
-    /// Back away from the target when it is too close.
-    Avoid { range: f64, speed: f64 },
-    /// Creeper: fuse while the target is close.
-    Swell,
-    /// Spider: pounce at a target a few blocks away.
-    Leap,
-    /// Shoot arrows from a distance.
-    Bow {
-        cooldown: u32,
-        drawn: u32,
-        range: f64,
-    },
-    /// Sheep: graze on grass.
-    EatGrass { left: i32 },
-    // Target goals.
-    /// Go after whoever hurt the mob.
-    HurtBy,
-    /// Go after the nearest player.
-    Nearest {
-        range: f64,
-        /// Spiders lose interest in the light.
-        fickle: bool,
-        /// Ticks the target has been out of sight.
-        unseen: i32,
-    },
+pub struct Gear {
+    pub item: i32,
+    pub count: i32,
+    pub damage: i32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -390,6 +65,76 @@ pub struct Target {
     pub pos: [f64; 3],
     /// Whether mobs may go after them (survival or adventure, alive).
     pub targetable: bool,
+    /// Alive and not a spectator: animals notice their food.
+    pub present: bool,
+    /// Items in the main and the off hand (-1 for none).
+    pub held: [i32; 2],
+    /// The helmet (-1 for none): a carved pumpkin hides the eyes from
+    /// endermen.
+    pub head: i32,
+    /// Wears a piece of gold armor (piglins leave them be).
+    pub gold: bool,
+    /// Where they look (degrees).
+    pub yaw: f32,
+    pub pitch: f32,
+    /// Who last hurt them, and whom they last hit (entity ids), for pets.
+    pub hurt_by: Option<i32>,
+    pub hit: Option<i32>,
+}
+
+impl Target {
+    /// A player at `pos` with nothing in hand.
+    pub fn at(id: i32, uuid: u128, pos: [f64; 3]) -> Self {
+        Self {
+            id,
+            uuid,
+            pos,
+            targetable: true,
+            present: true,
+            held: [-1; 2],
+            head: -1,
+            gold: false,
+            yaw: 0.0,
+            pitch: 0.0,
+            hurt_by: None,
+            hit: None,
+        }
+    }
+}
+
+/// Another mob (or a villager, `species: None`) as mobs see it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Other {
+    pub id: i32,
+    pub species: Option<Species>,
+    pub pos: [f64; 3],
+    pub width: f64,
+    pub height: f64,
+    pub baby: bool,
+    pub in_love: bool,
+    pub owner: Option<u128>,
+    pub alive: bool,
+}
+
+/// Item facts the mobs need, answered by the server's item tables.
+pub trait Items {
+    /// Whether the item is in an item tag (`minecraft:cow_food`).
+    fn tagged(&self, item: i32, tag: &str) -> bool;
+    /// `minecraft:bow`, or "" for an unknown id.
+    fn name(&self, item: i32) -> &str;
+}
+
+/// No items at all (tests).
+#[derive(Debug)]
+pub struct NoItems;
+
+impl Items for NoItems {
+    fn tagged(&self, _: i32, _: &str) -> bool {
+        false
+    }
+    fn name(&self, _: i32) -> &str {
+        ""
+    }
 }
 
 pub const PLAYER_EYE: f64 = 1.62;
@@ -399,26 +144,67 @@ pub const PLAYER_EYE: f64 = 1.62;
 pub struct Senses<'a> {
     pub world: &'a dyn Terrain,
     pub players: &'a [Target],
+    pub mobs: &'a [Other],
+    pub items: &'a dyn Items,
     /// Game time.
     pub tick: u64,
     /// 0 peaceful to 3 hard.
     pub difficulty: i32,
     /// Day and not raining: the sun burns.
     pub sunny: bool,
+    pub raining: bool,
+    /// In the Nether (piglins and hoglins do not turn into zombies there).
+    pub nether: bool,
 }
 
 impl std::fmt::Debug for Senses<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Senses")
             .field("players", &self.players.len())
+            .field("mobs", &self.mobs.len())
             .field("tick", &self.tick)
             .finish_non_exhaustive()
     }
 }
 
+/// Something a mob can go after: a player or another mob.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Seen {
+    pub id: i32,
+    pub pos: [f64; 3],
+    pub width: f64,
+    pub eye: f64,
+    pub player: bool,
+}
+
 impl Senses<'_> {
-    fn player(&self, id: i32) -> Option<&Target> {
+    pub fn player(&self, id: i32) -> Option<&Target> {
         self.players.iter().find(|p| p.id == id)
+    }
+
+    pub fn mob(&self, id: i32) -> Option<&Other> {
+        self.mobs.iter().find(|m| m.id == id)
+    }
+
+    /// A living target by entity id: a targetable player or a live mob.
+    pub fn seen(&self, id: i32) -> Option<Seen> {
+        if let Some(p) = self.player(id) {
+            return p.targetable.then_some(Seen {
+                id,
+                pos: p.pos,
+                width: 0.6,
+                eye: PLAYER_EYE,
+                player: true,
+            });
+        }
+        let m = self.mob(id).filter(|m| m.alive)?;
+        Some(Seen {
+            id,
+            pos: m.pos,
+            width: m.width,
+            eye: m.height * 0.85,
+            player: false,
+        })
     }
 
     /// The nearest player passing `ok`, within `range`.
@@ -436,43 +222,104 @@ impl Senses<'_> {
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, p)| p)
     }
+
+    /// The nearest other mob passing `ok`, within `range`.
+    pub fn nearest_mob(
+        &self,
+        from: [f64; 3],
+        range: f64,
+        ok: impl Fn(&Other) -> bool,
+    ) -> Option<&Other> {
+        self.mobs
+            .iter()
+            .filter(|m| m.alive && ok(m))
+            .map(|m| (dist_sq(from, m.pos), m))
+            .filter(|(d, _)| *d <= range * range)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, m)| m)
+    }
+}
+
+/// What a projectile a mob throws or shoots is.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Missile {
+    /// An arrow; strays' slow, and `damage` is the base.
+    Arrow { damage: f64, slowness: bool },
+    Trident,
+    /// A ghast's fireball, with its explosion power.
+    Fireball { power: i32 },
+    /// One of a blaze's three.
+    SmallFireball,
+    /// A witch's splash potion (`minecraft:harming`).
+    Potion(&'static str),
 }
 
 /// What a mob did that the world must act on.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MobEvent {
-    /// A bite or a blow at the player with this entity id.
+    /// A bite or a blow at the entity with this id.
     Attack { target: i32, damage: f32 },
-    /// An arrow at the player with this entity id (no projectiles yet: a
-    /// hit with this damage, if it lands).
-    Shoot { target: i32, damage: f32 },
+    /// A projectile at the entity with this id: from the mob's eyes towards
+    /// `aim`.
+    Shoot {
+        target: i32,
+        aim: [f64; 3],
+        missile: Missile,
+    },
     /// The creeper blows up.
     Explode { power: f32 },
-    /// A chicken lays an egg.
-    Egg,
+    /// Drops an item it makes (a chicken's egg).
+    Lay { item: &'static str },
     /// A sheep grazed: the plant, or the grass block under it, goes.
     Graze { cell: Cell, block: bool },
     /// Entity event for clients (`EntityEvent` status).
     Status(u8),
-    /// The mob took damage not from a player (burning, falling).
+    /// The mob took damage not from an entity (burning, falling).
     Hurt { amount: f32, kind: &'static str },
+    /// Two in love made a baby; this mob found `partner`.
+    Breed { partner: i32 },
+    /// A sound of the mob (`entity.cow.ambient`, without `minecraft:`).
+    Sound {
+        name: String,
+        volume: f32,
+        pitch: f32,
+    },
+    /// Swings its arm.
+    Swing,
+    /// Turns into another kind (a zombie under water into a drowned).
+    Convert(Species),
+    /// Calls the others of its kind nearby on its target.
+    Alert { target: i32 },
+    /// A zombie broke this door.
+    BreakDoor { cell: Cell },
+    /// Moved far at once: clients see a teleport.
+    Teleported,
+    /// Heals itself (a witch's potion).
+    Heal(f32),
+    /// Wears the item in a slot (a helmet in the sun).
+    Wear { slot: usize, amount: i32 },
+    /// A horse throws its rider off.
+    Buck,
+    /// A zombie villager is cured: it becomes a villager.
+    Cured,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mob {
     pub species: Species,
     pub health: f32,
+    pub max_health: f32,
     pub yaw: f32,
     pub pitch: f32,
     pub head_yaw: f32,
     pub brain: Brain,
     pub nav: Nav,
-    /// Whom it goes after: a player's entity id.
+    /// Whom it goes after: an entity id (player or mob).
     pub target: Option<i32>,
     /// Who hurt it last and for how many more ticks that counts.
     pub revenge: Option<(i32, i32)>,
-    /// Where goals want it to go this tick: the cell and speed multiplier.
-    pub goto: Option<(Cell, f64)>,
+    /// Where goals want it to go this tick: the point and speed multiplier.
+    pub goto: Option<([f64; 3], f64)>,
     /// Where goals want it to look this tick.
     pub look: Option<[f64; 3]>,
     pub jump: bool,
@@ -484,8 +331,12 @@ pub struct Mob {
     pub fall_distance: f64,
     /// Remaining ticks of the death animation; `Some` once health is gone.
     pub dying: Option<i32>,
-    /// Never despawns (named, or it picked something up).
+    /// Never despawns (named, tamed, or it picked something up).
     pub persistent: bool,
+    /// `NoAI`: stands still, no goals.
+    pub no_ai: bool,
+    pub custom_name: Option<String>,
+    pub left_handed: bool,
     // Species state.
     /// Sheep: the wool colour (0..16) and whether it is shorn.
     pub color: u8,
@@ -500,6 +351,63 @@ pub struct Mob {
     pub age: u32,
     /// Spider: clinging to a wall.
     pub climbing: bool,
+    /// Vanilla's `Age`: below zero a baby growing up, above zero the
+    /// ticks before it may breed again.
+    pub baby_age: i32,
+    /// Ticks of love left, and the player who fed it.
+    pub love: i32,
+    pub love_by: Option<u128>,
+    /// The owner of a tamed animal.
+    pub owner: Option<u128>,
+    /// Told to sit (or a fox asleep).
+    pub sitting: bool,
+    /// A horse let a rider stay on (it may also have no owner).
+    pub tame: bool,
+    /// Horses: how close it is to letting the rider stay.
+    pub temper: i32,
+    /// A variant number as clients know it (cat, parrot, horse, rabbit,
+    /// fox, wolf, cow, pig, chicken, mooshroom).
+    pub variant: i32,
+    /// Collar colour of a tamed wolf or cat.
+    pub collar: u8,
+    /// Equipment by slot (see [`slot`]).
+    pub gear: [Option<Gear>; 8],
+    /// Chance of each slot dropping on death (2 or more: always, undamaged).
+    pub drop_chance: [f32; 8],
+    pub can_pick_up: bool,
+    /// Neutral mobs: ticks of anger left.
+    pub anger: i32,
+    /// Ticks left of a conversion (zombie to drowned, zombie villager
+    /// cured, skeleton to stray), or -1.
+    pub conversion: i32,
+    /// Ticks spent with the head under water (zombies), or in powder snow.
+    pub soaked: i32,
+    /// Slimes, magma cubes and phantoms grow in size.
+    pub size: i32,
+    /// Enderman: the block in its hands.
+    pub carried: Option<u32>,
+    /// Witch: ticks left of drinking.
+    pub drinking: i32,
+    /// Pig: ticks of a carrot-on-a-stick boost.
+    pub boost: i32,
+    /// A zombie villager's former self: type, profession and level.
+    pub villager: Option<(String, Option<String>, i32)>,
+    /// Players riding it (entity ids).
+    pub riders: Vec<i32>,
+    /// Horses roll their own speed and jump.
+    pub speed_attr: f64,
+    pub jump_strength: f64,
+    /// Ticks towards the next ambient sound.
+    pub ambient_timer: i32,
+    /// Distance walked towards the next step sound.
+    pub walked: f64,
+    /// The player who last hurt it, and how many more ticks that counts
+    /// (loot and experience).
+    pub hurt_by_player: Option<(u128, i32)>,
+    /// Ghasts charge and blazes burn before shooting.
+    pub charge: i32,
+    /// Zombies raise their arms while chasing.
+    pub arms_up: bool,
     /// Whether clients must be told about changed fields.
     pub dirty: bool,
     aggressive: bool,
@@ -511,10 +419,11 @@ impl Mob {
         let mut mob = Self {
             species,
             health: species.max_health(),
+            max_health: species.max_health(),
             yaw: 0.0,
             pitch: 0.0,
             head_yaw: 0.0,
-            brain: species.brain(),
+            brain: brains::brain(species),
             nav: Nav::default(),
             target: None,
             revenge: None,
@@ -528,6 +437,9 @@ impl Mob {
             fall_distance: 0.0,
             dying: None,
             persistent: false,
+            no_ai: false,
+            custom_name: None,
+            left_handed: false,
             color: 0,
             sheared: false,
             swell: 0,
@@ -537,14 +449,66 @@ impl Mob {
             egg_time: 0,
             age: 0,
             climbing: false,
+            baby_age: 0,
+            love: 0,
+            love_by: None,
+            owner: None,
+            sitting: false,
+            tame: false,
+            temper: 0,
+            variant: 0,
+            collar: 14,
+            gear: Default::default(),
+            drop_chance: [0.085; 8],
+            can_pick_up: false,
+            anger: 0,
+            conversion: -1,
+            soaked: 0,
+            size: 1,
+            carried: None,
+            drinking: 0,
+            boost: 0,
+            villager: None,
+            riders: Vec::new(),
+            speed_attr: species.speed(),
+            jump_strength: 0.7,
+            ambient_timer: 0,
+            walked: 0.0,
+            hurt_by_player: None,
+            charge: 0,
+            arms_up: false,
             dirty: false,
             aggressive: false,
             rng: seed | 1,
         };
         mob.yaw = (mob.next_f64() * 360.0) as f32;
         mob.head_yaw = mob.yaw;
-        if species == Species::Chicken {
-            mob.egg_time = mob.rand_range(6000, 12000);
+        mob.left_handed = mob.next_f64() < 0.05;
+        mob.drop_chance[slot::SADDLE] = 2.0;
+        mob.drop_chance[slot::BODY] = 2.0;
+        match species {
+            Species::Chicken => mob.egg_time = mob.rand_range(6000, 12000),
+            Species::Horse | Species::Donkey | Species::Mule => {
+                // Each horse rolls its health, speed and jump.
+                if species == Species::Horse {
+                    let hp = 15.0 + mob.below(8) as f32 + mob.below(9) as f32;
+                    mob.set_max_health(hp);
+                    mob.speed_attr =
+                        (0.45 + mob.next_f64() * 0.3 + mob.next_f64() * 0.3 + mob.next_f64() * 0.3)
+                            * 0.25;
+                    mob.jump_strength =
+                        0.4 + mob.next_f64() * 0.2 + mob.next_f64() * 0.2 + mob.next_f64() * 0.2;
+                } else {
+                    let hp = 15.0 + mob.below(8) as f32 + mob.below(9) as f32;
+                    mob.set_max_health(hp);
+                    mob.jump_strength = 0.5;
+                }
+            }
+            Species::Slime | Species::MagmaCube => {
+                let size = 1 << mob.below(3);
+                mob.set_size(size);
+            }
+            _ => {}
         }
         mob
     }
@@ -573,12 +537,72 @@ impl Mob {
         }
     }
 
-    fn rand_range(&mut self, lo: i32, hi: i32) -> i32 {
+    pub fn rand_range(&mut self, lo: i32, hi: i32) -> i32 {
         lo + self.below((hi - lo + 1).max(1) as u32) as i32
+    }
+
+    /// A pitch for its sounds: around 1, higher for babies.
+    pub fn voice_pitch(&mut self) -> f32 {
+        let base = (self.next_f64() - self.next_f64()) as f32 * 0.2 + 1.0;
+        if self.is_baby() { base + 0.5 } else { base }
     }
 
     pub fn is_dead(&self) -> bool {
         self.health <= 0.0
+    }
+
+    pub fn is_baby(&self) -> bool {
+        self.baby_age < 0
+    }
+
+    pub fn set_baby(&mut self, baby: bool) {
+        self.baby_age = if baby { -24000 } else { 0 };
+        self.dirty = true;
+    }
+
+    pub fn is_tame(&self) -> bool {
+        self.owner.is_some() || self.tame
+    }
+
+    pub fn in_love(&self) -> bool {
+        self.love > 0
+    }
+
+    pub fn set_max_health(&mut self, hp: f32) {
+        self.max_health = hp;
+        self.health = hp;
+    }
+
+    /// Slimes and magma cubes: size sets health, speed and damage.
+    pub fn set_size(&mut self, size: i32) {
+        self.size = size.clamp(1, 127);
+        if matches!(self.species, Species::Slime | Species::MagmaCube) {
+            let s = self.size as f32;
+            self.set_max_health(s * s);
+            self.speed_attr = 0.2 + 0.1 * f64::from(self.size);
+        }
+        self.dirty = true;
+    }
+
+    /// Width and height of the collision box now (babies are half size).
+    pub fn size(&self) -> (f64, f64) {
+        let (w, h) = self.species.size();
+        match self.species {
+            Species::Slime | Species::MagmaCube => {
+                let s = f64::from(self.size);
+                (w * s, h * s)
+            }
+            Species::Phantom => {
+                let k = 1.0 + 0.15 * f64::from(self.size);
+                (w * k, h * k)
+            }
+            _ if self.is_baby() => (w / 2.0, h / 2.0),
+            _ => (w, h),
+        }
+    }
+
+    pub fn eye_height(&self) -> f64 {
+        self.size().1 * self.species.eye_ratio()
     }
 
     /// Hurts the mob. Returns whether the hit counted. Within the
@@ -588,7 +612,7 @@ impl Mob {
         if self.is_dead() || amount <= 0.0 {
             return false;
         }
-        let amount = if self.invulnerable > 0 {
+        let amount = if self.invulnerable > 10 {
             if amount <= self.last_damage {
                 return false;
             }
@@ -607,6 +631,11 @@ impl Mob {
             // Hurt by something else: animals run all the same.
             self.revenge = Some((-1, 100));
         }
+        // Hurt animals stop loving and stop sitting.
+        self.love = 0;
+        if self.species != Species::Wolf || attacker.is_some() {
+            self.sitting = false;
+        }
         self.dirty = true;
         true
     }
@@ -614,7 +643,7 @@ impl Mob {
     /// Whether `Sheep::shear` etc. apply: a shorn or baby sheep gives
     /// nothing.
     pub fn can_shear(&self) -> bool {
-        self.species == Species::Sheep && !self.sheared && !self.is_dead()
+        self.species == Species::Sheep && !self.sheared && !self.is_dead() && !self.is_baby()
     }
 
     pub fn shear(&mut self) {
@@ -637,32 +666,64 @@ impl Mob {
     pub fn aggressive(&self) -> bool {
         self.aggressive
     }
+
+    /// The item in a slot, if any.
+    pub fn gear_item(&self, slot: usize) -> Option<i32> {
+        self.gear[slot].as_ref().map(|g| g.item)
+    }
+
+    /// Whether it carries a saddle.
+    pub fn saddled(&self) -> bool {
+        self.gear[slot::SADDLE].is_some()
+    }
+
+    /// Starts love mode (fed its food).
+    pub fn fall_in_love(&mut self, by: Option<u128>) {
+        self.love = 600;
+        self.love_by = by;
+    }
+
+    /// One of its sounds by kind, with the slime's size.
+    pub fn sound_name(&self, which: Sound) -> Option<String> {
+        if matches!(self.species, Species::Slime | Species::MagmaCube) && self.size <= 1 {
+            let name = self.species.sound(which, false)?;
+            return Some(format!("{name}_small"));
+        }
+        let mut name = self.species.sound(which, self.is_baby())?;
+        // An angry wolf growls, a drowned in water gurgles.
+        if self.species == Species::Wolf && self.anger > 0 && which != Sound::Step {
+            name = name.replace("entity.wolf.", "entity.wolf_angry.");
+        }
+        Some(name)
+    }
+
+    /// The sound event for `which`, ready to play.
+    pub fn sound(&mut self, which: Sound) -> Option<MobEvent> {
+        let name = self.sound_name(which)?;
+        let volume = if which == Sound::Step {
+            0.15
+        } else {
+            self.species.volume()
+        };
+        let pitch = self.voice_pitch();
+        Some(MobEvent::Sound {
+            name,
+            volume,
+            pitch,
+        })
+    }
 }
 
-// ---- the goal engine ------------------------------------------------------
-
-/// What a mob moves with.
-#[derive(Debug)]
-pub struct Body {
-    pub pos: [f64; 3],
-    pub vel: [f64; 3],
-    pub on_ground: bool,
-}
-
-fn dist_sq(a: [f64; 3], b: [f64; 3]) -> f64 {
+pub(crate) fn dist_sq(a: [f64; 3], b: [f64; 3]) -> f64 {
     (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)
 }
 
-fn cell_of(pos: [f64; 3]) -> Cell {
+pub(crate) fn cell_of(pos: [f64; 3]) -> Cell {
     [
         pos[0].floor() as i32,
         pos[1].floor() as i32,
         pos[2].floor() as i32,
     ]
-}
-
-fn eye(m: &Mob, pos: [f64; 3]) -> [f64; 3] {
-    [pos[0], pos[1] + m.species.eye_height(), pos[2]]
 }
 
 /// Whether nothing solid lies between two points (stepped along the line).
@@ -684,602 +745,14 @@ pub fn line_clear(w: &dyn Terrain, a: [f64; 3], b: [f64; 3]) -> bool {
     })
 }
 
-fn can_see(m: &Mob, b: &Body, s: &Senses, t: &Target) -> bool {
-    line_clear(
-        s.world,
-        eye(m, b.pos),
-        [t.pos[0], t.pos[1] + PLAYER_EYE, t.pos[2]],
-    )
-}
-
-fn params(m: &Mob) -> PathParams {
-    PathParams::walker(m.species.body_height())
-}
-
-/// A random standable cell near `from`, at most `h` away sideways and `v`
-/// up or down; `towards` pulls the pick away from or to a point.
-fn random_spot(
-    m: &mut Mob,
-    s: &Senses,
-    from: Cell,
-    h: i32,
-    v: i32,
-    avoid_water: bool,
-    away_from: Option<[f64; 3]>,
-) -> Option<Cell> {
-    let p = params(m);
-    for _ in 0..10 {
-        let dx = m.below(2 * h as u32 + 1) as i32 - h;
-        let dz = m.below(2 * h as u32 + 1) as i32 - h;
-        if let Some(a) = away_from {
-            // Keep to the side away from the threat.
-            let (ax, az) = (a[0] - f64::from(from[0]), a[2] - f64::from(from[2]));
-            if f64::from(dx) * ax + f64::from(dz) * az > 0.0 {
-                continue;
-            }
-        }
-        let (x, z) = (from[0] + dx, from[2] + dz);
-        for y in (from[1] - v..=from[1] + v).rev() {
-            let c = [x, y, z];
-            if standable(s.world, c, &p) {
-                if avoid_water && s.world.liquid(x, y, z) == Liquid::Water {
-                    break;
-                }
-                return Some(c);
-            }
-        }
-    }
-    None
-}
-
-fn target_of<'a>(m: &Mob, s: &'a Senses) -> Option<&'a Target> {
-    s.player(m.target?).filter(|t| t.targetable)
-}
-
-fn can_use(g: &mut Goal, m: &mut Mob, b: &Body, s: &Senses) -> bool {
-    match g {
-        Goal::Float => {
-            s.world.liquid(
-                b.pos[0].floor() as i32,
-                (b.pos[1] + 0.3).floor() as i32,
-                b.pos[2].floor() as i32,
-            ) != Liquid::None
-        }
-        Goal::Panic { .. } => {
-            m.revenge.is_some() || m.burning > 0 && m.species.category() == Category::Creature
-        }
-        Goal::Stroll { interval, .. } => m.below(*interval) == 0,
-        Goal::LookAtPlayer { range, .. } => {
-            m.next_f64() < 0.02 && s.nearest(b.pos, *range, |p| p.targetable).is_some()
-        }
-        Goal::RandomLook { .. } => m.next_f64() < 0.02,
-        Goal::Melee { .. } => target_of(m, s).is_some(),
-        Goal::Avoid { range, .. } => {
-            target_of(m, s).is_some_and(|t| dist_sq(b.pos, t.pos) < *range * *range)
-        }
-        Goal::Swell => {
-            m.ignited
-                || target_of(m, s).is_some_and(|t| m.swell_dir > 0 || dist_sq(b.pos, t.pos) < 9.0)
-        }
-        Goal::Leap => {
-            let Some(t) = target_of(m, s) else {
-                return false;
-            };
-            let d = dist_sq(b.pos, t.pos);
-            b.on_ground && (4.0..=16.0).contains(&d) && m.below(5) == 0
-        }
-        Goal::Bow { .. } => target_of(m, s).is_some(),
-        Goal::EatGrass { .. } => {
-            if m.below(1000) != 0 {
-                return false;
-            }
-            let c = cell_of(b.pos);
-            s.world.grazing(c[0], c[1], c[2]) != Graze::None
-        }
-        Goal::HurtBy => m
-            .revenge
-            .is_some_and(|(id, _)| s.player(id).is_some_and(|p| p.targetable)),
-        Goal::Nearest { range, fickle, .. } => {
-            if m.below(10) != 0 {
-                return false;
-            }
-            if *fickle
-                && s.world.light(
-                    b.pos[0].floor() as i32,
-                    b.pos[1].floor() as i32,
-                    b.pos[2].floor() as i32,
-                ) >= 8
-            {
-                return false;
-            }
-            let range = *range;
-            let found = s
-                .nearest(b.pos, range, |p| p.targetable && can_see(m, b, s, p))
-                .map(|p| p.id);
-            found.is_some_and(|id| {
-                m.target = Some(id);
-                true
-            })
-        }
-    }
-}
-
-fn can_continue(g: &mut Goal, m: &mut Mob, b: &Body, s: &Senses) -> bool {
-    match g {
-        Goal::Float => can_use(g, m, b, s),
-        Goal::Panic { .. } => !m.nav.is_done(),
-        Goal::Stroll { .. } => !m.nav.is_done(),
-        Goal::LookAtPlayer { left, range } => {
-            *left > 0 && s.nearest(b.pos, *range, |p| p.targetable).is_some()
-        }
-        Goal::RandomLook { left, .. } => *left > 0,
-        Goal::Melee { fickle, .. } => {
-            if *fickle
-                && m.below(100) == 0
-                && s.world.light(
-                    b.pos[0].floor() as i32,
-                    b.pos[1].floor() as i32,
-                    b.pos[2].floor() as i32,
-                ) >= 8
-            {
-                m.target = None;
-                return false;
-            }
-            target_of(m, s).is_some()
-        }
-        Goal::Avoid { range, .. } => {
-            target_of(m, s).is_some_and(|t| dist_sq(b.pos, t.pos) < (*range + 1.0).powi(2))
-        }
-        Goal::Swell => true,
-        Goal::Leap => !b.on_ground,
-        Goal::Bow { .. } => target_of(m, s).is_some(),
-        Goal::EatGrass { left } => *left > 0,
-        Goal::HurtBy => target_of(m, s).is_some(),
-        Goal::Nearest { range, unseen, .. } => {
-            let Some(t) = target_of(m, s) else {
-                return false;
-            };
-            if dist_sq(b.pos, t.pos) > *range * *range {
-                return false;
-            }
-            if can_see(m, b, s, t) {
-                *unseen = 0;
-            } else {
-                *unseen += 1;
-            }
-            *unseen <= 60
-        }
-    }
-}
-
-fn start(g: &mut Goal, m: &mut Mob, b: &Body, s: &Senses) {
-    match g {
-        Goal::Panic { speed } => {
-            let away = m.revenge.and_then(|(id, _)| s.player(id)).map(|p| p.pos);
-            let from = cell_of(b.pos);
-            if let Some(c) = random_spot(m, s, from, 5, 4, false, away) {
-                m.nav.stop();
-                m.goto = Some((c, *speed));
-            }
-        }
-        Goal::Stroll {
-            speed, avoid_water, ..
-        } => {
-            let from = cell_of(b.pos);
-            let avoid = *avoid_water;
-            if let Some(c) = random_spot(m, s, from, 10, 7, avoid, None) {
-                m.nav.stop();
-                m.goto = Some((c, *speed));
-            }
-        }
-        Goal::LookAtPlayer { left, .. } => *left = 40 + m.below(40) as i32,
-        Goal::RandomLook { left, angle } => {
-            *angle = m.next_f64() * std::f64::consts::TAU;
-            *left = 20 + m.below(20) as i32;
-        }
-        Goal::EatGrass { left } => {
-            *left = 40;
-            m.nav.stop();
-        }
-        Goal::Swell => m.nav.stop(),
-        Goal::Leap => {}
-        Goal::Bow { drawn, .. } => *drawn = 0,
-        _ => {}
-    }
-}
-
-fn stop(g: &mut Goal, m: &mut Mob) {
-    match g {
-        Goal::Panic { .. } | Goal::Stroll { .. } | Goal::Melee { .. } | Goal::Avoid { .. } => {
-            m.nav.stop();
-        }
-        Goal::Swell => {
-            m.swell_dir = -1;
-            m.dirty = true;
-        }
-        Goal::Nearest { unseen, .. } => {
-            *unseen = 0;
-            m.target = None;
-        }
-        Goal::HurtBy => {
-            m.target = None;
-        }
-        _ => {}
-    }
-}
-
-fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent>) {
-    match g {
-        Goal::Float => {
-            if m.next_f64() < 0.8 {
-                m.jump = true;
-            }
-        }
-        Goal::Panic { speed } => {
-            if let Some(c) = m.nav.goal {
-                m.goto = Some((c, *speed));
-            }
-        }
-        Goal::Stroll { speed, .. } => {
-            if let Some(c) = m.nav.goal {
-                m.goto = Some((c, *speed));
-            }
-        }
-        Goal::LookAtPlayer { left, range } => {
-            *left -= 1;
-            if let Some(p) = s.nearest(b.pos, *range, |p| p.targetable) {
-                m.look = Some([p.pos[0], p.pos[1] + PLAYER_EYE, p.pos[2]]);
-            }
-        }
-        Goal::RandomLook { left, angle } => {
-            *left -= 1;
-            let e = eye(m, b.pos);
-            m.look = Some([e[0] + angle.cos() * 8.0, e[1], e[2] + angle.sin() * 8.0]);
-        }
-        Goal::Melee { speed, .. } => {
-            let Some(t) = target_of(m, s).cloned() else {
-                return;
-            };
-            m.look = Some([t.pos[0], t.pos[1] + PLAYER_EYE, t.pos[2]]);
-            m.goto = Some((cell_of(t.pos), *speed));
-            let (w, _) = m.species.size();
-            let reach = (w * 2.0).powi(2) + 0.6;
-            if m.attack_cooldown <= 0
-                && dist_sq(b.pos, t.pos) <= reach
-                && (b.pos[1] - t.pos[1]).abs() < 2.0
-            {
-                m.attack_cooldown = 20;
-                let damage = m.species.attack_damage();
-                if damage > 0.0 {
-                    out.push(MobEvent::Attack {
-                        target: t.id,
-                        damage,
-                    });
-                }
-            }
-        }
-        Goal::Avoid { speed, .. } => {
-            let Some(t) = target_of(m, s).cloned() else {
-                return;
-            };
-            if m.nav.is_done() || m.nav.goal.is_none() {
-                let from = cell_of(b.pos);
-                if let Some(c) = random_spot(m, s, from, 6, 3, true, Some(t.pos)) {
-                    m.nav.stop();
-                    m.goto = Some((c, *speed));
-                }
-            } else if let Some(c) = m.nav.goal {
-                m.goto = Some((c, *speed));
-            }
-        }
-        Goal::Swell => {
-            m.nav.stop();
-            let near = target_of(m, s)
-                .is_some_and(|t| dist_sq(b.pos, t.pos) <= 49.0 && can_see(m, b, s, t));
-            let dir = if m.ignited || near { 1 } else { -1 };
-            if dir != m.swell_dir {
-                m.swell_dir = dir;
-                m.dirty = true;
-            }
-            if let Some(t) = target_of(m, s) {
-                m.look = Some([t.pos[0], t.pos[1] + PLAYER_EYE, t.pos[2]]);
-            }
-        }
-        Goal::Leap => {
-            let Some(t) = target_of(m, s).cloned() else {
-                return;
-            };
-            m.look = Some([t.pos[0], t.pos[1] + PLAYER_EYE, t.pos[2]]);
-            if b.on_ground {
-                let (dx, dz) = (t.pos[0] - b.pos[0], t.pos[2] - b.pos[2]);
-                let len = (dx * dx + dz * dz).sqrt();
-                if len > 1e-7 {
-                    b.vel[0] += dx / len * 0.4 + b.vel[0] * 0.2;
-                    b.vel[2] += dz / len * 0.4 + b.vel[2] * 0.2;
-                }
-                b.vel[1] = 0.4;
-                b.on_ground = false;
-            }
-        }
-        Goal::Bow {
-            cooldown,
-            drawn,
-            range,
-        } => {
-            let Some(t) = target_of(m, s).cloned() else {
-                return;
-            };
-            let see = can_see(m, b, s, &t);
-            m.look = Some([t.pos[0], t.pos[1] + PLAYER_EYE, t.pos[2]]);
-            let d = dist_sq(b.pos, t.pos);
-            if d > *range * *range || !see {
-                m.goto = Some((cell_of(t.pos), 1.0));
-                *drawn = 0;
-            } else {
-                m.nav.stop();
-                *drawn += 1;
-                if *drawn >= *cooldown {
-                    *drawn = 0;
-                    // A skeleton's arrows get less sure with distance; harder
-                    // difficulty aims better.
-                    let sure =
-                        (0.9 - d.sqrt() / 30.0 + 0.05 * f64::from(s.difficulty)).clamp(0.2, 0.95);
-                    if m.next_f64() < sure {
-                        out.push(MobEvent::Shoot {
-                            target: t.id,
-                            damage: 2.0 + 2.0 * m.next_f64() as f32,
-                        });
-                    }
-                }
-            }
-        }
-        Goal::EatGrass { left } => {
-            *left -= 1;
-            m.nav.stop();
-            if *left == 36 {
-                out.push(MobEvent::Status(10));
-            }
-            if *left == 4 {
-                let c = cell_of(b.pos);
-                match s.world.grazing(c[0], c[1], c[2]) {
-                    Graze::Plant => out.push(MobEvent::Graze {
-                        cell: c,
-                        block: false,
-                    }),
-                    Graze::Block => out.push(MobEvent::Graze {
-                        cell: [c[0], c[1] - 1, c[2]],
-                        block: true,
-                    }),
-                    Graze::None => {}
-                }
-                if m.sheared {
-                    m.sheared = false;
-                    m.dirty = true;
-                }
-            }
-            if let Some(a) = m.look {
-                m.look = Some(a);
-            } else {
-                let e = eye(m, b.pos);
-                let yaw = f64::from(m.yaw).to_radians();
-                m.look = Some([e[0] - yaw.sin(), e[1] - 0.8, e[2] + yaw.cos()]);
-            }
-        }
-        Goal::HurtBy => {
-            // The attacker is the target while the grudge lasts.
-            if let Some((id, _)) = m.revenge
-                && s.player(id).is_some_and(|p| p.targetable)
-            {
-                m.target = Some(id);
-            }
-        }
-        Goal::Nearest { .. } => {}
-    }
-}
-
-/// Runs one list of goals (see the module comment).
-fn run_goals(list: &mut [Slot], m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent>) {
-    // Stop those that cannot go on.
-    for slot in list.iter_mut() {
-        if slot.running && !can_continue(&mut slot.goal, m, b, s) {
-            slot.running = false;
-            stop(&mut slot.goal, m);
-        }
-    }
-    // Start those that can, by priority.
-    let mut order: Vec<usize> = (0..list.len()).collect();
-    order.sort_by_key(|&i| list[i].priority);
-    for i in order {
-        if list[i].running {
-            continue;
-        }
-        let (flags, prio) = (list[i].flags, list[i].priority);
-        let blocked = list
-            .iter()
-            .any(|o| o.running && o.flags & flags != 0 && o.priority <= prio);
-        if blocked || !can_use(&mut list[i].goal, m, b, s) {
-            continue;
-        }
-        for o in list.iter_mut() {
-            if o.running && o.flags & flags != 0 {
-                o.running = false;
-                stop(&mut o.goal, m);
-            }
-        }
-        start(&mut list[i].goal, m, b, s);
-        list[i].running = true;
-    }
-    for slot in list.iter_mut() {
-        if slot.running {
-            tick_goal(&mut slot.goal, m, b, s, out);
-        }
-    }
-}
-
-// ---- body: steering and physics -----------------------------------------
-
-fn wrap_degrees(a: f32) -> f32 {
-    let a = a % 360.0;
-    if a > 180.0 {
-        a - 360.0
-    } else if a < -180.0 {
-        a + 360.0
-    } else {
-        a
-    }
-}
-
-fn approach(from: f32, to: f32, max: f32) -> f32 {
-    from + wrap_degrees(to - from).clamp(-max, max)
-}
-
-fn yaw_to(dx: f64, dz: f64) -> f32 {
-    (-dx).atan2(dz).to_degrees() as f32
-}
-
-const GRAVITY: f64 = 0.08;
-/// Blocks a tick per point of the speed attribute.
-const SPEED_SCALE: f64 = 0.9;
-
-/// Turns where the mob wants to go into movement for this tick.
-fn drive(m: &mut Mob, b: &mut Body, s: &Senses) -> Option<([f64; 2], f64)> {
-    m.nav.tick(b.pos, s.tick as u32);
-    let (cell, speed) = m.goto.take()?;
-    let from = cell_of(b.pos);
-    let p = params(m);
-    m.nav.go_to(s.world, from, cell, &p);
-    let reached = (m.species.size().0 / 2.0 + 0.2).max(0.4);
-    let (tx, ty, tz) = match m.nav.waypoint(b.pos, reached) {
-        Some(c) => (
-            f64::from(c[0]) + 0.5,
-            f64::from(c[1]),
-            f64::from(c[2]) + 0.5,
-        ),
-        None => {
-            // No path (or at its end): walk straight when the spot is near.
-            let (cx, cz) = (f64::from(cell[0]) + 0.5, f64::from(cell[2]) + 0.5);
-            if (cx - b.pos[0]).abs() + (cz - b.pos[2]).abs() > 3.0 {
-                return None;
-            }
-            (cx, f64::from(cell[1]), cz)
-        }
-    };
-    let (dx, dz) = (tx - b.pos[0], tz - b.pos[2]);
-    let len = (dx * dx + dz * dz).sqrt();
-    if len < 0.05 {
-        return None;
-    }
-    if ty > b.pos[1] + 0.1 && b.on_ground {
-        m.jump = true;
-    }
-    Some(([dx / len, dz / len], speed))
-}
-
-/// One tick of movement.
-fn physics(
-    m: &mut Mob,
-    b: &mut Body,
-    s: &Senses,
-    input: Option<([f64; 2], f64)>,
-    out: &mut Vec<MobEvent>,
-) {
-    let (w, h) = m.species.size();
-    let cell = cell_of(b.pos);
-    let in_water = s.world.liquid(cell[0], cell[1], cell[2]) == Liquid::Water
-        || s.world
-            .liquid(cell[0], (b.pos[1] + 0.4).floor() as i32, cell[2])
-            == Liquid::Water;
-    let in_lava = s.world.liquid(cell[0], cell[1], cell[2]) == Liquid::Lava;
-    if in_lava {
-        b.vel[1] = b.vel[1] * 0.5 + 0.02;
-        m.burning = m.burning.max(300);
-    }
-    let speed_attr = m.species.speed() * SPEED_SCALE;
-    // Horizontal velocity.
-    let friction = if b.on_ground { 0.546 } else { 0.91 };
-    match input {
-        Some((dir, speed)) => {
-            let want = speed_attr * speed;
-            let control = if b.on_ground || in_water { 0.5 } else { 0.1 };
-            let target = [dir[0] * want, dir[1] * want];
-            b.vel[0] += (target[0] - b.vel[0]) * control;
-            b.vel[2] += (target[1] - b.vel[2]) * control;
-            m.yaw = approach(m.yaw, yaw_to(dir[0], dir[1]), 30.0);
-        }
-        None => {
-            b.vel[0] *= friction;
-            b.vel[2] *= friction;
-        }
-    }
-    // Vertical.
-    if in_water {
-        b.vel[0] *= 0.8;
-        b.vel[2] *= 0.8;
-        b.vel[1] = b.vel[1] * 0.8 - 0.02;
-        if m.jump {
-            b.vel[1] += 0.04;
-        }
-        m.fall_distance = 0.0;
-    } else {
-        if m.jump && b.on_ground {
-            b.vel[1] = 0.42;
-        }
-        b.vel[1] = (b.vel[1] - GRAVITY) * 0.98;
-        // A chicken flaps: it falls slowly.
-        if m.species == Species::Chicken && b.vel[1] < -0.1 {
-            b.vel[1] = -0.1;
-        }
-    }
-    m.jump = false;
-    let before_y = b.pos[1];
-    let aabb = Aabb {
-        min: [b.pos[0] - w / 2.0, b.pos[1], b.pos[2] - w / 2.0],
-        max: [b.pos[0] + w / 2.0, b.pos[1] + h, b.pos[2] + w / 2.0],
-    };
-    let (moved, ground) = move_entity(aabb, b.vel, s.world);
-    let blocked_h = (moved[0] - b.vel[0]).abs() > 1e-9 || (moved[2] - b.vel[2]).abs() > 1e-9;
-    for (axis, &d) in moved.iter().enumerate() {
-        b.pos[axis] += d;
-        if (d - b.vel[axis]).abs() > 1e-9 {
-            b.vel[axis] = 0.0;
-        }
-    }
-    // Walking into a block with somewhere to go: hop over it.
-    if blocked_h && ground_or(b, ground) && input.is_some() && !m.species_climbs() {
-        m.jump = true;
-    }
-    m.climbing = m.species_climbs() && blocked_h;
-    if m.climbing {
-        b.vel[1] = b.vel[1].max(0.2);
-    } else if blocked_h && s.world.climbable(cell[0], cell[1], cell[2]) {
-        b.vel[1] = 0.2;
-    }
-    b.on_ground = ground;
-    if !ground && b.pos[1] < before_y {
-        m.fall_distance += before_y - b.pos[1];
-    } else if ground {
-        let fell = m.fall_distance;
-        m.fall_distance = 0.0;
-        if fell > 3.0 && m.species.takes_fall_damage() {
-            out.push(MobEvent::Hurt {
-                amount: (fell - 3.0).ceil() as f32,
-                kind: "minecraft:fall",
-            });
-        }
-    }
-    if m.climbing {
-        m.fall_distance = 0.0;
-    }
-}
-
-fn ground_or(b: &Body, ground: bool) -> bool {
-    b.on_ground || ground
-}
-
-impl Mob {
-    fn species_climbs(&self) -> bool {
-        self.species == Species::Spider
-    }
+/// What a mob moves with.
+#[derive(Debug)]
+pub struct Body {
+    /// The mob's entity id.
+    pub id: i32,
+    pub pos: [f64; 3],
+    pub vel: [f64; 3],
+    pub on_ground: bool,
 }
 
 /// Advances a mob one tick. Anything the world must act on goes to `out`.
@@ -1287,7 +760,8 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
     let Kind::Mob(m) = &mut entity.kind else {
         return;
     };
-    let mut body = Body {
+    let mut b = Body {
+        id: entity.id,
         pos: entity.pos,
         vel: entity.vel,
         on_ground: entity.on_ground,
@@ -1301,15 +775,21 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
             m.revenge = None;
         }
     }
+    if let Some((_, ticks)) = &mut m.hurt_by_player {
+        *ticks -= 1;
+        if *ticks <= 0 {
+            m.hurt_by_player = None;
+        }
+    }
     if let Some(left) = m.dying {
         // Dead: the body lies there for a second.
         m.dying = Some(left - 1);
-        body.vel[0] *= 0.5;
-        body.vel[2] *= 0.5;
-        physics(m, &mut body, s, None, &mut Vec::new());
-        entity.pos = body.pos;
-        entity.vel = body.vel;
-        entity.on_ground = body.on_ground;
+        b.vel[0] *= 0.5;
+        b.vel[2] *= 0.5;
+        body::physics(m, &mut b, s, None, &mut Vec::new());
+        entity.pos = b.pos;
+        entity.vel = b.vel;
+        entity.on_ground = b.on_ground;
         if left <= 1 {
             entity.removed = true;
         }
@@ -1318,272 +798,88 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
     if m.is_dead() {
         return;
     }
-    if body.pos[1] < -64.0 {
-        m.health = 0.0;
-        m.dirty = true;
+    if b.pos[1] < -128.0 {
+        out.push(MobEvent::Hurt {
+            amount: 4.0,
+            kind: "minecraft:out_of_world",
+        });
+    }
+    body::life(m, &mut b, s, out);
+    if m.is_dead() || entity.removed {
         return;
     }
-    // Sun and fire.
-    if m.species.burns_in_sun() {
-        let c = cell_of(body.pos);
-        let head = [
-            c[0],
-            (body.pos[1] + m.species.size().1).floor() as i32,
-            c[2],
-        ];
-        if s.sunny
-            && s.world.sky_light(head[0], head[1], head[2]) >= 15
-            && s.world.liquid(c[0], c[1], c[2]) == Liquid::None
-        {
-            m.burning = m.burning.max(160);
-        }
-    }
-    if m.burning > 0 {
-        let c = cell_of(body.pos);
-        if s.world.liquid(c[0], c[1], c[2]) == Liquid::Water {
-            m.burning = 0;
-        } else {
-            m.burning -= 1;
-            if m.age % 20 == 0 {
-                out.push(MobEvent::Hurt {
-                    amount: 1.0,
-                    kind: "minecraft:on_fire",
-                });
-            }
-        }
-    }
-    // Chickens lay eggs.
-    if m.species == Species::Chicken {
-        m.egg_time -= 1;
-        if m.egg_time <= 0 {
-            m.egg_time = m.rand_range(6000, 12000);
-            out.push(MobEvent::Egg);
-        }
-    }
-    // Creepers.
-    if m.species == Species::Creeper {
-        let before = m.swell;
-        if m.swell_dir > 0 || m.ignited {
-            m.swell += 1;
-        } else {
-            m.swell = (m.swell - 1).max(0);
-        }
-        if m.swell != before && (before == 0 || m.swell == 0) {
-            m.dirty = true;
-        }
-        if m.swell >= 30 {
-            out.push(MobEvent::Explode {
-                power: if m.powered { 6.0 } else { 3.0 },
-            });
-            return;
-        }
-    }
-    // Goals.
-    m.look = None;
-    let mut brain = std::mem::take(&mut m.brain);
-    run_goals(&mut brain.targets, m, &mut body, s, out);
-    run_goals(&mut brain.goals, m, &mut body, s, out);
-    m.brain = brain;
-    let aggressive = m.target.is_some();
-    m.set_aggressive(aggressive);
-    let input = drive(m, &mut body, s);
-    physics(m, &mut body, s, input, out);
-    // Where it looks: at the goal's point, else the way it goes.
-    let eye_pos = eye(m, body.pos);
-    if let Some(p) = m.look {
-        let (dx, dy, dz) = (p[0] - eye_pos[0], p[1] - eye_pos[1], p[2] - eye_pos[2]);
-        let flat = (dx * dx + dz * dz).sqrt();
-        m.head_yaw = approach(m.head_yaw, yaw_to(dx, dz), 30.0);
-        m.pitch = approach(m.pitch, (-dy).atan2(flat).to_degrees() as f32, 20.0);
-        // The body follows the head when it turns far.
-        let off = wrap_degrees(m.head_yaw - m.yaw);
-        if off.abs() > 50.0 {
-            m.yaw = approach(m.yaw, m.head_yaw, 10.0);
-        }
+    if m.no_ai {
+        body::physics(m, &mut b, s, None, out);
     } else {
-        m.head_yaw = approach(m.head_yaw, m.yaw, 10.0);
-        m.pitch = approach(m.pitch, 0.0, 10.0);
+        // Goals.
+        m.look = None;
+        let mut brain = std::mem::take(&mut m.brain);
+        goals::run(&mut brain.targets, m, &mut b, s, out);
+        goals::run(&mut brain.goals, m, &mut b, s, out);
+        m.brain = brain;
+        let aggressive = m.target.is_some();
+        m.set_aggressive(aggressive);
+        let input = body::drive(m, &mut b, s);
+        body::physics(m, &mut b, s, input, out);
+        body::turn_head(m, &b);
     }
-    entity.pos = body.pos;
-    entity.vel = body.vel;
-    entity.on_ground = body.on_ground;
+    entity.pos = b.pos;
+    entity.vel = b.vel;
+    entity.on_ground = b.on_ground;
+}
+
+/// One tick of a mob its rider moves: it lives (grows up, burns, makes
+/// sounds) but neither thinks nor moves itself.
+pub fn tick_ridden(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
+    let Kind::Mob(m) = &mut entity.kind else {
+        return;
+    };
+    let mut b = Body {
+        id: entity.id,
+        pos: entity.pos,
+        vel: [0.0; 3],
+        on_ground: true,
+    };
+    m.age += 1;
+    m.invulnerable = (m.invulnerable - 1).max(0);
+    if m.is_dead() || m.dying.is_some() {
+        return;
+    }
+    body::life(m, &mut b, s, out);
+}
+
+/// Moves a mob to a random standable spot within `range` (an enderman
+/// dodging); whether it found one.
+pub fn random_teleport(entity: &mut Entity, world: &dyn Terrain, range: i32) -> bool {
+    let Kind::Mob(m) = &mut entity.kind else {
+        return false;
+    };
+    let mut b = Body {
+        id: entity.id,
+        pos: entity.pos,
+        vel: entity.vel,
+        on_ground: entity.on_ground,
+    };
+    let s = Senses {
+        world,
+        players: &[],
+        mobs: &[],
+        items: &NoItems,
+        tick: 0,
+        difficulty: 0,
+        sunny: false,
+        raining: false,
+        nether: false,
+    };
+    let at = b.pos;
+    if goals::teleport_near(m, &mut b, &s, at, range) {
+        entity.pos = b.pos;
+        entity.vel = b.vel;
+        true
+    } else {
+        false
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::physics::Collide;
-
-    struct Flat;
-    impl Collide for Flat {
-        fn solid(&self, _: i32, y: i32, _: i32) -> bool {
-            y < 0
-        }
-    }
-    impl Terrain for Flat {
-        fn liquid(&self, _: i32, _: i32, _: i32) -> Liquid {
-            Liquid::None
-        }
-        fn hazard(&self, _: i32, _: i32, _: i32) -> bool {
-            false
-        }
-        fn sky_light(&self, _: i32, _: i32, _: i32) -> u8 {
-            15
-        }
-        fn light(&self, _: i32, _: i32, _: i32) -> u8 {
-            15
-        }
-    }
-
-    fn mob(species: Species, pos: [f64; 3]) -> Entity {
-        Entity {
-            id: 1,
-            uuid: 1,
-            kind: Kind::Mob(Box::new(Mob::new(species, 0x1234_5678_9abc))),
-            pos,
-            vel: [0.0; 3],
-            on_ground: false,
-            age: 0,
-            removed: false,
-            tags: Vec::new(),
-        }
-    }
-
-    fn run(e: &mut Entity, players: &[Target], ticks: u64, sunny: bool) -> Vec<MobEvent> {
-        let mut out = Vec::new();
-        for t in 0..ticks {
-            let s = Senses {
-                world: &Flat,
-                players,
-                tick: t,
-                difficulty: 2,
-                sunny,
-            };
-            tick(e, &s, &mut out);
-        }
-        out
-    }
-
-    fn player(pos: [f64; 3]) -> Target {
-        Target {
-            id: 100,
-            uuid: 100,
-            pos,
-            targetable: true,
-        }
-    }
-
-    #[test]
-    fn mobs_land_and_stay_on_the_ground() {
-        let mut e = mob(Species::Cow, [0.5, 5.0, 0.5]);
-        run(&mut e, &[], 40, false);
-        assert!(e.on_ground);
-        assert!((e.pos[1]).abs() < 1e-6, "{:?}", e.pos);
-    }
-
-    #[test]
-    fn a_zombie_walks_to_a_player_and_bites() {
-        let mut e = mob(Species::Zombie, [0.5, 0.0, 0.5]);
-        let p = player([8.5, 0.0, 0.5]);
-        let out = run(&mut e, std::slice::from_ref(&p), 200, false);
-        assert!(e.pos[0] > 5.0, "{:?}", e.pos);
-        assert!(
-            out.iter()
-                .any(|m| matches!(m, MobEvent::Attack { target: 100, .. })),
-            "{out:?}"
-        );
-    }
-
-    #[test]
-    fn zombies_burn_in_the_sun_and_creeper_fuse_blows() {
-        let mut z = mob(Species::Zombie, [0.5, 0.0, 0.5]);
-        let out = run(&mut z, &[], 100, true);
-        assert!(out.iter().any(|m| matches!(
-            m,
-            MobEvent::Hurt {
-                kind: "minecraft:on_fire",
-                ..
-            }
-        )));
-        let mut c = mob(Species::Creeper, [0.5, 0.0, 0.5]);
-        let p = player([2.5, 0.0, 0.5]);
-        let out = run(&mut c, &[p], 120, false);
-        assert!(
-            out.iter()
-                .any(|m| matches!(m, MobEvent::Explode { power } if *power == 3.0)),
-            "{out:?}"
-        );
-    }
-
-    #[test]
-    fn a_hurt_animal_panics_and_runs() {
-        let mut e = mob(Species::Cow, [0.5, 0.0, 0.5]);
-        run(&mut e, &[], 5, false);
-        if let Kind::Mob(m) = &mut e.kind {
-            assert!(m.hurt(2.0, Some(100)));
-            assert!(!m.hurt(1.0, Some(100)));
-        }
-        let start = e.pos;
-        run(&mut e, &[player([0.5, 0.0, -3.5])], 60, false);
-        let moved = (e.pos[0] - start[0]).hypot(e.pos[2] - start[2]);
-        assert!(moved > 2.0, "{moved}");
-    }
-
-    #[test]
-    fn hurt_has_an_invulnerability_window() {
-        let mut m = Mob::new(Species::Sheep, 7);
-        assert!(m.hurt(4.0, None));
-        assert!(!m.hurt(3.0, None));
-        assert!(m.hurt(6.0, None));
-        assert_eq!(m.health, 2.0);
-        assert!(m.hurt(0.1, None) || m.invulnerable > 0);
-    }
-
-    #[test]
-    fn higher_priority_goals_preempt_lower_ones() {
-        let mut m = Mob::new(Species::Cow, 99);
-        let mut out = Vec::new();
-        let mut b = Body {
-            pos: [0.5, 0.0, 0.5],
-            vel: [0.0; 3],
-            on_ground: true,
-        };
-        let s = Senses {
-            world: &Flat,
-            players: &[],
-            tick: 0,
-            difficulty: 2,
-            sunny: false,
-        };
-        let mut list = vec![
-            Slot {
-                priority: 6,
-                flags: MOVE,
-                goal: Goal::Stroll {
-                    speed: 1.0,
-                    interval: 1,
-                    avoid_water: false,
-                },
-                running: false,
-            },
-            Slot {
-                priority: 1,
-                flags: MOVE,
-                goal: Goal::Panic { speed: 2.0 },
-                running: false,
-            },
-        ];
-        run_goals(&mut list, &mut m, &mut b, &s, &mut out);
-        assert!(list[0].running && !list[1].running);
-        m.revenge = Some((-1, 100));
-        run_goals(&mut list, &mut m, &mut b, &s, &mut out);
-        assert!(list[1].running && !list[0].running);
-    }
-
-    #[test]
-    fn species_round_trip() {
-        for s in Species::ALL {
-            assert_eq!(Species::from_id(s.id()), Some(s));
-        }
-    }
-}
+mod tests;
