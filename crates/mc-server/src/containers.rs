@@ -407,7 +407,14 @@ pub fn open(ctx: &ServerContext, uuid: u128, p: Position, kind: Kind) -> Vec<Opt
     if !open.viewers.contains(&uuid) {
         open.viewers.push(uuid);
     }
-    open.slots.clone()
+    let slots = open.slots.clone();
+    drop(all);
+    // Trapped chests give power by how many look in.
+    ctx.container_updates
+        .lock()
+        .expect("container updates lock")
+        .push(p);
+    slots
 }
 
 /// Applies the client's view of changed container slots (0..size). Returns
@@ -476,6 +483,11 @@ pub fn close(ctx: &ServerContext, uuid: u128, p: Position) {
             store(ctx, p, open);
             all.remove(&key(p));
         }
+        drop(all);
+        ctx.container_updates
+            .lock()
+            .expect("container updates lock")
+            .push(p);
     }
 }
 

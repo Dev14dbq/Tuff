@@ -155,8 +155,8 @@ pub fn shape_updated(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, n
 /// cobblestone (flowing); over soul soil, touching blue ice, into basalt.
 /// It fizzes. Returns whether it did.
 fn harden_lava(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> bool {
-    let soul_soil = ctx.shapes.block_name(level.block(p.offset(Dir::Down)))
-        == Some("minecraft:soul_soil");
+    let soul_soil =
+        ctx.shapes.block_name(level.block(p.offset(Dir::Down))) == Some("minecraft:soul_soil");
     let mut into = None;
     for d in [Dir::Up, Dir::North, Dir::South, Dir::West, Dir::East] {
         let next = level.block(p.offset(d));

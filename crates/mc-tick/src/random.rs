@@ -28,6 +28,8 @@ pub enum Behaviour {
     BambooSapling,
     /// Pointed dripstone drips into cauldrons.
     Dripstone,
+    /// Glowing redstone ore goes dark.
+    RedstoneOre,
     NetherWart,
     SweetBerries,
     Cocoa,
@@ -57,6 +59,7 @@ impl Behaviour {
             "bamboo" => Self::Bamboo,
             "bamboo_sapling" => Self::BambooSapling,
             "pointed_dripstone" => Self::Dripstone,
+            "redstone_ore" | "deepslate_redstone_ore" => Self::RedstoneOre,
             "nether_wart" => Self::NetherWart,
             "sweet_berry_bush" => Self::SweetBerries,
             "cocoa" => Self::Cocoa,
@@ -123,6 +126,12 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut 
             }
         }
         Behaviour::Dripstone => crate::cauldron::dripstone_tick(level, ctx, p, rng),
+        Behaviour::RedstoneOre => {
+            if ctx.shapes.property(state, "lit") == Some("true") {
+                let dark = ctx.shapes.with(state, "lit", "false");
+                set_block(level, ctx, p, dark, Flags::ALL);
+            }
+        }
         Behaviour::NetherWart => {
             let age = int(ctx, state, "age");
             if age < 3 && rng.below(10) == 0 {

@@ -382,7 +382,7 @@ fn run_block_events(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
 
 /// Comparators look at containers whose contents changed (even while the
 /// game is frozen: they only schedule their ticks).
-fn containers_changed(ctx: &ServerContext) {
+pub(crate) fn containers_changed(ctx: &ServerContext) {
     let mut changed = std::mem::take(&mut *lock(&ctx.container_updates));
     // Entities holding items have no comparators next to them.
     changed.retain(|&p| crate::containers::entity_of(p).is_none());
@@ -395,7 +395,22 @@ fn containers_changed(ctx: &ServerContext) {
     let mut level = crate::level::WorldLevel::new(ctx);
     let logic = level.logic();
     for p in changed {
-        mc_tick::redstone::container_changed(&mut level, logic, crate::level::to_pos(p));
+        let at = crate::level::to_pos(p);
+        mc_tick::redstone::container_changed(&mut level, logic, at);
+        // A trapped chest's power follows its viewers.
+        if ctx
+            .world
+            .block(p, &ctx.data.blocks)
+            .and_then(|s| ctx.data.blocks.block_name(s))
+            == Some("minecraft:trapped_chest")
+        {
+            mc_tick::redstone::update_neighbors_at(&mut level, logic, at);
+            mc_tick::redstone::update_neighbors_at(
+                &mut level,
+                logic,
+                at.offset(mc_tick::Dir::Down),
+            );
+        }
     }
     let changes = level.into_changes();
     if !changes.is_empty() {

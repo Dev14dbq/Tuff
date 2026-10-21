@@ -265,7 +265,11 @@ fn along(
         e.pos[2] + e.vel[2].clamp(-max, max),
     ];
     let drag = if occupied { 0.997 } else { 0.96 };
-    let wet = if hits::in_water(ctx, e.pos) { 0.95 } else { 1.0 };
+    let wet = if hits::in_water(ctx, e.pos) {
+        0.95
+    } else {
+        1.0
+    };
     e.vel[0] = e.vel[0].clamp(-max, max) * drag * wet;
     e.vel[2] = e.vel[2].clamp(-max, max) * drag * wet;
     // Stops against a block that is not a rail ahead of it, in its way.

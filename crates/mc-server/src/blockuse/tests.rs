@@ -346,6 +346,62 @@ fn lava_over_soul_soil_by_blue_ice_turns_to_basalt() {
     };
     put(&ctx, Position::new(10, -60, 0), "minecraft:soul_soil", &[]);
     put(&ctx, Position::new(11, -59, 0), "minecraft:blue_ice", &[]);
-    put(&ctx, Position::new(10, -59, 0), "minecraft:lava", &[("level", "2")]);
-    assert_eq!(block(&ctx, Position::new(10, -59, 0)), "minecraft:basalt[axis=y]");
+    put(
+        &ctx,
+        Position::new(10, -59, 0),
+        "minecraft:lava",
+        &[("level", "2")],
+    );
+    assert_eq!(
+        block(&ctx, Position::new(10, -59, 0)),
+        "minecraft:basalt[axis=y]"
+    );
+}
+
+#[test]
+fn copper_bulbs_flip_and_trapped_chests_power() {
+    let Some((ctx, _)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let bulb = Position::new(20, -60, 0);
+    let lever = Position::new(21, -60, 0);
+    put(&ctx, bulb, "minecraft:copper_bulb", &[]);
+    put(&ctx, lever, "minecraft:lever", &[("face", "floor")]);
+    let toggle = |ctx: &ServerContext| {
+        let mut level = WorldLevel::new(ctx);
+        let logic = level.logic();
+        mc_tick::use_block(&mut level, logic, crate::level::to_pos(lever));
+    };
+    toggle(&ctx);
+    assert!(
+        block(&ctx, bulb).contains("lit=true"),
+        "{}",
+        block(&ctx, bulb)
+    );
+    toggle(&ctx);
+    assert!(block(&ctx, bulb).contains("lit=true,powered=false"));
+    toggle(&ctx);
+    assert!(block(&ctx, bulb).contains("lit=false,powered=true"));
+
+    // A trapped chest with a viewer powers dust beside it.
+    let chest = Position::new(30, -60, 0);
+    let dust = Position::new(31, -60, 0);
+    put(&ctx, chest, "minecraft:trapped_chest", &[]);
+    put(&ctx, dust, "minecraft:redstone_wire", &[]);
+    let kind = crate::containers::kind_of("minecraft:trapped_chest").unwrap();
+    crate::containers::open(&ctx, 7, chest, kind);
+    crate::tick::containers_changed(&ctx);
+    assert!(
+        block(&ctx, dust).contains("power=1,"),
+        "{}",
+        block(&ctx, dust)
+    );
+    crate::containers::close(&ctx, 7, chest);
+    crate::tick::containers_changed(&ctx);
+    assert!(
+        block(&ctx, dust).contains("power=0,"),
+        "{}",
+        block(&ctx, dust)
+    );
 }

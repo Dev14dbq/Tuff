@@ -352,6 +352,34 @@ impl Level for WorldLevel<'_> {
             .count() as u32
     }
 
+    fn block_entity_signal(&self, p: BlockPos) -> Option<u8> {
+        crate::blockuse::comparator_signal(self.ctx, to_position(p))
+    }
+
+    fn viewers(&self, p: BlockPos) -> u8 {
+        self.ctx
+            .containers
+            .lock()
+            .expect("containers lock")
+            .get(&(p.x, p.y, p.z))
+            .map_or(0, |o| o.viewers.len().min(255) as u8)
+    }
+
+    fn sound(&mut self, name: &str, p: BlockPos) {
+        crate::fx::sound(
+            self.ctx,
+            name,
+            crate::fx::category::BLOCKS,
+            [
+                f64::from(p.x) + 0.5,
+                f64::from(p.y) + 0.5,
+                f64::from(p.z) + 0.5,
+            ],
+            1.0,
+            1.0,
+        );
+    }
+
     fn minecart_container_signal(&self, p: BlockPos) -> Option<u8> {
         let (lo, hi) = (
             [f64::from(p.x), f64::from(p.y), f64::from(p.z)],

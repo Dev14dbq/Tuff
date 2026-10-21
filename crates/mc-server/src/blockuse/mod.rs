@@ -26,6 +26,80 @@ use crate::tick::lock;
 
 const CREATIVE: i32 = 1;
 
+/// What a comparator reads from a block entity: the slot of a chiseled
+/// bookshelf used last (plus one), how far a lectern's book is open, the
+/// song in a jukebox.
+pub fn comparator_signal(ctx: &ServerContext, p: Position) -> Option<u8> {
+    let blocks = &ctx.data.blocks;
+    let state = ctx.world.block(p, blocks)?;
+    let name = blocks.block_name(state)?;
+    if !matches!(
+        name,
+        "minecraft:chiseled_bookshelf" | "minecraft:lectern" | "minecraft:jukebox"
+    ) {
+        return None;
+    }
+    let be = ctx.world.block_entity(p, blocks);
+    let data = be.as_ref().map(|be| &be.data);
+    let int = |key: &str| match data.and_then(|d| d.get(key)) {
+        Some(Tag::Int(v)) => Some(*v),
+        _ => None,
+    };
+    Some(match name {
+        "minecraft:chiseled_bookshelf" => (int("last_interacted_slot").unwrap_or(-1) + 1) as u8,
+        "minecraft:lectern" => {
+            let Some(Tag::Compound(book)) = data.and_then(|d| d.get("Book")) else {
+                return Some(0);
+            };
+            let pages = match book.get("components") {
+                Some(Tag::Compound(c)) => [
+                    "minecraft:written_book_content",
+                    "minecraft:writable_book_content",
+                ]
+                .iter()
+                .find_map(|k| match c.get(k) {
+                    Some(Tag::Compound(content)) => match content.get("pages") {
+                        Some(Tag::List(l)) => Some(l.len()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .unwrap_or(0),
+                _ => 0,
+            };
+            let page = int("Page").unwrap_or(0).max(0) as f64;
+            let share = if pages > 1 {
+                page / (pages - 1) as f64
+            } else {
+                1.0
+            };
+            (share * 14.0).floor() as u8 + 1
+        }
+        _ => {
+            let Some(Tag::Compound(record)) = data.and_then(|d| d.get("RecordItem")) else {
+                return Some(0);
+            };
+            let Some(Tag::String(id)) = record.get("id") else {
+                return Some(0);
+            };
+            let song = ctx
+                .items
+                .id(id)
+                .and_then(|i| ctx.items.get(i))
+                .and_then(|i| i.jukebox_song.clone())?;
+            let file = ctx
+                .data
+                .data_pack()
+                .root
+                .join("minecraft/jukebox_song")
+                .join(format!("{}.json", song.trim_start_matches("minecraft:")));
+            let json: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+            json["comparator_output"].as_u64().unwrap_or(0).min(15) as u8
+        }
+    })
+}
+
 /// One click: who, with what, on which block.
 pub(crate) struct Click<'a> {
     pub ctx: &'a ServerContext,

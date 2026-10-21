@@ -46,6 +46,9 @@ pub trait Level {
     /// A wet sponge dried at `p`: it hisses and steams.
     fn sponge_dried(&mut self, _p: BlockPos) {}
 
+    /// A block sound (`block.copper_bulb.turn_on`...) at `p`.
+    fn sound(&mut self, _name: &str, _p: BlockPos) {}
+
     /// A world event (sound and particles clients play) at `p`.
     fn level_event(&mut self, _event: i32, _p: BlockPos, _data: i32) {}
 
@@ -108,6 +111,18 @@ pub trait Level {
     /// if it is not a container).
     fn container_signal(&self, _p: BlockPos) -> Option<u8> {
         None
+    }
+
+    /// What a comparator reads from the block entity at `p` when the block
+    /// state alone does not tell (chiseled bookshelves, lecterns,
+    /// jukeboxes); `None` to read it as a container.
+    fn block_entity_signal(&self, _p: BlockPos) -> Option<u8> {
+        None
+    }
+
+    /// How many players have the container at `p` open.
+    fn viewers(&self, _p: BlockPos) -> u8 {
+        0
     }
 
     /// The signal a comparator at `p` holds (kept in its block entity).
