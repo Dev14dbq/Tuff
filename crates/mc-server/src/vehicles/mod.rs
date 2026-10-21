@@ -274,6 +274,13 @@ pub fn destroy(ctx: &ServerContext, e: &mut Entity, fresh: &mut Vec<Entity>, dro
         return;
     };
     eject(ctx, e.id, v);
+    // With `entity_drops` off neither it nor what it held drops.
+    let mut kept = Vec::new();
+    let fresh = if ctx.game_rule_bool("entity_drops") {
+        fresh
+    } else {
+        &mut kept
+    };
     if drop_item {
         fresh.extend(crate::decor::dropped(ctx, e.pos, &item_of(&v.craft), 1, 0));
     }

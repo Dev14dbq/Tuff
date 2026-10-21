@@ -1279,6 +1279,7 @@ async fn play(
                             if shown {
                                 crate::vitals::announce_death(&ctx, uuid, message);
                             }
+                            crate::vitals::drop_pearls(&ctx, uuid);
                         } else if visible.remove(&who) {
                             writer.queue(&play::RemoveEntities { entity_ids: vec![dead] })?;
                         }

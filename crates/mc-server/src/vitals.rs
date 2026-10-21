@@ -764,6 +764,28 @@ pub fn drop_death_xp(ctx: &ServerContext, uuid: u128, game_mode: i32, pos: [f64;
     }
 }
 
+/// With `ender_pearls_vanish_on_death` on, the ender pearls a dying
+/// player threw are gone.
+pub fn drop_pearls(ctx: &ServerContext, uuid: u128) {
+    if !ctx.game_rule_bool("ender_pearls_vanish_on_death") {
+        return;
+    }
+    let mut removed = Vec::new();
+    for e in lock(&ctx.entities).iter_mut() {
+        if let mc_entity::Kind::Projectile(p) = &e.kind
+            && matches!(p.shot, mc_entity::extra::Shot::Pearl)
+            && p.owner == Some(uuid)
+            && !e.removed
+        {
+            e.removed = true;
+            removed.push(e.id);
+        }
+    }
+    if !removed.is_empty() {
+        let _ = ctx.events.send(Event::EntitiesRemoved(removed));
+    }
+}
+
 /// Tells the players a death message, as the dead player's team allows:
 /// everyone, only their team, everyone else, or no one.
 pub fn announce_death(ctx: &ServerContext, uuid: u128, message: Tag) {
