@@ -30,6 +30,9 @@ pub enum Fx {
     Link(play::SetEntityLink),
     Passengers(play::SetPassengers),
     Motion(play::SetEntityMotion),
+    Damage(play::DamageEvent),
+    Swing(play::SwingAnimation),
+    Data(play::SetEntityData),
 }
 
 impl Fx {
@@ -41,6 +44,9 @@ impl Fx {
             Fx::Link(p) => Some(p.entity_id),
             Fx::Passengers(p) => Some(p.vehicle),
             Fx::Motion(p) => Some(p.entity_id),
+            Fx::Damage(p) => Some(p.entity_id),
+            Fx::Swing(p) => Some(p.entity_id),
+            Fx::Data(p) => Some(p.entity_id),
             _ => None,
         }
     }
@@ -209,7 +215,10 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
         Kind::Projectile(p) => {
             s.yaw = p.yaw;
             s.pitch = p.pitch;
-            s.data = owner_id(p.owner);
+            s.data = match p.mob {
+                Some((id, _)) => id,
+                None => owner_id(p.owner),
+            };
             let item = |name: &str| {
                 ctx.items.id(name).map(|i| {
                     (
@@ -242,6 +251,7 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                 Shot::Firework(_) => {
                     s.meta.extend(item("minecraft:firework_rocket"));
                 }
+                Shot::Fireball { .. } => {}
                 Shot::Cloud { radius, .. } => {
                     s.meta.push((8, MetadataValue::Float(*radius)));
                 }
@@ -325,7 +335,10 @@ pub fn type_id(ctx: &ServerContext, name: &str) -> Option<i32> {
 pub fn type_name(kind: &Kind) -> Option<String> {
     Some(match kind {
         Kind::Projectile(p) => match &p.shot {
+            Shot::Arrow(a) if a.trident => "trident",
             Shot::Arrow(a) if a.spectral => "spectral_arrow",
+            Shot::Fireball { small: true } => "small_fireball",
+            Shot::Fireball { small: false } => "fireball",
             Shot::Arrow(_) => "arrow",
             Shot::Snowball => "snowball",
             Shot::Egg => "egg",

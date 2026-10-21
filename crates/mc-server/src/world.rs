@@ -849,6 +849,12 @@ impl World {
     }
 
     /// Whether the chunk is in memory (nothing is loaded to answer).
+    /// The world seed, read from `level.dat` (`None` for the flat test
+    /// world).
+    pub fn seed(&self) -> Option<i64> {
+        self.folder.as_deref().and_then(crate::generation::seed_of)
+    }
+
     pub fn chunk_loaded(&self, x: i32, z: i32) -> bool {
         self.chunks
             .lock()

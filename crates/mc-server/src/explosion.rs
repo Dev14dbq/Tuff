@@ -1030,8 +1030,21 @@ fn explode_one(
                 continue;
             }
         }
-        if let Kind::Mob(m) = &mut e.kind {
-            m.hurt(damage(impact, reach), None);
+        if matches!(e.kind, Kind::Mob(_)) {
+            let mut h = crate::mobs::hurt::Harm::new(
+                damage(impact, reach),
+                if blast.owner.is_some() {
+                    "minecraft:player_explosion"
+                } else {
+                    "minecraft:explosion"
+                },
+            );
+            h.player = blast.owner;
+            h.by = blast
+                .owner
+                .and_then(|o| lock(&ctx.players).get(&o).map(|p| p.entity_id));
+            h.direct = Some(blast.source);
+            crate::mobs::hurt::harm(ctx, e, &h);
         }
         for (v, d) in e.vel.iter_mut().zip(dir) {
             *v += d * impact;

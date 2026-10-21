@@ -553,11 +553,10 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         .collect();
     let targets: Vec<crate::hits::Target> = entities
         .iter()
-        .filter(|e| {
-            matches!(
-                e.kind,
-                mc_entity::Kind::Hung(_) | mc_entity::Kind::Vehicle(_)
-            )
+        .filter(|e| match &e.kind {
+            mc_entity::Kind::Hung(_) | mc_entity::Kind::Vehicle(_) => true,
+            mc_entity::Kind::Mob(m) => m.dying.is_none(),
+            _ => false,
         })
         .map(|e| crate::hits::Target {
             id: e.id,
@@ -587,11 +586,16 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             mc_entity::Kind::Projectile(_) | mc_entity::Kind::Hung(_) | mc_entity::Kind::Vehicle(_)
         );
         if extra {
+            let shooter = match &entity.kind {
+                mc_entity::Kind::Projectile(p) => p.mob,
+                _ => None,
+            };
             let mut t = crate::hits::Tick {
                 ctx,
                 players: &whos,
                 targets: &targets,
                 out: &mut out,
+                shooter,
             };
             match entity.kind {
                 mc_entity::Kind::Projectile(_) => crate::projectiles::tick(&mut t, entity),
@@ -710,6 +714,15 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     }
     level.entity_boxes = None;
     blasts.append(&mut out.blasts);
+    if let Some(fire) = ctx.data.blocks.default_state("minecraft:fire") {
+        use mc_tick::Level as _;
+        for c in std::mem::take(&mut out.fires) {
+            let at = mc_tick::BlockPos::new(c[0], c[1], c[2]);
+            if level.block(at) == ctx.shapes.air() {
+                mc_tick::set_block(level, logic, at, fire, mc_tick::Flags::ALL);
+            }
+        }
+    }
     if entities
         .iter()
         .any(|e| e.age % 20 == 0 && matches!(e.kind, mc_entity::Kind::ExperienceOrb { .. }))
