@@ -1244,9 +1244,11 @@ mod hub_tests {
         let mut rb = b.subscribe();
         a.send(Event::Chat(Tag::String("hi".into()))).unwrap();
         a.send(Event::Border).unwrap();
-        assert!(matches!(ra.recv().await, Ok(Event::Chat(_))));
+        // Local and global events may arrive in either order.
+        let mut got: Vec<_> = vec![ra.recv().await.unwrap(), ra.recv().await.unwrap()];
+        got.sort_by_key(|e| e.is_global());
+        assert!(matches!(got[0], Event::Border) && matches!(got[1], Event::Chat(_)));
         assert!(matches!(rb.recv().await, Ok(Event::Chat(_))));
-        assert!(matches!(ra.recv().await, Ok(Event::Border)));
         assert!(rb.try_changed().is_none());
         // Aimed at another dimension.
         a.send(Event::In(1, Box::new(Event::Border))).unwrap();
