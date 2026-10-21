@@ -509,6 +509,15 @@ impl Level for WorldLevel<'_> {
         to: BlockPos,
         to_side: mc_tick::Dir,
     ) -> bool {
+        if let Some(done) = crate::hoppers::composter_transfer(
+            self,
+            to_position(from),
+            from_side,
+            to_position(to),
+            to_side,
+        ) {
+            return done;
+        }
         crate::hoppers::transfer(
             self.ctx,
             to_position(from),

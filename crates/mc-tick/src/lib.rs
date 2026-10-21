@@ -2,6 +2,7 @@
 //! later scheduled ticks, block events and redstone (ROADMAP Ф3).
 
 pub mod cauldron;
+pub mod composter;
 pub mod dir;
 pub mod facts;
 pub mod fast;

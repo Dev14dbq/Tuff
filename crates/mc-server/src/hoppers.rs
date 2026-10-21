@@ -589,16 +589,36 @@ fn transfer_from_slot(
     dst: Store,
     side: Dir,
 ) -> bool {
-    let (to, to_kind, to_name) = (dst.at, dst.kind, dst.name);
     let src = containers::slots(ctx, from, from_kind);
     let src_comps = containers::components(ctx, from, from_kind);
-    let mut dst = containers::slots(ctx, to, to_kind);
-    let dst_comps = containers::components(ctx, to, to_kind);
     let Some(stack) = src[slot].clone() else {
         return false;
     };
+    if !insert_one(ctx, dst, side, &stack, src_comps.get(&slot)) {
+        return false;
+    }
+    let left = (stack.count > 1).then(|| ItemStack {
+        count: stack.count - 1,
+        ..stack.clone()
+    });
+    let kept = left.is_none().then(|| Tag::Compound(Default::default()));
+    containers::put_with(ctx, from, from_kind, &[(slot, left, kept)]);
+    true
+}
+
+/// Puts one of `stack` (with `comps`) into `dst` through its face `side`,
+/// onto a matching stack first. `false` if there is no room.
+fn insert_one(
+    ctx: &ServerContext,
+    dst: Store,
+    side: Dir,
+    stack: &ItemStack,
+    comps: Option<&Tag>,
+) -> bool {
+    let (to, to_kind, to_name) = (dst.at, dst.kind, dst.name);
+    let mut dst = containers::slots(ctx, to, to_kind);
+    let dst_comps = containers::components(ctx, to, to_kind);
     let into = sided_slots(to_name, dst.len(), side, true);
-    let comps = src_comps.get(&slot);
     let max = ctx.items.max_stack(stack.item);
     let merge = into.iter().copied().find(|&i| {
         dst[i]
@@ -625,13 +645,74 @@ fn transfer_from_slot(
             comps.cloned().or(Some(Tag::Compound(Default::default()))),
         )],
     );
-    let left = (stack.count > 1).then(|| ItemStack {
-        count: stack.count - 1,
-        ..stack.clone()
-    });
-    let kept = left.is_none().then(|| Tag::Compound(Default::default()));
-    containers::put_with(ctx, from, from_kind, &[(slot, left, kept)]);
     true
+}
+
+/// Hoppers and composters (minecraft.wiki, "Composter" → "Hopper"): one
+/// above puts compostable items in from the top, one below takes the bone
+/// meal out. `None` if neither end is a composter.
+pub fn composter_transfer(
+    level: &mut crate::level::WorldLevel,
+    from: Position,
+    from_side: Dir,
+    to: Position,
+    to_side: Dir,
+) -> Option<bool> {
+    let ctx = level.context();
+    let logic = level.logic();
+    let blocks = &ctx.data.blocks;
+    let composter = |p: Position| {
+        ctx.world
+            .block(p, blocks)
+            .filter(|&s| blocks.block_name(s) == Some("minecraft:composter"))
+    };
+    let layers = |s: u32| -> i32 {
+        blocks
+            .property(s, "level")
+            .and_then(|l| l.parse().ok())
+            .unwrap_or(0)
+    };
+    if let Some(state) = composter(to) {
+        if to_side != Dir::Up || layers(state) >= 7 {
+            return Some(false);
+        }
+        let Some(src) = store_at(ctx, from) else {
+            return Some(false);
+        };
+        let slots = containers::slots(ctx, src.at, src.kind);
+        let pick = sided_slots(src.name, slots.len(), from_side, false)
+            .into_iter()
+            .find_map(|i| {
+                let s = slots[i].as_ref()?;
+                let chance = crate::useblocks::compost_chance(ctx.items.name(s.item)?);
+                (chance > 0).then_some((i, s.clone(), chance))
+            });
+        let Some((slot, stack, chance)) = pick else {
+            return Some(false);
+        };
+        let left = (stack.count > 1).then(|| ItemStack {
+            count: stack.count - 1,
+            ..stack
+        });
+        let kept = left.is_none().then(|| Tag::Compound(Default::default()));
+        containers::put_with(ctx, src.at, src.kind, &[(slot, left, kept)]);
+        let success = crate::util::random_u64() % 100 < u64::from(chance);
+        mc_tick::composter::add(level, logic, crate::level::to_pos(to), state, success);
+        return Some(true);
+    }
+    let state = composter(from)?;
+    if from_side != Dir::Down || layers(state) != 8 {
+        return Some(false);
+    }
+    let (Some(dst), Some(bone_meal)) = (store_at(ctx, to), ctx.items.id("minecraft:bone_meal"))
+    else {
+        return Some(false);
+    };
+    if !insert_one(ctx, dst, to_side, &ItemStack::new(bone_meal, 1), None) {
+        return Some(false);
+    }
+    mc_tick::composter::empty(level, logic, crate::level::to_pos(from), state);
+    Some(true)
 }
 
 /// A hopper exists at `p`: it gets ticked.

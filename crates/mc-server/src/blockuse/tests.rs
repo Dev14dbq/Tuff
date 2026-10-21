@@ -405,3 +405,39 @@ fn copper_bulbs_flip_and_trapped_chests_power() {
         block(&ctx, dust)
     );
 }
+
+#[test]
+fn hoppers_feed_and_empty_composters() {
+    let Some((ctx, _)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let composter = Position::new(40, -59, 0);
+    let above = Position::new(40, -58, 0);
+    let below = Position::new(40, -60, 0);
+    put(&ctx, composter, "minecraft:composter", &[("level", "6")]);
+    put(&ctx, above, "minecraft:hopper", &[("facing", "down")]);
+    put(&ctx, below, "minecraft:hopper", &[]);
+    let hopper = crate::containers::kind_of("minecraft:hopper").unwrap();
+    let cake = ctx.items.id("minecraft:cake").unwrap();
+    crate::containers::put(&ctx, above, hopper, &[(0, Some(ItemStack::new(cake, 1)))]);
+    let mut level = WorldLevel::new(&ctx);
+    let logic = level.logic();
+    // Cake always composts: the last layer.
+    mc_tick::hopper::tick(&mut level, logic, crate::level::to_pos(above));
+    drop(level);
+    assert_eq!(block(&ctx, composter), "minecraft:composter[level=7]");
+    let mut level = WorldLevel::new(&ctx);
+    let kind = ctx.shapes.block_index(mc_tick::Level::block(
+        &level,
+        crate::level::to_pos(composter),
+    ));
+    mc_tick::composter::block_tick(&mut level, logic, crate::level::to_pos(composter), kind);
+    mc_tick::hopper::tick(&mut level, logic, crate::level::to_pos(below));
+    drop(level);
+    assert_eq!(block(&ctx, composter), "minecraft:composter[level=0]");
+    let got = crate::containers::slots(&ctx, below, hopper)[0]
+        .clone()
+        .map(|s| s.item);
+    assert_eq!(got, ctx.items.id("minecraft:bone_meal"));
+}
