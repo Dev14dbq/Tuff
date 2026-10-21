@@ -57,6 +57,9 @@ pub fn build(
     yaw: f32,
 ) -> Option<(Kind, Option<[f64; 3]>)> {
     let n = name.trim_start_matches("minecraft:");
+    if let Some(species) = mc_entity::Species::from_id(name) {
+        return Some((crate::mobs::new_mob(ctx, species, at).kind, None));
+    }
     let shot = |shot: Shot| {
         Some((
             Kind::Projectile(Projectile {

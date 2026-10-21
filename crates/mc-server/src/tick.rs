@@ -299,6 +299,7 @@ pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     }
     run_block_events(ctx, &mut level);
     tick_entities(ctx, &mut level);
+    crate::mobs::tick(ctx, &mut level);
     press_plates(ctx, &mut level);
     mc_tick::pistons::tick(&mut level, logic);
     crate::hoppers::tick(ctx, &mut level);
@@ -626,6 +627,8 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                     fuses.push(crate::explosion::fuse_data(entity.id, fuse));
                 }
             }
+            // Mobs have their own tick.
+            mc_entity::Kind::Mob(_) => {}
             mc_entity::Kind::ExperienceOrb { .. } => {
                 mc_entity::fall_with(entity, &Solid(level), mc_entity::ORB_GRAVITY);
                 if entity.on_ground {

@@ -195,6 +195,7 @@ fn roll(r: &mut Run, source: &[&str]) -> Result<Rolled> {
             cx.origin = Some(t.pos());
             cx.this = Some(Ent {
                 kind: t.kind().to_owned(),
+                ..Ent::default()
             });
             let drops = match r.ctx.loot.table(&id).cloned() {
                 Some(table) => r.ctx.loot.roll(&env, &table, &cx),

@@ -33,6 +33,7 @@ mod level;
 mod lists;
 pub mod logs;
 mod loot;
+mod mobs;
 mod packs;
 mod pipeline;
 mod players;

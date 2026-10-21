@@ -8,8 +8,11 @@
 //! Blocks collide as full cubes for now; shapes come later.
 
 pub mod extra;
+pub mod mob;
+pub mod nav;
 pub mod physics;
 
+pub use mob::{Mob, Species};
 pub use physics::{Aabb, Collide, move_entity};
 
 /// What kind of entity, with its own state.
@@ -40,6 +43,8 @@ pub enum Kind {
         /// The player who lit it.
         owner: Option<u128>,
     },
+    /// A creature with goals: animals and monsters.
+    Mob(Box<Mob>),
     /// Experience: `count` merged orbs of `value` points each.
     ExperienceOrb { value: i32, count: i32 },
 }
@@ -78,6 +83,7 @@ impl Entity {
         match &self.kind {
             Kind::FallingBlock { .. } | Kind::Tnt { .. } => (0.98, 0.98),
             Kind::Item { .. } => (0.25, 0.25),
+            Kind::Mob(m) => m.species.size(),
             Kind::ExperienceOrb { .. } => (0.5, 0.5),
             Kind::Projectile(p) => match &p.shot {
                 extra::Shot::Arrow(_) => (0.5, 0.5),

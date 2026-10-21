@@ -255,6 +255,13 @@ pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
                 "minecraft:tnt".to_owned(),
                 "entity.minecraft.tnt".to_owned(),
             ),
+            mc_entity::Kind::Mob(m) => (
+                m.species.id().to_owned(),
+                format!(
+                    "entity.minecraft.{}",
+                    m.species.id().trim_start_matches("minecraft:")
+                ),
+            ),
             mc_entity::Kind::ExperienceOrb { .. } => (
                 "minecraft:experience_orb".to_owned(),
                 "entity.minecraft.experience_orb".to_owned(),
