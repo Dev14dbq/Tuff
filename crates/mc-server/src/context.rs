@@ -470,6 +470,13 @@ pub struct ServerContext {
     pub entities: Mutex<Vec<mc_entity::Entity>>,
     /// Chests and barrels someone has open.
     pub containers: Mutex<crate::containers::Containers>,
+    /// Contents (`Items`) of entities that hold items (minecarts and boats
+    /// with a chest, hopper minecarts), by entity id.
+    pub entity_items: Mutex<HashMap<i32, mc_nbt::Compound>>,
+    /// Hopper minecarts resting after taking an item: ticks left, by id.
+    pub cart_rests: Mutex<HashMap<i32, i32>>,
+    /// Daylight detectors in loaded chunks.
+    pub daylight: Mutex<std::collections::HashSet<(i32, i32, i32)>>,
     /// Piston block events waiting for this tick (tick thread).
     pub block_events: Mutex<Vec<(mc_tick::BlockPos, u32, u8, u8)>>,
     /// Blocks on their way, moved by pistons (tick thread).
@@ -727,6 +734,9 @@ impl ServerContext {
             ticks: Mutex::new(mc_tick::ScheduledTicks::default()),
             entities: Mutex::new(Vec::new()),
             containers: Mutex::new(HashMap::new()),
+            entity_items: Mutex::new(HashMap::new()),
+            cart_rests: Mutex::new(HashMap::new()),
+            daylight: Mutex::new(Default::default()),
             block_events: Mutex::new(Vec::new()),
             moving: Mutex::new(Vec::new()),
             furnaces: Mutex::new(HashMap::new()),
@@ -1017,6 +1027,9 @@ impl ServerContext {
             ticks: Mutex::new(mc_tick::ScheduledTicks::default()),
             entities: Mutex::new(Vec::new()),
             containers: Mutex::new(HashMap::new()),
+            entity_items: Mutex::new(HashMap::new()),
+            cart_rests: Mutex::new(HashMap::new()),
+            daylight: Mutex::new(Default::default()),
             container_updates: Mutex::new(Vec::new()),
             hoppers: Mutex::new(Default::default()),
             torch_toggles: Mutex::new(HashMap::new()),

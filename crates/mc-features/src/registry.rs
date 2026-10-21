@@ -200,6 +200,11 @@ impl Features {
         }
     }
 
+    /// Whether rain or snow falls in `biome` at all.
+    pub fn has_precipitation(&self, biome: u32) -> bool {
+        self.biomes.get(&biome).is_none_or(|b| b.precipitation)
+    }
+
     fn cold(&self, biome: u32, p: P) -> bool {
         self.temperature(biome, p) < 0.15
     }

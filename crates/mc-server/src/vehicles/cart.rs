@@ -120,6 +120,11 @@ fn step(t: &mut Tick, e: &mut Entity, v: &mut Vehicle) {
         v.damage = (v.damage - 1.0).max(0.0);
     }
     let rail = find_rail(ctx, e.pos);
+    if let Some(r) = &rail
+        && r.name == "activator_rail"
+    {
+        v.enabled = !r.powered;
+    }
     // Activator rails shake riders off and light TNT.
     if let Some(r) = &rail
         && r.name == "activator_rail"
@@ -252,15 +257,21 @@ fn along(
             e.vel[2] *= 0.5;
         }
     }
-    // Slows by itself, less with someone aboard.
+    // It moves at most `max` a tick, then slows by itself (less with
+    // someone aboard).
+    let to = [
+        e.pos[0] + e.vel[0].clamp(-max, max),
+        e.pos[1],
+        e.pos[2] + e.vel[2].clamp(-max, max),
+    ];
     let drag = if occupied { 0.997 } else { 0.96 };
-    e.vel[0] = (e.vel[0] * drag).clamp(-max, max);
-    e.vel[2] = (e.vel[2] * drag).clamp(-max, max);
-    if hits::in_water(ctx, e.pos) {
-        e.vel[0] *= 0.95;
-        e.vel[2] *= 0.95;
-    }
-    let to = [e.pos[0] + e.vel[0], e.pos[1], e.pos[2] + e.vel[2]];
+    let wet = if hits::in_water(ctx, e.pos) {
+        0.95
+    } else {
+        1.0
+    };
+    e.vel[0] = e.vel[0].clamp(-max, max) * drag * wet;
+    e.vel[2] = e.vel[2].clamp(-max, max) * drag * wet;
     // Stops against a block that is not a rail ahead of it, in its way.
     let ahead = [
         to[0].floor() as i32,
@@ -356,7 +367,8 @@ mod tests {
         }
         let mut e = cart(&ctx, [100.5, -59.9375, 0.5], [0.3, 0.0, 0.0]);
         run(&ctx, &mut e, 20);
-        assert!(e.pos[0] > 105.0, "{:?}", e.pos);
+        // 0.3 × (1 + 0.96 + … + 0.96¹⁹) ≈ 4.18 blocks.
+        assert!(e.pos[0] > 104.6, "{:?}", e.pos);
         assert!((e.pos[1] + 59.9375).abs() < 1e-6 && (e.pos[2] - 0.5).abs() < 1e-6);
         // Empty carts lose 4% a tick.
         assert!(e.vel[0] < 0.3 * 0.96f64.powi(19));

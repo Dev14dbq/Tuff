@@ -8,6 +8,7 @@
 mod auth;
 mod beacons;
 mod blocks;
+mod blockuse;
 mod border;
 mod bossbars;
 mod commands;
@@ -16,6 +17,7 @@ mod containers;
 mod context;
 mod crafting;
 mod damage;
+mod daylight;
 mod decor;
 mod effects;
 mod explosion;
@@ -40,6 +42,7 @@ mod packs;
 mod pipeline;
 mod players;
 mod portals;
+mod precipitation;
 mod projectiles;
 pub mod properties;
 mod random_ticks;
@@ -342,9 +345,11 @@ fn save(ctx: &ServerContext) {
         save_player(ctx, uuid);
     }
     tracing::debug!("Saving worlds");
+    ctx.world.set_ticks_to_save(tick::ticks_by_chunk(ctx));
     let mut saved = ctx.world.save(&ctx.data.blocks);
     for other in ctx.open_dimensions().iter().filter(|d| d.dim != ctx.dim) {
         other.border.lock().expect("border lock").save();
+        other.world.set_ticks_to_save(tick::ticks_by_chunk(&other));
         let more = other.world.save(&other.data.blocks);
         saved.chunks += more.chunks;
         saved.failed += more.failed;

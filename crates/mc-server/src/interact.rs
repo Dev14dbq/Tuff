@@ -276,8 +276,9 @@ pub struct Outcome {
     pub open_crafting: bool,
     /// The player opened a block's menu (beacon, anvil...).
     pub open_menu: Option<(Position, crate::menus::Menu)>,
-    /// The player placed a sign: its editor opens.
-    pub open_sign: Option<Position>,
+    /// The player placed or clicked a sign: its editor opens on that side
+    /// (`true` the front).
+    pub open_sign: Option<(Position, bool)>,
 }
 
 /// Who is acting.
@@ -372,6 +373,16 @@ pub fn dig(
             return outcome;
         }
     }
+    // Hitting redstone ore lights it.
+    if status == dig::START && actor.game_mode != SPECTATOR {
+        let mut level = WorldLevel::new(ctx);
+        let logic = level.logic();
+        mc_tick::redstone::touch_ore(&mut level, logic, to_pos(position));
+        let changes = level.into_changes();
+        if !changes.is_empty() {
+            outcome.events.push(Event::BlocksChanged { by: 0, changes });
+        }
+    }
     let Some(state) = world.block(position, blocks) else {
         return outcome;
     };
@@ -395,6 +406,13 @@ pub fn dig(
     // The other half of a door or bed goes with the shape updates.
     let left = blocks::break_block(&ctx.data, &ctx.rules, position, state, &block_at)[0].1;
     let mut level = WorldLevel::new(ctx);
+    // String cut with shears does not trip its line.
+    if blocks.block_name(state) == Some("minecraft:tripwire")
+        && crate::held::held(ctx, actor.uuid, 0).is_some_and(|h| h.name == "minecraft:shears")
+    {
+        let logic = level.logic();
+        mc_tick::tripwire::disarm(&mut level, logic, to_pos(position));
+    }
     if !level.set_block(position, left) {
         outcome.updates.push((position, state));
         return outcome;
@@ -572,6 +590,12 @@ pub fn use_item_on(
         });
         return outcome;
     }
+    // Cauldrons, cakes, flower pots, signs, berries...
+    if use_blocks
+        && crate::blockuse::use_block(ctx, &mut outcome, actor, hand, clicked, face, cursor)
+    {
+        return outcome;
+    }
     // Composters, jukeboxes, bells, beds, respawn anchors.
     if use_blocks && crate::useblocks::try_use(ctx, &mut outcome, actor, hand, clicked, face) {
         return outcome;
@@ -605,6 +629,11 @@ pub fn use_item_on(
         }
         outcome
     };
+    // Axes, hoes, shovels, bone meal, honeycomb and stacking candles act
+    // on the block.
+    if crate::blockuse::use_item_on(ctx, &mut outcome, actor, hand, clicked, face, cursor) {
+        return outcome;
+    }
     // Flint and steel and fire charges light fire.
     let held_name = held.and_then(|item| ctx.items.name(item.item));
     // An eye of ender goes into an end portal frame; the twelfth makes the
@@ -792,7 +821,7 @@ pub fn use_item_on(
                 },
                 &ctx.data.blocks,
             );
-            outcome.open_sign = Some(p);
+            outcome.open_sign = Some((p, true));
         }
     }
     // The answer: the clicked block, then the placed ones.
@@ -1240,7 +1269,7 @@ pub fn clone_item(block: &str, items: &crate::items::Items) -> Option<i32> {
 }
 
 /// The block entity of a sign block, if it is one.
-fn sign_entity(block: &str) -> Option<&'static str> {
+pub(crate) fn sign_entity(block: &str) -> Option<&'static str> {
     if block.ends_with("_hanging_sign") {
         Some("minecraft:hanging_sign")
     } else if block.ends_with("_sign") {

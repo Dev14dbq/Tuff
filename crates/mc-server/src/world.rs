@@ -54,6 +54,13 @@ pub struct World {
     light: mc_light::Tables,
     /// Fluid ticks generation left for chunks players already have.
     live_ticks: Mutex<Vec<(mc_tick::BlockPos, u32)>>,
+    /// Block entities that tick (hoppers, furnaces) in chunks read from disk
+    /// since the last call to [`World::take_woken`].
+    woken: Mutex<Vec<(Position, String)>>,
+    /// Scheduled ticks stored in chunks read from disk, not yet queued.
+    saved_ticks: Mutex<Vec<SavedTick>>,
+    /// Scheduled ticks to store with each chunk at the next save.
+    ticks_to_save: Mutex<HashMap<(i32, i32), PendingTicks>>,
     /// Loaded chunks whose light a new neighbour changed.
     relit: Mutex<Vec<(i32, i32)>>,
     /// New chunks are lit with their neighbours outside the chunks lock;
@@ -61,6 +68,54 @@ pub struct World {
     lighting: crate::util::Claims,
     /// `/save-off`.
     no_autosave: std::sync::atomic::AtomicBool,
+}
+
+/// A scheduled tick as chunk files keep it (`block_ticks`, `fluid_ticks`):
+/// the block or fluid id, where, in how many ticks, with what priority.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedTick {
+    pub fluid: bool,
+    pub id: String,
+    pub pos: mc_tick::BlockPos,
+    pub delay: i64,
+    pub priority: i32,
+}
+
+/// The `block_ticks` and `fluid_ticks` lists of one chunk.
+pub type PendingTicks = (Vec<Tag>, Vec<Tag>);
+
+impl SavedTick {
+    fn read(tag: &Tag, fluid: bool) -> Option<Self> {
+        let Tag::Compound(c) = tag else { return None };
+        let int = |k: &str| match c.get(k) {
+            Some(Tag::Int(v)) => Some(*v),
+            _ => None,
+        };
+        let Some(Tag::String(id)) = c.get("i") else {
+            return None;
+        };
+        Some(Self {
+            fluid,
+            id: id.clone(),
+            pos: mc_tick::BlockPos::new(int("x")?, int("y")?, int("z")?),
+            delay: i64::from(int("t")?),
+            priority: int("p").unwrap_or(0),
+        })
+    }
+
+    pub fn tag(&self) -> Tag {
+        let mut c = mc_nbt::Compound::new();
+        c.insert("i", Tag::String(self.id.clone()));
+        c.insert("x", Tag::Int(self.pos.x));
+        c.insert("y", Tag::Int(self.pos.y));
+        c.insert("z", Tag::Int(self.pos.z));
+        c.insert(
+            "t",
+            Tag::Int(self.delay.clamp(0, i64::from(i32::MAX)) as i32),
+        );
+        c.insert("p", Tag::Int(self.priority));
+        Tag::Compound(c)
+    }
 }
 
 /// What one save did.
@@ -264,6 +319,9 @@ impl World {
             folder: None,
             light,
             live_ticks: Mutex::new(Vec::new()),
+            woken: Mutex::new(Vec::new()),
+            saved_ticks: Mutex::new(Vec::new()),
+            ticks_to_save: Mutex::new(HashMap::new()),
             relit: Mutex::new(Vec::new()),
             lighting: crate::util::Claims::default(),
             no_autosave: std::sync::atomic::AtomicBool::new(false),
@@ -420,6 +478,9 @@ impl World {
             folder: Some(dir.to_owned()),
             light,
             live_ticks: Mutex::new(Vec::new()),
+            woken: Mutex::new(Vec::new()),
+            saved_ticks: Mutex::new(Vec::new()),
+            ticks_to_save: Mutex::new(HashMap::new()),
             relit: Mutex::new(Vec::new()),
             lighting: crate::util::Claims::default(),
             no_autosave: std::sync::atomic::AtomicBool::new(false),
@@ -532,6 +593,39 @@ impl World {
         f(slot)
     }
 
+    /// Remembers the block entities of a chunk just read that tick on their
+    /// own, so they run without waiting for a block update.
+    fn wake_ticking(&self, chunk: &Chunk) {
+        let ticking = chunk.block_entities.iter().filter(|be| {
+            matches!(
+                be.id.as_str(),
+                "minecraft:hopper"
+                    | "minecraft:furnace"
+                    | "minecraft:blast_furnace"
+                    | "minecraft:smoker"
+                    | "minecraft:daylight_detector"
+            )
+        });
+        let mut woken = self.woken.lock().expect("woken lock");
+        woken.extend(ticking.map(|be| (Position::new(be.x, be.y, be.z), be.id.clone())));
+    }
+
+    /// Scheduled ticks of chunks read from disk since the last call.
+    pub fn take_saved_ticks(&self) -> Vec<SavedTick> {
+        std::mem::take(&mut *self.saved_ticks.lock().expect("saved ticks lock"))
+    }
+
+    /// The scheduled ticks to store with each chunk at the next save
+    /// (chunks not named store none).
+    pub fn set_ticks_to_save(&self, ticks: HashMap<(i32, i32), PendingTicks>) {
+        *self.ticks_to_save.lock().expect("ticks to save lock") = ticks;
+    }
+
+    /// Ticking block entities of chunks read from disk since the last call.
+    pub fn take_woken(&self) -> Vec<(Position, String)> {
+        std::mem::take(&mut *self.woken.lock().expect("woken lock"))
+    }
+
     /// The chunk, and whether it was generated just now.
     fn load(&self, x: i32, z: i32, blocks: &Blocks) -> (Option<Box<Chunk>>, bool) {
         match &self.source {
@@ -541,7 +635,16 @@ impl World {
                 (Some(Box::new(chunk)), false)
             }
             Source::Anvil(anvil) => match anvil.load(x, z, blocks, self.min_y, self.height) {
-                Ok(Some(chunk)) => (Some(chunk), false),
+                Ok(Some((chunk, ticks))) => {
+                    self.wake_ticking(&chunk);
+                    if !ticks.is_empty() {
+                        self.saved_ticks
+                            .lock()
+                            .expect("saved ticks lock")
+                            .extend(ticks);
+                    }
+                    (Some(chunk), false)
+                }
                 Ok(None) => match &anvil.generation {
                     Some(g) => (Some(self.generate(g, x, z, anvil, blocks)), true),
                     None => (None, false),
@@ -722,6 +825,24 @@ impl World {
                 .contains_y(p.y)
                 .then(|| chunk.block((p.x & 15) as usize, p.y, (p.z & 15) as usize))
         })
+    }
+
+    /// The y just above the highest block at `x, z` for which `counts` holds
+    /// (a heightmap's top), scanning the loaded chunk under one lock;
+    /// `None` where no chunk is loaded.
+    pub fn top_where(&self, x: i32, z: i32, counts: impl Fn(u32) -> bool) -> Option<i32> {
+        let chunks = self.chunks.lock().expect("chunks lock");
+        let chunk = chunks.get(&(x >> 4, z >> 4))?.chunk.as_ref()?;
+        let (lx, lz) = ((x & 15) as usize, (z & 15) as usize);
+        let top = chunk.min_y + chunk.height() as i32;
+        let mut y = top - 1;
+        while y >= chunk.min_y {
+            if counts(chunk.block(lx, y, lz)) {
+                return Some(y + 1);
+            }
+            y -= 1;
+        }
+        Some(chunk.min_y)
     }
 
     /// The blocks of the cube from `min`, `side` blocks each way, into `out`
@@ -1189,10 +1310,17 @@ impl World {
                 );
             }
         }
+        let mut ticks =
+            std::mem::take(&mut *self.ticks_to_save.lock().expect("ticks to save lock"));
         for chunk in dirty {
+            let pending = ticks.remove(&(chunk.x, chunk.z)).unwrap_or_default();
             let result = (|| -> Result<()> {
                 let stored = storage.read_chunk(chunk.x, chunk.z)?;
-                let tag = encode_chunk(&chunk, stored.as_ref(), &names, true)?;
+                let mut tag = encode_chunk(&chunk, stored.as_ref(), &names, true)?;
+                if let Tag::Compound(root) = &mut tag {
+                    root.insert("block_ticks", Tag::List(pending.0));
+                    root.insert("fluid_ticks", Tag::List(pending.1));
+                }
                 let mut bytes = Vec::new();
                 mc_nbt::write_named("", &tag, &mut bytes)?;
                 storage.write_chunk(chunk.x, chunk.z, &bytes, now)?;
@@ -1502,7 +1630,7 @@ impl Anvil {
         blocks: &Blocks,
         min_y: i32,
         height: u32,
-    ) -> Result<Option<Box<Chunk>>> {
+    ) -> Result<Option<(Box<Chunk>, Vec<SavedTick>)>> {
         // Only the file read holds the lock; decompression and decoding do not.
         let raw = self
             .storage
@@ -1529,7 +1657,15 @@ impl Anvil {
         if unresolved > 0 && self.unresolved_reported.fetch_add(1, Ordering::Relaxed) < 5 {
             warn!("chunk {x},{z}: {unresolved} unknown blocks or biomes replaced");
         }
-        Ok(Some(chunk))
+        let mut ticks = Vec::new();
+        if let Tag::Compound(root) = &tag {
+            for (key, fluid) in [("block_ticks", false), ("fluid_ticks", true)] {
+                if let Some(Tag::List(list)) = root.get(key) {
+                    ticks.extend(list.iter().filter_map(|t| SavedTick::read(t, fluid)));
+                }
+            }
+        }
+        Ok(Some((chunk, ticks)))
     }
 }
 

@@ -1,6 +1,8 @@
 //! Tick logic in vanilla order: block updates (neighbour changed, shape),
 //! later scheduled ticks, block events and redstone (ROADMAP Ф3).
 
+pub mod cauldron;
+pub mod composter;
 pub mod dir;
 pub mod facts;
 pub mod fast;
@@ -20,6 +22,7 @@ pub mod shapes;
 pub mod sponge;
 pub mod support;
 pub mod ticks;
+pub mod tripwire;
 pub mod updates;
 
 pub use dir::{Axis, BlockPos, Dir};

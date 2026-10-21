@@ -32,7 +32,8 @@ pub struct WorldLevel<'a> {
     /// While entities move: their boxes as they are so far this tick.
     pub entity_boxes: Option<Vec<mc_entity::Aabb>>,
     /// Minecarts and where they are so far this tick (detector rails look).
-    pub minecarts: Vec<(i32, mc_entity::Aabb)>,
+    /// Minecarts: id, box, and what a minecart holding items opens.
+    pub minecarts: Vec<(i32, mc_entity::Aabb, Option<crate::containers::Kind>)>,
 }
 
 impl<'a> WorldLevel<'a> {
@@ -59,6 +60,11 @@ impl<'a> WorldLevel<'a> {
             shapes: &self.ctx.shapes,
             facts: &self.ctx.rules,
         }
+    }
+
+    /// An entity that joins the world when this level is done.
+    pub fn spawn(&mut self, entity: mc_entity::Entity) {
+        self.spawned.push(entity);
     }
 
     /// Sets a block with all updates (as a player or `/setblock` does).
@@ -163,6 +169,9 @@ impl Level for WorldLevel<'_> {
         }
         if ctx.data.blocks.block_name(state) == Some("minecraft:beacon") {
             crate::beacons::placed(ctx, to_position(p));
+        }
+        if ctx.data.blocks.block_name(state) == Some("minecraft:daylight_detector") {
+            crate::daylight::placed(ctx, to_position(p));
         }
         if !ctx.world.same_light(old, state) {
             self.unlit.push((to_position(p), old));
@@ -348,8 +357,56 @@ impl Level for WorldLevel<'_> {
         );
         self.minecarts
             .iter()
-            .filter(|(_, b)| (0..3).all(|i| b.min[i] < hi[i] && b.max[i] > lo[i]))
+            .filter(|(_, b, _)| (0..3).all(|i| b.min[i] < hi[i] && b.max[i] > lo[i]))
             .count() as u32
+    }
+
+    fn block_entity_signal(&self, p: BlockPos) -> Option<u8> {
+        crate::blockuse::comparator_signal(self.ctx, to_position(p))
+    }
+
+    fn viewers(&self, p: BlockPos) -> u8 {
+        self.ctx
+            .containers
+            .lock()
+            .expect("containers lock")
+            .get(&(p.x, p.y, p.z))
+            .map_or(0, |o| o.viewers.len().min(255) as u8)
+    }
+
+    fn sound(&mut self, name: &str, p: BlockPos) {
+        crate::fx::sound(
+            self.ctx,
+            name,
+            crate::fx::category::BLOCKS,
+            [
+                f64::from(p.x) + 0.5,
+                f64::from(p.y) + 0.5,
+                f64::from(p.z) + 0.5,
+            ],
+            1.0,
+            1.0,
+        );
+    }
+
+    fn minecart_container_signal(&self, p: BlockPos) -> Option<u8> {
+        let (lo, hi) = (
+            [f64::from(p.x), f64::from(p.y), f64::from(p.z)],
+            [
+                f64::from(p.x) + 1.0,
+                f64::from(p.y) + 1.0,
+                f64::from(p.z) + 1.0,
+            ],
+        );
+        let (id, kind) = self
+            .minecarts
+            .iter()
+            .filter(|(_, b, _)| (0..3).all(|i| b.min[i] < hi[i] && b.max[i] > lo[i]))
+            .find_map(|(id, _, kind)| Some((*id, (*kind)?)))?;
+        Some(crate::containers::fullness(
+            self.ctx,
+            &crate::containers::slots(self.ctx, crate::containers::entity_key(id), kind),
+        ))
     }
 
     fn entities_in(&self, min: [f64; 3], max: [f64; 3]) -> (u32, u32) {
@@ -419,6 +476,13 @@ impl Level for WorldLevel<'_> {
 
     fn torch_fizz(&mut self, _p: BlockPos) {}
 
+    fn source_conversion(&self, fluid: mc_tick::fluids::Fluid) -> bool {
+        self.ctx.game_rule_bool(match fluid {
+            mc_tick::fluids::Fluid::Water => "minecraft:water_source_conversion",
+            mc_tick::fluids::Fluid::Lava => "minecraft:lava_source_conversion",
+        })
+    }
+
     fn ultrawarm(&self) -> bool {
         self.ctx.world.dimension.contains("nether")
     }
@@ -441,6 +505,15 @@ impl Level for WorldLevel<'_> {
         crate::fx::level_event(self.ctx, 2009, at, 0);
     }
 
+    fn level_event(&mut self, event: i32, p: BlockPos, data: i32) {
+        crate::fx::level_event(
+            self.ctx,
+            event,
+            [f64::from(p.x), f64::from(p.y), f64::from(p.z)],
+            data,
+        );
+    }
+
     fn container_transfer(
         &mut self,
         from: BlockPos,
@@ -448,6 +521,15 @@ impl Level for WorldLevel<'_> {
         to: BlockPos,
         to_side: mc_tick::Dir,
     ) -> bool {
+        if let Some(done) = crate::hoppers::composter_transfer(
+            self,
+            to_position(from),
+            from_side,
+            to_position(to),
+            to_side,
+        ) {
+            return done;
+        }
         crate::hoppers::transfer(
             self.ctx,
             to_position(from),
