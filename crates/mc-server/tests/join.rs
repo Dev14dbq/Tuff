@@ -2767,7 +2767,7 @@ async fn players_change_dimension_and_others_stop_seeing_them() {
     traveller
         .send(
             "minecraft:chat_command",
-            command("execute in minecraft:the_nether run tp @s 8 5 8"),
+            command("execute in minecraft:the_nether run tp 10824.09 65.00 8384.04"),
         )
         .await;
     // A new dimension: respawn, the new position, chunks of the Nether.
@@ -2790,11 +2790,11 @@ async fn players_change_dimension_and_others_stop_seeing_them() {
     let id = r.varint().unwrap();
     assert_eq!(
         (r.f64().unwrap(), r.f64().unwrap(), r.f64().unwrap()),
-        (8.5, 5.0, 8.5)
+        (10824.09, 65.0, 8384.04)
     );
     let mut confirm = Vec::new();
     confirm.put_varint(id);
-    for v in [8.5, 5.0, 8.5] {
+    for v in [10824.09, 65.0, 8384.04] {
         confirm.put_f64(v);
     }
     confirm.put_f32(0.0);
@@ -2821,7 +2821,7 @@ async fn players_change_dimension_and_others_stop_seeing_them() {
     traveller
         .send(
             "minecraft:chat_command",
-            command("setblock 8 4 8 minecraft:netherrack"),
+            command("setblock 10824 64 8384 minecraft:netherrack"),
         )
         .await;
     let netherrack = ctx
@@ -2838,14 +2838,17 @@ async fn players_change_dimension_and_others_stop_seeing_them() {
         }
     }
     assert_eq!(
-        nether
-            .world
-            .block(mc_protocol::Position::new(8, 4, 8), &ctx.data.blocks),
+        nether.world.block(
+            mc_protocol::Position::new(10824, 64, 8384),
+            &ctx.data.blocks
+        ),
         Some(netherrack)
     );
     assert_ne!(
-        ctx.world
-            .block(mc_protocol::Position::new(8, 4, 8), &ctx.data.blocks),
+        ctx.world.block(
+            mc_protocol::Position::new(10824, 64, 8384),
+            &ctx.data.blocks
+        ),
         Some(netherrack)
     );
 
