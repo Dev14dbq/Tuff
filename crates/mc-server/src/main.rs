@@ -192,6 +192,14 @@ async fn run() -> Result<()> {
     info!("Preparing level \"{level_name}\"");
 
     let server = Server::bind(config).await?;
+    // The Nether and the End load their generators now, not when the first
+    // player steps through a portal.
+    let ctx = server.context().clone();
+    std::thread::spawn(move || {
+        for index in 1..mc_server::DIMENSIONS.len() {
+            ctx.dimension(index);
+        }
+    });
     server
         .run(async {
             let _ = tokio::signal::ctrl_c().await;

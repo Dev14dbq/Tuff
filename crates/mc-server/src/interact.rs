@@ -555,6 +555,30 @@ pub fn use_item_on(
     };
     // Flint and steel and fire charges light fire.
     let held_name = held.and_then(|item| ctx.items.name(item.item));
+    // An eye of ender goes into an end portal frame; the twelfth makes the
+    // portal.
+    if held_name == Some("minecraft:ender_eye")
+        && let Some(state) = block_at(clicked)
+        && blocks.block_name(state) == Some("minecraft:end_portal_frame")
+        && blocks.property(state, "eye") == Some("false")
+    {
+        use mc_tick::Level as _;
+        let mut level = WorldLevel::new(ctx);
+        level.set(to_pos(clicked), ctx.shapes.with(state, "eye", "true"));
+        crate::portals::light_end_portal(&mut level, to_pos(clicked));
+        let changes = level.into_changes();
+        outcome.updates.extend(changes.iter().copied());
+        outcome.events.push(Event::BlocksChanged { by: 0, changes });
+        if actor.game_mode != CREATIVE {
+            replace_held(ctx, &mut outcome, actor, hand, None);
+        }
+        outcome.events.push(Event::Swing {
+            uuid: actor.uuid,
+            entity_id: actor.entity_id,
+            times: 1,
+        });
+        return outcome;
+    }
     if let Some(tool @ ("minecraft:flint_and_steel" | "minecraft:fire_charge")) = held_name {
         // TNT turns into primed TNT instead.
         let tnt = use_blocks
@@ -605,6 +629,7 @@ pub fn use_item_on(
         .lock()
         .expect("players lock")
         .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
         .filter(|p| p.profile.uuid != actor.uuid)
         .filter_map(|p| p.pose)
         .collect();
@@ -1161,7 +1186,7 @@ mod tests {
     }
 
     /// Survival player at the origin holding `damage` worn flint and steel.
-    fn with_flint(damage: i32) -> Option<(ServerContext, Actor)> {
+    fn with_flint(damage: i32) -> Option<(std::sync::Arc<ServerContext>, Actor)> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
         let data = mc_data::McData::load(&dir).ok()?;
         let ctx = ServerContext::new(crate::Config::new(dir), data).ok()?;

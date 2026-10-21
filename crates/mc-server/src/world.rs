@@ -144,8 +144,8 @@ struct Dimension {
     height: u32,
 }
 
-fn overworld(data: &McData, synced: &SyncedIds) -> Result<Dimension> {
-    let name = "minecraft:overworld".to_owned();
+fn dimension_info(data: &McData, synced: &SyncedIds, name: &str) -> Result<Dimension> {
+    let name = name.to_owned();
     let json = data
         .data_pack()
         .read_entry("minecraft:dimension_type", &name)?;
@@ -214,7 +214,19 @@ impl World {
         rules: &BlockRules,
         light: mc_light::Tables,
     ) -> Result<Self> {
-        let dim = overworld(data, synced)?;
+        Self::flat_in(data, synced, rules, light, "minecraft:overworld")
+    }
+
+    /// The same superflat world as another dimension (tests without a
+    /// world folder).
+    pub fn flat_in(
+        data: &McData,
+        synced: &SyncedIds,
+        rules: &BlockRules,
+        light: mc_light::Tables,
+        dimension: &str,
+    ) -> Result<Self> {
+        let dim = dimension_info(data, synced, dimension)?;
         let biomes = &synced["minecraft:worldgen/biome"];
         let generator = FlatGenerator {
             layers: vec![
@@ -281,32 +293,61 @@ impl World {
         shapes: mc_tick::Shapes,
         new: crate::generation::NewWorld,
     ) -> Result<Self> {
-        let dim = overworld(data, synced)?;
         let biome_ids: HashMap<String, u32> = synced["minecraft:worldgen/biome"]
             .iter()
             .map(|(k, &v)| (k.clone(), v as u32))
             .collect();
-        let mut generator = None;
+        let mut seed_found = None;
         if !dir.join("level.dat").is_file() {
             let seed = seed.unwrap_or_else(|| crate::util::random_u64() as i64);
             tracing::debug!("creating a new world in {} (seed {seed})", dir.display());
             let g = crate::generation::overworld(data, seed, &biome_ids)?;
             let spawn = crate::generation::find_spawn(&g, &data.blocks);
             crate::generation::create(dir, data, seed, spawn, new)?;
-            generator = Some((g, seed));
+            seed_found = Some((g, seed));
         } else if let Some(seed) = crate::generation::seed_of(dir) {
-            generator = Some((crate::generation::overworld(data, seed, &biome_ids)?, seed));
+            seed_found = Some((crate::generation::overworld(data, seed, &biome_ids)?, seed));
             tracing::debug!("new chunks are generated from seed {seed}");
         }
+        Self::open_dimension(
+            dir,
+            mc_worldgen::generator::Dimension::Overworld,
+            seed_found,
+            data,
+            synced,
+            light,
+            rules,
+            shapes,
+        )
+    }
+
+    /// One dimension of the world folder `dir`; `generator` makes the chunks
+    /// the folder does not have (with the world's seed).
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_dimension(
+        dir: &Path,
+        kind: mc_worldgen::generator::Dimension,
+        generator: Option<(mc_worldgen::generator::NoiseGenerator, i64)>,
+        data: &McData,
+        synced: &SyncedIds,
+        light: mc_light::Tables,
+        rules: &BlockRules,
+        shapes: mc_tick::Shapes,
+    ) -> Result<Self> {
+        let dim = dimension_info(data, synced, kind.id())?;
+        let biome_ids: HashMap<String, u32> = synced["minecraft:worldgen/biome"]
+            .iter()
+            .map(|(k, &v)| (k.clone(), v as u32))
+            .collect();
+        let generator_sea_level = generator.as_ref().map(|(g, _)| g.sea_level);
         let generation = match generator {
             Some((generator, seed)) => {
-                let features = crate::generation::features(data, shapes, &biome_ids, &generator)?;
+                let features = crate::generation::dimension_features(
+                    data, shapes, &biome_ids, &generator, kind,
+                )?;
                 let air = state(data, "minecraft:air")?;
                 let plains = biome_ids.get("minecraft:plains").copied().unwrap_or(0);
-                let fast_lava = crate::generation::fast_lava(
-                    data,
-                    mc_worldgen::generator::Dimension::Overworld,
-                );
+                let fast_lava = crate::generation::fast_lava(data, kind);
                 let pipeline = Arc::new(
                     crate::pipeline::Pipeline::new(generator, features, seed, air, plains)
                         .with_fast_lava(fast_lava),
@@ -332,15 +373,26 @@ impl World {
                 .collect(),
         });
         // 26.x keeps dimensions under dimensions/<namespace>/<name>/.
-        let regions = [
-            dir.join("dimensions/minecraft/overworld/region"),
-            dir.join("region"),
-        ]
-        .into_iter()
-        .find(|p| p.is_dir())
-        .with_context(|| format!("no overworld region folder in {}", dir.display()))?;
+        let own = dir
+            .join("dimensions")
+            .join(kind.id().replace(':', "/"))
+            .join("region");
+        let regions = if kind == mc_worldgen::generator::Dimension::Overworld {
+            [own.clone(), dir.join("region")]
+                .into_iter()
+                .find(|p| p.is_dir())
+                .with_context(|| format!("no overworld region folder in {}", dir.display()))?
+        } else {
+            std::fs::create_dir_all(&own).with_context(|| format!("creating {}", own.display()))?;
+            own
+        };
         let (spawn, spawn_yaw) = read_spawn(&dir.join("level.dat"))
             .with_context(|| format!("reading {}", dir.join("level.dat").display()))?;
+        let spawn = match kind {
+            mc_worldgen::generator::Dimension::Overworld => spawn,
+            mc_worldgen::generator::Dimension::Nether => (0.5, 70.0, 0.5),
+            mc_worldgen::generator::Dimension::End => (100.5, 49.0, 0.5),
+        };
 
         let biomes = &synced["minecraft:worldgen/biome"];
         let air = state(data, "minecraft:air")?;
@@ -375,7 +427,7 @@ impl World {
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
             height: dim.height,
-            sea_level: 63,
+            sea_level: generator_sea_level.unwrap_or(63),
             spawn,
             spawn_yaw,
             is_flat: false,
@@ -815,6 +867,56 @@ impl World {
     }
 
     /// Whether the chunk is in memory (nothing is loaded to answer).
+    /// Blocks satisfying `test` in the chunk at `cx, cz`, if the world has it
+    /// (in memory or saved; nothing is generated for this).
+    pub fn find_in_existing(
+        &self,
+        cx: i32,
+        cz: i32,
+        blocks: &Blocks,
+        test: &dyn Fn(u32) -> bool,
+    ) -> Vec<Position> {
+        let loaded = self
+            .chunks
+            .lock()
+            .expect("chunks lock")
+            .get(&(cx, cz))
+            .is_some_and(|s| s.chunk.is_some());
+        let exists = loaded
+            || match &self.source {
+                Source::Flat(_) => true,
+                Source::Anvil(anvil) => anvil.has_full(cx, cz),
+            };
+        if !exists {
+            return Vec::new();
+        }
+        self.with_slot(cx, cz, blocks, |slot| {
+            let Some(chunk) = slot.chunk.as_ref() else {
+                return Vec::new();
+            };
+            let mut found = Vec::new();
+            for (i, section) in chunk.sections.iter().enumerate() {
+                if !section.blocks.may_contain(test) {
+                    continue;
+                }
+                for y in 0..16 {
+                    for z in 0..16 {
+                        for x in 0..16 {
+                            if test(section.block(x, y, z)) {
+                                found.push(Position::new(
+                                    cx * 16 + x as i32,
+                                    chunk.min_y + i as i32 * 16 + y as i32,
+                                    cz * 16 + z as i32,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            found
+        })
+    }
+
     pub fn chunk_loaded(&self, x: i32, z: i32) -> bool {
         self.chunks
             .lock()

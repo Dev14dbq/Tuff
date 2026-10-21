@@ -11,6 +11,7 @@ pub mod hopper;
 pub mod leaves;
 pub mod level;
 pub mod pistons;
+pub mod portal;
 pub mod rails;
 pub mod random;
 pub mod redstone;

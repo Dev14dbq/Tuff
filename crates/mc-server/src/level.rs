@@ -132,6 +132,14 @@ impl Drop for WorldLevel<'_> {
 }
 
 impl Level for WorldLevel<'_> {
+    fn allows_nether_portal(&self) -> bool {
+        self.ctx.dim < 2
+    }
+
+    fn fast_lava(&self) -> bool {
+        self.ctx.dim == 1
+    }
+
     fn block(&self, p: BlockPos) -> u32 {
         self.ctx
             .world
@@ -260,6 +268,7 @@ impl Level for WorldLevel<'_> {
             .lock()
             .expect("players lock")
             .values()
+            .filter(|p| p.dimension == self.ctx.world.dimension)
             .filter_map(|player| player.pose)
             .any(|pose| {
                 let (dx, dy, dz) = (
@@ -327,6 +336,9 @@ impl Level for WorldLevel<'_> {
         let mut living = 0;
         for player in self.ctx.players.lock().expect("players lock").values() {
             let Some(pose) = player.pose else { continue };
+            if player.dimension != self.ctx.world.dimension {
+                continue;
+            }
             if player.game_mode == 3 {
                 continue;
             }

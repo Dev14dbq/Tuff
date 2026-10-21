@@ -2,8 +2,10 @@
 //! the world and the list of online players.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::ops::Deref;
+use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result};
 use mc_data::{McData, SYNCHRONIZED_REGISTRIES, resolve_tags};
@@ -32,6 +34,8 @@ pub struct OnlinePlayer {
     pub skin_parts: u8,
     /// Where the player is; `None` until they spawn in play.
     pub pose: Option<Pose>,
+    /// The dimension they are in.
+    pub dimension: String,
     /// What others see in their main hand.
     pub main_hand: Option<ItemStack>,
     /// Flying (creative players who double-jumped, and spectators).
@@ -255,6 +259,21 @@ pub enum Event {
     BiomesChanged {
         chunks: Vec<(i32, i32)>,
     },
+    /// An event of another dimension than the sender's.
+    In(usize, Box<Event>),
+    /// A player left this dimension (or the game): others stop seeing them.
+    PlayerGone {
+        uuid: u128,
+        entity_id: i32,
+    },
+    /// Move a player to another dimension (a portal or a command).
+    ChangeDimension {
+        uuid: u128,
+        dimension: String,
+        pose: Pose,
+        /// A respawn after dying: nothing is kept.
+        after_death: bool,
+    },
     /// A packet for one player only.
     Direct {
         uuid: u128,
@@ -314,7 +333,17 @@ pub enum Event {
     },
 }
 
-pub struct ServerContext {
+#[allow(missing_debug_implementations)]
+pub struct Shared {
+    /// The dimensions that exist so far, in [`DIMENSIONS`] order (the others
+    /// are made when first used).
+    pub dims: [Mutex<Option<Arc<ServerContext>>>; 3],
+    synced_ids: HashMap<String, HashMap<String, i32>>,
+    light_tables: mc_light::Tables,
+    /// Event channels of every dimension.
+    pub hub: Events,
+    /// Players waiting in portals (tick thread).
+    pub portals: Mutex<crate::portals::Waiting>,
     pub config: Config,
     pub data: McData,
     pub ids: PacketIds,
@@ -326,19 +355,12 @@ pub struct ServerContext {
     /// not know the vanilla data pack.
     pub registries_with_data: Vec<RegistryData>,
     pub tags: UpdateTags,
-    pub world: World,
     /// How placing and breaking blocks works (until block behaviours exist).
     pub rules: BlockRules,
     /// Neighbour-dependent block shapes.
     pub shapes: mc_tick::Shapes,
-    /// Block and fluid ticks waiting to run (tick thread only).
-    pub ticks: Mutex<mc_tick::ScheduledTicks>,
-    /// Entities other than players (tick thread only, read by joining players).
-    pub entities: Mutex<Vec<mc_entity::Entity>>,
     /// Inventories of the players in play.
     pub inventories: Mutex<HashMap<u128, crate::interact::Hands>>,
-    /// Chests and barrels someone has open.
-    pub containers: Mutex<crate::containers::Containers>,
     /// What broken blocks drop.
     pub loot: crate::loot::BlockLoot,
     /// Crafting recipes.
@@ -347,20 +369,8 @@ pub struct ServerContext {
     pub vitals: Mutex<crate::vitals::AllVitals>,
     /// Stack sizes, food and more of every item.
     pub items: crate::items::Items,
-    /// Piston block events waiting for this tick (tick thread).
-    pub block_events: Mutex<Vec<(mc_tick::BlockPos, u32, u8, u8)>>,
-    /// Blocks on their way, moved by pistons (tick thread).
-    pub moving: Mutex<Vec<(mc_tick::BlockPos, mc_tick::pistons::Moving)>>,
     /// Burn times of fuels.
     pub fuels: crate::furnaces::Fuels,
-    /// Furnaces burning or cooking (tick thread).
-    pub furnaces: Mutex<crate::furnaces::Active>,
-    /// Hoppers that tick (tick thread).
-    pub hoppers: Mutex<crate::hoppers::Active>,
-    /// Recent redstone torch toggles by position (burnout).
-    pub torch_toggles: Mutex<HashMap<(i32, i32, i32), Vec<i64>>>,
-    /// Containers whose contents changed, for comparators (tick thread).
-    pub container_updates: Mutex<Vec<mc_protocol::Position>>,
     /// Players eating or drinking (tick thread counts down).
     pub using: Mutex<HashMap<u128, crate::vitals::Using>>,
     /// 0 peaceful, 1 easy, 2 normal, 3 hard (level.dat).
@@ -387,7 +397,6 @@ pub struct ServerContext {
     pub key: Option<ServerKey>,
     /// Logged-in players by UUID.
     pub players: Mutex<HashMap<u128, OnlinePlayer>>,
-    pub events: broadcast::Sender<Event>,
     /// The world's age and clocks, advanced by the tick thread.
     pub time: Mutex<WorldTime>,
     /// Player actions for the tick thread.
@@ -401,10 +410,6 @@ pub struct ServerContext {
     /// The command tree and what commands are checked against.
     pub commands: crate::commands::Commands,
     pub game_rules: Mutex<crate::rules::GameRules>,
-    pub weather: Mutex<crate::weather::Weather>,
-    pub border: Mutex<crate::border::Border>,
-    /// Force-loaded chunks (`/forceload`).
-    pub forced: Mutex<crate::forced::Forced>,
     /// Boss bars made with `/bossbar`.
     pub bossbars: Mutex<crate::bossbars::BossBars>,
     /// Objectives, scores and teams.
@@ -422,6 +427,169 @@ pub struct ServerContext {
     next_entity_id: AtomicI32,
 }
 
+/// One dimension: its world and everything that happens in it. The rest
+/// (players, rules, commands...) is shared and reached through `Deref`.
+pub struct ServerContext {
+    pub shared: Arc<Shared>,
+    /// Index in [`DIMENSIONS`].
+    pub dim: usize,
+    pub world: World,
+    /// Block and fluid ticks waiting to run (tick thread only).
+    pub ticks: Mutex<mc_tick::ScheduledTicks>,
+    /// Entities other than players (tick thread only, read by joining players).
+    pub entities: Mutex<Vec<mc_entity::Entity>>,
+    /// Chests and barrels someone has open.
+    pub containers: Mutex<crate::containers::Containers>,
+    /// Piston block events waiting for this tick (tick thread).
+    pub block_events: Mutex<Vec<(mc_tick::BlockPos, u32, u8, u8)>>,
+    /// Blocks on their way, moved by pistons (tick thread).
+    pub moving: Mutex<Vec<(mc_tick::BlockPos, mc_tick::pistons::Moving)>>,
+    /// Furnaces burning or cooking (tick thread).
+    pub furnaces: Mutex<crate::furnaces::Active>,
+    /// Hoppers that tick (tick thread).
+    pub hoppers: Mutex<crate::hoppers::Active>,
+    /// Recent redstone torch toggles by position (burnout).
+    pub torch_toggles: Mutex<HashMap<(i32, i32, i32), Vec<i64>>>,
+    /// Containers whose contents changed, for comparators (tick thread).
+    pub container_updates: Mutex<Vec<mc_protocol::Position>>,
+    pub events: Events,
+    pub weather: Mutex<crate::weather::Weather>,
+    pub border: Mutex<crate::border::Border>,
+    /// Force-loaded chunks (`/forceload`).
+    pub forced: Mutex<crate::forced::Forced>,
+}
+
+impl Deref for ServerContext {
+    type Target = Shared;
+
+    fn deref(&self) -> &Shared {
+        &self.shared
+    }
+}
+
+/// The dimensions of a world, by index.
+pub const DIMENSIONS: [&str; 3] = [
+    "minecraft:overworld",
+    "minecraft:the_nether",
+    "minecraft:the_end",
+];
+
+/// Index of a dimension in [`DIMENSIONS`] (`overworld` and `minecraft:overworld`
+/// both work).
+pub fn dimension_index(name: &str) -> Option<usize> {
+    let name = name.strip_prefix("minecraft:").unwrap_or(name);
+    ["overworld", "the_nether", "the_end"]
+        .iter()
+        .position(|d| *d == name)
+}
+
+/// The channels events go through: one per dimension for what happens at a
+/// place, and one for what every player gets wherever they are.
+#[derive(Clone, Debug)]
+pub struct Events {
+    locals: Arc<Vec<broadcast::Sender<Event>>>,
+    global: broadcast::Sender<Event>,
+    me: usize,
+}
+
+impl Events {
+    fn new() -> Self {
+        Self {
+            // Every movement is an event; leave room for many moving players.
+            locals: Arc::new(
+                (0..DIMENSIONS.len())
+                    .map(|_| broadcast::channel(4096).0)
+                    .collect(),
+            ),
+            global: broadcast::channel(4096).0,
+            me: 0,
+        }
+    }
+
+    fn for_dim(&self, me: usize) -> Self {
+        Self { me, ..self.clone() }
+    }
+
+    /// Sends the event to who it concerns: everyone, or those in this
+    /// dimension (or in the one an [`Event::In`] names).
+    pub fn send(&self, event: Event) -> Result<usize, Box<broadcast::error::SendError<Event>>> {
+        let (dim, event) = match event {
+            Event::In(dim, inner) => (dim.min(self.locals.len() - 1), *inner),
+            event => (self.me, event),
+        };
+        let sent = if event.is_global() {
+            self.global.send(event)
+        } else {
+            self.locals[dim].send(event)
+        };
+        sent.map_err(Box::new)
+    }
+
+    /// Everything that goes to this dimension and to everyone.
+    pub fn subscribe(&self) -> EventReceiver {
+        EventReceiver {
+            local: self.locals[self.me].subscribe(),
+            global: self.global.subscribe(),
+        }
+    }
+}
+
+impl EventReceiver {
+    /// The next event if one is waiting.
+    #[cfg(test)]
+    pub fn try_changed(&mut self) -> Option<Event> {
+        self.local
+            .try_recv()
+            .ok()
+            .or_else(|| self.global.try_recv().ok())
+    }
+}
+
+#[derive(Debug)]
+pub struct EventReceiver {
+    local: broadcast::Receiver<Event>,
+    global: broadcast::Receiver<Event>,
+}
+
+impl EventReceiver {
+    pub async fn recv(&mut self) -> Result<Event, broadcast::error::RecvError> {
+        tokio::select! {
+            event = self.local.recv() => event,
+            event = self.global.recv() => event,
+        }
+    }
+}
+
+impl Event {
+    /// Whether every player gets it, wherever they are (what is for one
+    /// player, the chat, the tab list...) rather than those in the
+    /// dimension it happened in.
+    pub fn is_global(&self) -> bool {
+        !matches!(
+            self,
+            Event::PlayerMoved { .. }
+                | Event::PlayerGone { .. }
+                | Event::BlocksChanged { .. }
+                | Event::BlockBroken { .. }
+                | Event::LightChanged(_)
+                | Event::EntitySpawned(_)
+                | Event::BlockEntity { .. }
+                | Event::BlockAction { .. }
+                | Event::EntitiesMoved(_)
+                | Event::EntitiesRemoved(_)
+                | Event::ContainerSlots { .. }
+                | Event::ContainerGone { .. }
+                | Event::FurnaceProgress { .. }
+                | Event::ItemTaken { .. }
+                | Event::BiomesChanged { .. }
+                | Event::Weather(_)
+                | Event::Border
+                | Event::EntitiesData(_)
+                | Event::Explosion { .. }
+        )
+    }
+}
+
 impl std::fmt::Debug for ServerContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerContext")
@@ -431,11 +599,130 @@ impl std::fmt::Debug for ServerContext {
 }
 
 impl ServerContext {
+    /// The dimension at `index` in [`DIMENSIONS`], made when first needed.
+    /// `None` if it cannot be made.
+    pub fn dimension(&self, index: usize) -> Option<Arc<ServerContext>> {
+        let cell = self.shared.dims.get(index)?;
+        let mut cell = cell.lock().expect("dimensions lock");
+        if cell.is_none() {
+            match self.build_dimension(index) {
+                Ok(ctx) => *cell = Some(ctx),
+                Err(err) => {
+                    warn!("cannot open {}: {err:#}", DIMENSIONS[index]);
+                    return None;
+                }
+            }
+        }
+        cell.clone()
+    }
+
+    /// The dimension at `index`, or this one if it cannot be had.
+    pub fn at(&self, index: usize) -> Arc<ServerContext> {
+        self.dimension(index)
+            .or_else(|| self.dimension(self.dim))
+            .expect("this dimension exists")
+    }
+
+    /// A dimension by name (`minecraft:the_nether`).
+    pub fn in_dimension(&self, name: &str) -> Option<Arc<ServerContext>> {
+        self.dimension(dimension_index(name)?)
+    }
+
+    /// The dimensions made so far.
+    pub fn open_dimensions(&self) -> Vec<Arc<ServerContext>> {
+        self.shared
+            .dims
+            .iter()
+            .filter_map(|d| d.lock().expect("dimensions lock").clone())
+            .collect()
+    }
+
+    /// The dimension a player is in (this one if they are nowhere).
+    pub fn of_player(&self, uuid: u128) -> Arc<ServerContext> {
+        let name = self
+            .players
+            .lock()
+            .expect("players lock")
+            .get(&uuid)
+            .map(|p| p.dimension.clone());
+        name.and_then(|n| self.in_dimension(&n))
+            .or_else(|| self.dimension(self.dim))
+            .expect("this dimension exists")
+    }
+
+    /// `minecraft:overworld`, `minecraft:the_nether` or `minecraft:the_end`.
+    pub fn dimension_name(&self) -> &'static str {
+        DIMENSIONS[self.dim]
+    }
+
+    fn build_dimension(&self, index: usize) -> Result<Arc<ServerContext>> {
+        use mc_worldgen::generator::Dimension as Kind;
+        let kind = [Kind::Overworld, Kind::Nether, Kind::End][index];
+        let synced = &self.shared.synced_ids;
+        let rules = &self.rules;
+        let light = self.shared.light_tables.clone();
+        let name = DIMENSIONS[index].trim_start_matches("minecraft:");
+        let world = match &self.config.world {
+            Some(dir) => {
+                let biome_ids: HashMap<String, u32> = synced["minecraft:worldgen/biome"]
+                    .iter()
+                    .map(|(k, &v)| (k.clone(), v as u32))
+                    .collect();
+                let generator = match crate::generation::seed_of(dir) {
+                    Some(seed) => Some((
+                        crate::generation::dimension(&self.data, seed, &biome_ids, kind)?,
+                        seed,
+                    )),
+                    None => None,
+                };
+                World::open_dimension(
+                    dir,
+                    kind,
+                    generator,
+                    &self.data,
+                    synced,
+                    light,
+                    rules,
+                    make_shapes(&self.data, &self.config),
+                )?
+            }
+            None => World::flat_in(&self.data, synced, rules, light, DIMENSIONS[index])?,
+        };
+        let folder = world.folder().map(Path::to_owned);
+        let version = self.data.version.world_version;
+        Ok(Arc::new(ServerContext {
+            shared: Arc::clone(&self.shared),
+            dim: index,
+            world,
+            ticks: Mutex::new(mc_tick::ScheduledTicks::default()),
+            entities: Mutex::new(Vec::new()),
+            containers: Mutex::new(HashMap::new()),
+            block_events: Mutex::new(Vec::new()),
+            moving: Mutex::new(Vec::new()),
+            furnaces: Mutex::new(HashMap::new()),
+            hoppers: Mutex::new(Default::default()),
+            torch_toggles: Mutex::new(HashMap::new()),
+            container_updates: Mutex::new(Vec::new()),
+            weather: Mutex::new(Default::default()),
+            border: Mutex::new(crate::border::Border::load_in(
+                folder.as_deref(),
+                name,
+                version,
+            )),
+            forced: Mutex::new(crate::forced::Forced::load_in(
+                folder.as_deref(),
+                name,
+                version,
+            )),
+            events: self.shared.hub.for_dim(index),
+        }))
+    }
+
     pub fn white_list(&self) -> bool {
         self.white_list.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn new(config: Config, data: McData) -> Result<Self> {
+    pub fn new(config: Config, data: McData) -> Result<Arc<Self>> {
         let mut ids = PacketIds::new();
         for packet in &data.packets {
             if let (Some(state), Some(direction)) = (
@@ -493,6 +780,8 @@ impl ServerContext {
         let tags = build_tags(&data, &synced_ids)?;
         let rules = BlockRules::new(&data).map_err(anyhow::Error::msg)?;
         let light = light_tables(&data, &config);
+        let light_tables = light.clone();
+        let hub = Events::new();
         let items = match data.builtin.get("minecraft:item") {
             Some(ids) => crate::items::Items::load(&config.data_dir, ids)?,
             None => crate::items::Items::default(),
@@ -615,7 +904,7 @@ impl ServerContext {
             pitch: 0.0,
             forced: false,
         };
-        Ok(Self {
+        let shared = Arc::new(Shared {
             core_pack: KnownPack {
                 namespace: "minecraft".into(),
                 id: "core".into(),
@@ -626,25 +915,15 @@ impl ServerContext {
             registries,
             registries_with_data,
             tags,
-            world,
             rules,
             shapes,
-            ticks: Mutex::new(mc_tick::ScheduledTicks::default()),
-            entities: Mutex::new(Vec::new()),
             inventories: Mutex::new(HashMap::new()),
-            containers: Mutex::new(HashMap::new()),
             loot: crate::loot::BlockLoot::load(&data),
             recipes: crate::crafting::Recipes::load(&data),
             vitals: Mutex::new(HashMap::new()),
             items,
             using: Mutex::new(HashMap::new()),
-            container_updates: Mutex::new(Vec::new()),
-            hoppers: Mutex::new(Default::default()),
-            torch_toggles: Mutex::new(HashMap::new()),
             fuels,
-            furnaces: Mutex::new(HashMap::new()),
-            block_events: Mutex::new(Vec::new()),
-            moving: Mutex::new(Vec::new()),
             difficulty: AtomicI32::new(difficulty),
             damage_types,
             player_files,
@@ -668,8 +947,6 @@ impl ServerContext {
             player_entity_type,
             key,
             players: Mutex::new(HashMap::new()),
-            // Every movement is an event; leave room for many moving players.
-            events: broadcast::channel(4096).0,
             time: Mutex::new(time),
             actions,
             action_queue: Mutex::new(Some(action_queue)),
@@ -682,17 +959,41 @@ impl ServerContext {
             packs: Mutex::new(packs),
             commands,
             game_rules: Mutex::new(game_rules),
-            weather: Mutex::new(weather),
-            border: Mutex::new(border),
             spawn: Mutex::new(spawn),
-            forced: Mutex::new(forced),
             bossbars: Mutex::new(bossbars),
             scoreboard: Mutex::new(scoreboard),
             storage: Mutex::new(storage),
             rare: Mutex::default(),
             stopwatches: Mutex::default(),
             data,
-        })
+            dims: Default::default(),
+            synced_ids,
+            light_tables,
+            hub: hub.clone(),
+            portals: Mutex::default(),
+        });
+        let overworld = Arc::new(ServerContext {
+            shared: Arc::clone(&shared),
+            dim: 0,
+
+            world,
+            ticks: Mutex::new(mc_tick::ScheduledTicks::default()),
+            entities: Mutex::new(Vec::new()),
+            containers: Mutex::new(HashMap::new()),
+            container_updates: Mutex::new(Vec::new()),
+            hoppers: Mutex::new(Default::default()),
+            torch_toggles: Mutex::new(HashMap::new()),
+            furnaces: Mutex::new(HashMap::new()),
+            block_events: Mutex::new(Vec::new()),
+            moving: Mutex::new(Vec::new()),
+            // Every movement is an event; leave room for many moving players.
+            events: hub.for_dim(0),
+            weather: Mutex::new(weather),
+            border: Mutex::new(border),
+            forced: Mutex::new(forced),
+        });
+        *shared.dims[0].lock().expect("dimensions lock") = Some(Arc::clone(&overworld));
+        Ok(overworld)
     }
 
     pub fn difficulty(&self) -> i32 {
@@ -723,6 +1024,24 @@ impl ServerContext {
     pub fn online_count(&self) -> usize {
         self.players.lock().expect("players lock").len()
     }
+}
+
+fn make_shapes(data: &McData, config: &Config) -> mc_tick::Shapes {
+    let observed = |file: &str| {
+        let path = config.data_dir.join("observed").join(file);
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| serde_json::from_value::<Vec<i32>>(v["states"].clone()).ok())
+    };
+    mc_tick::Shapes::new(
+        data,
+        observed("fence_attach.json"),
+        observed("conductor.json"),
+    )
+    .with_instruments(observed("instrument.json"))
+    .with_support(observed("support.json"))
+    .with_push(observed("push.json"))
 }
 
 /// Opacity and emission per state. Opacity comes from
@@ -894,4 +1213,27 @@ fn build_tags(data: &McData, synced: &HashMap<String, HashMap<String, i32>>) -> 
         });
     }
     Ok(UpdateTags { registries })
+}
+
+#[cfg(test)]
+mod hub_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn events_reach_the_right_receivers() {
+        let hub = Events::new();
+        let (a, b) = (hub.for_dim(0), hub.for_dim(1));
+        let mut ra = a.subscribe();
+        let mut rb = b.subscribe();
+        a.send(Event::Chat(Tag::String("hi".into()))).unwrap();
+        a.send(Event::Border).unwrap();
+        assert!(matches!(ra.recv().await, Ok(Event::Chat(_))));
+        assert!(matches!(rb.recv().await, Ok(Event::Chat(_))));
+        assert!(matches!(ra.recv().await, Ok(Event::Border)));
+        assert!(rb.try_changed().is_none());
+        // Aimed at another dimension.
+        a.send(Event::In(1, Box::new(Event::Border))).unwrap();
+        assert!(matches!(rb.recv().await, Ok(Event::Border)));
+        assert!(ra.try_changed().is_none());
+    }
 }

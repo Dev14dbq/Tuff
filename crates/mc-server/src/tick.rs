@@ -137,6 +137,8 @@ pub enum Action {
 
 #[derive(Debug)]
 pub struct Request {
+    /// The dimension the player is in (index in `context::DIMENSIONS`).
+    pub dim: usize,
     pub actor: Actor,
     pub action: Action,
     /// Gets the player's own answer; events for others are broadcast.
@@ -172,6 +174,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             let packet = lock(&ctx.time).packet(false);
             let _ = ctx.events.send(Event::Time(packet));
         }
+        let dimensions = ctx.open_dimensions();
         let runs = !control.frozen || control.steps > 0;
         if control.frozen && control.steps > 0 {
             control.steps -= 1;
@@ -179,23 +182,30 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         if runs {
             lock(&ctx.time).advance();
             crate::commands::run_functions(&ctx, &mut control);
-            run_scheduled_ticks(&ctx);
-            crate::random_ticks::tick(&ctx);
+            for d in &dimensions {
+                run_scheduled_ticks(d);
+                crate::random_ticks::tick(d);
+                crate::furnaces::tick(d);
+                lock(&d.border).tick();
+            }
             crate::effects::tick(&ctx, count as i64);
             crate::vitals::tick(&ctx);
             crate::vitals::tick_using(&ctx);
-            crate::furnaces::tick(&ctx);
+            crate::portals::tick(&ctx);
             let advance = ctx.game_rule_bool("advance_weather");
             let changes = lock(&ctx.weather).tick(advance);
             if changes != crate::weather::Changes::default() {
                 let _ = ctx.events.send(Event::Weather(changes));
             }
-            lock(&ctx.border).tick();
         }
 
         while let Ok(request) = requests.try_recv() {
             let actor = request.actor.uuid;
-            let mut outcome = handle(&ctx, &mut control, request.actor, request.action);
+            let here = ctx
+                .dimension(request.dim)
+                .unwrap_or_else(|| Arc::clone(&ctx));
+            let ctx = &here;
+            let mut outcome = handle(ctx, &mut control, request.actor, request.action);
             // Packets sent to the player come before the reply, as in
             // vanilla, so the reply then goes the same way.
             let after = outcome.events.iter().any(|e| match e {
@@ -218,19 +228,24 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
                 }
             }
             for (at, drop) in std::mem::take(&mut outcome.drops) {
-                drop_item(&ctx, at, drop);
+                drop_item(ctx, at, drop);
             }
             let _ = request.reply.send(outcome);
         }
-        containers_changed(&ctx);
+        for d in &dimensions {
+            containers_changed(d);
+        }
 
         if count.is_multiple_of(UNLOAD_EVERY) {
-            let dropped = ctx.world.unload_unused();
-            if dropped > 0 {
-                debug!(
-                    "unloaded {dropped} chunks, {} in memory",
-                    ctx.world.loaded_chunks()
-                );
+            for d in &dimensions {
+                let dropped = d.world.unload_unused();
+                if dropped > 0 {
+                    debug!(
+                        "unloaded {dropped} chunks of {}, {} in memory",
+                        d.dimension_name(),
+                        d.world.loaded_chunks()
+                    );
+                }
             }
         }
         if count.is_multiple_of(autosave) && ctx.world.autosaving() {
@@ -362,6 +377,7 @@ fn press_plates(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     use mc_tick::Level as _;
     let at: Vec<mc_tick::BlockPos> = lock(&ctx.players)
         .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
         .filter(|p| p.game_mode != 3)
         .filter_map(|p| p.pose)
         .map(|pose| {
@@ -523,6 +539,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     let logic = level.logic();
     let players: Vec<(u128, i32, i32, crate::context::Pose)> = lock(&ctx.players)
         .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
         .filter_map(|p| {
             p.pose
                 .map(|pose| (p.profile.uuid, p.entity_id, p.game_mode, pose))

@@ -221,7 +221,7 @@ pub fn bone_meal(level: &mut WorldLevel, p: Position) -> bool {
 mod tests {
     use super::*;
 
-    fn flat() -> Option<crate::context::ServerContext> {
+    fn flat() -> Option<std::sync::Arc<crate::context::ServerContext>> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
         let data = mc_data::McData::load(&dir).ok()?;
         crate::context::ServerContext::new(crate::Config::new(dir), data).ok()

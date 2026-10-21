@@ -26,6 +26,12 @@ pub trait Level {
     /// Whether `p` is inside the world's height.
     fn in_world(&self, p: BlockPos) -> bool;
 
+    /// Whether fire may light a nether portal here (the overworld and the
+    /// Nether).
+    fn allows_nether_portal(&self) -> bool {
+        true
+    }
+
     /// Lava flows fast, far and thin here (the dimension's
     /// `gameplay/fast_lava`, the Nether).
     fn fast_lava(&self) -> bool {

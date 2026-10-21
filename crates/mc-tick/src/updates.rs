@@ -144,6 +144,7 @@ pub fn update_neighbor_shapes(
             _ => {}
         }
         new = crate::fire::update_shape(level, ctx, np, new);
+        new = crate::portal::update_shape(level, ctx, np, new, dir.opposite(), state);
         crate::leaves::shape_updated(level, ctx, np, new);
         // Something that lost what held it up breaks (or looks again next
         // tick).

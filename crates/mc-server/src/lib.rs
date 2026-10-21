@@ -32,6 +32,7 @@ mod loot;
 mod packs;
 mod pipeline;
 mod players;
+mod portals;
 pub mod properties;
 mod random_ticks;
 mod rules;
@@ -53,7 +54,7 @@ use anyhow::{Context as _, Result, ensure};
 use tokio::net::TcpListener;
 use tracing::{debug, info};
 
-pub use context::ServerContext;
+pub use context::{DIMENSIONS, ServerContext};
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -177,7 +178,7 @@ impl Server {
             mc_protocol::PROTOCOL_VERSION
         );
         let addr = SocketAddr::new(config.bind, config.port);
-        let ctx = Arc::new(ServerContext::new(config, data)?);
+        let ctx = ServerContext::new(config, data)?;
         let listener = TcpListener::bind(addr)
             .await
             .with_context(|| format!("cannot listen on {addr}"))?;
@@ -286,6 +287,7 @@ fn console(ctx: &Arc<ServerContext>) {
             continue;
         }
         let request = tick::Request {
+            dim: 0,
             actor: interact::Actor::console(),
             action: tick::Action::Command {
                 line,
@@ -328,7 +330,13 @@ fn save(ctx: &ServerContext) {
         save_player(ctx, uuid);
     }
     tracing::debug!("Saving worlds");
-    let saved = ctx.world.save(&ctx.data.blocks);
+    let mut saved = ctx.world.save(&ctx.data.blocks);
+    for other in ctx.open_dimensions().iter().filter(|d| d.dim != ctx.dim) {
+        other.border.lock().expect("border lock").save();
+        let more = other.world.save(&other.data.blocks);
+        saved.chunks += more.chunks;
+        saved.failed += more.failed;
+    }
     if saved.chunks > 0 || saved.failed > 0 {
         tracing::debug!(
             "saved {} chunks in {} ms{}",
@@ -370,6 +378,7 @@ pub(crate) fn saved_of(ctx: &ServerContext, uuid: u128) -> Option<players::Saved
         .unwrap_or_default();
     Some(players::Saved {
         pose,
+        dimension: player.dimension.clone(),
         game_mode: player.game_mode,
         flying: player.flying,
         hands,

@@ -359,6 +359,7 @@ fn dress_player(
     let (fx, fy, fz) = (f64::from(front.x), f64::from(front.y), f64::from(front.z));
     let candidates: Vec<u128> = lock(&ctx.players)
         .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
         .filter(|p| p.game_mode != 3)
         .filter_map(|p| p.pose.map(|pose| (p.profile.uuid, pose)))
         .filter(|(_, pose)| {
@@ -612,7 +613,7 @@ mod tests {
     use super::*;
     use crate::level::WorldLevel;
 
-    fn context() -> Option<ServerContext> {
+    fn context() -> Option<std::sync::Arc<ServerContext>> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
         let data = mc_data::McData::load(&dir).ok()?;
         ServerContext::new(crate::Config::new(dir), data).ok()

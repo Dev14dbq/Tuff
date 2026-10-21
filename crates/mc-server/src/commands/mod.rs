@@ -125,6 +125,8 @@ pub struct Src {
     /// Yaw and pitch.
     pub rot: [f32; 2],
     pub level: u8,
+    /// The dimension it runs in (index in `context::DIMENSIONS`).
+    pub dim: usize,
     /// `execute anchored eyes`.
     pub eyes: bool,
     /// `execute store`: where the command's result goes.
@@ -188,6 +190,7 @@ impl Src {
                     pos: [x, y, z],
                     rot: [0.0, 0.0],
                     level: 4,
+                    dim: ctx.dim,
                     eyes: false,
                     stores: Vec::new(),
                     silent: false,
@@ -199,6 +202,7 @@ impl Src {
                 pos: [pose.x, pose.y, pose.z],
                 rot: [pose.yaw, pose.pitch],
                 level: level(ctx, *uuid, name),
+                dim: ctx.of_player(*uuid).dim,
                 eyes: false,
                 stores: Vec::new(),
                 silent: false,
@@ -228,6 +232,21 @@ pub struct Run<'a> {
 pub type Result<T> = std::result::Result<T, CommandError>;
 
 impl Run<'_> {
+    /// Moves a player to `pose` in the dimension the command runs in.
+    pub fn teleport(&mut self, uuid: u128, pose: Pose) {
+        let there = self.ctx.of_player(uuid).dim;
+        self.out.events.push(if there == self.ctx.dim {
+            Event::Teleport { uuid, pose }
+        } else {
+            Event::ChangeDimension {
+                uuid,
+                dimension: self.ctx.dimension_name().to_owned(),
+                pose,
+                after_death: false,
+            }
+        });
+    }
+
     /// Tells the source; with `broadcast`, other operators and the console
     /// hear of it too (`[Name: ...]`).
     pub fn success(&mut self, message: Tag, broadcast: bool) {
@@ -353,7 +372,8 @@ pub(crate) fn run_chain(
         } else {
             for s in &sources {
                 out.steps += 1;
-                next.extend(run::modify(ctx, c, s)?);
+                let here = ctx.at(s.dim);
+                next.extend(run::modify(&here, c, s)?);
             }
         }
         if out.steps > max_steps {
@@ -383,8 +403,10 @@ pub(crate) fn run_chain(
             return Ok(total);
         }
         let silent = s.silent;
+        let here = ctx.at(s.dim);
+        let first_event = out.events.len();
         let mut r = Run {
-            ctx,
+            ctx: &here,
             tick: &mut *tick,
             src: s,
             c: last,
@@ -392,6 +414,16 @@ pub(crate) fn run_chain(
             admin: Vec::new(),
         };
         let result = run::run(&mut r, &path);
+        // What happened in another dimension is for those there.
+        if r.src.dim != ctx.dim {
+            let dim = r.src.dim;
+            for e in &mut r.out.events[first_event..] {
+                if !e.is_global() && !matches!(e, Event::In(..)) {
+                    let old = std::mem::replace(e, Event::Border);
+                    *e = Event::In(dim, Box::new(old));
+                }
+            }
+        }
         admin.append(&mut r.admin);
         let stores = std::mem::take(&mut r.src.stores);
         if !stores.is_empty() {
