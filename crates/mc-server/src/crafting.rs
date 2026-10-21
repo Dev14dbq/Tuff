@@ -230,7 +230,7 @@ impl Recipes {
             smithing,
             item_tags: item_tags
                 .iter()
-                .map(|(k, v)| ((*k).to_owned(), v.iter().copied().collect()))
+                .map(|(k, v)| ((*k).to_owned(), v.to_vec()))
                 .collect(),
         }
     }
