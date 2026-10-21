@@ -2190,7 +2190,10 @@ fn summon(r: &mut Run) -> Result<i32> {
             };
             mc_entity::Kind::FallingBlock { state }
         }
-        _ => return Err(err("commands.summon.failed", Vec::new())),
+        other => match mc_entity::Species::from_id(other) {
+            Some(species) => crate::mobs::new_mob(r.ctx, species, at).kind,
+            None => return Err(err("commands.summon.failed", Vec::new())),
+        },
     };
     let entity = mc_entity::Entity {
         id: r.ctx.next_entity_id(),

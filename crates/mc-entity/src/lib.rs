@@ -7,8 +7,11 @@
 //! first, then the larger horizontal one — and its velocity is damped.
 //! Blocks collide as full cubes for now; shapes come later.
 
+pub mod mob;
+pub mod nav;
 pub mod physics;
 
+pub use mob::{Mob, Species};
 pub use physics::{Aabb, Collide, move_entity};
 
 /// What kind of entity, with its own state.
@@ -33,6 +36,8 @@ pub enum Kind {
         /// The player who lit it.
         owner: Option<u128>,
     },
+    /// A creature with goals: animals and monsters.
+    Mob(Box<Mob>),
 }
 
 impl Kind {
@@ -69,6 +74,7 @@ impl Entity {
         match self.kind {
             Kind::FallingBlock { .. } | Kind::Tnt { .. } => (0.98, 0.98),
             Kind::Item { .. } => (0.25, 0.25),
+            Kind::Mob(ref m) => m.species.size(),
         }
     }
 

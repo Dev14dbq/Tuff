@@ -142,6 +142,10 @@ pub enum Event {
     },
     /// An entity appeared (players see it if they have its chunk).
     EntitySpawned(mc_entity::Entity),
+    /// Mobs that moved or turned.
+    MobsMoved(Vec<crate::mobs::MobMove>),
+    /// Entity events of mobs (`EntityEvent` statuses: 2 hurt, 3 death...).
+    MobsStatus(Vec<(i32, u8)>),
     /// Light changed in these chunks.
     LightChanged(Vec<(i32, i32)>),
     /// A player started (`hand` 0 main, 1 off) or stopped (`None`) using an
@@ -334,6 +338,8 @@ pub struct ServerContext {
     pub ticks: Mutex<mc_tick::ScheduledTicks>,
     /// Entities other than players (tick thread only, read by joining players).
     pub entities: Mutex<Vec<mc_entity::Entity>>,
+    /// What players did to mobs and where mobs have spawned.
+    pub mobs: crate::mobs::MobState,
     /// Inventories of the players in play.
     pub inventories: Mutex<HashMap<u128, crate::interact::Hands>>,
     /// Chests and barrels someone has open.
@@ -630,6 +636,7 @@ impl ServerContext {
             shapes,
             ticks: Mutex::new(mc_tick::ScheduledTicks::default()),
             entities: Mutex::new(Vec::new()),
+            mobs: Default::default(),
             inventories: Mutex::new(HashMap::new()),
             containers: Mutex::new(HashMap::new()),
             loot: crate::loot::BlockLoot::load(&data),

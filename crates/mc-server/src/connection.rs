@@ -841,6 +841,19 @@ async fn play(
                         let victim = ctx.players.lock().expect("players lock").values()
                             .find(|p| p.entity_id == target)
                             .and_then(|p| p.pose.map(|at| (p.profile.uuid, at)));
+                        if victim.is_none() {
+                            // Not a player: a mob, if anything.
+                            let held = ctx.inventories.lock().expect("inventories lock").get(&uuid)
+                                .and_then(|h| h.main_hand().map(|s| s.item));
+                            let damage = crate::vitals::melee_damage(&ctx, held);
+                            let by = crate::mobs::Actor {
+                                uuid,
+                                entity_id,
+                                name: me.profile.name.clone(),
+                                pos: [pose.x, pose.y, pose.z],
+                            };
+                            ctx.mobs.hit(target, by, damage);
+                        }
                         if let Some((victim, at)) = victim {
                             let (dx, dy, dz) = (at.x - pose.x, at.y - pose.y, at.z - pose.z);
                             // Reach 3 from the docs, with some room for lag.
@@ -851,6 +864,15 @@ async fn play(
                                 crate::vitals::hurt_by(&ctx, victim, damage, "minecraft:player_attack", "death.attack.player", Some(&me.profile.name));
                             }
                         }
+                    }
+                    play::Serverbound::Interact { entity_id: target, hand } if game_mode != 3 => {
+                        let by = crate::mobs::Actor {
+                            uuid,
+                            entity_id,
+                            name: me.profile.name.clone(),
+                            pos: [pose.x, pose.y, pose.z],
+                        };
+                        ctx.mobs.use_on(target, by, hand);
                     }
                     play::Serverbound::Punch => {
                         let _ = ctx.events.send(Event::Swing { uuid, entity_id, times: 1 });
@@ -963,6 +985,7 @@ async fn play(
                         .is_some_and(|s| ctx.data.blocks.is_fluid(s));
                     crate::vitals::moved(&ctx, uuid, before, pose, in_water);
                     view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                    sync_entities(writer, &ctx, &view, &mut seen_entities)?;
                     update_player(&ctx, uuid, |p| p.pose = Some(pose));
                     let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
                 }
@@ -1014,6 +1037,43 @@ async fn play(
                                     pitch: 0.0,
                                     on_ground,
                                 })?;
+                            }
+                        }
+                    }
+                    Ok(Event::MobsMoved(moves)) => {
+                        for m in moves {
+                            let at = Position::new(m.pos[0].floor() as i32, 0, m.pos[2].floor() as i32);
+                            let in_view = view.has_block(at);
+                            if seen_entities.contains(&m.id) {
+                                if !in_view {
+                                    seen_entities.remove(&m.id);
+                                    writer.queue(&play::RemoveEntities { entity_ids: vec![m.id] })?;
+                                    continue;
+                                }
+                                writer.queue(&play::EntityPositionSync {
+                                    entity_id: m.id,
+                                    x: m.pos[0],
+                                    y: m.pos[1],
+                                    z: m.pos[2],
+                                    yaw: m.yaw,
+                                    pitch: m.pitch,
+                                    on_ground: m.on_ground,
+                                })?;
+                                writer.queue(&play::RotateHead { entity_id: m.id, head_yaw: m.head_yaw })?;
+                            } else if in_view {
+                                // A mob walked into view.
+                                let found = ctx.entities.lock().expect("entities lock").iter().find(|e| e.id == m.id).cloned();
+                                if let Some(entity) = found {
+                                    spawn_entity(writer, &ctx, &entity)?;
+                                    seen_entities.insert(entity.id);
+                                }
+                            }
+                        }
+                    }
+                    Ok(Event::MobsStatus(statuses)) => {
+                        for (id, status) in statuses {
+                            if seen_entities.contains(&id) {
+                                writer.queue(&play::EntityEvent { entity_id: id, status: status as i8 })?;
                             }
                         }
                     }
@@ -1534,16 +1594,52 @@ fn spawn_player(
     Ok(())
 }
 
+/// Shows the entities in the chunks the client has and hides those that
+/// are no longer in them.
+fn sync_entities(
+    writer: &mut PacketWriter,
+    ctx: &ServerContext,
+    view: &ChunkView,
+    seen: &mut HashSet<i32>,
+) -> Result<()> {
+    let (mut show, mut hide) = (Vec::new(), Vec::new());
+    for entity in ctx.entities.lock().expect("entities lock").iter() {
+        let (x, _, z) = entity.block_pos();
+        let in_view = view.has_block(Position::new(x, 0, z));
+        if in_view && !seen.contains(&entity.id) {
+            show.push(entity.clone());
+        } else if !in_view && seen.contains(&entity.id) {
+            hide.push(entity.id);
+        }
+    }
+    for entity in show {
+        spawn_entity(writer, ctx, &entity)?;
+        seen.insert(entity.id);
+    }
+    for id in &hide {
+        seen.remove(id);
+    }
+    if !hide.is_empty() {
+        writer.queue(&play::RemoveEntities { entity_ids: hide })?;
+    }
+    Ok(())
+}
+
 /// Add Entity for a non-player entity.
 fn spawn_entity(
     writer: &mut PacketWriter,
     ctx: &ServerContext,
     entity: &mc_entity::Entity,
 ) -> Result<()> {
-    let (kind, data) = match entity.kind {
-        mc_entity::Kind::FallingBlock { state } => (ctx.entity_types.falling_block, state as i32),
+    let (kind, data) = match &entity.kind {
+        mc_entity::Kind::FallingBlock { state } => (ctx.entity_types.falling_block, *state as i32),
         mc_entity::Kind::Item { .. } => (ctx.entity_types.item, 0),
         mc_entity::Kind::Tnt { .. } => (ctx.entity_types.tnt, 0),
+        mc_entity::Kind::Mob(m) => (crate::mobs::type_id(ctx, m.species), 0),
+    };
+    let (yaw, pitch, head_yaw) = match &entity.kind {
+        mc_entity::Kind::Mob(m) => (m.yaw, m.pitch, m.head_yaw),
+        _ => (0.0, 0.0, 0.0),
     };
     writer.queue(&play::AddEntity {
         entity_id: entity.id,
@@ -1552,12 +1648,16 @@ fn spawn_entity(
         x: entity.pos[0],
         y: entity.pos[1],
         z: entity.pos[2],
-        pitch: 0.0,
-        yaw: 0.0,
-        head_yaw: 0.0,
+        pitch,
+        yaw,
+        head_yaw,
         data,
     })?;
+    if let Some(packet) = crate::mobs::metadata_packet(entity) {
+        writer.queue(&packet)?;
+    }
     match entity.kind {
+        mc_entity::Kind::Mob(_) => {}
         mc_entity::Kind::Item {
             item,
             count,

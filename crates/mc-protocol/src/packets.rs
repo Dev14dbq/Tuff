@@ -618,6 +618,12 @@ pub mod play {
         Attack {
             entity_id: i32,
         },
+        /// Right click on an entity (the rest of the packet, where it was
+        /// clicked and sneaking, is not read).
+        Interact {
+            entity_id: i32,
+            hand: i32,
+        },
         /// 0 respawn, 1 statistics, 2 game rules.
         ClientCommand {
             action: i32,
@@ -940,6 +946,12 @@ pub mod play {
                 "minecraft:attack" => Serverbound::Attack {
                     entity_id: r.varint()?,
                 },
+                "minecraft:interact" => {
+                    let entity_id = r.varint()?;
+                    let hand = r.varint()?;
+                    let _ = r.bytes(r.remaining());
+                    Serverbound::Interact { entity_id, hand }
+                }
                 "minecraft:client_command" => Serverbound::ClientCommand {
                     action: r.varint()?,
                 },

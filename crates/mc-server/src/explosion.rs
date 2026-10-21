@@ -692,6 +692,9 @@ pub fn explode(
                 continue;
             }
         }
+        if let Kind::Mob(m) = &mut e.kind {
+            m.hurt(damage(impact, reach), None);
+        }
         for (v, d) in e.vel.iter_mut().zip(dir) {
             *v += d * impact;
         }

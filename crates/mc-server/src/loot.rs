@@ -47,10 +47,11 @@ pub trait LootEnv {
 }
 
 /// An entity as conditions see it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Ent {
     /// `minecraft:cow`
     pub kind: String,
+    pub on_fire: bool,
 }
 
 /// The tool in a hand.
@@ -612,6 +613,9 @@ impl Eval<'_> {
         };
         o.iter().all(|(k, v)| match k.as_str() {
             "type" => self.matches_id("minecraft:entity_type", v, &e.kind),
+            "minecraft:flags" => v["is_on_fire"]
+                .as_bool()
+                .is_none_or(|want| want == e.on_fire),
             _ => false,
         })
     }

@@ -256,6 +256,32 @@ fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
             }
         }
         mc_entity::Kind::FallingBlock { .. } => {}
+        mc_entity::Kind::Mob(m) => {
+            c.insert("Health", Tag::Float(m.health));
+            c.insert(
+                "DeathTime",
+                Tag::Short(m.dying.map_or(0, |left| 20 - left) as i16),
+            );
+            c.insert("HurtTime", Tag::Short(m.invulnerable.max(0) as i16));
+            c.insert("Fire", Tag::Short(m.burning.max(-1) as i16));
+            c.insert("Age", Tag::Int(0));
+            match m.species {
+                mc_entity::Species::Sheep => {
+                    c.insert("Color", Tag::Byte(m.color as i8));
+                    c.insert("Sheared", Tag::Byte(i8::from(m.sheared)));
+                }
+                mc_entity::Species::Creeper => {
+                    c.insert("Fuse", Tag::Short(30));
+                    c.insert("ExplosionRadius", Tag::Byte(3));
+                    c.insert("powered", Tag::Byte(i8::from(m.powered)));
+                    c.insert("ignited", Tag::Byte(i8::from(m.ignited)));
+                }
+                mc_entity::Species::Chicken => {
+                    c.insert("EggLayTime", Tag::Int(m.egg_time));
+                }
+                _ => {}
+            }
+        }
     }
     c
 }
