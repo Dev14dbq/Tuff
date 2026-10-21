@@ -1112,6 +1112,9 @@ fn damage(impact: f64, reach: f64) -> f32 {
 /// thrown out at that block.
 fn merge_and_drop(ctx: &ServerContext, drops: Vec<(Position, crate::loot::Drop)>) {
     const MERGE: i32 = 16;
+    if !ctx.game_rule_bool("block_drops") {
+        return;
+    }
     let mut merged: Vec<(Position, crate::loot::Drop)> = Vec::new();
     for (p, d) in drops {
         let max = ctx.items.max_stack(d.item).min(MERGE);

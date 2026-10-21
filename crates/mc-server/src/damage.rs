@@ -114,6 +114,29 @@ fn entry(ctx: &ServerContext, damage_type: &str) -> Option<serde_json::Value> {
     serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()
 }
 
+/// Whether a game rule spares players this damage: `fall_damage`,
+/// `fire_damage`, `drowning_damage` and `freeze_damage` off turn off the
+/// types of the matching damage-type tag.
+pub fn ruled_out(ctx: &ServerContext, damage_type: &str) -> bool {
+    let rules = crate::tick::lock(&ctx.game_rules);
+    [
+        ("is_fall", "fall_damage"),
+        ("is_fire", "fire_damage"),
+        ("is_drowning", "drowning_damage"),
+        ("is_freezing", "freeze_damage"),
+    ]
+    .iter()
+    .any(|(tag, rule)| {
+        !rules.bool(rule)
+            && ctx
+                .commands
+                .env
+                .tag("minecraft:damage_type", tag)
+                .iter()
+                .any(|t| t == damage_type)
+    })
+}
+
 /// Whether the type's damage always scales with difficulty.
 pub fn scales_always(ctx: &ServerContext, damage_type: &str) -> bool {
     entry(ctx, damage_type).is_some_and(|e| e["scaling"] == "always")

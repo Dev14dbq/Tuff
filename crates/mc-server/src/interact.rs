@@ -455,6 +455,7 @@ pub fn dig(
         crate::fx::level_event(ctx, 1011, centre(position), 0);
     }
     if actor.game_mode != CREATIVE
+        && ctx.game_rule_bool("block_drops")
         && let Some(name) = blocks.block_name(state)
     {
         let props = |k: &str| blocks.property(state, k).map(str::to_owned);

@@ -64,6 +64,8 @@ pub enum Direct {
     ShowDialog(mc_protocol::packets::play::ShowDialog),
     ClearDialog(mc_protocol::packets::play::ClearDialog),
     PostEffects(mc_protocol::packets::play::PostEffects),
+    GameEvent(mc_protocol::packets::play::GameEvent),
+    EntityEvent(mc_protocol::packets::play::EntityEvent),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

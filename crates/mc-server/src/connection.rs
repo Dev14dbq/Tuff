@@ -476,9 +476,9 @@ async fn play(
         max_players: ctx.config.max_players as i32,
         view_distance: i32::from(ctx.config.view_distance),
         simulation_distance: i32::from(ctx.config.view_distance),
-        reduced_debug_info: false,
-        enable_respawn_screen: true,
-        do_limited_crafting: false,
+        reduced_debug_info: ctx.game_rule_bool("reduced_debug_info"),
+        enable_respawn_screen: !ctx.game_rule_bool("immediate_respawn"),
+        do_limited_crafting: ctx.game_rule_bool("limited_crafting"),
         dimension_type: world.dimension_type_id,
         dimension: world.dimension.clone(),
         hashed_seed: 0,
@@ -826,6 +826,9 @@ async fn play(
                             update_player(&ctx, uuid, |p| p.flying = flying);
                             writer.queue(&abilities(game_mode, flying))?;
                             writer.queue(&health)?;
+                            if let Some(xp) = ctx.vitals.lock().expect("vitals lock").get(&uuid).map(crate::vitals::Vitals::experience_packet) {
+                                writer.queue(&xp)?;
+                            }
                             pose = respawn_pose(&ctx, uuid);
                             next_teleport += 1;
                             awaiting_teleport = Some(next_teleport);
@@ -1232,9 +1235,12 @@ async fn play(
                     }
                     Ok(Event::Died { uuid: who, entity_id: dead, message }) => {
                         if who == uuid {
-                            writer.queue(&play::PlayerCombatKill { player: entity_id, message: message.clone() })?;
+                            let shown = ctx.game_rule_bool("show_death_messages");
+                            let screen = if shown { message.clone() } else { mc_nbt::Tag::String(String::new()) };
+                            writer.queue(&play::PlayerCombatKill { player: entity_id, message: screen })?;
                             // Everything carried falls out where the player died.
-                            let lost: Vec<play::ItemStack> = {
+                            let keep = ctx.game_rule_bool("keep_inventory");
+                            let lost: Vec<play::ItemStack> = if keep { Vec::new() } else {
                                 let mut inventories = ctx.inventories.lock().expect("inventories lock");
                                 inventories.get_mut(&uuid).map_or_else(Vec::new, |hands| {
                                     hands.components.clear();
@@ -1246,8 +1252,13 @@ async fn play(
                             for stack in lost {
                                 crate::tick::scatter_item(&ctx, pose, stack);
                             }
-                            update_player(&ctx, uuid, |p| p.main_hand = None);
-                            let _ = ctx.events.send(Event::Chat(message));
+                            if !keep {
+                                update_player(&ctx, uuid, |p| p.main_hand = None);
+                                crate::vitals::drop_death_xp(&ctx, uuid, game_mode, [pose.x, pose.y, pose.z]);
+                            }
+                            if shown {
+                                crate::vitals::announce_death(&ctx, uuid, message);
+                            }
                         } else if visible.remove(&who) {
                             writer.queue(&play::RemoveEntities { entity_ids: vec![dead] })?;
                         }
@@ -1350,6 +1361,8 @@ async fn play(
                             Direct::ShowDialog(p) => writer.queue(&p)?,
                             Direct::ClearDialog(p) => writer.queue(&p)?,
                             Direct::PostEffects(p) => writer.queue(&p)?,
+                            Direct::GameEvent(p) => writer.queue(&p)?,
+                            Direct::EntityEvent(p) => writer.queue(&p)?,
                         }
                     }
                     Ok(Event::Scoreboard(p)) => send_scoreboard(writer, &p)?,

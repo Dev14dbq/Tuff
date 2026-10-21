@@ -281,7 +281,9 @@ impl Level for WorldLevel<'_> {
         let ctx = self.ctx;
         let blocks = &ctx.data.blocks;
         let at = to_position(p);
-        if let Some(name) = blocks.block_name(state) {
+        if let Some(name) = blocks.block_name(state)
+            && ctx.game_rule_bool("block_drops")
+        {
             let props = |k: &str| blocks.property(state, k).map(str::to_owned);
             for drop in ctx.loot.drops(name, &props) {
                 crate::tick::drop_item(ctx, at, drop);
