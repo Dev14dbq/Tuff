@@ -343,6 +343,7 @@ fn save(ctx: &ServerContext) {
         save_player(ctx, uuid);
     }
     tracing::debug!("Saving worlds");
+    ctx.world.set_ticks_to_save(tick::ticks_by_chunk(ctx));
     let saved = ctx.world.save(&ctx.data.blocks);
     if saved.chunks > 0 || saved.failed > 0 {
         tracing::debug!(

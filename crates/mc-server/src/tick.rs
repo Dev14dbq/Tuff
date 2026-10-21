@@ -270,6 +270,79 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
     }
 }
 
+/// The waiting scheduled ticks as chunk files keep them, by chunk.
+pub(crate) fn ticks_by_chunk(
+    ctx: &ServerContext,
+) -> std::collections::HashMap<(i32, i32), crate::world::PendingTicks> {
+    let now = lock(&ctx.time).age;
+    let ticks = lock(&ctx.ticks);
+    let mut out: std::collections::HashMap<(i32, i32), crate::world::PendingTicks> =
+        Default::default();
+    for (pos, kind, time, priority) in ticks.blocks.pending() {
+        let Some(id) = ctx.shapes.index_name(kind) else {
+            continue;
+        };
+        let tick = crate::world::SavedTick {
+            fluid: false,
+            id: id.to_owned(),
+            pos,
+            delay: time - now,
+            priority,
+        };
+        out.entry((pos.x >> 4, pos.z >> 4))
+            .or_default()
+            .0
+            .push(tick.tag());
+    }
+    for (pos, kind, time, priority) in ticks.fluids.pending() {
+        let lava = kind == mc_tick::fluids::Fluid::Lava as u32;
+        let still = ctx
+            .world
+            .block(crate::level::to_position(pos), &ctx.data.blocks)
+            .and_then(|s| ctx.data.blocks.property(s, "level"))
+            == Some("0");
+        let id = match (lava, still) {
+            (false, true) => "minecraft:water",
+            (false, false) => "minecraft:flowing_water",
+            (true, true) => "minecraft:lava",
+            (true, false) => "minecraft:flowing_lava",
+        };
+        let tick = crate::world::SavedTick {
+            fluid: true,
+            id: id.to_owned(),
+            pos,
+            delay: time - now,
+            priority,
+        };
+        out.entry((pos.x >> 4, pos.z >> 4))
+            .or_default()
+            .1
+            .push(tick.tag());
+    }
+    out
+}
+
+/// Ticks stored in chunks just read go back in the queues.
+fn queue_saved_ticks(ctx: &ServerContext, ticks: &mut mc_tick::ScheduledTicks, now: i64) {
+    for t in ctx.world.take_saved_ticks() {
+        if t.fluid {
+            let fluid = if t.id.ends_with("lava") {
+                mc_tick::fluids::Fluid::Lava
+            } else {
+                mc_tick::fluids::Fluid::Water
+            };
+            ticks
+                .fluids
+                .schedule(t.pos, fluid as u32, now + t.delay, t.priority);
+        } else if let Some(state) = ctx.data.blocks.default_state(&t.id) {
+            let kind = ctx.shapes.block_index(state);
+            ticks
+                .blocks
+                .schedule(t.pos, kind, now + t.delay, t.priority);
+        }
+    }
+}
+
 /// Due block ticks, then due fluid ticks, then entities; what they change
 /// goes to everyone.
 pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
@@ -287,6 +360,7 @@ pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     }
     let due = {
         let mut ticks = lock(&ctx.ticks);
+        queue_saved_ticks(ctx, &mut ticks, now);
         // Flow new chunks pass on to chunks players already have.
         for (pos, fluid) in ctx.world.take_live_ticks() {
             let delay = if fluid == mc_tick::fluids::Fluid::Lava as u32 {
@@ -917,6 +991,52 @@ pub fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scheduled_ticks_survive_a_save() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        if mc_data::McData::load(&dir).is_err() {
+            eprintln!("skipped: no game data");
+            return;
+        }
+        let data = || mc_data::McData::load(&dir).expect("game data");
+        let folder = std::env::temp_dir().join(format!("mc-ticks-{}", std::process::id()));
+        let open = |data: mc_data::McData| {
+            let mut config = crate::Config::new(dir.clone());
+            config.world = Some(folder.clone());
+            config.seed = Some(12345);
+            ServerContext::new(config, data).expect("context")
+        };
+        let p = Position::new(3, 200, 5);
+        {
+            let ctx = open(data());
+            let repeater = ctx.data.blocks.default_state("minecraft:repeater").unwrap();
+            crate::level::WorldLevel::new(&ctx).set_block(p, repeater);
+            let kind = ctx.shapes.block_index(repeater);
+            let now = lock(&ctx.time).age;
+            lock(&ctx.ticks)
+                .blocks
+                .schedule(crate::level::to_pos(p), kind, now + 7, -1);
+            crate::save(&ctx);
+        }
+        let ctx = open(data());
+        let _ = ctx.world.block(p, &ctx.data.blocks);
+        let now = lock(&ctx.time).age;
+        let mut ticks = lock(&ctx.ticks);
+        queue_saved_ticks(&ctx, &mut ticks, now);
+        let pending: Vec<_> = ticks.blocks.pending().collect();
+        let _ = std::fs::remove_dir_all(&folder);
+        let repeater = ctx.data.blocks.default_state("minecraft:repeater").unwrap();
+        assert_eq!(
+            pending,
+            vec![(
+                crate::level::to_pos(p),
+                ctx.shapes.block_index(repeater),
+                now + 7,
+                -1
+            )]
+        );
+    }
 
     #[test]
     fn stopped_clocks_do_not_advance() {
