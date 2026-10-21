@@ -32,6 +32,12 @@ pub trait Level {
         false
     }
 
+    /// Whether two sources of `fluid` make a new one between them (game rules
+    /// `water_source_conversion`, `lava_source_conversion`).
+    fn source_conversion(&self, fluid: crate::fluids::Fluid) -> bool {
+        fluid == crate::fluids::Fluid::Water
+    }
+
     /// Water cannot stay here (the Nether): wet sponges dry at once.
     fn ultrawarm(&self) -> bool {
         false

@@ -337,3 +337,15 @@ fn daylight_detectors_see_the_noon_sun() {
     crate::daylight::tick(&ctx, 0);
     assert!(block(&ctx, AT).contains("power=15"), "{}", block(&ctx, AT));
 }
+
+#[test]
+fn lava_over_soul_soil_by_blue_ice_turns_to_basalt() {
+    let Some((ctx, _)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    put(&ctx, Position::new(10, -60, 0), "minecraft:soul_soil", &[]);
+    put(&ctx, Position::new(11, -59, 0), "minecraft:blue_ice", &[]);
+    put(&ctx, Position::new(10, -59, 0), "minecraft:lava", &[("level", "2")]);
+    assert_eq!(block(&ctx, Position::new(10, -59, 0)), "minecraft:basalt[axis=y]");
+}

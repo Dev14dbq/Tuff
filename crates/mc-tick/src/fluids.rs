@@ -24,21 +24,17 @@ struct Props {
     drop: i32,
     /// How far to look for a way down.
     slope: i32,
-    /// Two sources make a new one between them.
-    makes_sources: bool,
 }
 
 const WATER: Props = Props {
     delay: 5,
     drop: 1,
     slope: 4,
-    makes_sources: true,
 };
 const LAVA: Props = Props {
     delay: 30,
     drop: 2,
     slope: 2,
-    makes_sources: false,
 };
 
 /// Lava where it is fast (the Nether).
@@ -46,7 +42,6 @@ const FAST_LAVA: Props = Props {
     delay: 10,
     drop: 1,
     slope: 4,
-    makes_sources: false,
 };
 
 fn props(level: &dyn Level, fluid: Fluid) -> &'static Props {
@@ -157,27 +152,35 @@ pub fn shape_updated(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, n
 }
 
 /// Lava touching water anywhere but below turns into obsidian (a source) or
-/// cobblestone (flowing). Returns whether it did.
+/// cobblestone (flowing); over soul soil, touching blue ice, into basalt.
+/// It fizzes. Returns whether it did.
 fn harden_lava(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> bool {
-    let touches_water = [Dir::Up, Dir::North, Dir::South, Dir::West, Dir::East]
-        .into_iter()
-        .any(|d| {
-            matches!(
-                fluid_of(ctx, level.block(p.offset(d))),
-                Some((Fluid::Water, _))
-            )
-        });
-    if !touches_water {
-        return false;
+    let soul_soil = ctx.shapes.block_name(level.block(p.offset(Dir::Down)))
+        == Some("minecraft:soul_soil");
+    let mut into = None;
+    for d in [Dir::Up, Dir::North, Dir::South, Dir::West, Dir::East] {
+        let next = level.block(p.offset(d));
+        if matches!(fluid_of(ctx, next), Some((Fluid::Water, _))) {
+            let source = matches!(fluid_of(ctx, state), Some((_, 0)));
+            into = Some(if source {
+                "minecraft:obsidian"
+            } else {
+                "minecraft:cobblestone"
+            });
+            break;
+        }
+        if soul_soil && ctx.shapes.block_name(next) == Some("minecraft:blue_ice") {
+            into = Some("minecraft:basalt");
+            break;
+        }
     }
-    let source = matches!(fluid_of(ctx, state), Some((_, 0)));
-    let into = if source {
-        "minecraft:obsidian"
-    } else {
-        "minecraft:cobblestone"
+    let Some(into) = into else {
+        return false;
     };
     let new = ctx.shapes.state(into, &[]).unwrap_or(ctx.facts.air);
     set_block(level, ctx, p, new, Flags::ALL);
+    // World event 1501: lava hisses.
+    level.level_event(1501, p, 0);
     true
 }
 
@@ -217,7 +220,7 @@ fn new_state(level: &dyn Level, ctx: Ctx, p: BlockPos, fluid: Fluid) -> u32 {
             most = most.max(amount(l));
         }
     }
-    if props.makes_sources && sources >= 2 {
+    if level.source_conversion(fluid) && sources >= 2 {
         let below = level.block(p.offset(Dir::Down));
         let below_source = matches!(fluid_of(ctx, below), Some((f, 0)) if f == fluid);
         if below_source || (fluid_of(ctx, below).is_none() && ctx.facts.blocks_motion(below)) {

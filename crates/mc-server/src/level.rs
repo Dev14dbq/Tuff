@@ -436,6 +436,13 @@ impl Level for WorldLevel<'_> {
 
     fn torch_fizz(&mut self, _p: BlockPos) {}
 
+    fn source_conversion(&self, fluid: mc_tick::fluids::Fluid) -> bool {
+        self.ctx.game_rule_bool(match fluid {
+            mc_tick::fluids::Fluid::Water => "minecraft:water_source_conversion",
+            mc_tick::fluids::Fluid::Lava => "minecraft:lava_source_conversion",
+        })
+    }
+
     fn ultrawarm(&self) -> bool {
         self.ctx.world.dimension.contains("nether")
     }
