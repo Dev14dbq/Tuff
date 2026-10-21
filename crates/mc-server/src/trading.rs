@@ -381,6 +381,13 @@ fn with_merchant<R>(
     }
 }
 
+/// Whether the entity is a villager or a wandering trader.
+pub fn is_merchant(ctx: &ServerContext, entity_id: i32) -> bool {
+    crate::tick::lock(&ctx.entities)
+        .iter()
+        .any(|e| e.id == entity_id && matches!(e.kind, Kind::Merchant(_)))
+}
+
 /// A player right-clicks a merchant: its window, if there is something to
 /// trade.
 pub fn open(ctx: &ServerContext, uuid: u128, entity_id: i32) -> Option<Snapshot> {

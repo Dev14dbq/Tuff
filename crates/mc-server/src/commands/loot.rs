@@ -17,7 +17,7 @@ use crate::loot::{Drop, Ent, LootCtx, LootEnv, Tool};
 use crate::tick::lock;
 
 /// What loot tables ask of the server.
-pub(super) struct Env<'a>(pub &'a ServerContext);
+pub(crate) struct Env<'a>(pub &'a ServerContext);
 
 impl LootEnv for Env<'_> {
     fn tag(&self, registry: &str, tag: &str) -> Vec<String> {
@@ -195,6 +195,7 @@ fn roll(r: &mut Run, source: &[&str]) -> Result<Rolled> {
             cx.origin = Some(t.pos());
             cx.this = Some(Ent {
                 kind: t.kind().to_owned(),
+                ..Ent::default()
             });
             let drops = match r.ctx.loot.table(&id).cloned() {
                 Some(table) => r.ctx.loot.roll(&env, &table, &cx),

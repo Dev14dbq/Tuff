@@ -31,6 +31,8 @@ pub struct WorldLevel<'a> {
     unlit: Vec<(Position, u32)>,
     /// While entities move: their boxes as they are so far this tick.
     pub entity_boxes: Option<Vec<mc_entity::Aabb>>,
+    /// Minecarts and where they are so far this tick (detector rails look).
+    pub minecarts: Vec<(i32, mc_entity::Aabb)>,
 }
 
 impl<'a> WorldLevel<'a> {
@@ -44,6 +46,7 @@ impl<'a> WorldLevel<'a> {
             lit: Vec::new(),
             unlit: Vec::new(),
             entity_boxes: None,
+            minecarts: Vec::new(),
         }
     }
 
@@ -322,6 +325,21 @@ impl Level for WorldLevel<'_> {
         self.ctx.world.set_block_entity(be, blocks);
     }
 
+    fn minecarts_at(&self, p: BlockPos) -> u32 {
+        let (lo, hi) = (
+            [f64::from(p.x), f64::from(p.y), f64::from(p.z)],
+            [
+                f64::from(p.x) + 1.0,
+                f64::from(p.y) + 1.0,
+                f64::from(p.z) + 1.0,
+            ],
+        );
+        self.minecarts
+            .iter()
+            .filter(|(_, b)| (0..3).all(|i| b.min[i] < hi[i] && b.max[i] > lo[i]))
+            .count() as u32
+    }
+
     fn entities_in(&self, min: [f64; 3], max: [f64; 3]) -> (u32, u32) {
         let touches = |lo: [f64; 3], hi: [f64; 3]| (0..3).all(|i| lo[i] < max[i] && hi[i] > min[i]);
         let mut living = 0;
@@ -365,6 +383,7 @@ impl Level for WorldLevel<'_> {
         }
         let entity =
             crate::explosion::primed(self.ctx, to_position(p), crate::explosion::TNT_FUSE, None);
+        crate::explosion::primed_sound(self.ctx, &entity);
         self.spawned.push(entity);
         true
     }
