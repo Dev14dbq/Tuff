@@ -396,6 +396,13 @@ pub fn dig(
     // The other half of a door or bed goes with the shape updates.
     let left = blocks::break_block(&ctx.data, &ctx.rules, position, state, &block_at)[0].1;
     let mut level = WorldLevel::new(ctx);
+    // String cut with shears does not trip its line.
+    if blocks.block_name(state) == Some("minecraft:tripwire")
+        && crate::held::held(ctx, actor.uuid, 0).is_some_and(|h| h.name == "minecraft:shears")
+    {
+        let logic = level.logic();
+        mc_tick::tripwire::disarm(&mut level, logic, to_pos(position));
+    }
     if !level.set_block(position, left) {
         outcome.updates.push((position, state));
         return outcome;

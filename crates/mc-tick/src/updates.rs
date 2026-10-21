@@ -70,6 +70,7 @@ fn set_with_limit(
     crate::fire::on_place(level, ctx, p, old, state);
     redstone::on_place(level, ctx, p, old, state);
     crate::sponge::on_place(level, ctx, p, old, state);
+    crate::tripwire::on_place(level, ctx, p, old, state);
     if ctx.shapes.block_index(old) != ctx.shapes.block_index(state) {
         crate::rails::on_place(level, ctx, p, state);
         crate::hopper::on_place(level, ctx, p, state);
@@ -219,6 +220,7 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     crate::leaves::block_tick(level, ctx, p, kind);
     crate::cauldron::block_tick(level, ctx, p, kind);
     crate::composter::block_tick(level, ctx, p, kind);
+    crate::tripwire::block_tick(level, ctx, p, kind);
     let state = level.block(p);
     if ctx.shapes.block_index(state) == kind
         && crate::support::check(ctx, state) == crate::support::Check::Tick
@@ -236,6 +238,9 @@ pub fn placement_state(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> 
     match redstone::part(ctx, state) {
         redstone::Part::Wire => redstone::wire_shape(level, ctx, p, state),
         redstone::Part::NoteBlock => redstone::note_instrument(level, ctx, p, state),
+        _ if ctx.shapes.block_name(state) == Some("minecraft:tripwire") => {
+            crate::tripwire::connections(level, ctx, p, state)
+        }
         _ => state,
     }
 }

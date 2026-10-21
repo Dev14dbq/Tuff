@@ -227,6 +227,7 @@ fn emitted(level: &dyn Level, ctx: Ctx, at: BlockPos, state: u32, toward: Dir, w
         }
         Part::Wire if wires && wire_points(ctx, state, toward) => wire_power(ctx, state),
         _ => crate::rails::emits(ctx, state, toward, false)
+            .max(crate::tripwire::emits(ctx, state, toward, false))
             .max(other_power(ctx, state))
             .max(trapped_chest(level, ctx, at, state)),
     }
@@ -282,7 +283,8 @@ fn emitted_strong(
         {
             trapped_chest(level, ctx, at, state)
         }
-        _ => crate::rails::emits(ctx, state, toward, true),
+        _ => crate::rails::emits(ctx, state, toward, true)
+            .max(crate::tripwire::emits(ctx, state, toward, true)),
     }
 }
 

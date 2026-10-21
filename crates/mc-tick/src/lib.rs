@@ -21,6 +21,7 @@ pub mod shapes;
 pub mod sponge;
 pub mod support;
 pub mod ticks;
+pub mod tripwire;
 pub mod updates;
 
 pub use dir::{Axis, BlockPos, Dir};

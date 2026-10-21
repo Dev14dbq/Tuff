@@ -492,8 +492,8 @@ pub(crate) fn containers_changed(ctx: &ServerContext) {
     }
 }
 
-/// Players standing in pressure plates press them (other entities do as
-/// they move).
+/// Players standing in pressure plates and string press them (other
+/// entities do as they move).
 fn press_plates(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     use mc_tick::Level as _;
     let at: Vec<mc_tick::BlockPos> = lock(&ctx.players)
@@ -513,6 +513,8 @@ fn press_plates(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         let name = ctx.shapes.block_name(level.block(p)).unwrap_or("");
         if name.ends_with("_pressure_plate") {
             mc_tick::redstone::entity_inside(level, logic, p);
+        } else if name == "minecraft:tripwire" {
+            mc_tick::tripwire::entity_inside(level, logic, p);
         }
     }
 }
@@ -819,12 +821,12 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             {
                 mc_tick::rails::entity_inside(level, logic, at);
             }
-            if ctx
-                .shapes
-                .block_name(level.block(at))
-                .is_some_and(|n| n.ends_with("_pressure_plate"))
-            {
-                mc_tick::redstone::entity_inside(level, logic, at);
+            match ctx.shapes.block_name(level.block(at)) {
+                Some(n) if n.ends_with("_pressure_plate") => {
+                    mc_tick::redstone::entity_inside(level, logic, at);
+                }
+                Some("minecraft:tripwire") => mc_tick::tripwire::entity_inside(level, logic, at),
+                _ => {}
             }
         }
         if entity.removed {
