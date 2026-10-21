@@ -255,6 +255,11 @@ fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
                 c.insert("owner", Tag::IntArray(target::uuid_ints(*owner)));
             }
         }
+        mc_entity::Kind::ExperienceOrb { value, count } => {
+            c.insert("Value", Tag::Short(*value as i16));
+            c.insert("Count", Tag::Int(*count));
+            c.insert("Age", Tag::Short(e.age.min(i16::MAX as u32) as i16));
+        }
         mc_entity::Kind::FallingBlock { .. } => {}
         mc_entity::Kind::Merchant(m) => {
             if !m.wandering {

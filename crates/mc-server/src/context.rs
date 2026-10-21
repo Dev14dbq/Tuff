@@ -97,6 +97,7 @@ pub struct EntityTypes {
     pub tnt: i32,
     pub villager: i32,
     pub wandering_trader: i32,
+    pub experience_orb: i32,
 }
 
 /// Things every connection in play needs to hear about.
@@ -669,6 +670,7 @@ impl ServerContext {
                 tnt: entity_type("minecraft:tnt")?,
                 villager: entity_type("minecraft:villager")?,
                 wandering_trader: entity_type("minecraft:wandering_trader")?,
+                experience_orb: entity_type("minecraft:experience_orb")?,
             },
             player_entity_type,
             key,

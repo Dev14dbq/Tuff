@@ -399,6 +399,14 @@ pub fn dig(
         .and_then(crate::containers::kind_of)
         .is_some()
     {
+        if matches!(
+            blocks.block_name(state),
+            Some("minecraft:furnace" | "minecraft:blast_furnace" | "minecraft:smoker")
+        ) && actor.game_mode != CREATIVE
+        {
+            let points = crate::furnaces::collect_xp(ctx, position);
+            crate::xp::spawn(ctx, centre(position), points);
+        }
         let (items, _) = crate::containers::broken(ctx, position);
         for stack in items {
             outcome.drops.push((
@@ -419,6 +427,9 @@ pub fn dig(
         for drop in ctx.loot.drops(name, &props) {
             outcome.drops.push((position, drop));
         }
+        if !silk_touch(ctx, actor.uuid) {
+            crate::xp::spawn(ctx, centre(position), crate::xp::block_xp(name));
+        }
     }
     outcome.events.push(Event::BlockBroken {
         by: actor.uuid,
@@ -432,6 +443,29 @@ pub fn dig(
         changes: level.into_changes(),
     });
     outcome
+}
+
+fn centre(p: Position) -> [f64; 3] {
+    [
+        f64::from(p.x) + 0.5,
+        f64::from(p.y) + 0.5,
+        f64::from(p.z) + 0.5,
+    ]
+}
+
+/// Whether the main hand holds a Silk Touch tool.
+fn silk_touch(ctx: &ServerContext, uuid: u128) -> bool {
+    let inventories = ctx.inventories.lock().expect("inventories lock");
+    inventories.get(&uuid).is_some_and(|h| {
+        let Some(mc_nbt::Tag::Compound(c)) = h.components.get(&(36 + h.selected)) else {
+            return false;
+        };
+        let Some(mc_nbt::Tag::Compound(e)) = c.get("minecraft:enchantments") else {
+            return false;
+        };
+        e.get("minecraft:silk_touch").is_some()
+            || matches!(e.get("levels"), Some(mc_nbt::Tag::Compound(l)) if l.get("minecraft:silk_touch").is_some())
+    })
 }
 
 /// Use Item On: places the held block item, if it fits.

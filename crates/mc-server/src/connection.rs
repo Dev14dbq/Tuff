@@ -1560,6 +1560,7 @@ fn spawn_entity(
         mc_entity::Kind::Tnt { .. } => (ctx.entity_types.tnt, 0),
         mc_entity::Kind::Merchant(ref m) if m.wandering => (ctx.entity_types.wandering_trader, 0),
         mc_entity::Kind::Merchant(_) => (ctx.entity_types.villager, 0),
+        mc_entity::Kind::ExperienceOrb { .. } => (ctx.entity_types.experience_orb, 0),
     };
     writer.queue(&play::AddEntity {
         entity_id: entity.id,
@@ -1588,6 +1589,15 @@ fn spawn_entity(
                         damage,
                         ..play::ItemStack::new(item, count)
                     })),
+                )],
+            })?;
+        }
+        mc_entity::Kind::ExperienceOrb { value, .. } => {
+            writer.queue(&play::SetEntityData {
+                entity_id: entity.id,
+                entries: vec![(
+                    play::metadata::EXPERIENCE_ORB_VALUE,
+                    play::MetadataValue::VarInt(value),
                 )],
             })?;
         }
