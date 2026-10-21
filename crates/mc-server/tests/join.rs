@@ -2857,3 +2857,97 @@ async fn beacons_sell_effects_for_a_payment_and_give_them() {
     assert_eq!(be.data.get("Levels"), Some(&Tag::Int(1)));
     let _ = stop.send(());
 }
+
+/// Reads a Set Container Slot body: (window, slot, item, count).
+fn slot_packet(body: &[u8]) -> (i32, i16, i32, i32) {
+    let mut r = Reader::new(body);
+    let window = r.varint().unwrap();
+    r.varint().unwrap();
+    let slot = r.i16().unwrap();
+    let count = r.varint().unwrap();
+    let item = if count > 0 { r.varint().unwrap() } else { 0 };
+    (window, slot, item, count)
+}
+
+#[tokio::test]
+async fn the_stonecutter_offers_recipes_and_uses_up_its_input() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Mason".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let (mut mason, _) = join_offline(addr, ctx.ids.clone(), "Mason").await;
+    let item = |n: &str| ctx.data.builtin.id("minecraft:item", n).unwrap();
+    let stone = item("minecraft:stone");
+    chat_command(&mut mason, "setblock 2 -60 2 minecraft:stonecutter").await;
+    creative_slot(&mut mason, 36, stone, 2).await;
+    use_block(&mut mason, mc_protocol::Position::new(2, -60, 2), 1).await;
+    let (_, screen) = mason.recv_until("minecraft:open_screen").await;
+    let window = Reader::new(&screen).varint().unwrap();
+    // Shift-click both stones into the input (hotbar 0 is slot 2 + 27).
+    let mut click = Vec::new();
+    click.put_varint(window);
+    click.put_varint(2);
+    click.put_i16(29);
+    click.put_i8(0);
+    click.put_varint(1);
+    click.put_varint(2);
+    click.put_i16(0);
+    click.extend(hashed(stone, 2));
+    click.put_i16(29);
+    click.put_bool(false);
+    click.put_bool(false);
+    mason.send("minecraft:container_click", click).await;
+    let mut button = Vec::new();
+    button.put_varint(window);
+    button.put_varint(0);
+    mason.send("minecraft:container_button_click", button).await;
+    let (_, shown) = mason.recv_until("minecraft:container_set_slot").await;
+    let (_, slot, made, count) = slot_packet(&shown);
+    assert_eq!(slot, 1, "the result slot");
+    let first = ctx
+        .recipes
+        .stonecutting
+        .iter()
+        .find(|c| c.input.contains(&stone))
+        .unwrap();
+    assert_eq!((made, count), (first.result.item, first.result.count));
+    // Take it: one stone is used up, the result is worked out again.
+    let mut take = Vec::new();
+    take.put_varint(window);
+    take.put_varint(3);
+    take.put_i16(1);
+    take.put_i8(0);
+    take.put_varint(0);
+    take.put_varint(2);
+    take.put_i16(1);
+    take.put_bool(false);
+    take.put_i16(0);
+    take.extend(hashed(stone, 1));
+    take.extend(hashed(first.result.item, first.result.count));
+    mason.send("minecraft:container_click", take).await;
+    // The result is offered again for the stone that is left.
+    let (_, again) = mason.recv_until("minecraft:container_set_slot").await;
+    let (_, slot, made_again, _) = slot_packet(&again);
+    assert_eq!((slot, made_again), (1, first.result.item));
+    let mut close = Vec::new();
+    close.put_varint(window);
+    mason.send("minecraft:container_close", close).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let back: i32 = ctx
+        .inventories
+        .lock()
+        .unwrap()
+        .values()
+        .flat_map(|h| h.slots.iter().flatten())
+        .filter(|s| s.item == stone)
+        .map(|s| s.count)
+        .sum();
+    assert_eq!(back, 1, "one stone was used up, one comes back");
+    let _ = stop.send(());
+}

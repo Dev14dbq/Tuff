@@ -1651,6 +1651,41 @@ pub mod play {
         }
     }
 
+    /// Update Recipes: what the client needs to know of recipes to check its
+    /// slots (furnace and smithing inputs) and to list the stonecutter's
+    /// choices.
+    #[derive(Clone, Debug, Default)]
+    pub struct UpdateRecipes {
+        /// Property set id (`minecraft:furnace_input`...) and its item ids.
+        pub property_sets: Vec<(String, Vec<i32>)>,
+        /// Stonecutter recipes in order: the items accepted and the result.
+        pub stonecutter: Vec<(Vec<i32>, ItemStack)>,
+    }
+    packet!(UpdateRecipes, Play, "minecraft:update_recipes");
+    impl Encode for UpdateRecipes {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_len(self.property_sets.len());
+            for (key, items) in &self.property_sets {
+                out.put_string(key);
+                out.put_len(items.len());
+                for &item in items {
+                    out.put_varint(item);
+                }
+            }
+            out.put_len(self.stonecutter.len());
+            for (input, result) in &self.stonecutter {
+                // An ID set: the count plus one, then the ids.
+                out.put_len(input.len() + 1);
+                for &item in input {
+                    out.put_varint(item);
+                }
+                // Slot display of type `item_stack`.
+                out.put_varint(5);
+                ItemStack::encode(Some(result), out);
+            }
+        }
+    }
+
     /// Commands: the command tree the client completes and checks against
     /// (the body is built by `mc_command`).
     #[derive(Clone, Debug)]

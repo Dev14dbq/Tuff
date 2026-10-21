@@ -428,25 +428,63 @@ impl Windows {
                 let taken = result.is_some_and(|r| result_before.is_some() && m.slots[r].is_none());
                 let shown = m.slots.clone();
                 m.settle(ctx, uuid, taken);
-                let changes: Vec<(usize, Option<ItemStack>)> = m
-                    .slots
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, s)| **s != shown[*i])
-                    .map(|(i, s)| (i, s.clone()))
-                    .collect();
-                let values = m.values(ctx);
-                let changed_values = values != m.data;
-                m.data.clone_from(&values);
-                for (slot, item) in changes {
-                    self.set_slot(writer, id, slot, item)?;
-                }
-                if changed_values {
-                    self.send_values(writer, &values)?;
-                }
+                self.sync_machine(writer, who, shown)?;
             }
         }
         Ok(())
+    }
+
+    /// Sends what a menu changed on its own since the client's view `shown`
+    /// (results, numbers).
+    fn sync_machine(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        shown: Vec<Option<ItemStack>>,
+    ) -> anyhow::Result<()> {
+        let Some(open) = self.open.as_mut() else {
+            return Ok(());
+        };
+        let id = open.id;
+        let Kind::Machine(m) = &mut open.kind else {
+            return Ok(());
+        };
+        let changes: Vec<(usize, Option<ItemStack>)> = m
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(i, s)| **s != shown[*i])
+            .map(|(i, s)| (i, s.clone()))
+            .collect();
+        let values = m.values(who.ctx);
+        let changed_values = values != m.data;
+        m.data.clone_from(&values);
+        for (slot, item) in changes {
+            self.set_slot(writer, id, slot, item)?;
+        }
+        if changed_values {
+            self.send_values(writer, &values)?;
+        }
+        Ok(())
+    }
+
+    /// A button of the open window was pressed.
+    pub fn button(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        window: i32,
+        button: i32,
+    ) -> anyhow::Result<()> {
+        let Some(open) = self.open.as_mut().filter(|o| o.id == window) else {
+            return Ok(());
+        };
+        let Kind::Machine(m) = &mut open.kind else {
+            return Ok(());
+        };
+        let shown = m.slots.clone();
+        m.button(who.ctx, who.uuid, button);
+        self.sync_machine(writer, who, shown)
     }
 
     /// The client closed a window.

@@ -495,6 +495,7 @@ async fn play(
     let mut flying = me.flying || me.game_mode == 3;
     writer.queue(&abilities(me.game_mode, flying))?;
     send_permissions(writer, &ctx, uuid, &me.profile.name, entity_id)?;
+    writer.queue(&ctx.recipes.update_packet())?;
     let mut awaiting_teleport = Some(1);
     let mut next_teleport = 1;
     writer.queue(&play::PlayerPosition {
@@ -753,6 +754,9 @@ async fn play(
                     play::Serverbound::ContainerClick { window, slot, button, mode, changed, carried, .. } => {
                         let click = windows::Click { window, slot, button, mode, changed, carried };
                         windows.click(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, click)?;
+                    }
+                    play::Serverbound::ContainerButtonClick { window, button } => {
+                        windows.button(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, button)?;
                     }
                     play::Serverbound::SetBeacon { primary, secondary } => {
                         windows.set_beacon(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, primary, secondary)?;
