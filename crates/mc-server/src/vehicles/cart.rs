@@ -120,6 +120,11 @@ fn step(t: &mut Tick, e: &mut Entity, v: &mut Vehicle) {
         v.damage = (v.damage - 1.0).max(0.0);
     }
     let rail = find_rail(ctx, e.pos);
+    if let Some(r) = &rail
+        && r.name == "activator_rail"
+    {
+        v.enabled = !r.powered;
+    }
     // Activator rails shake riders off and light TNT.
     if let Some(r) = &rail
         && r.name == "activator_rail"

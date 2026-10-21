@@ -571,9 +571,15 @@ pub fn emits(ctx: Ctx, state: u32, toward: Dir, strong: bool) -> u8 {
     0
 }
 
-/// The comparator reading of a detector rail with a minecart on it (a
-/// minecart with a container is not read yet): 15 when pressed.
+/// The comparator reading of a pressed detector rail: how full a minecart
+/// holding items on it is, 0 for any other minecart.
 pub fn comparator_reading(level: &dyn Level, ctx: Ctx, p: BlockPos) -> Option<u8> {
     let state = level.block(p);
-    (kind(ctx, state) == Some(Kind::Detector)).then(|| u8::from(level.minecarts_at(p) > 0) * 15)
+    (kind(ctx, state) == Some(Kind::Detector)).then(|| {
+        if powered_prop(ctx, state) {
+            level.minecart_container_signal(p).unwrap_or(0)
+        } else {
+            0
+        }
+    })
 }

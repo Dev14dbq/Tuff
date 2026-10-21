@@ -32,7 +32,8 @@ pub struct WorldLevel<'a> {
     /// While entities move: their boxes as they are so far this tick.
     pub entity_boxes: Option<Vec<mc_entity::Aabb>>,
     /// Minecarts and where they are so far this tick (detector rails look).
-    pub minecarts: Vec<(i32, mc_entity::Aabb)>,
+    /// Minecarts: id, box, and what a minecart holding items opens.
+    pub minecarts: Vec<(i32, mc_entity::Aabb, Option<crate::containers::Kind>)>,
 }
 
 impl<'a> WorldLevel<'a> {
@@ -339,8 +340,28 @@ impl Level for WorldLevel<'_> {
         );
         self.minecarts
             .iter()
-            .filter(|(_, b)| (0..3).all(|i| b.min[i] < hi[i] && b.max[i] > lo[i]))
+            .filter(|(_, b, _)| (0..3).all(|i| b.min[i] < hi[i] && b.max[i] > lo[i]))
             .count() as u32
+    }
+
+    fn minecart_container_signal(&self, p: BlockPos) -> Option<u8> {
+        let (lo, hi) = (
+            [f64::from(p.x), f64::from(p.y), f64::from(p.z)],
+            [
+                f64::from(p.x) + 1.0,
+                f64::from(p.y) + 1.0,
+                f64::from(p.z) + 1.0,
+            ],
+        );
+        let (id, kind) = self
+            .minecarts
+            .iter()
+            .filter(|(_, b, _)| (0..3).all(|i| b.min[i] < hi[i] && b.max[i] > lo[i]))
+            .find_map(|(id, _, kind)| Some((*id, (*kind)?)))?;
+        Some(crate::containers::fullness(
+            self.ctx,
+            &crate::containers::slots(self.ctx, crate::containers::entity_key(id), kind),
+        ))
     }
 
     fn entities_in(&self, min: [f64; 3], max: [f64; 3]) -> (u32, u32) {

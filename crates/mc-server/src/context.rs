@@ -361,6 +361,11 @@ pub struct ServerContext {
     pub inventories: Mutex<HashMap<u128, crate::interact::Hands>>,
     /// Chests and barrels someone has open.
     pub containers: Mutex<crate::containers::Containers>,
+    /// Contents (`Items`) of entities that hold items (minecarts and boats
+    /// with a chest, hopper minecarts), by entity id.
+    pub entity_items: Mutex<HashMap<i32, mc_nbt::Compound>>,
+    /// Hopper minecarts resting after taking an item: ticks left, by id.
+    pub cart_rests: Mutex<HashMap<i32, i32>>,
     /// What broken blocks drop.
     pub loot: crate::loot::BlockLoot,
     /// Crafting recipes.
@@ -664,6 +669,8 @@ impl ServerContext {
             mobs: Default::default(),
             inventories: Mutex::new(HashMap::new()),
             containers: Mutex::new(HashMap::new()),
+            entity_items: Mutex::new(HashMap::new()),
+            cart_rests: Mutex::new(HashMap::new()),
             loot: crate::loot::BlockLoot::load(&data),
             recipes: crate::crafting::Recipes::load(&data),
             trades: crate::trading::Trades::load(&data, &items),

@@ -277,6 +277,18 @@ pub fn destroy(ctx: &ServerContext, e: &mut Entity, fresh: &mut Vec<Entity>, dro
     if drop_item {
         fresh.extend(crate::decor::dropped(ctx, e.pos, &item_of(&v.craft), 1, 0));
     }
+    // What it held spills out, and windows on it close.
+    let (items, viewers) = crate::containers::entity_gone(ctx, e.id);
+    for stack in items {
+        if let Some(name) = ctx.items.name(stack.item) {
+            fresh.extend(crate::decor::dropped(ctx, e.pos, name, stack.count, stack.damage));
+        }
+    }
+    if !viewers.is_empty() {
+        let _ = ctx.events.send(Event::ContainerGone {
+            position: crate::containers::entity_key(e.id),
+        });
+    }
     e.removed = true;
 }
 
@@ -325,12 +337,26 @@ pub fn interact(
         }
         return;
     }
-    if actor.sneaking {
-        return;
-    }
     let Kind::Vehicle(v) = &mut e.kind else {
         return;
     };
+    // Carts with a chest or hopper open their inventory; boats with a chest
+    // do when the player sneaks.
+    let boat = matches!(v.craft, Craft::Boat { .. });
+    if let Some(kind) = crate::containers::entity_kind(&item_of(&v.craft))
+        && (!boat || actor.sneaking)
+    {
+        outcome.open = Some((crate::containers::entity_key(id), kind));
+        outcome.events.push(Event::Swing {
+            uuid: actor.uuid,
+            entity_id: actor.entity_id,
+            times: 1,
+        });
+        return;
+    }
+    if actor.sneaking {
+        return;
+    }
     // Coal feeds a furnace cart.
     if v.craft == Craft::Minecart(Cart::Furnace)
         && let Some(h) = crate::held::held(ctx, actor.uuid, hand)

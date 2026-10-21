@@ -299,6 +299,8 @@ pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     };
     let mut level = crate::level::WorldLevel::new(ctx);
     let logic = level.logic();
+    // Detector rails look for minecarts in their ticks.
+    level.minecarts = minecart_boxes(&lock(&ctx.entities));
     for (pos, block) in due.0 {
         mc_tick::block_tick(&mut level, logic, pos, block);
     }
@@ -312,6 +314,7 @@ pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     press_plates(ctx, &mut level);
     mc_tick::pistons::tick(&mut level, logic);
     crate::hoppers::tick(ctx, &mut level);
+    crate::hoppers::tick_carts(ctx);
     let (changes, spawned) = level.finish();
     if !changes.is_empty() {
         let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
@@ -323,6 +326,23 @@ pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
             entities.push(entity);
         }
     }
+}
+
+/// Ids, boxes and container kinds of the minecarts.
+type CartBox = (i32, mc_entity::Aabb, Option<crate::containers::Kind>);
+
+fn minecart_boxes(entities: &[mc_entity::Entity]) -> Vec<CartBox> {
+    entities
+        .iter()
+        .filter(|e| !e.removed)
+        .filter_map(|e| match &e.kind {
+            mc_entity::Kind::Vehicle(v) if matches!(v.craft, mc_entity::extra::Craft::Minecart(_)) => {
+                let kind = crate::containers::entity_kind(&crate::vehicles::item_of(&v.craft));
+                Some((e.id, e.aabb(), kind))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Block events queued so far (and those they queue), each once.
@@ -358,7 +378,9 @@ fn run_block_events(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
 /// Comparators look at containers whose contents changed (even while the
 /// game is frozen: they only schedule their ticks).
 fn containers_changed(ctx: &ServerContext) {
-    let changed = std::mem::take(&mut *lock(&ctx.container_updates));
+    let mut changed = std::mem::take(&mut *lock(&ctx.container_updates));
+    // Entities holding items have no comparators next to them.
+    changed.retain(|&p| crate::containers::entity_of(p).is_none());
     if changed.is_empty() {
         return;
     }
@@ -571,13 +593,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         })
         .collect();
     crate::decor::leash::tick(ctx);
-    level.minecarts = entities
-        .iter()
-        .filter(|e| {
-            matches!(&e.kind, mc_entity::Kind::Vehicle(v) if matches!(v.craft, mc_entity::extra::Craft::Minecart(_)))
-        })
-        .map(|e| (e.id, e.aabb()))
-        .collect();
+    level.minecarts = minecart_boxes(&entities);
     let mut out = crate::hits::Out::default();
     let (mut moved, mut removed) = (Vec::new(), Vec::new());
     let mut gone = Vec::new();
@@ -688,7 +704,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         if let Some(boxes) = level.entity_boxes.as_mut() {
             boxes[i] = entity.aabb();
         }
-        if let Some(m) = level.minecarts.iter_mut().find(|(id, _)| *id == entity.id) {
+        if let Some(m) = level.minecarts.iter_mut().find(|(id, _, _)| *id == entity.id) {
             m.1 = entity.aabb();
         }
         if !entity.removed {

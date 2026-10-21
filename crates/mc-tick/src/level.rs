@@ -131,6 +131,12 @@ pub trait Level {
         0
     }
 
+    /// How full a minecart holding items (chest, hopper) in the block at
+    /// `p` is, as a comparator reads it; `None` if there is none.
+    fn minecart_container_signal(&self, _p: BlockPos) -> Option<u8> {
+        None
+    }
+
     /// Records a redstone torch toggle at `p` (when `add`) and tells whether
     /// it has toggled too often lately (8 times within 60 ticks): then it
     /// burns out.
