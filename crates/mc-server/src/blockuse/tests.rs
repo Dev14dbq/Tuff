@@ -441,3 +441,47 @@ fn hoppers_feed_and_empty_composters() {
         .map(|s| s.item);
     assert_eq!(got, ctx.items.id("minecraft:bone_meal"));
 }
+
+#[test]
+fn copper_weathers_and_amethyst_buds() {
+    let Some((ctx, _)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let copper = Position::new(50, -59, 0);
+    let stairs = Position::new(52, -59, 0);
+    put(&ctx, copper, "minecraft:copper_block", &[]);
+    put(
+        &ctx,
+        stairs,
+        "minecraft:exposed_cut_copper_stairs",
+        &[("facing", "west")],
+    );
+    let budding = Position::new(50, -59, 6);
+    put(&ctx, budding, "minecraft:budding_amethyst", &[]);
+    let mut level = WorldLevel::new(&ctx);
+    let logic = level.logic();
+    let mut rng = mc_tick::rng::Rng::new(9);
+    for _ in 0..3000 {
+        for p in [copper, stairs, budding] {
+            let at = crate::level::to_pos(p);
+            let state = mc_tick::Level::block(&level, at);
+            mc_tick::random::tick(&mut level, logic, at, state, &mut rng);
+        }
+    }
+    drop(level);
+    assert_eq!(block(&ctx, copper), "minecraft:oxidized_copper");
+    assert!(block(&ctx, stairs).starts_with("minecraft:oxidized_cut_copper_stairs[facing=west"));
+    let clusters = mc_tick::Dir::ALL
+        .iter()
+        .filter(|d| {
+            let (dx, dy, dz) = d.offset();
+            block(
+                &ctx,
+                Position::new(budding.x + dx, budding.y + dy, budding.z + dz),
+            )
+            .starts_with("minecraft:amethyst_cluster")
+        })
+        .count();
+    assert_eq!(clusters, 6);
+}

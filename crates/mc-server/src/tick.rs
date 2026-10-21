@@ -510,6 +510,7 @@ fn press_plates(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         .collect();
     let logic = level.logic();
     for p in at {
+        mc_tick::redstone::touch_ore(level, logic, p.offset(mc_tick::Dir::Down));
         let name = ctx.shapes.block_name(level.block(p)).unwrap_or("");
         if name.ends_with("_pressure_plate") {
             mc_tick::redstone::entity_inside(level, logic, p);
@@ -820,6 +821,10 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             if matches!(&entity.kind, mc_entity::Kind::Vehicle(v) if matches!(v.craft, mc_entity::extra::Craft::Minecart(_)))
             {
                 mc_tick::rails::entity_inside(level, logic, at);
+            }
+            // Walking on redstone ore lights it.
+            if entity.on_ground {
+                mc_tick::redstone::touch_ore(level, logic, at.offset(mc_tick::Dir::Down));
             }
             match ctx.shapes.block_name(level.block(at)) {
                 Some(n) if n.ends_with("_pressure_plate") => {

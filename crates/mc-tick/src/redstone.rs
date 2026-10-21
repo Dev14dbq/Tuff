@@ -829,6 +829,25 @@ fn flip_bulb(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
     set_block(level, ctx, p, new, Flags::ALL);
 }
 
+/// Redstone ore at `p` was stepped on or hit: it glows (until a random
+/// tick).
+pub fn touch_ore(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+    let state = level.block(p);
+    let ore = matches!(
+        ctx.shapes.block_name(state),
+        Some("minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore")
+    );
+    if ore && !is(ctx, state, "lit") {
+        set_block(
+            level,
+            ctx,
+            p,
+            with_bool(ctx, state, "lit", true),
+            Flags::ALL,
+        );
+    }
+}
+
 /// A due block tick for a component.
 pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     let state = level.block(p);

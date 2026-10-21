@@ -373,6 +373,16 @@ pub fn dig(
             return outcome;
         }
     }
+    // Hitting redstone ore lights it.
+    if status == dig::START && actor.game_mode != SPECTATOR {
+        let mut level = WorldLevel::new(ctx);
+        let logic = level.logic();
+        mc_tick::redstone::touch_ore(&mut level, logic, to_pos(position));
+        let changes = level.into_changes();
+        if !changes.is_empty() {
+            outcome.events.push(Event::BlocksChanged { by: 0, changes });
+        }
+    }
     let Some(state) = world.block(position, blocks) else {
         return outcome;
     };

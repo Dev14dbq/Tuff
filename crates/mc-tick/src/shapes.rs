@@ -303,6 +303,21 @@ impl Shapes {
             .unwrap_or(u32::MAX)
     }
 
+    /// The state of block `name` with the properties of `state` it has too.
+    pub fn renamed(&self, state: u32, name: &str) -> Option<u32> {
+        let key = self.blocks.describe(state)?;
+        let info = self.blocks.get(name)?;
+        let props: Vec<(&str, &str)> = key
+            .find('[')
+            .map(|i| &key[i + 1..key.len() - 1])
+            .unwrap_or("")
+            .split(',')
+            .filter_map(|kv| kv.split_once('='))
+            .filter(|(k, _)| info.default_properties.iter().any(|(d, _)| d == k))
+            .collect();
+        self.blocks.state_id(name, &props)
+    }
+
     /// The block name behind a [`Shapes::block_index`].
     pub fn index_name(&self, index: u32) -> Option<&str> {
         self.block_names.get(index as usize).map(String::as_str)
