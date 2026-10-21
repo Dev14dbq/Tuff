@@ -867,7 +867,8 @@ struct Victim {
 }
 
 /// One explosion on its own.
-pub fn explode(
+#[cfg(test)]
+fn explode(
     ctx: &ServerContext,
     level: &mut WorldLevel,
     entities: &mut Vec<Entity>,
