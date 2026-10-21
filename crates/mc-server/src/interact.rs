@@ -344,6 +344,10 @@ pub fn dig(
         ack: Some(sequence),
         ..Outcome::default()
     };
+    if status == 5 {
+        crate::projectiles::release(ctx, actor);
+        return outcome;
+    }
     let (world, blocks) = (&ctx.world, &ctx.data.blocks);
     // Hitting a block puts out fire on the face hit.
     if status == dig::START
@@ -850,6 +854,9 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
     let mut outcome = Outcome::default();
     if actor.game_mode == SPECTATOR {
         return outcome;
+    }
+    if let Some(done) = crate::projectiles::use_item(ctx, actor, hand, yaw, pitch) {
+        return done;
     }
     let held = ctx
         .inventories

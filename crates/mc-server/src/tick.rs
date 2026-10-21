@@ -133,6 +133,12 @@ pub enum Action {
     },
     /// Using the held item without a block (buckets).
     UseItem { hand: i32, yaw: f32, pitch: f32 },
+    /// A click on an entity: `attack` for the left one.
+    UseEntity {
+        entity_id: i32,
+        hand: i32,
+        attack: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -382,7 +388,7 @@ fn press_plates(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
 }
 
 /// Blocks as entities bump into them.
-struct Solid<'a, 'b>(&'a crate::level::WorldLevel<'b>);
+pub(crate) struct Solid<'a, 'b>(&'a crate::level::WorldLevel<'b>);
 
 impl mc_entity::Collide for Solid<'_, '_> {
     fn solid(&self, x: i32, y: i32, z: i32) -> bool {
@@ -528,6 +534,29 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                 .map(|pose| (p.profile.uuid, p.entity_id, p.game_mode, pose))
         })
         .collect();
+    let whos: Vec<crate::hits::Who> = players
+        .iter()
+        .map(|&(uuid, entity_id, mode, pose)| crate::hits::Who {
+            uuid,
+            entity_id,
+            mode,
+            pose,
+        })
+        .collect();
+    let targets: Vec<crate::hits::Target> = entities
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                mc_entity::Kind::Hung(_) | mc_entity::Kind::Vehicle(_)
+            )
+        })
+        .map(|e| crate::hits::Target {
+            id: e.id,
+            aabb: e.aabb(),
+        })
+        .collect();
+    let mut out = crate::hits::Out::default();
     let (mut moved, mut removed) = (Vec::new(), Vec::new());
     let mut gone = Vec::new();
     let (mut blasts, mut fuses) = (Vec::new(), Vec::new());
@@ -535,7 +564,25 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     level.entity_boxes = Some(entities.iter().map(|e| e.aabb()).collect());
     for (i, entity) in entities.iter_mut().enumerate() {
         let before = (entity.pos, entity.on_ground);
+        let extra = matches!(
+            entity.kind,
+            mc_entity::Kind::Projectile(_) | mc_entity::Kind::Hung(_) | mc_entity::Kind::Vehicle(_)
+        );
+        if extra {
+            let mut t = crate::hits::Tick {
+                ctx,
+                players: &whos,
+                targets: &targets,
+                out: &mut out,
+            };
+            if let mc_entity::Kind::Projectile(_) = entity.kind {
+                crate::projectiles::tick(&mut t, entity);
+            }
+        }
         match entity.kind.clone() {
+            mc_entity::Kind::Projectile(_)
+            | mc_entity::Kind::Hung(_)
+            | mc_entity::Kind::Vehicle(_) => {}
             mc_entity::Kind::FallingBlock { state } => {
                 mc_entity::fall(entity, &Solid(level));
                 if entity.on_ground || entity.age > 600 {
@@ -614,7 +661,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         if entity.removed {
             removed.push(entity.id);
             gone.push(entity.uuid);
-        } else if (entity.pos, entity.on_ground) != before {
+        } else if !extra && (entity.pos, entity.on_ground) != before {
             moved.push((entity.id, entity.pos, entity.on_ground));
         }
     }
@@ -627,6 +674,23 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     }
     if !fuses.is_empty() {
         let _ = ctx.events.send(Event::EntitiesData(fuses));
+    }
+    if !out.data.is_empty() {
+        let _ = ctx
+            .events
+            .send(Event::EntitiesData(std::mem::take(&mut out.data)));
+    }
+    if !out.sync.is_empty() {
+        let _ = ctx
+            .events
+            .send(Event::EntitySync(std::mem::take(&mut out.sync)));
+    }
+    for hit in std::mem::take(&mut out.hits) {
+        crate::hits::apply(ctx, &mut entities, &mut removed, &mut gone, hit);
+    }
+    for entity in out.spawn.drain(..) {
+        let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
+        lock(&ctx.entities).push(entity);
     }
     entities.retain(|e| !e.removed);
     if !gone.is_empty() {
@@ -727,6 +791,11 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             sequence,
         } => interact::use_item_on(ctx, actor, hand, position, face, cursor, sequence),
         Action::UseItem { hand, yaw, pitch } => interact::use_item(ctx, actor, hand, yaw, pitch),
+        Action::UseEntity {
+            entity_id,
+            hand,
+            attack,
+        } => crate::hits::use_entity(ctx, actor, entity_id, hand, attack),
     }
 }
 

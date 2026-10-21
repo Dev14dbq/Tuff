@@ -1,0 +1,456 @@
+//! Arrows, thrown things, fireworks and fishing bobbers.
+//!
+//! Flight follows the public description (minecraft.wiki, "Arrow",
+//! "Snowball", "Ender Pearl", "Potion"): each tick the projectile moves by
+//! its velocity, stopping at the first block or entity on the way, then
+//! loses speed to drag and gains downward speed to gravity.
+//!
+//! Other code (dispensers, commands) launches projectiles with [`spawn`] or
+//! [`shoot`].
+
+pub mod arrow;
+pub mod firework;
+pub mod fishing;
+pub mod potions;
+pub mod thrown;
+
+use std::collections::HashMap;
+
+use mc_entity::extra::{Projectile, Shot};
+use mc_entity::{Entity, Kind};
+
+use crate::context::{Event, ServerContext};
+use crate::fx;
+use crate::hits::{self, Tick};
+use crate::interact::{Actor, Outcome};
+use crate::tick::lock;
+
+/// What players are in the middle of with projectiles.
+#[derive(Debug, Default)]
+pub struct State {
+    /// A bow being drawn: world age when it started and the hand.
+    pub draws: HashMap<u128, (i64, i32)>,
+    /// A cast fishing bobber, by its owner.
+    pub bobbers: HashMap<u128, i32>,
+}
+
+/// The direction a player looks along.
+pub fn look(yaw: f32, pitch: f32) -> [f64; 3] {
+    let (yaw, pitch) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
+    [
+        -yaw.sin() * pitch.cos(),
+        -pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    ]
+}
+
+/// Adds a projectile to the world at `pos` with velocity `vel`; returns its
+/// entity id.
+pub fn spawn(
+    ctx: &ServerContext,
+    shot: Shot,
+    owner: Option<u128>,
+    pos: [f64; 3],
+    vel: [f64; 3],
+) -> i32 {
+    let (yaw, pitch) = fx::facing_of(vel);
+    let entity = Entity {
+        id: ctx.next_entity_id(),
+        uuid: crate::util::random_uuid(),
+        kind: Kind::Projectile(Projectile {
+            shot,
+            owner,
+            yaw,
+            pitch,
+        }),
+        pos,
+        vel,
+        on_ground: false,
+        age: 0,
+        removed: false,
+        tags: Vec::new(),
+    };
+    let id = entity.id;
+    let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
+    lock(&ctx.entities).push(entity);
+    id
+}
+
+/// Launches a projectile along `dir` (any length) at `speed`, spread by
+/// `inaccuracy` (1.0 for a player, 6.0 for a dispenser).
+pub fn shoot(
+    ctx: &ServerContext,
+    shot: Shot,
+    owner: Option<u128>,
+    pos: [f64; 3],
+    dir: [f64; 3],
+    speed: f64,
+    inaccuracy: f64,
+) -> i32 {
+    let len = dir.iter().map(|c| c * c).sum::<f64>().sqrt().max(1e-9);
+    let spread = 0.0075 * inaccuracy;
+    let vel = dir.map(|c| (c / len + hits::gauss() * spread) * speed);
+    spawn(ctx, shot, owner, pos, vel)
+}
+
+/// Where a player's projectiles start: at the eyes, a little lower.
+pub fn muzzle(actor: &Actor) -> [f64; 3] {
+    [actor.pose.x, actor.pose.y + 1.62 - 0.1, actor.pose.z]
+}
+
+enum Class {
+    Arrow,
+    Thrown,
+    Firework,
+    Bobber,
+    Cloud,
+}
+
+/// One tick of a projectile.
+pub fn tick(t: &mut Tick, e: &mut Entity) {
+    let Kind::Projectile(p) = &e.kind else {
+        return;
+    };
+    let class = match p.shot {
+        Shot::Arrow(_) => Class::Arrow,
+        Shot::Firework(_) => Class::Firework,
+        Shot::Bobber { .. } => Class::Bobber,
+        Shot::Cloud { .. } => Class::Cloud,
+        _ => Class::Thrown,
+    };
+    match class {
+        Class::Arrow => arrow::tick(t, e),
+        Class::Thrown => thrown::tick(t, e),
+        Class::Firework => firework::tick(t, e),
+        Class::Bobber => fishing::tick(t, e),
+        Class::Cloud => potions::tick_cloud(t, e),
+    }
+    if e.removed {
+        return;
+    }
+    if let Kind::Projectile(p) = &mut e.kind
+        && e.vel != [0.0; 3]
+    {
+        (p.yaw, p.pitch) = fx::facing_of(e.vel);
+    }
+    if let Kind::Projectile(p) = &e.kind {
+        t.out.sync.push(fx::Sync {
+            id: e.id,
+            pos: e.pos,
+            vel: e.vel,
+            yaw: p.yaw,
+            pitch: p.pitch,
+            on_ground: e.on_ground,
+        });
+    }
+}
+
+/// The player pushed away from a hit (the entity's velocity packet).
+pub fn knock(ctx: &ServerContext, victim: &hits::Who, from: [f64; 3], strength: f64) {
+    let (dx, dz) = (victim.pose.x - from[0], victim.pose.z - from[2]);
+    let len = dx.hypot(dz);
+    if len < 1e-6 {
+        return;
+    }
+    fx::emit(
+        ctx,
+        fx::Fx::Motion(mc_protocol::packets::play::SetEntityMotion {
+            entity_id: victim.entity_id,
+            velocity: [dx / len * strength, strength.min(0.4), dz / len * strength],
+        }),
+    );
+}
+
+/// Hurts the player at `t.players[i]`; returns whether it did damage.
+pub fn hurt_player(
+    t: &Tick,
+    victim: &hits::Who,
+    amount: f32,
+    kind: &str,
+    key: &str,
+    owner: Option<u128>,
+    with: i32,
+) -> bool {
+    let attacker = owner.and_then(|o| hits::name_of(t.ctx, o));
+    crate::vitals::try_hurt_by_entity(
+        t.ctx,
+        victim.uuid,
+        amount,
+        kind,
+        key,
+        attacker.as_deref(),
+        Some(with),
+    )
+    .is_some()
+}
+
+/// A right click in the air with a projectile item: `Some` if the item was
+/// one.
+pub fn use_item(
+    ctx: &ServerContext,
+    actor: Actor,
+    hand: i32,
+    yaw: f32,
+    pitch: f32,
+) -> Option<Outcome> {
+    let held = crate::held::held(ctx, actor.uuid, hand)?;
+    let name = held.name.as_str();
+    let mut outcome = Outcome::default();
+    let consumes = actor.game_mode != 1;
+    let aim = |offset: f32| look(yaw, pitch + offset);
+    let (shot, speed, offset, sound) = match name {
+        "minecraft:bow" => {
+            if consumes && crate::held::find(ctx, actor.uuid, is_arrow).is_none() {
+                return Some(outcome);
+            }
+            let now = lock(&ctx.time).age;
+            lock(&ctx.shooting).draws.insert(actor.uuid, (now, hand));
+            let _ = ctx.events.send(Event::UsingItem {
+                uuid: actor.uuid,
+                entity_id: actor.entity_id,
+                hand: Some(hand),
+            });
+            return Some(outcome);
+        }
+        "minecraft:snowball" => (Shot::Snowball, 1.5, 0.0, "entity.snowball.throw"),
+        "minecraft:egg" => (Shot::Egg, 1.5, 0.0, "entity.egg.throw"),
+        "minecraft:ender_pearl" => (Shot::Pearl, 1.5, 0.0, "entity.ender_pearl.throw"),
+        "minecraft:splash_potion" | "minecraft:lingering_potion" => {
+            let lingering = name == "minecraft:lingering_potion";
+            let contents = potions::contents(held.comps.as_ref());
+            (
+                Shot::Potion {
+                    item: held.stack.item,
+                    lingering,
+                    color: potions::color(&contents),
+                    effects: contents,
+                },
+                0.5,
+                -20.0,
+                if lingering {
+                    "entity.lingering_potion.throw"
+                } else {
+                    "entity.splash_potion.throw"
+                },
+            )
+        }
+        "minecraft:fishing_rod" => return Some(fishing::use_rod(ctx, actor, hand, yaw, pitch)),
+        "minecraft:firework_rocket" => {
+            firework::launch(
+                ctx,
+                actor,
+                &held,
+                [actor.pose.x, actor.pose.y + 1.5, actor.pose.z],
+                false,
+            );
+            if consumes {
+                crate::held::consume(ctx, actor.uuid, held.slot, 1);
+            }
+            outcome.events.push(Event::Swing {
+                uuid: actor.uuid,
+                entity_id: actor.entity_id,
+                times: 1,
+            });
+            return Some(outcome);
+        }
+        _ => return None,
+    };
+    let at = muzzle(&actor);
+    shoot(ctx, shot, Some(actor.uuid), at, aim(offset), speed, 1.0);
+    fx::sound(
+        ctx,
+        sound,
+        fx::category::NEUTRAL,
+        at,
+        0.5,
+        0.4 / (hits::rnd() as f32 * 0.4 + 0.8),
+    );
+    if consumes {
+        crate::held::consume(ctx, actor.uuid, held.slot, 1);
+    }
+    outcome.events.push(Event::Swing {
+        uuid: actor.uuid,
+        entity_id: actor.entity_id,
+        times: 1,
+    });
+    Some(outcome)
+}
+
+pub fn is_arrow(name: &str) -> bool {
+    matches!(
+        name,
+        "minecraft:arrow" | "minecraft:spectral_arrow" | "minecraft:tipped_arrow"
+    )
+}
+
+/// The player let go of use: a drawn bow shoots.
+pub fn release(ctx: &ServerContext, actor: Actor) {
+    let Some((start, hand)) = lock(&ctx.shooting).draws.remove(&actor.uuid) else {
+        return;
+    };
+    let _ = ctx.events.send(Event::UsingItem {
+        uuid: actor.uuid,
+        entity_id: actor.entity_id,
+        hand: None,
+    });
+    let now = lock(&ctx.time).age;
+    arrow::fire_bow(ctx, actor, hand, (now - start).max(0) as i32);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mc_entity::extra::Pickup;
+
+    /// A superflat server context, `None` without the game data.
+    pub(crate) fn flat() -> Option<ServerContext> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let data = mc_data::McData::load(&dir).ok()?;
+        ServerContext::new(crate::Config::new(dir), data).ok()
+    }
+
+    fn run(ctx: &ServerContext, e: &mut Entity, ticks: usize) -> hits::Out {
+        let mut out = hits::Out::default();
+        for _ in 0..ticks {
+            let mut t = Tick {
+                ctx,
+                players: &[],
+                targets: &[],
+                out: &mut out,
+            };
+            tick(&mut t, e);
+            if e.removed {
+                break;
+            }
+        }
+        out
+    }
+
+    fn arrow_at(ctx: &ServerContext, pos: [f64; 3], vel: [f64; 3]) -> Entity {
+        let id = spawn(
+            ctx,
+            Shot::Arrow(mc_entity::extra::Arrow::new(1)),
+            None,
+            pos,
+            vel,
+        );
+        let mut entities = lock(&ctx.entities);
+        let i = entities.iter().position(|e| e.id == id).expect("spawned");
+        entities.swap_remove(i)
+    }
+
+    #[test]
+    fn an_arrow_arcs_down_and_sticks_in_the_ground() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        // The flat world's surface is at y = -60.
+        let mut e = arrow_at(&ctx, [0.5, -58.0, 0.5], [1.0, 0.2, 0.0]);
+        run(&ctx, &mut e, 200);
+        let Kind::Projectile(p) = &e.kind else {
+            panic!()
+        };
+        let Shot::Arrow(a) = &p.shot else { panic!() };
+        assert!(a.stuck > 0, "{e:?}");
+        assert!(!e.removed);
+        assert!((e.pos[1] + 60.0).abs() < 0.01, "{:?}", e.pos);
+        assert!(e.pos[0] > 5.0);
+        assert_eq!(e.vel, [0.0; 3]);
+        assert_eq!(a.pickup, Pickup::Yes);
+    }
+
+    #[test]
+    fn a_snowball_breaks_on_the_ground() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let id = spawn(
+            &ctx,
+            Shot::Snowball,
+            None,
+            [0.5, -58.0, 0.5],
+            [0.0, -0.5, 0.0],
+        );
+        let mut e = {
+            let mut entities = lock(&ctx.entities);
+            let i = entities.iter().position(|e| e.id == id).unwrap();
+            entities.swap_remove(i)
+        };
+        run(&ctx, &mut e, 20);
+        assert!(e.removed);
+    }
+
+    #[test]
+    fn a_stuck_arrow_falls_when_its_block_goes() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut e = arrow_at(&ctx, [0.5, -55.0, 0.5], [0.0, 0.0, 0.0]);
+        if let Kind::Projectile(p) = &mut e.kind
+            && let Shot::Arrow(a) = &mut p.shot
+        {
+            a.stuck = 3;
+        }
+        run(&ctx, &mut e, 1);
+        let Kind::Projectile(p) = &e.kind else {
+            panic!()
+        };
+        let Shot::Arrow(a) = &p.shot else { panic!() };
+        // In the air nothing holds it.
+        assert_eq!(a.stuck, 0);
+        assert!(e.vel[1] < 0.0);
+    }
+
+    #[test]
+    fn bow_power_rises_with_the_draw() {
+        let power = arrow::power;
+        assert!(power(2) < 0.1 && power(3) >= 0.1);
+        assert!(power(20) >= 1.0 - 1e-9);
+        assert!(power(10) > 0.4 && power(10) < 0.5);
+    }
+
+    #[test]
+    fn velocities_pack_as_the_protocol_does() {
+        use mc_protocol::packets::play::put_lpvec3;
+        let mut out = Vec::new();
+        put_lpvec3(&mut out, [0.0; 3]);
+        assert_eq!(out, [0]);
+        // Unpack what a client would: scale from the low bits, 15 bits an axis.
+        let mut out = Vec::new();
+        put_lpvec3(&mut out, [1.5, -0.5, 0.25]);
+        assert_eq!(out.len(), 6);
+        let bits = u64::from(out[0])
+            | u64::from(out[1]) << 8
+            | u64::from(u32::from_be_bytes([out[2], out[3], out[4], out[5]])) << 16;
+        let scale = (bits & 3) as f64;
+        assert_eq!(scale, 2.0);
+        let axis = |shift: u32| ((bits >> shift) & 0x7fff) as f64 / 32766.0 * 2.0 - 1.0;
+        assert!((axis(3) * scale - 1.5).abs() < 1e-3);
+        assert!((axis(18) * scale + 0.5).abs() < 1e-3);
+        assert!((axis(33) * scale - 0.25).abs() < 1e-3);
+    }
+
+    #[test]
+    fn boxes_are_hit_where_the_ray_enters() {
+        let b = mc_entity::Aabb {
+            min: [1.0, 0.0, 0.0],
+            max: [2.0, 1.0, 1.0],
+        };
+        let f = hits::ray_box([0.0, 0.5, 0.5], [4.0, 0.5, 0.5], &b).unwrap();
+        assert!((f - 0.25).abs() < 1e-9);
+        assert!(hits::ray_box([0.0, 2.5, 0.5], [4.0, 2.5, 0.5], &b).is_none());
+    }
+
+    #[test]
+    fn potion_tables_follow_the_wiki() {
+        let healing = potions::effects_of("minecraft:strong_healing");
+        assert_eq!(healing, vec![("minecraft:instant_health".to_owned(), 1, 1)]);
+        let speed = potions::effects_of("long_swiftness");
+        assert_eq!(speed, vec![("minecraft:speed".to_owned(), 0, 9600)]);
+        assert!(potions::effects_of("water").is_empty());
+        assert_eq!(potions::effects_of("strong_turtle_master").len(), 2);
+    }
+}

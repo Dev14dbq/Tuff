@@ -618,6 +618,12 @@ pub mod play {
         Attack {
             entity_id: i32,
         },
+        /// Right click on an entity (the click point and the sneak flag that
+        /// follow are not read).
+        Interact {
+            entity_id: i32,
+            hand: i32,
+        },
         /// 0 respawn, 1 statistics, 2 game rules.
         ClientCommand {
             action: i32,
@@ -939,6 +945,10 @@ pub mod play {
                 },
                 "minecraft:attack" => Serverbound::Attack {
                     entity_id: r.varint()?,
+                },
+                "minecraft:interact" => Serverbound::Interact {
+                    entity_id: r.varint()?,
+                    hand: r.varint()?,
                 },
                 "minecraft:client_command" => Serverbound::ClientCommand {
                     action: r.varint()?,
@@ -2150,11 +2160,19 @@ pub mod play {
         /// A list of particles: (particle type id, the ARGB colour for those
         /// that take one).
         Particles(Vec<(i32, Option<i32>)>),
+        /// Three angles in degrees (armor stand poses).
+        Rotations([f32; 3]),
     }
 
     impl MetadataValue {
         fn encode(&self, out: &mut Vec<u8>) {
             match self {
+                MetadataValue::Rotations(angles) => {
+                    out.put_varint(9);
+                    for a in angles {
+                        out.put_f32(*a);
+                    }
+                }
                 MetadataValue::Byte(v) => {
                     out.put_varint(0);
                     out.put_i8(*v);
@@ -2237,6 +2255,80 @@ pub mod play {
             out.put_angle(self.yaw);
             out.put_angle(self.head_yaw);
             out.put_varint(self.data);
+        }
+    }
+
+    /// A velocity as the protocol packs it (`LpVec3`): one zero byte for
+    /// (almost) none, else 15 bits per axis scaled by the largest, 6 bytes
+    /// and a VarInt when the scale does not fit in two bits.
+    pub fn put_lpvec3(out: &mut Vec<u8>, v: [f64; 3]) {
+        let v = v.map(|c| {
+            if c.is_nan() {
+                0.0
+            } else {
+                c.clamp(-1.7179869183e10, 1.7179869183e10)
+            }
+        });
+        let max = v.iter().fold(0.0_f64, |m, c| m.max(c.abs()));
+        if max < 3.051944088235294e-5 {
+            out.put_u8(0);
+            return;
+        }
+        let scale = max.ceil() as u64;
+        let partial = scale & 3 != scale;
+        let markers = if partial { scale & 3 | 4 } else { scale };
+        let pack = |c: f64| ((c / scale as f64 * 0.5 + 0.5) * 32766.0).round() as u64;
+        let bits = markers | pack(v[0]) << 3 | pack(v[1]) << 18 | pack(v[2]) << 33;
+        out.put_u8(bits as u8);
+        out.put_u8((bits >> 8) as u8);
+        out.put_i32((bits >> 16) as i32);
+        if partial {
+            out.put_varint((scale >> 2) as i32);
+        }
+    }
+
+    /// Set Entity Motion: the velocity clients predict the entity with.
+    #[derive(Clone, Debug)]
+    pub struct SetEntityMotion {
+        pub entity_id: i32,
+        pub velocity: [f64; 3],
+    }
+    packet!(SetEntityMotion, Play, "minecraft:set_entity_motion");
+    impl Encode for SetEntityMotion {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            put_lpvec3(out, self.velocity);
+        }
+    }
+
+    /// Set Entity Link: a leash from `entity_id` to `holder` (0: cut).
+    #[derive(Clone, Debug)]
+    pub struct SetEntityLink {
+        pub entity_id: i32,
+        pub holder: i32,
+    }
+    packet!(SetEntityLink, Play, "minecraft:set_entity_link");
+    impl Encode for SetEntityLink {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_i32(self.entity_id);
+            out.put_i32(self.holder);
+        }
+    }
+
+    /// Set Passengers: everything riding `vehicle`.
+    #[derive(Clone, Debug)]
+    pub struct SetPassengers {
+        pub vehicle: i32,
+        pub passengers: Vec<i32>,
+    }
+    packet!(SetPassengers, Play, "minecraft:set_passengers");
+    impl Encode for SetPassengers {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.vehicle);
+            out.put_len(self.passengers.len());
+            for &p in &self.passengers {
+                out.put_varint(p);
+            }
         }
     }
 

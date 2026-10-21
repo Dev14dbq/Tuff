@@ -841,6 +841,11 @@ async fn play(
                         let victim = ctx.players.lock().expect("players lock").values()
                             .find(|p| p.entity_id == target)
                             .and_then(|p| p.pose.map(|at| (p.profile.uuid, at)));
+                        if victim.is_none() {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::UseEntity { entity_id: target, hand: 0, attack: true };
+                            let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                        }
                         if let Some((victim, at)) = victim {
                             let (dx, dy, dz) = (at.x - pose.x, at.y - pose.y, at.z - pose.z);
                             // Reach 3 from the docs, with some room for lag.
@@ -851,6 +856,11 @@ async fn play(
                                 crate::vitals::hurt_by(&ctx, victim, damage, "minecraft:player_attack", "death.attack.player", Some(&me.profile.name));
                             }
                         }
+                    }
+                    play::Serverbound::Interact { entity_id: target, hand } if game_mode != 3 => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::UseEntity { entity_id: target, hand, attack: false };
+                        let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::Punch => {
                         let _ = ctx.events.send(Event::Swing { uuid, entity_id, times: 1 });
@@ -1014,6 +1024,48 @@ async fn play(
                                     pitch: 0.0,
                                     on_ground,
                                 })?;
+                            }
+                        }
+                    }
+                    Ok(Event::EntitySync(rows)) => {
+                        for r in rows {
+                            if seen_entities.contains(&r.id) {
+                                writer.queue(&play::EntityPositionSync {
+                                    entity_id: r.id,
+                                    x: r.pos[0],
+                                    y: r.pos[1],
+                                    z: r.pos[2],
+                                    yaw: r.yaw,
+                                    pitch: r.pitch,
+                                    on_ground: r.on_ground,
+                                })?;
+                                writer.queue(&play::SetEntityMotion {
+                                    entity_id: r.id,
+                                    velocity: r.vel,
+                                })?;
+                            }
+                        }
+                    }
+                    Ok(Event::Fx(fx)) => {
+                        use crate::fx::Fx;
+                        let wanted = match (fx.entity(), fx.at()) {
+                            (Some(id), _) => seen_entities.contains(&id) || visible_entity(&ctx, id, &visible),
+                            (None, Some(at)) => {
+                                let (dx, dy, dz) = (pose.x - at[0], pose.y - at[1], pose.z - at[2]);
+                                dx * dx + dy * dy + dz * dz < 4096.0
+                            }
+                            _ => true,
+                        };
+                        if wanted {
+                            match fx {
+                                Fx::Sound(p) => writer.queue(&p)?,
+                                Fx::Level(p) => writer.queue(&p)?,
+                                Fx::Particles(p) => writer.queue(&p)?,
+                                Fx::Status(p) => writer.queue(&p)?,
+                                Fx::Equip(p) => writer.queue(&p)?,
+                                Fx::Link(p) => writer.queue(&p)?,
+                                Fx::Passengers(p) => writer.queue(&p)?,
+                                Fx::Motion(p) => writer.queue(&p)?,
                             }
                         }
                     }
@@ -1540,10 +1592,47 @@ fn spawn_entity(
     ctx: &ServerContext,
     entity: &mc_entity::Entity,
 ) -> Result<()> {
+    if let Some(d) = crate::fx::describe(ctx, entity) {
+        let Some(kind) = crate::fx::type_id(ctx, &d.kind) else {
+            return Ok(());
+        };
+        writer.queue(&play::AddEntity {
+            entity_id: entity.id,
+            uuid: entity.uuid,
+            kind,
+            x: entity.pos[0],
+            y: entity.pos[1],
+            z: entity.pos[2],
+            pitch: d.pitch,
+            yaw: d.yaw,
+            head_yaw: d.yaw,
+            data: d.data,
+        })?;
+        if d.vel != [0.0; 3] {
+            writer.queue(&play::SetEntityMotion {
+                entity_id: entity.id,
+                velocity: d.vel,
+            })?;
+        }
+        if !d.meta.is_empty() {
+            writer.queue(&play::SetEntityData {
+                entity_id: entity.id,
+                entries: d.meta,
+            })?;
+        }
+        if !d.gear.is_empty() {
+            writer.queue(&play::SetEquipment {
+                entity_id: entity.id,
+                slots: d.gear,
+            })?;
+        }
+        return Ok(());
+    }
     let (kind, data) = match entity.kind {
         mc_entity::Kind::FallingBlock { state } => (ctx.entity_types.falling_block, state as i32),
         mc_entity::Kind::Item { .. } => (ctx.entity_types.item, 0),
         mc_entity::Kind::Tnt { .. } => (ctx.entity_types.tnt, 0),
+        _ => return Ok(()),
     };
     writer.queue(&play::AddEntity {
         entity_id: entity.id,
@@ -1582,6 +1671,15 @@ fn spawn_entity(
         _ => {}
     }
     Ok(())
+}
+
+/// Whether `id` is the entity of a player this one sees (or themselves).
+fn visible_entity(ctx: &ServerContext, id: i32, visible: &HashSet<u128>) -> bool {
+    ctx.players
+        .lock()
+        .expect("players lock")
+        .values()
+        .any(|p| p.entity_id == id && visible.contains(&p.profile.uuid))
 }
 
 fn skin_parts_metadata(entity_id: i32, skin_parts: u8) -> play::SetEntityData {

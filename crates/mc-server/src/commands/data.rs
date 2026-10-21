@@ -256,6 +256,7 @@ fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
             }
         }
         mc_entity::Kind::FallingBlock { .. } => {}
+        _ => {}
     }
     c
 }

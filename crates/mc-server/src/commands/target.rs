@@ -255,6 +255,13 @@ pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
                 "minecraft:tnt".to_owned(),
                 "entity.minecraft.tnt".to_owned(),
             ),
+            other => {
+                let name = crate::fx::type_name(other).unwrap_or_default();
+                (
+                    format!("minecraft:{name}"),
+                    format!("entity.minecraft.{name}"),
+                )
+            }
         };
         let mut key = Compound::new();
         key.insert("translate", name_key.as_str());
