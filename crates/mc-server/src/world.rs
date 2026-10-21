@@ -977,6 +977,18 @@ impl World {
         })
     }
 
+    /// Every block entity with `id` in the loaded chunks.
+    pub fn block_entities_of(&self, id: &str) -> Vec<mc_world::BlockEntity> {
+        let chunks = self.chunks.lock().expect("chunks lock");
+        chunks
+            .values()
+            .filter_map(|slot| slot.chunk.as_ref())
+            .flat_map(|chunk| chunk.block_entities.iter())
+            .filter(|be| be.id == id)
+            .cloned()
+            .collect()
+    }
+
     /// The `minecraft:block_entity_type` registry id of a block entity id.
     pub fn block_entity_kind(&self, id: &str) -> Option<i32> {
         self.block_entity_types.get(id).copied()

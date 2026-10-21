@@ -65,6 +65,12 @@ pub fn kind_of(block: &str) -> Option<Kind> {
             "minecraft:generic_3x3",
             "Dropper",
         )),
+        "minecraft:brewing_stand" => Some(other(
+            "minecraft:brewing_stand",
+            5,
+            "minecraft:brewing_stand",
+            "Brewing Stand",
+        )),
         "minecraft:hopper" => Some(other("minecraft:hopper", 5, "minecraft:hopper", "Hopper")),
         b if b.ends_with("shulker_box") => Some(other(
             "minecraft:shulker_box",

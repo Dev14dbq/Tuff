@@ -45,10 +45,31 @@ pub struct Cooking {
     pub xp: f32,
 }
 
+/// A stonecutter recipe.
+#[derive(Debug)]
+pub struct Cut {
+    pub input: HashSet<i32>,
+    pub result: ItemStack,
+}
+
+/// A smithing table recipe: an upgrade (`result` set) or a trim (not).
+#[derive(Debug)]
+pub struct Smithing {
+    pub template: HashSet<i32>,
+    pub base: HashSet<i32>,
+    pub addition: HashSet<i32>,
+    pub result: Option<ItemStack>,
+}
+
 #[derive(Debug, Default)]
 pub struct Recipes {
     recipes: Vec<Recipe>,
     pub cooking: Vec<Cooking>,
+    /// In the order the client is told of them.
+    pub stonecutting: Vec<Cut>,
+    pub smithing: Vec<Smithing>,
+    /// Item tags (`minecraft:planks`) with the items in them.
+    pub item_tags: std::collections::HashMap<String, Vec<i32>>,
 }
 
 impl Recipes {
@@ -81,6 +102,8 @@ impl Recipes {
         };
         let mut recipes = Vec::new();
         let mut cooking = Vec::new();
+        let mut stonecutting = Vec::new();
+        let mut smithing = Vec::new();
         for name in pack
             .registry_entries("minecraft:recipe")
             .unwrap_or_default()
@@ -88,6 +111,21 @@ impl Recipes {
             let Ok(json) = pack.read_entry("minecraft:recipe", &name) else {
                 continue;
             };
+            if json["type"].as_str() == Some("minecraft:smithing_trim") {
+                if let (Some(template), Some(base), Some(addition)) = (
+                    ingredient(&json["template"]),
+                    ingredient(&json["base"]),
+                    ingredient(&json["addition"]),
+                ) {
+                    smithing.push(Smithing {
+                        template,
+                        base,
+                        addition,
+                        result: None,
+                    });
+                }
+                continue;
+            }
             let Some(result) = json["result"]["id"].as_str().and_then(|id| items.get(id)) else {
                 continue;
             };
@@ -98,6 +136,27 @@ impl Recipes {
                 has_component_changes: false,
             };
             let kind = json["type"].as_str().unwrap_or("");
+            if kind == "minecraft:stonecutting" {
+                if let Some(input) = ingredient(&json["ingredient"]) {
+                    stonecutting.push(Cut { input, result });
+                }
+                continue;
+            }
+            if kind == "minecraft:smithing_transform" {
+                if let (Some(template), Some(base), Some(addition)) = (
+                    ingredient(&json["template"]),
+                    ingredient(&json["base"]),
+                    ingredient(&json["addition"]),
+                ) {
+                    smithing.push(Smithing {
+                        template,
+                        base,
+                        addition,
+                        result: Some(result),
+                    });
+                }
+                continue;
+            }
             if matches!(
                 kind,
                 "minecraft:smelting"
@@ -164,7 +223,68 @@ impl Recipes {
             };
             recipes.push(Recipe { shape, result });
         }
-        Self { recipes, cooking }
+        Self {
+            recipes,
+            cooking,
+            stonecutting,
+            smithing,
+            item_tags: item_tags
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.to_vec()))
+                .collect(),
+        }
+    }
+
+    /// What clients are told: which items their furnace and smithing
+    /// slots accept, and the stonecutter's recipes.
+    pub fn update_packet(&self) -> mc_protocol::packets::play::UpdateRecipes {
+        let sorted = |set: HashSet<i32>| {
+            let mut v: Vec<i32> = set.into_iter().collect();
+            v.sort_unstable();
+            v
+        };
+        let cooked = |kind: &str| {
+            sorted(
+                self.cooking
+                    .iter()
+                    .filter(|c| c.kind == kind)
+                    .flat_map(|c| c.input.iter().copied())
+                    .collect(),
+            )
+        };
+        let smith = |part: fn(&Smithing) -> &HashSet<i32>| {
+            sorted(
+                self.smithing
+                    .iter()
+                    .flat_map(|s| part(s).iter().copied())
+                    .collect(),
+            )
+        };
+        mc_protocol::packets::play::UpdateRecipes {
+            property_sets: vec![
+                (
+                    "minecraft:furnace_input".into(),
+                    cooked("minecraft:smelting"),
+                ),
+                (
+                    "minecraft:blast_furnace_input".into(),
+                    cooked("minecraft:blasting"),
+                ),
+                ("minecraft:smoker_input".into(), cooked("minecraft:smoking")),
+                (
+                    "minecraft:campfire_input".into(),
+                    cooked("minecraft:campfire_cooking"),
+                ),
+                ("minecraft:smithing_base".into(), smith(|s| &s.base)),
+                ("minecraft:smithing_template".into(), smith(|s| &s.template)),
+                ("minecraft:smithing_addition".into(), smith(|s| &s.addition)),
+            ],
+            stonecutter: self
+                .stonecutting
+                .iter()
+                .map(|c| (sorted(c.input.clone()), c.result.clone()))
+                .collect(),
+        }
     }
 
     pub fn len(&self) -> usize {

@@ -614,6 +614,21 @@ pub mod play {
         ContainerClose {
             window: i32,
         },
+        /// A button of a window (enchanting offer, stonecutter recipe, loom
+        /// pattern...).
+        ContainerButtonClick {
+            window: i32,
+            button: i32,
+        },
+        /// The text typed into an anvil's name field.
+        RenameItem {
+            name: String,
+        },
+        /// The effects chosen at a beacon (`minecraft:mob_effect` ids).
+        SetBeacon {
+            primary: Option<i32>,
+            secondary: Option<i32>,
+        },
         /// Left click on an entity.
         Attack {
             entity_id: i32,
@@ -957,6 +972,21 @@ pub mod play {
                 "minecraft:container_close" => Serverbound::ContainerClose {
                     window: r.varint()?,
                 },
+                "minecraft:container_button_click" => Serverbound::ContainerButtonClick {
+                    window: r.varint()?,
+                    button: r.varint()?,
+                },
+                "minecraft:rename_item" => Serverbound::RenameItem {
+                    name: r.string(50)?,
+                },
+                "minecraft:set_beacon" => {
+                    let mut effect = || -> Result<Option<i32>> {
+                        Ok(if r.bool()? { Some(r.varint()?) } else { None })
+                    };
+                    let primary = effect()?;
+                    let secondary = effect()?;
+                    Serverbound::SetBeacon { primary, secondary }
+                }
                 "minecraft:attack" => Serverbound::Attack {
                     entity_id: r.varint()?,
                 },
@@ -1623,6 +1653,41 @@ pub mod play {
             out.put_varint(self.window);
             out.put_i16(self.property);
             out.put_i16(self.value);
+        }
+    }
+
+    /// Update Recipes: what the client needs to know of recipes to check its
+    /// slots (furnace and smithing inputs) and to list the stonecutter's
+    /// choices.
+    #[derive(Clone, Debug, Default)]
+    pub struct UpdateRecipes {
+        /// Property set id (`minecraft:furnace_input`...) and its item ids.
+        pub property_sets: Vec<(String, Vec<i32>)>,
+        /// Stonecutter recipes in order: the items accepted and the result.
+        pub stonecutter: Vec<(Vec<i32>, ItemStack)>,
+    }
+    packet!(UpdateRecipes, Play, "minecraft:update_recipes");
+    impl Encode for UpdateRecipes {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_len(self.property_sets.len());
+            for (key, items) in &self.property_sets {
+                out.put_string(key);
+                out.put_len(items.len());
+                for &item in items {
+                    out.put_varint(item);
+                }
+            }
+            out.put_len(self.stonecutter.len());
+            for (input, result) in &self.stonecutter {
+                // An ID set: the count plus one, then the ids.
+                out.put_len(input.len() + 1);
+                for &item in input {
+                    out.put_varint(item);
+                }
+                // Slot display of type `item_stack`.
+                out.put_varint(5);
+                ItemStack::encode(Some(result), out);
+            }
         }
     }
 

@@ -36,6 +36,12 @@ pub struct Item {
     pub damageable: bool,
     /// `max_damage`, 0 for items that do not wear.
     pub max_damage: i32,
+    /// What repairs it on an anvil: item names or one `#tag`.
+    pub repairable: Vec<String>,
+    /// `enchantable` value (how well it takes enchantments), if it does.
+    pub enchantable: Option<i32>,
+    /// `jukebox_playable`: the song's id.
+    pub jukebox_song: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -168,6 +174,21 @@ fn parse(name: &str, c: &Value) -> Item {
         attack_damage,
         damageable: c.get("minecraft:max_damage").is_some(),
         max_damage: c["minecraft:max_damage"].as_i64().unwrap_or(0) as i32,
+        repairable: match &c["minecraft:repairable"]["items"] {
+            Value::String(s) => vec![s.clone()],
+            Value::Array(list) => list
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect(),
+            _ => Vec::new(),
+        },
+        jukebox_song: match &c["minecraft:jukebox_playable"] {
+            Value::String(s) => Some(s.clone()),
+            other => other["song"].as_str().map(str::to_owned),
+        },
+        enchantable: c["minecraft:enchantable"]["value"]
+            .as_i64()
+            .map(|v| v as i32),
         fuel: c.get("minecraft:cooking_fuel").and_then(|f| {
             Some((
                 f["burn_time"].as_str()?.to_owned(),

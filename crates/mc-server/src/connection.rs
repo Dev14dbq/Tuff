@@ -501,6 +501,7 @@ async fn play(
     let mut flying = me.flying || me.game_mode == 3;
     writer.queue(&abilities(me.game_mode, flying))?;
     send_permissions(writer, &ctx, uuid, &me.profile.name, entity_id)?;
+    writer.queue(&ctx.recipes.update_packet())?;
     let mut awaiting_teleport = Some(1);
     let mut next_teleport = 1;
     writer.queue(&play::PlayerPosition {
@@ -684,6 +685,9 @@ async fn play(
                 if let Some(position) = outcome.open_sign.take() {
                     writer.queue(&play::OpenSignEditor { position, front: true })?;
                 }
+                if let Some((position, menu)) = outcome.open_menu.take() {
+                    windows.open_menu(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, menu)?;
+                }
                 if std::mem::take(&mut outcome.open_crafting) {
                     windows.open_crafting(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose })?;
                 }
@@ -759,6 +763,12 @@ async fn play(
                     play::Serverbound::ContainerClick { window, slot, button, mode, changed, carried, .. } => {
                         let click = windows::Click { window, slot, button, mode, changed, carried };
                         windows.click(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, click)?;
+                    }
+                    play::Serverbound::ContainerButtonClick { window, button } => {
+                        windows.button(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, button)?;
+                    }
+                    play::Serverbound::SetBeacon { primary, secondary } => {
+                        windows.set_beacon(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, primary, secondary)?;
                     }
                     play::Serverbound::Interact { entity_id: target, .. }
                         if game_mode != 3 && crate::trading::is_merchant(&ctx, target) =>
@@ -2315,11 +2325,40 @@ fn respawn_target(ctx: &ServerContext, uuid: u128) -> (String, Pose) {
                 on_ground: true,
             },
         ),
-        _ => (
-            ctx.spawn.lock().expect("spawn lock").dimension.clone(),
-            world_spawn_pose(ctx),
-        ),
+        // A bed or a charged anchor that is still there.
+        Some(r) => {
+            let there = ctx.in_dimension(&r.dimension);
+            let at = Position::new(r.pos.0, r.pos.1, r.pos.2);
+            let blocks = &ctx.data.blocks;
+            let state = there.as_ref().and_then(|d| d.world.block(at, blocks));
+            let name = state.and_then(|s| blocks.block_name(s));
+            let anchor_ok = name == Some("minecraft:respawn_anchor")
+                && state.is_some_and(|s| blocks.property(s, "charges") != Some("0"));
+            if name.is_some_and(|n| n.ends_with("_bed")) || anchor_ok {
+                (
+                    r.dimension.clone(),
+                    Pose {
+                        x: f64::from(r.pos.0) + 0.5,
+                        y: f64::from(r.pos.1) + if anchor_ok { 1.0 } else { 0.6 },
+                        z: f64::from(r.pos.2) + 0.5,
+                        yaw: r.yaw,
+                        pitch: 0.0,
+                        on_ground: true,
+                    },
+                )
+            } else {
+                spawn_target(ctx)
+            }
+        }
+        None => spawn_target(ctx),
     }
+}
+
+fn spawn_target(ctx: &ServerContext) -> (String, Pose) {
+    (
+        ctx.spawn.lock().expect("spawn lock").dimension.clone(),
+        world_spawn_pose(ctx),
+    )
 }
 
 /// Tells a client where the world spawn is (the compass points there).

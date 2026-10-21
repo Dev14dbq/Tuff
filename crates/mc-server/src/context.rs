@@ -395,6 +395,8 @@ pub struct Shared {
     pub items: crate::items::Items,
     /// Burn times of fuels.
     pub fuels: crate::furnaces::Fuels,
+    /// Players in bed at night, since when.
+    pub sleepers: Mutex<crate::useblocks::Sleepers>,
     /// Players eating or drinking (tick thread counts down).
     pub using: Mutex<HashMap<u128, crate::vitals::Using>>,
     /// 0 peaceful, 1 easy, 2 normal, 3 hard (level.dat).
@@ -954,6 +956,7 @@ impl ServerContext {
             items,
             using: Mutex::new(HashMap::new()),
             fuels,
+            sleepers: Mutex::new(HashMap::new()),
             difficulty: AtomicI32::new(difficulty),
             damage_types,
             player_files,

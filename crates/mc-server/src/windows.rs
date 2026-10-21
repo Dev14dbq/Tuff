@@ -13,6 +13,7 @@ use mc_protocol::text;
 use super::{PacketWriter, change_hands};
 use crate::containers;
 use crate::context::{Event, Pose, ServerContext};
+use crate::menus::{Machine, Menu};
 use crate::trading;
 
 enum Kind {
@@ -20,6 +21,8 @@ enum Kind {
     Container { parts: Vec<(Position, usize)> },
     /// Crafting table: 0 result, 1–9 grid (not shared, not stored).
     Crafting { grid: Vec<Option<ItemStack>> },
+    /// A menu with slots of its own (beacon, anvil...).
+    Machine(Box<Machine>),
     /// A villager's trades: 0 and 1 payment, 2 result (not shared, not
     /// stored).
     Merchant {
@@ -35,12 +38,15 @@ impl Kind {
     fn part_of(&self, slot: usize) -> Option<(Position, usize)> {
         match self {
             Kind::Container { parts } => open_part(parts, slot),
-            Kind::Crafting { .. } | Kind::Merchant { .. } => None,
+            Kind::Crafting { .. } | Kind::Machine(_) | Kind::Merchant { .. } => None,
         }
     }
 
     /// Where the part at `position` starts in the window.
     fn offset_of(&self, position: Position) -> Option<usize> {
+        if let Kind::Machine(m) = self {
+            return (m.at == position).then_some(0);
+        }
         let Kind::Container { parts } = self else {
             return None;
         };
@@ -58,6 +64,7 @@ impl Kind {
         match self {
             Kind::Container { parts } => parts.iter().map(|(_, n)| n).sum(),
             Kind::Crafting { .. } => 10,
+            Kind::Machine(m) => m.slots.len(),
             Kind::Merchant { .. } => 3,
         }
     }
@@ -208,6 +215,44 @@ impl Windows {
         Ok(())
     }
 
+    /// Opens the menu of the block at `at`.
+    pub fn open_menu(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        at: Position,
+        menu: Menu,
+    ) -> anyhow::Result<()> {
+        self.close_current(writer, who)?;
+        let machine = Machine::new(who.ctx, who.uuid, menu, at);
+        let values = machine.data.clone();
+        let slots = machine.slots.clone();
+        self.show(
+            writer,
+            who,
+            menu.menu(),
+            menu.title(),
+            slots,
+            Kind::Machine(Box::new(machine)),
+        )?;
+        self.send_values(writer, &values)
+    }
+
+    /// Sends the window's numbers.
+    fn send_values(&mut self, writer: &mut PacketWriter, values: &[i16]) -> anyhow::Result<()> {
+        let Some(id) = self.open.as_ref().map(|o| o.id) else {
+            return Ok(());
+        };
+        for (property, &value) in values.iter().enumerate() {
+            writer.queue(&play::ContainerSetData {
+                window: id,
+                property: property as i16,
+                value,
+            })?;
+        }
+        Ok(())
+    }
+
     pub fn open_crafting(&mut self, writer: &mut PacketWriter, who: Who) -> anyhow::Result<()> {
         self.close_current(writer, who)?;
         let grid = vec![None; 10];
@@ -298,6 +343,7 @@ impl Windows {
                         .get(&(p.x, p.y, p.z))
                         .and_then(|o| o.slots.get(local).cloned().flatten())
                 }),
+                Kind::Machine(m) => m.slots.get(s).cloned().flatten(),
                 Kind::Crafting { grid } | Kind::Merchant { grid, .. } => grid[s].clone(),
             };
             if let Some(stack) = before {
@@ -323,6 +369,13 @@ impl Windows {
                 .filter(|s| s.has_changes())
                 .cloned()
                 .collect(),
+            Kind::Machine(m) => m
+                .slots
+                .iter()
+                .flatten()
+                .filter(|s| s.has_changes())
+                .cloned()
+                .collect(),
         };
         let mut hand_stacks = Vec::new();
         let mut thrown = Vec::new();
@@ -342,6 +395,7 @@ impl Windows {
         }
         let id = open.id;
         let mut settle = None;
+        let mut machine_shown = None;
         match &mut open.kind {
             Kind::Container { parts } => {
                 for &(p, _) in parts.iter() {
@@ -376,6 +430,18 @@ impl Windows {
                     self.set_slot(writer, id, 0, made)?;
                 }
             }
+            Kind::Machine(m) => {
+                let known: Vec<&ItemStack> = hand_stacks.iter().chain(&window_stacks).collect();
+                let result = m.result_slot();
+                let result_before = result.and_then(|r| m.slots[r].clone());
+                for (s, stack) in theirs {
+                    m.slots[s] = stack.map(|h| h.resolve(known.iter().copied()));
+                }
+                let taken = result.is_some_and(|r| result_before.is_some() && m.slots[r].is_none());
+                let shown = m.slots.clone();
+                m.settle(ctx, uuid, taken);
+                machine_shown = Some(shown);
+            }
             Kind::Merchant { grid, .. } => {
                 settle = Some(grid.clone());
                 for (s, stack) in theirs {
@@ -383,6 +449,9 @@ impl Windows {
                     grid[s] = stack.map(|h| h.resolve(known.iter().copied()));
                 }
             }
+        }
+        if let Some(shown) = machine_shown {
+            self.sync_machine(writer, who, shown)?;
         }
         if let Some(before) = settle {
             self.settle_trade(writer, who, before, click.mode)?;
@@ -606,6 +675,59 @@ impl Windows {
         Ok(())
     }
 
+    /// Sends what a menu changed on its own since the client's view `shown`
+    /// (results, numbers).
+    fn sync_machine(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        shown: Vec<Option<ItemStack>>,
+    ) -> anyhow::Result<()> {
+        let Some(open) = self.open.as_mut() else {
+            return Ok(());
+        };
+        let id = open.id;
+        let Kind::Machine(m) = &mut open.kind else {
+            return Ok(());
+        };
+        let changes: Vec<(usize, Option<ItemStack>)> = m
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(i, s)| **s != shown[*i])
+            .map(|(i, s)| (i, s.clone()))
+            .collect();
+        let values = m.values(who.ctx);
+        let changed_values = values != m.data;
+        m.data.clone_from(&values);
+        for (slot, item) in changes {
+            self.set_slot(writer, id, slot, item)?;
+        }
+        if changed_values {
+            self.send_values(writer, &values)?;
+        }
+        Ok(())
+    }
+
+    /// A button of the open window was pressed.
+    pub fn button(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        window: i32,
+        button: i32,
+    ) -> anyhow::Result<()> {
+        let Some(open) = self.open.as_mut().filter(|o| o.id == window) else {
+            return Ok(());
+        };
+        let Kind::Machine(m) = &mut open.kind else {
+            return Ok(());
+        };
+        let shown = m.slots.clone();
+        m.button(who.ctx, who.uuid, button);
+        self.sync_machine(writer, who, shown)
+    }
+
     /// The client closed a window.
     pub fn close(
         &mut self,
@@ -710,6 +832,10 @@ impl Windows {
                 let left: Vec<ItemStack> = grid.into_iter().skip(1).flatten().collect();
                 self.give_back(writer, who, left)?;
             }
+            Kind::Machine(mut m) => {
+                let left = m.leftovers();
+                self.give_back(writer, who, left)?;
+            }
             Kind::Merchant { entity, grid, .. } => {
                 trading::close(ctx, uuid, entity);
                 let left: Vec<ItemStack> = grid.into_iter().take(2).flatten().collect();
@@ -761,6 +887,60 @@ impl Windows {
             })?;
         }
         Ok(())
+    }
+
+    /// The beacon window's choice of effects arrived.
+    pub fn set_beacon(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        primary: Option<i32>,
+        secondary: Option<i32>,
+    ) -> anyhow::Result<()> {
+        let Who { ctx, .. } = who;
+        let Some(open) = self.open.as_mut() else {
+            return Ok(());
+        };
+        let id = open.id;
+        let Kind::Machine(m) = &mut open.kind else {
+            return Ok(());
+        };
+        if m.menu != Menu::Beacon {
+            return Ok(());
+        }
+        let name = |e: Option<i32>| {
+            e.and_then(|e| {
+                ctx.data
+                    .builtin
+                    .get("minecraft:mob_effect")?
+                    .iter()
+                    .find(|(_, id)| **id == e)
+                    .map(|(name, _)| name.clone())
+            })
+        };
+        let (primary, secondary) = (name(primary), name(secondary));
+        let (levels, _, _) = crate::beacons::state(ctx, m.at);
+        let paid = m.slots[0]
+            .as_ref()
+            .is_some_and(|s| crate::beacons::is_payment(ctx, s.item));
+        let valid = primary
+            .as_deref()
+            .is_some_and(|p| crate::beacons::primary_allowed(levels, p))
+            && secondary.as_deref().is_none_or(|s| {
+                crate::beacons::secondary_allowed(levels, primary.as_deref().unwrap_or(""), s)
+            });
+        if !paid || !valid {
+            return Ok(());
+        }
+        if let Some(stack) = &mut m.slots[0] {
+            stack.count -= 1;
+            if stack.count <= 0 {
+                m.slots[0] = None;
+            }
+        }
+        let left = m.slots[0].clone();
+        crate::beacons::choose(ctx, m.at, primary.as_deref(), secondary.as_deref());
+        self.set_slot(writer, id, 0, left)
     }
 
     /// The container block is gone.

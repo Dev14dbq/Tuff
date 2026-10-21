@@ -17,6 +17,7 @@ pub mod random;
 pub mod redstone;
 pub mod rng;
 pub mod shapes;
+pub mod sponge;
 pub mod support;
 pub mod ticks;
 pub mod updates;
