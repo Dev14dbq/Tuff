@@ -633,6 +633,13 @@ pub mod play {
         Attack {
             entity_id: i32,
         },
+        /// Player Command: 1 start sprinting, 2 stop, 3/4 a horse jump
+        /// (`data` its strength), 5 open a mount's inventory...
+        PlayerCommand {
+            entity_id: i32,
+            action: i32,
+            data: i32,
+        },
         /// Right click on an entity, with the point clicked when the packet
         /// carries it in a form we read (three floats or doubles).
         Interact {
@@ -989,6 +996,11 @@ pub mod play {
                 }
                 "minecraft:attack" => Serverbound::Attack {
                     entity_id: r.varint()?,
+                },
+                "minecraft:player_command" => Serverbound::PlayerCommand {
+                    entity_id: r.varint()?,
+                    action: r.varint()?,
+                    data: r.varint()?,
                 },
                 "minecraft:move_vehicle" => {
                     let packet = Serverbound::MoveVehicle {
@@ -1915,13 +1927,15 @@ pub mod play {
         pub damage_type: i32,
         /// The entity that hit it (primed TNT), if any.
         pub direct: Option<i32>,
+        /// The entity behind the hit (the shooter of an arrow), if any.
+        pub cause: Option<i32>,
     }
     packet!(DamageEvent, Play, "minecraft:damage_event");
     impl Encode for DamageEvent {
         fn encode(&self, out: &mut Vec<u8>) {
             out.put_varint(self.entity_id);
             out.put_varint(self.damage_type);
-            out.put_varint(0); // no causing entity
+            out.put_varint(self.cause.map_or(0, |id| id + 1));
             out.put_varint(self.direct.map_or(0, |id| id + 1));
             out.put_bool(false); // no source position
         }
@@ -2272,6 +2286,16 @@ pub mod play {
         VillagerData(i32, i32, i32),
         /// Three angles in degrees (armor stand poses).
         Rotations([f32; 3]),
+        VarLong(i64),
+        /// A custom name (a text component), or none.
+        OptComponent(Option<mc_nbt::Tag>),
+        /// A living entity by UUID (a pet's owner), or none.
+        OptUuid(Option<u128>),
+        /// A block state (an enderman's), or none.
+        OptBlockState(Option<u32>),
+        /// A registry id under its own serializer type (cat, cow, wolf, pig
+        /// and chicken variants): (type id, value).
+        Holder(i32, i32),
     }
 
     impl MetadataValue {
@@ -2286,6 +2310,32 @@ pub mod play {
                 MetadataValue::Byte(v) => {
                     out.put_varint(0);
                     out.put_i8(*v);
+                }
+                MetadataValue::VarLong(v) => {
+                    out.put_varint(2);
+                    out.put_varlong(*v);
+                }
+                MetadataValue::OptComponent(tag) => {
+                    out.put_varint(6);
+                    out.put_bool(tag.is_some());
+                    if let Some(t) = tag {
+                        crate::codec::put_nbt(out, t);
+                    }
+                }
+                MetadataValue::OptUuid(uuid) => {
+                    out.put_varint(13);
+                    out.put_bool(uuid.is_some());
+                    if let Some(u) = uuid {
+                        out.put_uuid(*u);
+                    }
+                }
+                MetadataValue::OptBlockState(state) => {
+                    out.put_varint(15);
+                    out.put_varint(state.map_or(0, |s| s as i32));
+                }
+                MetadataValue::Holder(kind, value) => {
+                    out.put_varint(*kind);
+                    out.put_varint(*value);
                 }
                 MetadataValue::VarInt(v) => {
                     out.put_varint(1);
