@@ -533,7 +533,24 @@ heightmap тоже. Генерация в секунду на ядро ≥ ва�
   - трансляция позиции игрока по TCP (`chase`); management API по JSON-RPC (списки, операторы, игроки, правила, состояние, секрет и режимы безопасности);
   - уведомления внешним сервисам (вход, выход, старт, сохранение, обновление мира); диалоги (`/dialog`); локатор (полоса точек и игроков); фильтр текста;
   - флаги функций и оверлеи пакетов; кэш ник → UUID и конвертация старых списков; полный список правил игры (около шестидесяти);
-  - команды без реализации: `/advancement`, `/attribute`, `/clear`, `/clone`, `/enchant`, `/loot`, `/list`, `/ban-ip`, `/pardon-ip`, `/banlist`, `/deop`, `/save-all|on|off`, `/spawnpoint`, `/setidletimeout`, `/teammsg`, `/transfer`, `/publish|unpublish`, `/waypoint`, `/jfr`, `/perf`, `/debug`;
+  - ✅ команды: все 1379 исполняемых веток ванильного дерева доходят до обработчика (проверка
+    `commands_reach_a_handler` по `xtask/commands/gen_leaves.py`); `/publish|unpublish` нет и в
+    ванильном выделенном сервере. Селекторы: правила повтора опций (`inapplicable`), фильтры `nbt`,
+    `level`, `advancements`, `predicate`, имя сущности по типу, объём `dx/dy/dz` по рамке сущности,
+    повороты с переходом через ±180; подсказки не предлагают неприменимые опции. Прогресс
+    достижений (`players/advancements/<uuid>.json`) и рецепты (`recipeBook`) сохраняются;
+  - ✅ правила игры действуют: урон от падения, огня, утопления и заморозки, естественная
+    регенерация, `keep_inventory` (и опыт), сообщения о смерти с видимостью команд,
+    `immediate_respawn`, `limited_crafting`, `reduced_debug_info` (при входе и при смене), `pvp` и
+    огонь по своим, `block_drops`, `entity_drops`, `mob_drops` (опыт игрока), `mob_griefing` и
+    затухание дропа для взрыва крипера, `spawn_mobs`, `spawn_monsters`,
+    `players_sleeping_percentage`, `respawn_radius`, `ender_pearls_vanish_on_death`;
+  - правила, чьих механик ещё нет: `command_blocks_work`, `command_block_output`,
+    `spawner_blocks_work`, `spread_vines`, `max_entity_cramming`, `universal_anger`,
+    `forgive_dead_players`, `raids`, `spawn_patrols`, `spawn_phantoms`, `spawn_wardens`,
+    `projectiles_can_break_blocks`, `global_sound_events`, `locator_bar`,
+    `player_movement_check`, `elytra_movement_check`, `spectators_generate_chunks`,
+    `block_explosion_drop_decay` (взрывы кровати и якоря), правила порталов Незера;
   - решить владельцу: демо-режим, окно GUI сервера, `gametest`, отладочные пакеты (`/debug`), старый ping списка серверов.
 
 **Готово, когда:** популярные датапаки работают, набор тестов на ванильные команды зелёный,
