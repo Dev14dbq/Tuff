@@ -12,6 +12,7 @@ mod blockuse;
 mod books;
 mod border;
 mod bossbars;
+mod combat;
 mod commands;
 mod connection;
 mod containers;

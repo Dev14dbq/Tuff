@@ -32,6 +32,8 @@ pub struct Arrow {
     pub stuck: i32,
     /// Entities it went through already.
     pub hit: Vec<i32>,
+    /// A thrown trident (a drowned's) rather than an arrow.
+    pub trident: bool,
 }
 
 impl Arrow {
@@ -48,6 +50,7 @@ impl Arrow {
             effects: Vec::new(),
             stuck: 0,
             hit: Vec::new(),
+            trident: false,
         }
     }
 }
@@ -85,6 +88,10 @@ pub enum Shot {
         /// Ticks left.
         left: i32,
     },
+    /// A ghast's fireball (explodes) or a blaze's small one (burns).
+    Fireball {
+        small: bool,
+    },
     /// A fishing bobber; `hooked` is the entity it pulls.
     Bobber {
         hooked: Option<i32>,
@@ -98,6 +105,8 @@ pub enum Shot {
 pub struct Projectile {
     pub shot: Shot,
     pub owner: Option<u128>,
+    /// A mob that shot it: its entity id and name (death messages).
+    pub mob: Option<(i32, &'static str)>,
     /// Facing in degrees, set from the velocity as it flies.
     pub yaw: f32,
     pub pitch: f32,

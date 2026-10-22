@@ -411,6 +411,9 @@ pub fn act(ctx: &ServerContext, actor: Actor, act: Act) -> Outcome {
     let Some(e) = entities.iter_mut().find(|e| {
         matches!(&e.kind, Kind::Vehicle(v) if v.riders.contains(&actor.entity_id)) && !e.removed
     }) else {
+        drop(entities);
+        // Not a boat or a cart: a saddled pig or a horse.
+        crate::mobs::ride::act(ctx, &actor, act);
         return Outcome::default();
     };
     let id = e.id;
@@ -514,6 +517,7 @@ mod tests {
                 players: &[],
                 targets: &[],
                 out: &mut out,
+                shooter: None,
             };
             tick(&mut t, &mut e);
         }

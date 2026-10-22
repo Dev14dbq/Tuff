@@ -9,6 +9,7 @@
 //! [`shoot`].
 
 pub mod arrow;
+pub mod fireball;
 pub mod firework;
 pub mod fishing;
 pub mod potions;
@@ -60,6 +61,39 @@ pub fn spawn(
         kind: Kind::Projectile(Projectile {
             shot,
             owner,
+            mob: None,
+            yaw,
+            pitch,
+        }),
+        pos,
+        vel,
+        on_ground: false,
+        age: 0,
+        removed: false,
+        tags: Vec::new(),
+    };
+    let id = entity.id;
+    let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
+    lock(&ctx.entities).push(entity);
+    id
+}
+
+/// [`spawn`] for a projectile a mob shot (`mob`: its entity id and name).
+pub fn spawn_by_mob(
+    ctx: &ServerContext,
+    shot: Shot,
+    mob: (i32, &'static str),
+    pos: [f64; 3],
+    vel: [f64; 3],
+) -> i32 {
+    let (yaw, pitch) = fx::facing_of(vel);
+    let entity = Entity {
+        id: ctx.next_entity_id(),
+        uuid: crate::util::random_uuid(),
+        kind: Kind::Projectile(Projectile {
+            shot,
+            owner: None,
+            mob: Some(mob),
             yaw,
             pitch,
         }),
@@ -100,6 +134,7 @@ pub fn muzzle(actor: &Actor) -> [f64; 3] {
 
 enum Class {
     Arrow,
+    Fireball,
     Thrown,
     Firework,
     Bobber,
@@ -113,6 +148,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
     };
     let class = match p.shot {
         Shot::Arrow(_) => Class::Arrow,
+        Shot::Fireball { .. } => Class::Fireball,
         Shot::Firework(_) => Class::Firework,
         Shot::Bobber { .. } => Class::Bobber,
         Shot::Cloud { .. } => Class::Cloud,
@@ -120,6 +156,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
     };
     match class {
         Class::Arrow => arrow::tick(t, e),
+        Class::Fireball => fireball::tick(t, e),
         Class::Thrown => thrown::tick(t, e),
         Class::Firework => firework::tick(t, e),
         Class::Bobber => fishing::tick(t, e),
@@ -171,7 +208,10 @@ pub fn hurt_player(
     owner: Option<u128>,
     with: i32,
 ) -> bool {
-    let attacker = owner.and_then(|o| hits::name_of(t.ctx, o));
+    let mob = t.shooter;
+    let attacker = owner
+        .and_then(|o| hits::name_of(t.ctx, o))
+        .or(mob.map(|(_, name)| name.to_owned()));
     crate::vitals::try_hurt_by_entity(
         t.ctx,
         victim.uuid,
@@ -350,6 +390,7 @@ pub(crate) mod tests {
                 players: &[],
                 targets: &[],
                 out: &mut out,
+                shooter: None,
             };
             tick(&mut t, e);
             if e.removed {

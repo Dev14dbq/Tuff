@@ -1405,6 +1405,8 @@ async fn players_hurt_each_other_and_give_works() {
         .find(|p| p.profile.name == "Target")
         .unwrap()
         .entity_id;
+    // A full blow needs the sword charged (1.6 attacks a second).
+    tokio::time::sleep(Duration::from_millis(1000)).await;
     let mut attack = Vec::new();
     attack.put_varint(target_entity);
     hitter.send("minecraft:attack", attack).await;

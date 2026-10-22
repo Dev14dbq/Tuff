@@ -136,20 +136,6 @@ pub fn wear(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32) {
     }
 }
 
-/// Wears the armor a player has on after a hit of `amount` (a quarter of
-/// it, at least 1, on each piece), unless the damage type bypasses armor.
-pub fn wear_armor(ctx: &ServerContext, uuid: u128, amount: f32, damage_type: &str) {
-    if amount <= 0.0
-        || crate::enchant_effects::damage_is(ctx, damage_type, "minecraft:bypasses_armor")
-    {
-        return;
-    }
-    let per = ((amount / 4.0) as i32).max(1);
-    for slot in 5..9 {
-        wear(ctx, uuid, slot, per);
-    }
-}
-
 /// Puts a stack in the inventory; what does not fit is returned.
 pub fn give(ctx: &ServerContext, uuid: u128, stack: &ItemStack) -> i32 {
     let max = ctx.items.max_stack(stack.item);

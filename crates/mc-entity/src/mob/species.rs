@@ -1,0 +1,463 @@
+//! What each kind of mob is: its size, attributes, food, sounds and how much
+//! experience it gives. Numbers are the public ones (minecraft.wiki, the page
+//! of each mob, "Attribute").
+
+/// Spawn and despawn categories.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Category {
+    Creature,
+    Monster,
+}
+
+macro_rules! species {
+    ($($name:ident => $id:literal, $display:literal;)*) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum Species {
+            $($name,)*
+        }
+
+        impl Species {
+            pub const ALL: &'static [Species] = &[$(Species::$name,)*];
+
+            /// The registry name.
+            pub fn id(self) -> &'static str {
+                match self {
+                    $(Species::$name => $id,)*
+                }
+            }
+
+            /// The name death messages show.
+            pub fn display_name(self) -> &'static str {
+                match self {
+                    $(Species::$name => $display,)*
+                }
+            }
+        }
+    };
+}
+
+species! {
+    Cow => "minecraft:cow", "Cow";
+    Mooshroom => "minecraft:mooshroom", "Mooshroom";
+    Sheep => "minecraft:sheep", "Sheep";
+    Pig => "minecraft:pig", "Pig";
+    Chicken => "minecraft:chicken", "Chicken";
+    Rabbit => "minecraft:rabbit", "Rabbit";
+    Horse => "minecraft:horse", "Horse";
+    Donkey => "minecraft:donkey", "Donkey";
+    Mule => "minecraft:mule", "Mule";
+    Wolf => "minecraft:wolf", "Wolf";
+    Cat => "minecraft:cat", "Cat";
+    Fox => "minecraft:fox", "Fox";
+    Parrot => "minecraft:parrot", "Parrot";
+    Zombie => "minecraft:zombie", "Zombie";
+    Husk => "minecraft:husk", "Husk";
+    Drowned => "minecraft:drowned", "Drowned";
+    ZombieVillager => "minecraft:zombie_villager", "Zombie Villager";
+    Skeleton => "minecraft:skeleton", "Skeleton";
+    Stray => "minecraft:stray", "Stray";
+    WitherSkeleton => "minecraft:wither_skeleton", "Wither Skeleton";
+    Creeper => "minecraft:creeper", "Creeper";
+    Spider => "minecraft:spider", "Spider";
+    CaveSpider => "minecraft:cave_spider", "Cave Spider";
+    Enderman => "minecraft:enderman", "Enderman";
+    Witch => "minecraft:witch", "Witch";
+    Slime => "minecraft:slime", "Slime";
+    Phantom => "minecraft:phantom", "Phantom";
+    Piglin => "minecraft:piglin", "Piglin";
+    ZombifiedPiglin => "minecraft:zombified_piglin", "Zombified Piglin";
+    Ghast => "minecraft:ghast", "Ghast";
+    Blaze => "minecraft:blaze", "Blaze";
+    MagmaCube => "minecraft:magma_cube", "Magma Cube";
+}
+
+/// Which sound of a mob.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sound {
+    Ambient,
+    Hurt,
+    Death,
+    Step,
+}
+
+impl Species {
+    pub fn from_id(id: &str) -> Option<Self> {
+        let id = if id.contains(':') {
+            id.to_owned()
+        } else {
+            format!("minecraft:{id}")
+        };
+        Self::ALL.iter().copied().find(|s| s.id() == id)
+    }
+
+    /// The name without `minecraft:`.
+    pub fn path(self) -> &'static str {
+        self.id().trim_start_matches("minecraft:")
+    }
+
+    pub fn category(self) -> Category {
+        use Species::*;
+        match self {
+            Cow | Mooshroom | Sheep | Pig | Chicken | Rabbit | Horse | Donkey | Mule | Wolf
+            | Cat | Fox | Parrot => Category::Creature,
+            _ => Category::Monster,
+        }
+    }
+
+    /// Width and height of an adult's collision box (slimes and phantoms
+    /// grow with their size, see [`crate::Mob::size`]).
+    pub fn size(self) -> (f64, f64) {
+        use Species::*;
+        match self {
+            Cow | Mooshroom => (0.9, 1.4),
+            Sheep => (0.9, 1.3),
+            Pig => (0.9, 0.9),
+            Chicken => (0.4, 0.7),
+            Rabbit => (0.49, 0.6),
+            Horse | Mule => (1.3964844, 1.6),
+            Donkey => (1.3964844, 1.5),
+            Wolf => (0.6, 0.85),
+            Cat => (0.6, 0.7),
+            Fox => (0.6, 0.7),
+            Parrot => (0.5, 0.9),
+            Zombie | Husk | Drowned | ZombieVillager | ZombifiedPiglin | Piglin | Witch => {
+                (0.6, 1.95)
+            }
+            Skeleton | Stray => (0.6, 1.99),
+            WitherSkeleton => (0.7, 2.4),
+            Creeper => (0.6, 1.7),
+            Spider => (1.4, 0.9),
+            CaveSpider => (0.7, 0.5),
+            Enderman => (0.6, 2.9),
+            Slime | MagmaCube => (0.52, 0.52),
+            Phantom => (0.9, 0.5),
+            Ghast => (4.0, 4.0),
+            Blaze => (0.6, 1.8),
+        }
+    }
+
+    /// Eye height as a share of the height, for those that differ from 85%.
+    pub fn eye_ratio(self) -> f64 {
+        use Species::*;
+        match self {
+            Cow | Mooshroom => 1.3 / 1.4,
+            Sheep => 0.95,
+            Chicken => 0.92,
+            Zombie | Husk | Drowned | ZombieVillager | ZombifiedPiglin | Skeleton | Stray => {
+                1.74 / 1.95
+            }
+            Piglin => 1.79 / 1.95,
+            Witch => 1.62 / 1.95,
+            WitherSkeleton => 2.1 / 2.4,
+            Spider => 0.65 / 0.9,
+            CaveSpider => 0.45 / 0.5,
+            Enderman => 2.55 / 2.9,
+            Ghast => 2.6 / 4.0,
+            Wolf => 0.8,
+            Cat | Fox => 0.5,
+            Parrot => 0.6,
+            Slime | MagmaCube => 0.625,
+            Phantom => 0.35,
+            _ => 0.85,
+        }
+    }
+
+    pub fn max_health(self) -> f32 {
+        use Species::*;
+        match self {
+            Cow | Mooshroom | Pig | Cat | Fox | Ghast => 10.0,
+            Sheep | Wolf => 8.0,
+            Chicken => 4.0,
+            Rabbit => 3.0,
+            Parrot => 6.0,
+            Horse | Donkey | Mule => 22.0,
+            Spider | Piglin => 16.0,
+            CaveSpider => 12.0,
+            Enderman => 40.0,
+            Witch => 26.0,
+            Slime | MagmaCube => 1.0,
+            _ => 20.0,
+        }
+    }
+
+    /// The `movement_speed` attribute.
+    pub fn speed(self) -> f64 {
+        use Species::*;
+        match self {
+            Cow | Mooshroom => 0.2,
+            Sheep | Zombie | Husk | Drowned | ZombieVillager | ZombifiedPiglin | Blaze => 0.23,
+            Rabbit | Wolf | Cat | Fox | Spider | CaveSpider | Enderman => 0.3,
+            Horse => 0.225,
+            Donkey | Mule => 0.175,
+            Parrot => 0.2,
+            Piglin => 0.35,
+            Phantom | Ghast => 0.7,
+            Slime | MagmaCube => 0.3,
+            _ => 0.25,
+        }
+    }
+
+    /// The `follow_range` attribute.
+    pub fn follow_range(self) -> f64 {
+        use Species::*;
+        match self {
+            Zombie | Husk | Drowned | ZombieVillager | ZombifiedPiglin => 35.0,
+            Enderman => 64.0,
+            Ghast => 100.0,
+            Blaze => 48.0,
+            Fox => 32.0,
+            _ => 16.0,
+        }
+    }
+
+    /// The `attack_damage` attribute at normal difficulty (0 for those that
+    /// do not bite).
+    pub fn attack_damage(self) -> f32 {
+        use Species::*;
+        match self {
+            Zombie | Husk | Drowned | ZombieVillager => 3.0,
+            Spider | CaveSpider | Fox => 2.0,
+            Wolf => 4.0,
+            Cat => 3.0,
+            WitherSkeleton => 4.0,
+            Enderman => 7.0,
+            Piglin | ZombifiedPiglin => 5.0,
+            Blaze | Phantom => 6.0,
+            Skeleton | Stray => 2.0,
+            _ => 0.0,
+        }
+    }
+
+    /// The `armor` attribute.
+    pub fn armor(self) -> f32 {
+        use Species::*;
+        match self {
+            Zombie | Husk | Drowned | ZombieVillager | ZombifiedPiglin => 2.0,
+            _ => 0.0,
+        }
+    }
+
+    /// Undead: hurt by healing, healed by harming, smite applies.
+    pub fn undead(self) -> bool {
+        use Species::*;
+        matches!(
+            self,
+            Zombie
+                | Husk
+                | Drowned
+                | ZombieVillager
+                | Skeleton
+                | Stray
+                | WitherSkeleton
+                | Phantom
+                | ZombifiedPiglin
+        )
+    }
+
+    /// Whether sunlight sets it on fire.
+    pub fn burns_in_sun(self) -> bool {
+        use Species::*;
+        matches!(
+            self,
+            Zombie | Drowned | ZombieVillager | Skeleton | Stray | Phantom
+        )
+    }
+
+    /// Fire and lava do not hurt it.
+    pub fn fire_immune(self) -> bool {
+        use Species::*;
+        matches!(
+            self,
+            WitherSkeleton | Ghast | Blaze | MagmaCube | ZombifiedPiglin
+        )
+    }
+
+    /// Flies instead of walking.
+    pub fn flies(self) -> bool {
+        matches!(
+            self,
+            Species::Ghast | Species::Blaze | Species::Phantom | Species::Parrot
+        )
+    }
+
+    /// Whether falls hurt it.
+    pub fn takes_fall_damage(self) -> bool {
+        !matches!(
+            self,
+            Species::Chicken
+                | Species::Parrot
+                | Species::Ghast
+                | Species::Blaze
+                | Species::Phantom
+                | Species::Cat
+                | Species::MagmaCube
+        )
+    }
+
+    /// Blocks of fall it shrugs off.
+    pub fn safe_fall(self) -> f64 {
+        match self {
+            Species::Rabbit | Species::Fox => 5.0,
+            Species::Horse | Species::Donkey | Species::Mule => 4.0,
+            _ => 3.0,
+        }
+    }
+
+    /// Can have babies (`AgeableMob`).
+    pub fn ageable(self) -> bool {
+        self.category() == Category::Creature && self != Species::Parrot
+    }
+
+    /// Babies of these grow up; zombies and piglins stay babies.
+    pub fn has_babies(self) -> bool {
+        use Species::*;
+        self.ageable()
+            || matches!(
+                self,
+                Zombie | Husk | Drowned | ZombieVillager | Piglin | ZombifiedPiglin
+            )
+    }
+
+    /// The item tag that makes it come along and breed (`cow_food`).
+    pub fn food_tag(self) -> Option<&'static str> {
+        use Species::*;
+        Some(match self {
+            Cow | Mooshroom => "minecraft:cow_food",
+            Sheep => "minecraft:sheep_food",
+            Pig => "minecraft:pig_food",
+            Chicken => "minecraft:chicken_food",
+            Rabbit => "minecraft:rabbit_food",
+            Horse | Donkey | Mule => "minecraft:horse_food",
+            Wolf => "minecraft:wolf_food",
+            Cat => "minecraft:cat_food",
+            Fox => "minecraft:fox_food",
+            Parrot => "minecraft:parrot_food",
+            _ => return None,
+        })
+    }
+
+    /// The item tag it follows a player for, if not its food.
+    pub fn tempt_tag(self) -> Option<&'static str> {
+        use Species::*;
+        match self {
+            Horse | Donkey | Mule => Some("minecraft:horse_tempt_items"),
+            Wolf | Parrot => None,
+            _ => self.food_tag(),
+        }
+    }
+
+    /// Whether it is a horse of some kind (saddle, temper, chest).
+    pub fn horse(self) -> bool {
+        matches!(self, Species::Horse | Species::Donkey | Species::Mule)
+    }
+
+    /// Tamed by its owner and follows them.
+    pub fn tameable(self) -> bool {
+        matches!(
+            self,
+            Species::Wolf
+                | Species::Cat
+                | Species::Parrot
+                | Species::Horse
+                | Species::Donkey
+                | Species::Mule
+        )
+    }
+
+    /// The zombie kind (doors, villagers, babies, conversions).
+    pub fn zombie(self) -> bool {
+        matches!(
+            self,
+            Species::Zombie | Species::Husk | Species::Drowned | Species::ZombieVillager
+        )
+    }
+
+    pub fn skeleton(self) -> bool {
+        matches!(
+            self,
+            Species::Skeleton | Species::Stray | Species::WitherSkeleton
+        )
+    }
+
+    /// Experience a player gets for killing an adult (equipment adds more,
+    /// see the server).
+    pub fn xp_reward(self) -> (i32, i32) {
+        use Species::*;
+        match self.category() {
+            Category::Creature => (1, 3),
+            Category::Monster => match self {
+                Blaze => (10, 10),
+                Slime | MagmaCube => (0, 0),
+                _ => (5, 5),
+            },
+        }
+    }
+
+    /// A sound event name without `minecraft:`, for a baby when it has its
+    /// own.
+    pub fn sound(self, which: Sound, baby: bool) -> Option<String> {
+        use Species::*;
+        let base = match self {
+            Mooshroom => "cow",
+            CaveSpider => "spider",
+            _ => self.path(),
+        };
+        let ok = match which {
+            Sound::Ambient => !matches!(self, Creeper | Slime | MagmaCube),
+            Sound::Step => matches!(
+                self,
+                Cow | Mooshroom
+                    | Sheep
+                    | Pig
+                    | Chicken
+                    | Wolf
+                    | Zombie
+                    | Husk
+                    | Skeleton
+                    | Stray
+                    | WitherSkeleton
+                    | Spider
+                    | CaveSpider
+                    | ZombieVillager
+                    | Piglin
+                    | Drowned
+                    | Horse
+            ),
+            Sound::Hurt | Sound::Death => true,
+        };
+        if !ok {
+            return None;
+        }
+        let suffix = match which {
+            Sound::Ambient => "ambient",
+            Sound::Hurt => "hurt",
+            Sound::Death => "death",
+            Sound::Step => "step",
+        };
+        // Babies of some animals have their own voices.
+        if baby && matches!(base, "cat" | "chicken" | "horse" | "pig" | "wolf") {
+            return Some(format!("entity.baby_{base}.{suffix}"));
+        }
+        Some(format!("entity.{base}.{suffix}"))
+    }
+
+    /// Ticks between ambient sounds on average.
+    pub fn ambient_interval(self) -> i32 {
+        match self {
+            Species::Ghast => 80,
+            Species::Horse | Species::Donkey | Species::Mule => 80,
+            _ => 80,
+        }
+    }
+
+    /// How loud its sounds are.
+    pub fn volume(self) -> f32 {
+        match self {
+            Species::Ghast => 5.0,
+            Species::Wolf | Species::Cat | Species::Rabbit => 0.4,
+            Species::Horse | Species::Donkey | Species::Mule => 0.8,
+            Species::Slime | Species::MagmaCube => 0.4,
+            _ => 1.0,
+        }
+    }
+}

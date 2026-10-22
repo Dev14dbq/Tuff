@@ -29,6 +29,18 @@ pub struct Item {
     pub remainder: Option<String>,
     /// Extra main-hand attack damage.
     pub attack_damage: f32,
+    /// Main-hand attack speed modifier (added to the base 4).
+    pub attack_speed: f32,
+    /// Armor points, toughness and knockback resistance it gives when worn.
+    pub armor: f32,
+    pub toughness: f32,
+    pub knockback_resistance: f32,
+    /// `equippable` slot (`head`, `chest`, `saddle`, `body`, `offhand`...).
+    pub slot: Option<String>,
+    /// `weapon`: wear per hit and seconds it disables a shield for.
+    pub weapon: Option<(i32, f32)>,
+    /// `blocks_attacks`: a shield.
+    pub blocks_attacks: bool,
     /// As fuel: the burn time and speed providers (`cooking_fuel`).
     pub fuel: Option<(String, String)>,
     /// Has `max_damage` (and so a `damage` component).
@@ -126,13 +138,16 @@ fn parse(name: &str, c: &Value) -> Item {
     let use_ticks = c
         .get("minecraft:consumable")
         .map(|u| (u["consume_seconds"].as_f64().unwrap_or(1.6) * 20.0).round() as i32);
-    let attack_damage = c["minecraft:attribute_modifiers"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|m| m["type"] == "minecraft:attack_damage" && m["operation"] == "add_value")
-        .filter_map(|m| m["amount"].as_f64())
-        .sum::<f64>() as f32;
+    let modifier = |kind: &str| {
+        c["minecraft:attribute_modifiers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|m| m["type"] == kind && m["operation"] == "add_value")
+            .filter_map(|m| m["amount"].as_f64())
+            .sum::<f64>() as f32
+    };
+    let attack_damage = modifier("minecraft:attack_damage");
     Item {
         defaults: c.clone(),
         name: name.to_owned(),
@@ -143,6 +158,20 @@ fn parse(name: &str, c: &Value) -> Item {
             .as_str()
             .map(str::to_owned),
         attack_damage,
+        attack_speed: modifier("minecraft:attack_speed"),
+        armor: modifier("minecraft:armor"),
+        toughness: modifier("minecraft:armor_toughness"),
+        knockback_resistance: modifier("minecraft:knockback_resistance"),
+        slot: c["minecraft:equippable"]["slot"]
+            .as_str()
+            .map(str::to_owned),
+        weapon: c.get("minecraft:weapon").map(|w| {
+            (
+                w["item_damage_per_attack"].as_i64().unwrap_or(1) as i32,
+                w["disable_blocking_for_seconds"].as_f64().unwrap_or(0.0) as f32,
+            )
+        }),
+        blocks_attacks: c.get("minecraft:blocks_attacks").is_some(),
         damageable: c.get("minecraft:max_damage").is_some(),
         max_damage: c["minecraft:max_damage"].as_i64().unwrap_or(0) as i32,
         repairable: match &c["minecraft:repairable"]["items"] {

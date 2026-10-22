@@ -438,7 +438,6 @@ pub fn try_hurt_by_entity(
     if !(takes_damage(game_mode) || bypass && game_mode == 1) || amount <= 0.0 {
         return None;
     }
-    let worn;
     let (packet, died) = {
         let mut all = lock(&ctx.vitals);
         let v = all.get_mut(&uuid)?;
@@ -464,7 +463,6 @@ pub fn try_hurt_by_entity(
             amount
         };
         let (armor, toughness) = crate::damage::worn_armor(ctx, uuid);
-        worn = amount;
         let amount = crate::damage::armor_reduce(amount, armor, toughness, damage_type);
         let amount = crate::effects::reduce_damage(&v.effects, amount, damage_type);
         let amount = if amount > 0.0 {
@@ -501,9 +499,6 @@ pub fn try_hurt_by_entity(
         v.dead = died;
         (v.packet(), died)
     };
-    if game_mode != 1 {
-        crate::held::wear_armor(ctx, uuid, worn, damage_type);
-    }
     let _ = ctx.events.send(Event::Health {
         uuid,
         health: packet,
