@@ -1401,6 +1401,8 @@ async fn players_hurt_each_other_and_give_works() {
         .find(|p| p.profile.name == "Target")
         .unwrap()
         .entity_id;
+    // A stone sword is charged again 12.5 ticks after the last swing.
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     let mut attack = Vec::new();
     attack.put_varint(target_entity);
     hitter.send("minecraft:attack", attack).await;
