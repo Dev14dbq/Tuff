@@ -337,3 +337,100 @@ fn skeletons_carry_bows_and_metadata_matches_vanilla() {
     let v = metadata_of(&ctx, &sheep, 0);
     assert!(v.contains(&(18, mc_protocol::packets::play::MetadataValue::Byte(14 | 16))));
 }
+
+fn actor_at(pos: [f64; 3]) -> crate::interact::Actor {
+    crate::interact::Actor {
+        uuid: STEVE,
+        entity_id: 7000,
+        game_mode: 0,
+        pose: crate::context::Pose {
+            x: pos[0],
+            y: pos[1],
+            z: pos[2],
+            yaw: 0.0,
+            pitch: 0.0,
+            on_ground: true,
+        },
+        sneaking: false,
+    }
+}
+
+fn mobs_of(ctx: &ServerContext, species: Species) -> Vec<Entity> {
+    lock(&ctx.entities)
+        .iter()
+        .filter(|e| matches!(&e.kind, Kind::Mob(m) if m.species == species))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn spawn_eggs_work_on_the_ground_and_on_grown_mobs() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    assert_eq!(eggs::species_of("minecraft:cow_spawn_egg"), Some(Species::Cow));
+    hold(&ctx, "minecraft:cow_spawn_egg", 3);
+    // Clicking the top of the ground.
+    let ground = mc_protocol::Position::new(2, -61, 0);
+    crate::interact::use_item_on(&ctx, actor_at([0.5, -60.0, 0.5]), 0, ground, 1, [0.5, 1.0, 0.5], 1);
+    let cows = mobs_of(&ctx, Species::Cow);
+    assert_eq!(cows.len(), 1);
+    assert_eq!(cows[0].pos, [2.5, -60.0, 0.5]);
+    // On the grown cow: a calf.
+    ctx.mobs.use_on(ctx.dim, cows[0].id, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    let calves = mobs_of(&ctx, Species::Cow)
+        .iter()
+        .filter(|e| matches!(&e.kind, Kind::Mob(m) if m.is_baby()))
+        .count();
+    assert_eq!(calves, 1);
+    let left = lock(&ctx.inventories)[&STEVE].slots[36].as_ref().map(|s| s.count);
+    assert_eq!(left, Some(1));
+    // Picking the cow gives its egg.
+    let egg = ctx.items.id("minecraft:cow_spawn_egg");
+    assert_eq!(eggs::pick(&ctx, &cows[0]), egg);
+}
+
+#[test]
+fn a_crowd_pushes_apart_and_crushes() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [20.5, -60.0, 20.5]);
+    for _ in 0..30 {
+        put(&ctx, Species::Pig, [0.5, -60.0, 0.5]);
+    }
+    run(&ctx, 40);
+    let pigs = mobs_of(&ctx, Species::Pig);
+    let hurt = pigs
+        .iter()
+        .filter(|e| matches!(&e.kind, Kind::Mob(m) if m.health < m.max_health))
+        .count();
+    assert!(hurt > 0 || pigs.len() < 30, "nobody was crushed");
+    let spread = pigs
+        .iter()
+        .map(|e| (e.pos[0] - 0.5).hypot(e.pos[2] - 0.5))
+        .fold(0.0, f64::max);
+    assert!(spread > 0.5, "{spread}");
+}
+
+#[test]
+fn mobs_suffocate_inside_blocks() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [10.5, -60.0, 10.5]);
+    let stone = ctx.data.blocks.default_state("minecraft:stone").unwrap();
+    for y in -60..=-58 {
+        ctx.world
+            .set_block(mc_protocol::Position::new(0, y, 0), stone, &ctx.data.blocks, &ctx.rules)
+            .unwrap();
+    }
+    let id = put(&ctx, Species::Cow, [0.5, -60.0, 0.5]);
+    run(&ctx, 30);
+    assert!(with_mob(&ctx, id, |m| m.health) < 10.0);
+}
