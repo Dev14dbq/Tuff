@@ -69,6 +69,8 @@ pub struct Out {
     pub data: Vec<mc_protocol::packets::play::SetEntityData>,
     /// Explosions to set off.
     pub blasts: Vec<crate::explosion::Blast>,
+    /// Cells a fireball set alight (fire goes there if they are air).
+    pub fires: Vec<[i32; 3]>,
 }
 
 pub struct Tick<'a> {
@@ -76,6 +78,8 @@ pub struct Tick<'a> {
     pub players: &'a [Who],
     pub targets: &'a [Target],
     pub out: &'a mut Out,
+    /// The mob that shot the projectile ticking, if a mob did.
+    pub shooter: Option<(i32, &'static str)>,
 }
 
 /// A uniform random number in [0, 1).
@@ -249,12 +253,31 @@ pub fn apply(
     gone: &mut Vec<u128>,
     hit: Hit,
 ) {
+    // Where the projectile came from, for the push.
+    let from = hit
+        .with
+        .and_then(|w| entities.iter().find(|e| e.id == w))
+        .map(|p| [p.pos[0] - p.vel[0], p.pos[1], p.pos[2] - p.vel[2]]);
     let Some(e) = entities
         .iter_mut()
         .find(|e| e.id == hit.target && !e.removed)
     else {
         return;
     };
+    if matches!(e.kind, Kind::Mob(_)) {
+        let mut h = crate::mobs::hurt::Harm::new(hit.amount, hit.kind);
+        h.player = hit.by;
+        h.by = hit
+            .by
+            .and_then(|o| crate::tick::lock(&ctx.players).get(&o).map(|p| p.entity_id));
+        if h.player.is_some() {
+            h.killer = Some("minecraft:player".into());
+        }
+        h.direct = hit.with;
+        h.from = from;
+        crate::mobs::hurt::harm(ctx, e, &h);
+        return;
+    }
     let mut fresh = Vec::new();
     let events = match &e.kind {
         Kind::Hung(_) => crate::decor::hurt(ctx, e, &hit, &mut fresh),

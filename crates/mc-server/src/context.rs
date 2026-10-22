@@ -70,6 +70,8 @@ pub enum Direct {
     PostEffects(mc_protocol::packets::play::PostEffects),
     GameEvent(mc_protocol::packets::play::GameEvent),
     EntityEvent(mc_protocol::packets::play::EntityEvent),
+    /// A push (knockback): the player's own velocity.
+    Motion(mc_protocol::packets::play::SetEntityMotion),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

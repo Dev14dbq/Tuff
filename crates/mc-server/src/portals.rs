@@ -811,4 +811,62 @@ mod tests {
         // The change is announced to the nether, not to the overworld.
         assert!(out.events.iter().any(|e| matches!(e, Event::In(1, _))));
     }
+
+    /// A real world folder with a seed (generated, so slow).
+    fn seeded(tag: &str) -> Option<(Arc<ServerContext>, std::path::PathBuf)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let data = mc_data::McData::load(&dir).ok()?;
+        let folder = std::env::temp_dir().join(format!("mc-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let mut config = crate::Config::new(dir);
+        config.world = Some(folder.clone());
+        config.seed = Some(12345);
+        Some((ServerContext::new(config, data).ok()?, folder))
+    }
+
+    #[test]
+    fn generated_chunks_have_every_section_of_the_dimension() {
+        let Some((ctx, folder)) = seeded("sections") else {
+            return;
+        };
+        for index in 0..3 {
+            let d = ctx.dimension(index).unwrap();
+            let want = (d.world.height / 16) as usize;
+            for (x, z) in [(0, 0), (5, -3)] {
+                let got = d.world.section_count(x, z, &ctx.data.blocks);
+                assert_eq!(got, Some(want), "{} chunk {x},{z}", d.dimension_name());
+            }
+        }
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn portals_survive_saving_and_reopening() {
+        let Some((ctx, folder)) = seeded("portal-save") else {
+            return;
+        };
+        let nether = ctx.dimension(1).unwrap();
+        let state = nether
+            .shapes
+            .state("minecraft:nether_portal", &[("axis", "z")])
+            .unwrap();
+        let at = Position::new(3, 70, 3);
+        WorldLevel::new(&nether).set_block(at, state);
+        let overworld_state = ctx
+            .shapes
+            .state("minecraft:nether_portal", &[("axis", "x")])
+            .unwrap();
+        WorldLevel::new(&ctx).set_block(Position::new(3, 70, 3), overworld_state);
+        crate::save(&ctx);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let data = mc_data::McData::load(&dir).unwrap();
+        let mut config = crate::Config::new(dir);
+        config.world = Some(folder.clone());
+        let again = ServerContext::new(config, data).unwrap();
+        let blocks = &again.data.blocks;
+        assert_eq!(again.world.block(at, blocks), Some(overworld_state));
+        let nether = again.dimension(1).unwrap();
+        assert_eq!(nether.world.block(at, blocks), Some(state));
+        let _ = std::fs::remove_dir_all(folder);
+    }
 }

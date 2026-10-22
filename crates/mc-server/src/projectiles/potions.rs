@@ -204,6 +204,7 @@ fn cloud(t: &mut Tick, at: [f64; 3], list: &[EffectSpec], color: i32) {
                 left: 600,
             },
             owner: None,
+            mob: None,
             yaw: 0.0,
             pitch: 0.0,
         }),

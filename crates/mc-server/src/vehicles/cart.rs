@@ -352,6 +352,7 @@ mod tests {
                 players: &[],
                 targets: &[],
                 out: &mut out,
+                shooter: None,
             };
             tick(&mut t, e);
         }

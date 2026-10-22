@@ -43,6 +43,11 @@ const BYPASSES_ARMOR: [&str; 19] = [
     "minecraft:wither",
 ];
 
+/// Whether armor does nothing against this damage type.
+pub fn bypasses_armor(damage_type: &str) -> bool {
+    BYPASSES_ARMOR.contains(&damage_type)
+}
+
 /// Damage after armor points and toughness: each armor point takes 4%, at
 /// most 80%; toughness makes big hits count for less.
 pub fn armor_reduce(amount: f32, armor: f32, toughness: f32, damage_type: &str) -> f32 {
@@ -54,40 +59,8 @@ pub fn armor_reduce(amount: f32, armor: f32, toughness: f32, damage_type: &str) 
     amount * (1.0 - points / 25.0)
 }
 
-/// (armor points, toughness) of an armor item.
-fn armor_of(name: &str) -> (f32, f32) {
-    let Some((material, piece)) = name.strip_prefix("minecraft:").and_then(|n| {
-        let (m, p) = n.rsplit_once('_')?;
-        Some((m, p))
-    }) else {
-        return (0.0, 0.0);
-    };
-    let slot = match piece {
-        "helmet" => 0,
-        "chestplate" => 1,
-        "leggings" => 2,
-        "boots" => 3,
-        _ => return (0.0, 0.0),
-    };
-    let points: [f32; 4] = match material {
-        "leather" => [1.0, 3.0, 2.0, 1.0],
-        "golden" => [2.0, 5.0, 3.0, 1.0],
-        "chainmail" => [2.0, 5.0, 4.0, 1.0],
-        "iron" => [2.0, 6.0, 5.0, 2.0],
-        "diamond" => [3.0, 8.0, 6.0, 3.0],
-        "netherite" => [3.0, 8.0, 6.0, 3.0],
-        "turtle" => [2.0, 0.0, 0.0, 0.0],
-        _ => return (0.0, 0.0),
-    };
-    let toughness = match material {
-        "diamond" => 2.0,
-        "netherite" => 3.0,
-        _ => 0.0,
-    };
-    (points[slot], toughness)
-}
-
-/// A player's armor points and toughness from what they wear (slots 5–8).
+/// A player's armor points and toughness from what they wear (slots 5–8),
+/// by the `armor` and `armor_toughness` modifiers of the items.
 pub fn worn_armor(ctx: &ServerContext, uuid: u128) -> (f32, f32) {
     let inventories = lock(&ctx.inventories);
     let Some(hands) = inventories.get(&uuid) else {
@@ -96,9 +69,8 @@ pub fn worn_armor(ctx: &ServerContext, uuid: u128) -> (f32, f32) {
     hands.slots[5..9]
         .iter()
         .flatten()
-        .filter_map(|s| ctx.items.name(s.item))
-        .map(armor_of)
-        .fold((0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1))
+        .filter_map(|s| ctx.items.get(s.item))
+        .fold((0.0, 0.0), |a, i| (a.0 + i.armor, a.1 + i.toughness))
 }
 
 /// A damage type's data-pack entry.
@@ -230,15 +202,6 @@ mod tests {
             assert_eq!(armor_reduce(5.0, 20.0, 8.0, t), 5.0, "{t}");
         }
         assert!(armor_reduce(5.0, 20.0, 8.0, "minecraft:lava") < 5.0);
-    }
-
-    #[test]
-    fn armor_items() {
-        assert_eq!(armor_of("minecraft:diamond_chestplate"), (8.0, 2.0));
-        assert_eq!(armor_of("minecraft:netherite_boots"), (3.0, 3.0));
-        assert_eq!(armor_of("minecraft:turtle_helmet"), (2.0, 0.0));
-        assert_eq!(armor_of("minecraft:stone"), (0.0, 0.0));
-        assert_eq!(armor_of("minecraft:diamond_horse_armor"), (0.0, 0.0));
     }
 
     #[test]
