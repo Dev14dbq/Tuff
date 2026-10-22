@@ -1890,21 +1890,6 @@ pub(super) fn item_display(ctx: &ServerContext, name: &str) -> Tag {
     Tag::Compound(c)
 }
 
-/// The `damage=<n>` of an item argument's components.
-fn item_damage(item: &mc_command::args::Item) -> i32 {
-    let Some(components) = item.components.as_deref() else {
-        return 0;
-    };
-    components
-        .trim_matches(|c| c == '[' || c == ']')
-        .split(',')
-        .filter_map(|kv| kv.split_once('='))
-        .find(|(k, _)| matches!(k.trim(), "damage" | "minecraft:damage"))
-        .and_then(|(_, v)| v.trim().parse().ok())
-        .unwrap_or(0)
-        .max(0)
-}
-
 fn give(r: &mut Run) -> Result<i32> {
     let Some(Arg::Item(item)) = r.arg("item").cloned() else {
         return Err(err("command.failed", Vec::new()));
@@ -1929,10 +1914,10 @@ fn give(r: &mut Run) -> Result<i32> {
         let Some(hands) = inventories.get_mut(&uuid) else {
             continue;
         };
-        let stack = ItemStack {
-            damage: item_damage(&item),
-            ..ItemStack::new(id, count)
-        };
+        let stack = super::item::with_components(
+            ItemStack::new(id, count),
+            &super::item::item_components(item.components.as_deref()),
+        );
         let (_, changed) = hands.insert_stack(&stack, max);
         for slot in changed {
             r.out.events.push(Event::InventorySlot {
