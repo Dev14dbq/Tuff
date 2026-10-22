@@ -67,12 +67,79 @@ fn flags(ctx: &ServerContext) -> &'static [u8] {
     })
 }
 
+/// Collision boxes of block states that are not full cubes, as the bottom
+/// and top in sixteenths (a bottom slab `(0, 8)`, a fence `(0, 24)`);
+/// `(0, 0)` for none. After the block shapes on minecraft.wiki.
+fn spans(ctx: &ServerContext) -> &'static [(u8, u8)] {
+    static TABLE: OnceLock<Vec<(u8, u8)>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let blocks = &ctx.data.blocks;
+        (0..blocks.state_count())
+            .map(|state| {
+                if !ctx.rules.blocks_motion(state) {
+                    return (0, 0);
+                }
+                let name = blocks.block_name(state).unwrap_or("");
+                let name = name.trim_start_matches("minecraft:");
+                let prop = |k| blocks.property(state, k);
+                if name.ends_with("_slab") {
+                    return match prop("type") {
+                        Some("bottom") => (0, 8),
+                        Some("top") => (8, 16),
+                        _ => (0, 16),
+                    };
+                }
+                if name.ends_with("_fence") || name.ends_with("_wall") {
+                    return (0, 24);
+                }
+                if name.ends_with("_fence_gate") {
+                    return if prop("open") == Some("true") { (0, 0) } else { (0, 24) };
+                }
+                if name.ends_with("_trapdoor") {
+                    return match (prop("open"), prop("half")) {
+                        (Some("true"), _) => (0, 0),
+                        (_, Some("top")) => (13, 16),
+                        _ => (0, 3),
+                    };
+                }
+                if name.ends_with("carpet") {
+                    return (0, 1);
+                }
+                if name.ends_with("_bed") {
+                    return (0, 9);
+                }
+                match name {
+                    "snow" => {
+                        let layers: u8 = prop("layers").and_then(|l| l.parse().ok()).unwrap_or(1);
+                        (0, (layers - 1) * 2)
+                    }
+                    "soul_sand" | "mud" | "chest" | "trapped_chest" | "ender_chest" => (0, 14),
+                    "farmland" | "dirt_path" | "honey_block" => (0, 15),
+                    "enchanting_table" => (0, 12),
+                    "end_portal_frame" => (0, 13),
+                    "stonecutter" => (0, 9),
+                    "daylight_detector" => (0, 6),
+                    "cake" => (0, 8),
+                    "lily_pad" => (0, 1),
+                    "repeater" | "comparator" => (0, 2),
+                    _ => (0, 16),
+                }
+            })
+            .collect()
+    })
+}
+
+/// A collision box's bottom and top, in sixteenths.
+type Span = (u8, u8);
+
 /// The loaded world, with the blocks looked at so far remembered for the
 /// tick (paths ask about the same cells again and again).
 pub struct Ground<'a> {
     ctx: &'a ServerContext,
     flags: &'static [u8],
+    spans: &'static [(u8, u8)],
     cache: RefCell<mc_tick::fast::FastMap<(i32, i32, i32), u8>>,
+    span_cache: RefCell<mc_tick::fast::FastMap<(i32, i32, i32), Span>>,
 }
 
 impl<'a> Ground<'a> {
@@ -80,7 +147,9 @@ impl<'a> Ground<'a> {
         Self {
             ctx,
             flags: flags(ctx),
+            spans: spans(ctx),
             cache: RefCell::default(),
+            span_cache: RefCell::default(),
         }
     }
 
@@ -115,6 +184,28 @@ impl<'a> Ground<'a> {
 impl Collide for Ground<'_> {
     fn solid(&self, x: i32, y: i32, z: i32) -> bool {
         self.at(x, y, z) & SOLID != 0
+    }
+
+    fn span(&self, x: i32, y: i32, z: i32) -> Option<(f64, f64)> {
+        if !self.solid(x, y, z) {
+            return None;
+        }
+        let cached = self.span_cache.borrow().get(&(x, y, z)).copied();
+        let (lo, hi) = match cached {
+            Some(s) => s,
+            None => {
+                let s = self
+                    .ctx
+                    .world
+                    .block(Position::new(x, y, z), &self.ctx.data.blocks)
+                    .and_then(|state| self.spans.get(state as usize).copied())
+                    // Unloaded: a wall.
+                    .unwrap_or((0, 16));
+                self.span_cache.borrow_mut().insert((x, y, z), s);
+                s
+            }
+        };
+        (hi > lo).then(|| (f64::from(lo) / 16.0, f64::from(hi) / 16.0))
     }
 }
 

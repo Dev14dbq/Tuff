@@ -314,3 +314,121 @@ fn sounds_are_named_like_vanilla() {
         Some("entity.slime.hurt_small")
     );
 }
+
+/// A flat floor with something in a line across x = 3.
+struct Barrier {
+    /// Bottom and top of the barrier's cell at y = 0.
+    span: (f64, f64),
+    /// Also solid at y = 1 (a wall two blocks high).
+    high: bool,
+}
+impl Collide for Barrier {
+    fn solid(&self, x: i32, y: i32, z: i32) -> bool {
+        self.span(x, y, z).is_some()
+    }
+    fn span(&self, x: i32, y: i32, _: i32) -> Option<(f64, f64)> {
+        if y < 0 || (x == 3 && y == 1 && self.high) {
+            Some((0.0, 1.0))
+        } else if x == 3 && y == 0 {
+            Some(self.span)
+        } else {
+            None
+        }
+    }
+}
+impl Terrain for Barrier {
+    fn liquid(&self, _: i32, _: i32, _: i32) -> Liquid {
+        Liquid::None
+    }
+    fn hazard(&self, _: i32, _: i32, _: i32) -> bool {
+        false
+    }
+    fn sky_light(&self, _: i32, _: i32, _: i32) -> u8 {
+        15
+    }
+    fn light(&self, _: i32, _: i32, _: i32) -> u8 {
+        15
+    }
+}
+
+/// Sends a mob east to x = 6 for `ticks`; returns where it got and how
+/// often it jumped.
+fn walk_east(world: &dyn Terrain, ticks: u64) -> ([f64; 3], usize) {
+    let mut e = mob(Species::Pig, [0.5, 0.0, 0.5]);
+    e.on_ground = true;
+    let mut jumps = 0;
+    for t in 0..ticks {
+        m(&mut e).goto = Some(([6.5, 0.0, 0.5], 1.0));
+        let s = Senses {
+            world,
+            ..senses(&[], &[], t, false)
+        };
+        let mut b = Body {
+            id: e.id,
+            pos: e.pos,
+            vel: e.vel,
+            on_ground: e.on_ground,
+        };
+        let input = body::drive(m(&mut e), &mut b, &s);
+        if m(&mut e).jump {
+            jumps += 1;
+        }
+        body::physics(m(&mut e), &mut b, &s, input, &mut Vec::new());
+        e.pos = b.pos;
+        e.vel = b.vel;
+        e.on_ground = b.on_ground;
+        if std::env::var("TRACE").is_ok() {
+            let path = m(&mut e).nav.path.clone();
+            eprintln!("{t} {:?} {:?} {} {:?}", e.pos, e.vel, e.on_ground, path);
+        }
+    }
+    (e.pos, jumps)
+}
+
+#[test]
+fn walkers_step_onto_slabs_without_jumping() {
+    let (pos, jumps) = walk_east(&Barrier { span: (0.0, 0.5), high: false }, 200);
+    assert!(pos[0] > 5.0, "{pos:?}");
+    assert_eq!(jumps, 0);
+}
+
+#[test]
+fn walkers_jump_onto_a_block_once() {
+    let (pos, jumps) = walk_east(&Barrier { span: (0.0, 1.0), high: false }, 200);
+    assert!(pos[0] > 5.0, "{pos:?}");
+    assert!((1..=2).contains(&jumps), "{jumps}");
+}
+
+#[test]
+fn walkers_do_not_hop_forever_at_a_wall_or_fence() {
+    for world in [
+        Barrier { span: (0.0, 1.0), high: true },
+        Barrier { span: (0.0, 1.5), high: false },
+    ] {
+        let (pos, jumps) = walk_east(&world, 300);
+        assert!(pos[0] < 3.0, "{pos:?}");
+        assert!(jumps <= 2, "{jumps} jumps");
+    }
+}
+
+#[test]
+fn walking_speed_matches_vanilla() {
+    // A zombie walks 0.116 blocks a tick.
+    let mut e = mob(Species::Zombie, [0.5, 0.0, 0.5]);
+    e.on_ground = true;
+    let mut b = Body {
+        id: 1,
+        pos: e.pos,
+        vel: [0.0; 3],
+        on_ground: true,
+    };
+    let s = senses(&[], &[], 0, false);
+    for _ in 0..40 {
+        let input = Some(body::Input {
+            dir: [1.0, 0.0, 0.0],
+            speed: 1.0,
+        });
+        body::physics(m(&mut e), &mut b, &s, input, &mut Vec::new());
+    }
+    assert!((b.vel[0] - 0.116).abs() < 0.01, "{}", b.vel[0]);
+}

@@ -79,11 +79,31 @@ impl PathParams {
     }
 }
 
+/// Whether the block gets in a walker's way (thin floors such as carpets do
+/// not: they are stepped over).
+pub fn blocks(w: &dyn Terrain, x: i32, y: i32, z: i32) -> bool {
+    w.span(x, y, z).is_some_and(|(_, top)| top > 0.25)
+}
+
+/// Fences and walls: taller than a block, so never stepped onto.
+pub fn tall(w: &dyn Terrain, x: i32, y: i32, z: i32) -> bool {
+    w.span(x, y, z).is_some_and(|(_, top)| top > 1.0)
+}
+
+/// Height of the floor a walker in cell `c` stands on.
+pub fn floor(w: &dyn Terrain, c: Cell) -> f64 {
+    match w.span(c[0], c[1] - 1, c[2]) {
+        Some((_, top)) if top > 0.25 => f64::from(c[1] - 1) + top,
+        _ => f64::from(c[1]),
+    }
+}
+
 fn clear(w: &dyn Terrain, c: Cell, p: &PathParams) -> bool {
-    (0..p.height).all(|dy| {
-        let (x, y, z) = (c[0], c[1] + dy, c[2]);
-        !w.solid(x, y, z) && w.liquid(x, y, z) != Liquid::Lava && !w.hazard(x, y, z)
-    })
+    !tall(w, c[0], c[1] - 1, c[2])
+        && (0..p.height).all(|dy| {
+            let (x, y, z) = (c[0], c[1] + dy, c[2]);
+            !blocks(w, x, y, z) && w.liquid(x, y, z) != Liquid::Lava && !w.hazard(x, y, z)
+        })
 }
 
 /// Whether a mob can stand in `c`.
@@ -99,7 +119,7 @@ pub fn standable(w: &dyn Terrain, c: Cell, p: &PathParams) -> bool {
     if wet && p.water_cost.is_infinite() {
         return false;
     }
-    w.solid(below[0], below[1], below[2])
+    blocks(w, below[0], below[1], below[2])
         || (wet && w.liquid(below[0], below[1], below[2]) != Liquid::Lava)
 }
 
@@ -118,7 +138,7 @@ fn neighbors(w: &dyn Terrain, from: Cell, p: &PathParams, out: &mut Vec<(Cell, f
     const DIAGONALS: [(i32, i32); 4] = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
     let [x, y, z] = from;
     // Room above to jump: one more block of headroom than the body needs.
-    let can_jump = !w.solid(x, y + p.height, z);
+    let can_jump = !blocks(w, x, y + p.height, z);
     for (dx, dz) in SIDES {
         let level = [x + dx, y, z + dz];
         if standable(w, level, p) {
@@ -129,7 +149,7 @@ fn neighbors(w: &dyn Terrain, from: Cell, p: &PathParams, out: &mut Vec<(Cell, f
             // Nothing to stand on: a drop, if it lands soon enough.
             for fall in 1..=p.max_fall {
                 let down = [x + dx, y - fall, z + dz];
-                if w.solid(down[0], down[1] - 1, down[2])
+                if blocks(w, down[0], down[1] - 1, down[2])
                     || w.liquid(down[0], down[1], down[2]) == Liquid::Water
                 {
                     if standable(w, down, p) {
@@ -144,7 +164,7 @@ fn neighbors(w: &dyn Terrain, from: Cell, p: &PathParams, out: &mut Vec<(Cell, f
         } else if can_jump {
             let up = [x + dx, y + 1, z + dz];
             // A one-block step: the block in front is the only obstacle.
-            if standable(w, up, p) && !w.solid(x + dx, y + p.height, z + dz) {
+            if standable(w, up, p) && !blocks(w, x + dx, y + p.height, z + dz) {
                 out.push((up, step_cost(w, up, p, 2.0)));
             }
         }
