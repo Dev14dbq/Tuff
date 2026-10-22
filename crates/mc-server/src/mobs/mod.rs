@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 use mc_entity::mob::{MobEvent, Senses, Target};
 use mc_entity::{Entity, Kind, Mob, Species};
-use mc_protocol::packets::play::{MetadataValue, SetEntityData, metadata};
+use mc_protocol::packets::play::{ItemStack, MetadataValue, SetEntityData, metadata};
 
 use crate::context::{Event, ServerContext};
 use crate::explosion::Blast;
@@ -67,8 +67,17 @@ pub struct Actor {
 
 #[derive(Debug)]
 enum Pending {
-    Hit { target: i32, by: Actor, damage: f32 },
-    Use { target: i32, by: Actor, hand: i32 },
+    Hit {
+        target: i32,
+        by: Actor,
+        damage: f32,
+        weapon: Option<ItemStack>,
+    },
+    Use {
+        target: i32,
+        by: Actor,
+        hand: i32,
+    },
 }
 
 /// Mob state shared with connections: what players did to mobs, waiting for
@@ -82,8 +91,13 @@ pub struct MobState {
 impl MobState {
     /// A player hit the entity with this id (nothing happens if it is no
     /// mob or out of reach).
-    pub fn hit(&self, target: i32, by: Actor, damage: f32) {
-        lock(&self.pending).push(Pending::Hit { target, by, damage });
+    pub fn hit(&self, target: i32, by: Actor, damage: f32, weapon: Option<ItemStack>) {
+        lock(&self.pending).push(Pending::Hit {
+            target,
+            by,
+            damage,
+            weapon,
+        });
     }
 
     /// A player used an item on the entity with this id.
@@ -113,9 +127,9 @@ pub fn clicked(
     if attack {
         let held = lock(&ctx.inventories)
             .get(&who.uuid)
-            .and_then(|h| h.main_hand().map(|s| s.item));
-        ctx.mobs
-            .hit(target, by, crate::vitals::melee_damage(ctx, held));
+            .and_then(|h| h.main_hand().cloned());
+        let damage = crate::vitals::melee_damage(ctx, held.as_ref().map(|s| s.item));
+        ctx.mobs.hit(target, by, damage, held);
     } else {
         ctx.mobs.use_on(target, by, hand);
     }
@@ -281,7 +295,12 @@ impl crate::loot::LootEnv for Env<'_> {
 }
 
 /// What a dead mob leaves, from the loot tables of the data pack.
-fn loot(ctx: &ServerContext, entity: &Entity, by_player: bool) -> Vec<crate::loot::Drop> {
+fn loot(
+    ctx: &ServerContext,
+    entity: &Entity,
+    by_player: bool,
+    weapon: Option<&ItemStack>,
+) -> Vec<crate::loot::Drop> {
     let Kind::Mob(m) = &entity.kind else {
         return Vec::new();
     };
@@ -293,6 +312,7 @@ fn loot(ctx: &ServerContext, entity: &Entity, by_player: bool) -> Vec<crate::loo
             on_fire: m.burning > 0,
         }),
         player_kill: by_player,
+        attacker_enchants: weapon.map(crate::enchants::levels).unwrap_or_default(),
         ..Default::default()
     };
     let name = m.species.id().trim_start_matches("minecraft:");
@@ -313,7 +333,13 @@ fn loot(ctx: &ServerContext, entity: &Entity, by_player: bool) -> Vec<crate::loo
 }
 
 /// Starts a mob's death: the animation, and what it drops.
-fn die(ctx: &ServerContext, entity: &mut Entity, by_player: bool, status: &mut Vec<(i32, u8)>) {
+fn die(
+    ctx: &ServerContext,
+    entity: &mut Entity,
+    by_player: bool,
+    weapon: Option<&ItemStack>,
+    status: &mut Vec<(i32, u8)>,
+) {
     let Kind::Mob(m) = &mut entity.kind else {
         return;
     };
@@ -342,7 +368,7 @@ fn die(ctx: &ServerContext, entity: &mut Entity, by_player: bool, status: &mut V
         };
         crate::xp::spawn(ctx, [pos[0], pos[1] + 0.3, pos[2]], xp);
     }
-    for drop in loot(ctx, entity, by_player) {
+    for drop in loot(ctx, entity, by_player, weapon) {
         crate::tick::spawn_stack_at(ctx, [pos[0], pos[1] + 0.3, pos[2]], &drop.stack());
     }
 }
@@ -362,7 +388,9 @@ fn wear_shears(ctx: &ServerContext, who: &Actor, hand: i32) {
         return;
     };
     let max = ctx.items.max_damage(stack.item);
-    stack.damage += 1;
+    if max > 0 {
+        stack.damage += crate::enchant_effects::wear(ctx, stack, 1);
+    }
     if max > 0 && stack.damage >= max {
         hands.slots[slot] = None;
         let _ = ctx.events.send(Event::HandBroke {
@@ -387,7 +415,12 @@ fn apply_pending(
 ) {
     for p in pending {
         match p {
-            Pending::Hit { target, by, damage } => {
+            Pending::Hit {
+                target,
+                by,
+                damage,
+                weapon,
+            } => {
                 let Some(e) = entities.iter_mut().find(|e| e.id == target) else {
                     continue;
                 };
@@ -397,17 +430,25 @@ fn apply_pending(
                 if m.dying.is_some() || dist_sq(by.pos, e.pos) > REACH_SQ {
                     continue;
                 }
+                let (damage, knockback, fire) =
+                    crate::enchant_effects::melee(ctx, weapon.as_ref(), damage, m.species.id());
                 if m.hurt(damage, Some(by.entity_id)) {
                     status.push((e.id, 2));
-                    // Knocked back from the attacker (strength 0.4).
+                    if fire > 0.0 {
+                        m.burning = m.burning.max((fire * 20.0) as i32);
+                    }
+                    crate::enchant_effects::wear_weapon(ctx, by.uuid, weapon.as_ref());
+                    // Knocked back from the attacker (strength 0.4, half a
+                    // block more per level of knockback).
+                    let push = 0.4 + f64::from(knockback) * 0.5;
                     let (dx, dz) = (e.pos[0] - by.pos[0], e.pos[2] - by.pos[2]);
                     let len = (dx * dx + dz * dz).sqrt().max(1e-4);
-                    e.vel[0] = e.vel[0] / 2.0 + dx / len * 0.4;
-                    e.vel[2] = e.vel[2] / 2.0 + dz / len * 0.4;
+                    e.vel[0] = e.vel[0] / 2.0 + dx / len * push;
+                    e.vel[2] = e.vel[2] / 2.0 + dz / len * push;
                     e.vel[1] = (e.vel[1] / 2.0 + 0.4).min(0.4);
                     e.on_ground = false;
                     if m.is_dead() {
-                        die(ctx, e, true, status);
+                        die(ctx, e, true, weapon.as_ref(), status);
                     }
                 }
             }
@@ -578,7 +619,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             && m.is_dead()
             && m.dying.is_none()
         {
-            die(ctx, e, false, &mut status);
+            die(ctx, e, false, None, &mut status);
         }
         let Kind::Mob(m) = &mut e.kind else {
             continue;
@@ -615,7 +656,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             && m.is_dead()
             && m.dying.is_none()
         {
-            die(ctx, e, false, &mut status);
+            die(ctx, e, false, None, &mut status);
         }
     }
 
@@ -794,7 +835,7 @@ mod tests {
             name: "Steve".into(),
             pos: [0.5, -60.0, 0.5],
         };
-        ctx.mobs.hit(id, by.clone(), 4.0);
+        ctx.mobs.hit(id, by.clone(), 4.0, None);
         run(&ctx, 1);
         let c = mob_of(&ctx, id).unwrap();
         let Kind::Mob(m) = &c.kind else { panic!() };
@@ -808,7 +849,7 @@ mod tests {
             "{before:?} {after:?}"
         );
         let near = Actor { pos: after, ..by };
-        ctx.mobs.hit(id, near, 100.0);
+        ctx.mobs.hit(id, near, 100.0, None);
         run(&ctx, 1);
         let items = lock(&ctx.entities)
             .iter()

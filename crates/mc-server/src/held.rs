@@ -107,6 +107,10 @@ pub fn wear(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32) {
         if max == 0 {
             return;
         }
+        let amount = crate::enchant_effects::wear(ctx, stack, amount);
+        if amount == 0 {
+            return;
+        }
         stack.damage += amount;
         if stack.damage >= max {
             hands.slots[slot] = None;
@@ -117,12 +121,32 @@ pub fn wear(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32) {
     if broke {
         let entity_id = lock(&ctx.players).get(&uuid).map(|p| p.entity_id);
         if let Some(entity_id) = entity_id {
+            // Entity events 47..52: main hand, off hand, head, chest, legs, feet.
+            let status = match slot {
+                45 => 48,
+                5..=8 => 44 + slot as i8,
+                _ => 47,
+            };
             let _ = ctx.events.send(Event::HandBroke {
                 uuid,
                 entity_id,
-                status: if slot == 45 { 48 } else { 47 },
+                status,
             });
         }
+    }
+}
+
+/// Wears the armor a player has on after a hit of `amount` (a quarter of
+/// it, at least 1, on each piece), unless the damage type bypasses armor.
+pub fn wear_armor(ctx: &ServerContext, uuid: u128, amount: f32, damage_type: &str) {
+    if amount <= 0.0
+        || crate::enchant_effects::damage_is(ctx, damage_type, "minecraft:bypasses_armor")
+    {
+        return;
+    }
+    let per = ((amount / 4.0) as i32).max(1);
+    for slot in 5..9 {
+        wear(ctx, uuid, slot, per);
     }
 }
 

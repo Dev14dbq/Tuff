@@ -242,15 +242,6 @@ pub fn levels(stack: &ItemStack) -> Vec<(String, i32)> {
     levels_in(stack, "minecraft:enchantments")
 }
 
-/// The level of one acting enchantment, 0 if absent.
-pub fn level(stack: &ItemStack, name: &str) -> i32 {
-    let name = mc_protocol::components::full_name(name);
-    levels(stack)
-        .into_iter()
-        .find(|(n, _)| *n == name)
-        .map_or(0, |(_, l)| l)
-}
-
 /// Sets the levels under `key`; none left removes the component.
 pub fn set_levels(stack: &mut ItemStack, key: &str, list: &[(String, i32)]) {
     let mut c = Compound::new();

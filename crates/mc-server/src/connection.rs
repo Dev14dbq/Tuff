@@ -941,9 +941,12 @@ async fn play(
                             // Reach 3 from the docs, with some room for lag.
                             if dx * dx + dy * dy + dz * dz <= 36.0 {
                                 let held = ctx.inventories.lock().expect("inventories lock").get(&uuid)
-                                    .and_then(|h| h.main_hand().map(|s| s.item));
-                                let damage = crate::vitals::melee_damage(&ctx, held);
-                                crate::vitals::hurt_by(&ctx, victim, damage, "minecraft:player_attack", "death.attack.player", Some(&me.profile.name));
+                                    .and_then(|h| h.main_hand().cloned());
+                                let damage = crate::vitals::melee_damage(&ctx, held.as_ref().map(|s| s.item));
+                                let (damage, _, _) = crate::enchant_effects::melee(&ctx, held.as_ref(), damage, "minecraft:player");
+                                if crate::vitals::try_hurt(&ctx, victim, damage, "minecraft:player_attack", "death.attack.player", Some(&me.profile.name)).is_some() {
+                                    crate::enchant_effects::wear_weapon(&ctx, uuid, held.as_ref());
+                                }
                             }
                         }
                     }
@@ -1292,6 +1295,9 @@ async fn play(
                                     all
                                 })
                             };
+                            // Curse of vanishing: gone with the death.
+                            let lost = lost.into_iter()
+                                .filter(|s| !crate::enchant_effects::has_effect(&ctx, s, "minecraft:prevent_equipment_drop"));
                             for stack in lost {
                                 crate::tick::scatter_item(&ctx, pose, stack);
                             }

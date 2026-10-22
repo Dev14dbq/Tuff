@@ -21,6 +21,7 @@ mod damage;
 mod daylight;
 mod decor;
 mod effects;
+mod enchant_effects;
 mod enchants;
 mod explosion;
 mod fastmap;

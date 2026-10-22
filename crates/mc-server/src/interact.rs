@@ -871,7 +871,7 @@ fn wear_held(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, hand: i32
     if max == 0 {
         return;
     }
-    stack.damage += amount;
+    stack.damage += crate::enchant_effects::wear(ctx, stack, amount);
     if stack.damage >= max {
         hands.slots[slot] = None;
         outcome.events.push(Event::HandBroke {

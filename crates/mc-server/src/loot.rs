@@ -94,6 +94,8 @@ pub struct LootCtx {
     pub this: Option<Ent>,
     pub killer: Option<Ent>,
     pub player_kill: bool,
+    /// Enchantments of the killer's weapon (looting).
+    pub attacker_enchants: Vec<(String, i32)>,
     pub luck: f32,
     /// Radius of the explosion that broke the block, when its drops decay
     /// (`survives_explosion` then passes with the chance 1 / radius).
@@ -507,6 +509,16 @@ impl Eval<'_> {
             .map_or(0, |e| e.1)
     }
 
+    /// A level of the killer's weapon (looting).
+    fn attacker_level(&self, enchantment: &str) -> i32 {
+        let name = full(enchantment);
+        self.cx
+            .attacker_enchants
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map_or(0, |e| e.1)
+    }
+
     fn cond(&self, c: &Value) -> bool {
         match c {
             Value::Null => true,
@@ -545,7 +557,13 @@ impl Eval<'_> {
             "match_tool" => self.tool_matches(&c["predicate"]),
             "random_chance" => random() < f64::from(self.float(&c["chance"])),
             "random_chance_with_enchanted_bonus" => {
-                random() < f64::from(self.float(&c["unenchanted_chance"]))
+                let level = self.attacker_level(c["enchantment"].as_str().unwrap_or(""));
+                let chance = if level > 0 {
+                    crate::enchant_effects::value(&c["enchanted_chance"], level)
+                } else {
+                    self.float(&c["unenchanted_chance"])
+                };
+                random() < f64::from(chance)
             }
             "table_bonus" => {
                 let level = self.tool_level(c["enchantment"].as_str().unwrap_or(""));
@@ -681,6 +699,18 @@ impl Eval<'_> {
                     }
                     if let Some(hi) = hi {
                         d.count = d.count.min(hi as i32);
+                    }
+                }
+            }
+            "enchanted_count_increase" => {
+                let level = self.attacker_level(f["enchantment"].as_str().unwrap_or(""));
+                if level > 0 {
+                    let limit = f["limit"].as_i64().unwrap_or(0) as i32;
+                    for d in drops.iter_mut() {
+                        d.count += (self.float(&f["count"]) * level as f32).round() as i32;
+                        if limit > 0 {
+                            d.count = d.count.min(limit);
+                        }
                     }
                 }
             }

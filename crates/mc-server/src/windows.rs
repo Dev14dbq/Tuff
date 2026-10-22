@@ -291,7 +291,15 @@ impl Windows {
         if click.window == 0 {
             let mut thrown = Vec::new();
             let mut result = None;
+            let mut undone = None;
+            let creative = ctx
+                .players
+                .lock()
+                .expect("players lock")
+                .get(&uuid)
+                .is_some_and(|p| p.game_mode == 1);
             change_hands(ctx, uuid, entity_id, |hands| {
+                let before = hands.clone();
                 thrown = hands.click(
                     click.slot,
                     click.button,
@@ -300,6 +308,18 @@ impl Windows {
                     click.carried.clone(),
                     &[],
                 );
+                // Curse of binding: worn armor stays on (but in creative).
+                let bound_off = (5..9).any(|s| {
+                    before.slots[s].as_ref().is_some_and(|b| {
+                        crate::enchant_effects::has_effect(ctx, b, "minecraft:prevent_armor_change")
+                            && hands.slots[s].as_ref().is_none_or(|now| !now.same_kind(b))
+                    })
+                });
+                if bound_off && !creative {
+                    *hands = before;
+                    thrown.clear();
+                    undone = Some((hands.slots.clone(), hands.carried.clone()));
+                }
                 // The 2×2 grid's result.
                 let made = ctx.recipes.craft(&hands.slots[1..5], 2);
                 if made != hands.slots[0] {
@@ -309,6 +329,16 @@ impl Windows {
             });
             for stack in thrown {
                 crate::tick::throw_item(ctx, pose, stack);
+            }
+            if let Some((slots, carried)) = undone {
+                self.state_id += 1;
+                writer.queue(&play::ContainerSetContent {
+                    window: 0,
+                    state_id: self.state_id,
+                    slots,
+                    carried,
+                })?;
+                return Ok(());
             }
             if let Some(made) = result {
                 self.set_slot(writer, 0, 0, made)?;

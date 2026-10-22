@@ -438,6 +438,7 @@ pub fn try_hurt_by_entity(
     if !(takes_damage(game_mode) || bypass && game_mode == 1) || amount <= 0.0 {
         return None;
     }
+    let worn;
     let (packet, died) = {
         let mut all = lock(&ctx.vitals);
         let v = all.get_mut(&uuid)?;
@@ -463,8 +464,14 @@ pub fn try_hurt_by_entity(
             amount
         };
         let (armor, toughness) = crate::damage::worn_armor(ctx, uuid);
+        worn = amount;
         let amount = crate::damage::armor_reduce(amount, armor, toughness, damage_type);
         let amount = crate::effects::reduce_damage(&v.effects, amount, damage_type);
+        let amount = if amount > 0.0 {
+            crate::enchant_effects::protect(ctx, uuid, amount, damage_type)
+        } else {
+            amount
+        };
         // Fully resisted still counts as a hit (vanilla's /damage succeeds).
         if amount <= 0.0 {
             return Some(false);
@@ -494,6 +501,9 @@ pub fn try_hurt_by_entity(
         v.dead = died;
         (v.packet(), died)
     };
+    if game_mode != 1 {
+        crate::held::wear_armor(ctx, uuid, worn, damage_type);
+    }
     let _ = ctx.events.send(Event::Health {
         uuid,
         health: packet,
@@ -664,9 +674,23 @@ pub fn tick(ctx: &ServerContext) {
             == Some("minecraft:water");
         let mut drowns = false;
         let mut air_change = None;
+        // Respiration: each tick under water keeps the air with a chance of
+        // bonus / (bonus + 1).
+        let oxygen = if underwater {
+            crate::enchant_effects::attribute(ctx, uuid, "minecraft:oxygen_bonus")
+        } else {
+            0.0
+        };
+        let holds_breath = oxygen > 0.0
+            && (crate::util::random_u64() >> 11) as f64 / (1u64 << 53) as f64
+                >= 1.0 / (f64::from(oxygen) + 1.0);
         if let Some(v) = lock(&ctx.vitals).get_mut(&uuid) {
             let dry = v.effects.has("water_breathing") || v.effects.has("conduit_power");
-            let (air, drown) = crate::damage::breathe(v.air, underwater && !dry);
+            let (air, drown) = if underwater && holds_breath {
+                (v.air, false)
+            } else {
+                crate::damage::breathe(v.air, underwater && !dry)
+            };
             drowns = drown;
             if air != v.air {
                 v.air = air;
