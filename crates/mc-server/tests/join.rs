@@ -574,10 +574,14 @@ async fn placed_and_broken_blocks_are_seen_by_everyone() {
     // Placing on top of the grass two blocks east.
     bob.send("minecraft:use_item_on", use_item_on(2, -61, 0, 1))
         .await;
-    let (_, update) = alice.recv_until("minecraft:block_update").await;
+    // The swing may come before the block update (it is sent at once, the
+    // block with the tick's changes).
+    let (seen, update) = alice.recv_until("minecraft:block_update").await;
     assert_eq!(block_update(&update), ((2, -60, 0), stone));
-    let (_, swing) = alice.recv_until("minecraft:swing_animation").await;
-    assert_eq!(Reader::new(&swing).varint().unwrap(), bob_entity);
+    if !seen.iter().any(|n| n == "minecraft:swing_animation") {
+        let (_, swing) = alice.recv_until("minecraft:swing_animation").await;
+        assert_eq!(Reader::new(&swing).varint().unwrap(), bob_entity);
+    }
     let mut placer = Vec::new();
     let ack = loop {
         let (name, body) = bob.recv().await;
