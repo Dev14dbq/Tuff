@@ -80,8 +80,9 @@ enum Pending {
 /// the tick thread, where mobs have spawned, and players in fights.
 #[derive(Debug, Default)]
 pub struct MobState {
-    pending: Mutex<Vec<Pending>>,
-    spawner: Mutex<spawn::Spawner>,
+    /// By dimension index.
+    pending: Mutex<HashMap<usize, Vec<Pending>>>,
+    spawner: Mutex<HashMap<usize, spawn::Spawner>>,
     /// Players' fighting state (see [`crate::combat`]).
     pub fighters: Mutex<crate::combat::Fighters>,
     /// Health of villagers, which zombies hurt (20 when not listed).
@@ -91,13 +92,19 @@ pub struct MobState {
 impl MobState {
     /// A player hit the entity with this id with `blow` (nothing happens
     /// if it is no mob or out of reach).
-    pub fn hit(&self, target: i32, by: Actor, blow: Blow) {
-        lock(&self.pending).push(Pending::Hit { target, by, blow });
+    pub fn hit(&self, dim: usize, target: i32, by: Actor, blow: Blow) {
+        lock(&self.pending)
+            .entry(dim)
+            .or_default()
+            .push(Pending::Hit { target, by, blow });
     }
 
     /// A player used an item on the entity with this id.
-    pub fn use_on(&self, target: i32, by: Actor, hand: i32) {
-        lock(&self.pending).push(Pending::Use { target, by, hand });
+    pub fn use_on(&self, dim: usize, target: i32, by: Actor, hand: i32) {
+        lock(&self.pending)
+            .entry(dim)
+            .or_default()
+            .push(Pending::Use { target, by, hand });
     }
 }
 
@@ -123,9 +130,9 @@ pub fn clicked(
     };
     if attack {
         let blow = crate::combat::swing(ctx, who.uuid, who.pose);
-        ctx.mobs.hit(target, by, blow);
+        ctx.mobs.hit(ctx.dim, target, by, blow);
     } else {
-        ctx.mobs.use_on(target, by, hand);
+        ctx.mobs.use_on(ctx.dim, target, by, hand);
     }
 }
 
@@ -203,6 +210,7 @@ fn players(ctx: &ServerContext) -> Vec<Target> {
     let players = lock(&ctx.players);
     let mut out: Vec<Target> = players
         .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
         .filter_map(|p| {
             let pose = p.pose?;
             let alive = vitals.get(&p.profile.uuid).is_none_or(|v| !v.dead);
@@ -352,7 +360,7 @@ struct Outcome {
 /// Runs the mobs for one tick: what players did, goals and movement,
 /// deaths, spawning and despawning.
 pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
-    let pending = std::mem::take(&mut *lock(&ctx.mobs.pending));
+    let pending = lock(&ctx.mobs.pending).remove(&ctx.dim).unwrap_or_default();
     let targets = players(ctx);
     if targets.is_empty() {
         return;
@@ -360,8 +368,10 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     let mut entities = std::mem::take(&mut *lock(&ctx.entities));
     let now = lock(&ctx.time).age;
     let day = day_time(ctx);
-    let raining = lock(&ctx.weather).raining;
-    let sunny = sky_darken(day) == 0 && !raining;
+    // Only the overworld has a sun and weather.
+    let overworld = ctx.world.dimension == "minecraft:overworld";
+    let raining = overworld && lock(&ctx.weather).raining;
+    let sunny = overworld && sky_darken(day) == 0 && !raining;
     let difficulty = ctx.difficulty();
     let mut out = Outcome::default();
 

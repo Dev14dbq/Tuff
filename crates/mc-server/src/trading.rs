@@ -695,6 +695,7 @@ pub fn tick_spawner(ctx: &ServerContext, level: &mut crate::level::WorldLevel, n
     }
     let players: Vec<crate::context::Pose> = crate::tick::lock(&ctx.players)
         .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
         .filter_map(|p| p.pose)
         .collect();
     if players.is_empty() {
@@ -762,7 +763,7 @@ mod tests {
         assert_eq!(profession_for("minecraft:stone"), None);
     }
 
-    fn context() -> Option<ServerContext> {
+    fn context() -> Option<std::sync::Arc<ServerContext>> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
         let data = mc_data::McData::load(&dir).ok()?;
         ServerContext::new(crate::Config::new(dir), data).ok()

@@ -213,7 +213,9 @@ fn parse(name: &str, c: &Value) -> Item {
             Value::String(s) => Some(s.clone()),
             other => other["song"].as_str().map(str::to_owned),
         },
-        enchantable: c["minecraft:enchantable"]["value"].as_i64().map(|v| v as i32),
+        enchantable: c["minecraft:enchantable"]["value"]
+            .as_i64()
+            .map(|v| v as i32),
         fuel: c.get("minecraft:cooking_fuel").and_then(|f| {
             Some((
                 f["burn_time"].as_str()?.to_owned(),

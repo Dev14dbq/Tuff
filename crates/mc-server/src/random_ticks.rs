@@ -19,10 +19,11 @@ const SIMULATION_DISTANCE: i32 = 10;
 
 /// The chunks that tick: within simulation distance of a player, and
 /// force-loaded ones.
-fn ticking_chunks(ctx: &ServerContext) -> Vec<(i32, i32)> {
+pub(crate) fn ticking_chunks(ctx: &ServerContext) -> Vec<(i32, i32)> {
     let radius = SIMULATION_DISTANCE.min(i32::from(ctx.config.view_distance));
     let centres: HashSet<(i32, i32)> = lock(&ctx.players)
         .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
         .filter_map(|p| p.pose)
         .map(|pose| ((pose.x.floor() as i32) >> 4, (pose.z.floor() as i32) >> 4))
         .collect();
@@ -88,7 +89,7 @@ fn tick_chunks(ctx: &ServerContext, chunks: &[(i32, i32)]) -> usize {
 mod tests {
     use super::*;
 
-    fn world(name: &str) -> Option<(ServerContext, std::path::PathBuf)> {
+    fn world(name: &str) -> Option<(std::sync::Arc<ServerContext>, std::path::PathBuf)> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
         let data = mc_data::McData::load(&dir).ok()?;
         let folder = std::env::temp_dir().join(format!("mc-{name}-{}", std::process::id()));

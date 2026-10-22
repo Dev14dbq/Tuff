@@ -154,6 +154,7 @@ fn is_plant(ctx: Ctx, state: u32, name: &str) -> bool {
                 | "attached_melon_stem"
                 | "attached_pumpkin_stem"
                 | "bamboo_sapling"
+                | "cactus_flower"
         )
 }
 
@@ -235,6 +236,9 @@ pub fn can_survive(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> bool
                     let n = level.block(p.offset(d));
                     ctx.shapes.is_air(n) || !ctx.shapes.face_attaches(n, d)
                 })
+        }
+        "cactus_flower" => {
+            on("minecraft:support_override_cactus_flower") || holds(below, TOP_CENTER)
         }
         "sugar_cane" => {
             ctx.shapes.block_name(below) == Some(full)

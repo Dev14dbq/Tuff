@@ -69,6 +69,13 @@ impl TickQueue {
         self.queue.len()
     }
 
+    /// Every waiting tick in execution order: where, what, when, priority.
+    pub fn pending(&self) -> impl Iterator<Item = (BlockPos, u32, i64, i32)> + '_ {
+        self.queue
+            .iter()
+            .map(|(k, &(pos, kind))| (pos, kind, k.time, k.priority))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
     }

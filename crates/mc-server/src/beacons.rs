@@ -179,6 +179,7 @@ fn apply(ctx: &ServerContext, p: Position, levels: i32, primary: &str, secondary
         .lock()
         .expect("players lock")
         .values()
+        .filter(|pl| pl.dimension == ctx.world.dimension)
         .filter(|pl| pl.game_mode != 3)
         .filter(|pl| {
             pl.pose.is_some_and(|pose| {
@@ -254,8 +255,16 @@ mod tests {
         assert!(primary_allowed(4, "minecraft:strength"));
         assert!(!primary_allowed(4, "minecraft:regeneration"));
         assert!(!primary_allowed(0, "minecraft:speed"));
-        assert!(!secondary_allowed(3, "minecraft:speed", "minecraft:regeneration"));
-        assert!(secondary_allowed(4, "minecraft:speed", "minecraft:regeneration"));
+        assert!(!secondary_allowed(
+            3,
+            "minecraft:speed",
+            "minecraft:regeneration"
+        ));
+        assert!(secondary_allowed(
+            4,
+            "minecraft:speed",
+            "minecraft:regeneration"
+        ));
         assert!(secondary_allowed(4, "minecraft:speed", "minecraft:speed"));
         assert!(!secondary_allowed(4, "minecraft:speed", "minecraft:haste"));
     }

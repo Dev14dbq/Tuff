@@ -222,6 +222,9 @@ async fn login(
         entity_id: ctx.next_entity_id(),
         skin_parts: 0,
         pose: None,
+        dimension: saved
+            .as_ref()
+            .map_or_else(|| "minecraft:overworld".to_owned(), |s| s.dimension.clone()),
         main_hand: None,
         flying: saved.as_ref().is_some_and(|s| s.flying),
         address: Some(peer.ip().to_string()),
@@ -457,10 +460,10 @@ async fn play(
     writer: &mut PacketWriter,
     session: &Session,
 ) -> Result<()> {
-    let ctx = writer.ctx.clone();
-    let world = &ctx.world;
     let me = &session.player;
     let (uuid, entity_id) = (me.profile.uuid, me.entity_id);
+    // Where the player was last (the overworld for a new one).
+    let mut ctx = writer.ctx.of_player(uuid);
     // Subscribe before reading the player list, so nobody slips through.
     let mut events = ctx.events.subscribe();
     let mut pose = session
@@ -472,23 +475,26 @@ async fn play(
     writer.queue(&play::Login {
         entity_id,
         hardcore: false,
-        dimensions: vec![world.dimension.clone()],
+        dimensions: crate::context::DIMENSIONS
+            .iter()
+            .map(|d| (*d).to_owned())
+            .collect(),
         max_players: ctx.config.max_players as i32,
         view_distance: i32::from(ctx.config.view_distance),
         simulation_distance: i32::from(ctx.config.view_distance),
         reduced_debug_info: false,
         enable_respawn_screen: true,
         do_limited_crafting: false,
-        dimension_type: world.dimension_type_id,
-        dimension: world.dimension.clone(),
+        dimension_type: ctx.world.dimension_type_id,
+        dimension: ctx.world.dimension.clone(),
         hashed_seed: 0,
         game_mode: me.game_mode,
         previous_game_mode: None,
         is_debug: false,
-        is_flat: world.is_flat,
+        is_flat: ctx.world.is_flat,
         death_location: None,
         portal_cooldown: 0,
-        sea_level: world.sea_level,
+        sea_level: ctx.world.sea_level,
         online_mode: ctx.config.online_mode,
         enforces_secure_chat: false,
     })?;
@@ -524,7 +530,10 @@ async fn play(
     })?;
     let _ = ctx.events.send(Event::PlayerJoined(me.clone()));
     let mut visible: HashSet<u128> = HashSet::new();
-    for other in everyone.iter().filter(|p| p.profile.uuid != uuid) {
+    for other in everyone
+        .iter()
+        .filter(|p| p.profile.uuid != uuid && p.dimension == ctx.world.dimension)
+    {
         if let Some(other_pose) = other.pose {
             spawn_player(writer, &ctx, other, other_pose)?;
             visible.insert(other.profile.uuid);
@@ -564,7 +573,7 @@ async fn play(
         content: text::colored(
             &format!(
                 "Welcome to minecraft-rewrite! You are in {}.",
-                world.description
+                ctx.world.description
             ),
             "gold",
         ),
@@ -673,8 +682,8 @@ async fn play(
                 if let Some((position, kind)) = outcome.open.take() {
                     windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
                 }
-                if let Some(position) = outcome.open_sign.take() {
-                    writer.queue(&play::OpenSignEditor { position, front: true })?;
+                if let Some((position, front)) = outcome.open_sign.take() {
+                    writer.queue(&play::OpenSignEditor { position, front })?;
                 }
                 if let Some((position, menu)) = outcome.open_menu.take() {
                     windows.open_menu(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, menu)?;
@@ -728,7 +737,7 @@ async fn play(
                         let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                         let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
                         let action = Action::Command { line: command, source };
-                        let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::CommandSuggestion { id, text } => {
                         let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
@@ -817,24 +826,35 @@ async fn play(
                         let dead = ctx.vitals.lock().expect("vitals lock").get(&uuid).is_some_and(|v| v.dead);
                         if dead {
                             let health = crate::vitals::respawn(&ctx, uuid);
+                            let (dimension, target) = respawn_target(&ctx, uuid);
+                            if dimension != ctx.world.dimension {
+                                // Another dimension: the switch sends it all.
+                                let _ = ctx.events.send(Event::ChangeDimension {
+                                    uuid,
+                                    dimension,
+                                    pose: target,
+                                    after_death: true,
+                                });
+                                continue;
+                            }
                             writer.queue(&play::Respawn {
-                                dimension_type: world.dimension_type_id,
-                                dimension: world.dimension.clone(),
+                                dimension_type: ctx.world.dimension_type_id,
+                                dimension: ctx.world.dimension.clone(),
                                 hashed_seed: 0,
                                 game_mode,
                                 previous_game_mode: None,
                                 is_debug: false,
-                                is_flat: world.is_flat,
+                                is_flat: ctx.world.is_flat,
                                 death_location: None,
                                 portal_cooldown: 0,
-                                sea_level: world.sea_level,
+                                sea_level: ctx.world.sea_level,
                                 data_kept: 0,
                             })?;
                             flying = game_mode == 3;
                             update_player(&ctx, uuid, |p| p.flying = flying);
                             writer.queue(&abilities(game_mode, flying))?;
                             writer.queue(&health)?;
-                            pose = respawn_pose(&ctx, uuid);
+                            pose = target;
                             next_teleport += 1;
                             awaiting_teleport = Some(next_teleport);
                             writer.queue(&play::PlayerPosition {
@@ -873,7 +893,7 @@ async fn play(
                         if sneaking && riding.is_some() {
                             let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                             let action = Action::Vehicle(crate::vehicles::Act::Dismount);
-                            let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
                     }
                     play::Serverbound::MoveVehicle { x, y, z, yaw, pitch } if riding.is_some() && awaiting_teleport.is_none() => {
@@ -883,7 +903,7 @@ async fn play(
                             view.move_to(writer, chunk_of(x), chunk_of(z)).await?;
                             let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                             let action = Action::Vehicle(crate::vehicles::Act::Move { pos: [x, y, z], yaw });
-                            let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
                     }
                     play::Serverbound::PlayerAbilities { flags } if matches!(game_mode, 1 | 3) => {
@@ -892,7 +912,7 @@ async fn play(
                     }
                     play::Serverbound::Attack { entity_id: target } if game_mode != 3 => {
                         let victim = ctx.players.lock().expect("players lock").values()
-                            .find(|p| p.entity_id == target)
+                            .find(|p| p.entity_id == target && p.dimension == ctx.world.dimension)
                             .and_then(|p| p.pose.map(|at| (p.profile.uuid, at)));
                         if let Some((victim, at)) = victim {
                             let (dx, dy, dz) = (at.x - pose.x, at.y - pose.y, at.z - pose.z);
@@ -904,13 +924,13 @@ async fn play(
                         } else {
                             let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                             let action = Action::UseEntity { entity_id: target, hand: 0, attack: true, at: None };
-                            let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
                     }
                     play::Serverbound::Interact { entity_id: target, hand, location } if game_mode != 3 => {
                         let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                         let action = Action::UseEntity { entity_id: target, hand, attack: false, at: location };
-                        let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::Punch => {
                         let _ = ctx.events.send(Event::Swing { uuid, entity_id, times: 1 });
@@ -920,12 +940,12 @@ async fn play(
                     play::Serverbound::PlayerAction { status, position, face, sequence } => {
                         let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                         let action = Action::Dig { status, position, face, sequence };
-                        let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::UseItemOn { hand, position, face, cursor, sequence, .. } => {
                         let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                         let action = Action::UseItemOn { hand, position, face, cursor, sequence };
-                        let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::UseItem { hand, sequence, yaw, pitch } => {
                         writer.queue(&play::BlockChangedAck { sequence })?;
@@ -935,7 +955,7 @@ async fn play(
                         }
                         let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                         let action = Action::UseItem { hand, yaw, pitch };
-                        let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::ChangeGameMode { mode: mode @ 0..=3 } => {
                         // As `/gamemode`, for those allowed to use it; the
@@ -945,7 +965,7 @@ async fn play(
                             let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                             let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
                             let action = Action::Command { line: format!("gamemode {name}"), source };
-                            let _ = ctx.actions.send(Request { actor, action, reply: replies_tx.clone() });
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         } else {
                             warn!("Player {} tried to change game mode without required permissions", me.profile.name);
                         }
@@ -1400,6 +1420,125 @@ async fn play(
                         })?;
                         view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
                         update_player(&ctx, uuid, |p| p.pose = Some(pose));
+                        let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
+                    }
+                    Ok(Event::PlayerGone { uuid: other, entity_id: other_entity }) if other != uuid => {
+                        if visible.remove(&other) {
+                            writer.queue(&play::RemoveEntities { entity_ids: vec![other_entity] })?;
+                        }
+                    }
+                    Ok(Event::ChangeDimension { uuid: who, dimension, pose: to, after_death }) if who == uuid => {
+                        let Some(next) = ctx.in_dimension(&dimension) else {
+                            continue;
+                        };
+                        // Others here stop seeing us; the new place starts afresh.
+                        let _ = ctx.events.send(Event::PlayerGone { uuid, entity_id });
+                        ctx = next;
+                        events = ctx.events.subscribe();
+                        visible.clear();
+                        seen_entities.clear();
+                        pose = Pose { on_ground: false, ..to };
+                        update_player(&ctx, uuid, |p| {
+                            p.dimension = ctx.world.dimension.clone();
+                            p.pose = Some(pose);
+                        });
+                        crate::vitals::stop_using(&ctx, uuid);
+                        writer.queue(&play::Respawn {
+                            dimension_type: ctx.world.dimension_type_id,
+                            dimension: ctx.world.dimension.clone(),
+                            hashed_seed: 0,
+                            game_mode,
+                            previous_game_mode: None,
+                            is_debug: false,
+                            is_flat: ctx.world.is_flat,
+                            death_location: None,
+                            portal_cooldown: 0,
+                            sea_level: ctx.world.sea_level,
+                            // Attributes and entity data stay, as through a portal.
+                            data_kept: if after_death { 0 } else { 3 },
+                        })?;
+                        if after_death {
+                            flying = game_mode == 3;
+                            update_player(&ctx, uuid, |p| p.flying = flying);
+                        }
+                        writer.queue(&abilities(game_mode, flying))?;
+                        next_teleport += 1;
+                        awaiting_teleport = Some(next_teleport);
+                        writer.queue(&play::PlayerPosition {
+                            teleport_id: next_teleport,
+                            x: pose.x,
+                            y: pose.y,
+                            z: pose.z,
+                            velocity: [0.0; 3],
+                            yaw: pose.yaw,
+                            pitch: pose.pitch,
+                            flags: 0,
+                        })?;
+                        let time = ctx.time.lock().expect("time lock").packet(true);
+                        writer.queue(&time)?;
+                        writer.queue(&spawn_packet(&ctx))?;
+                        writer.queue(&ctx.border.lock().expect("border lock").packet())?;
+                        {
+                            let w = ctx.weather.lock().expect("weather lock");
+                            if w.rain_level > 0.0 {
+                                let changes = crate::weather::Changes {
+                                    raining: Some(true),
+                                    rain_level: Some(w.rain_level),
+                                    thunder_level: Some(w.thunder_level),
+                                };
+                                send_weather(writer, &changes)?;
+                            }
+                        }
+                        writer.queue(&play::GameEvent {
+                            event: play::game_event::START_WAITING_FOR_CHUNKS,
+                            value: 0.0,
+                        })?;
+                        writer.queue(&skin_parts_metadata(entity_id, session.skin_parts))?;
+                        writer.flush().await?;
+                        view = ChunkView::new(session.view_distance, ctx.clone());
+                        view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                        // What the client forgot with the old dimension.
+                        let state = ctx.vitals.lock().expect("vitals lock").get(&uuid).cloned().unwrap_or_default();
+                        writer.queue(&state.packet())?;
+                        writer.queue(&state.experience_packet())?;
+                        let (effects, effect_data, attributes) =
+                            crate::effects::join_packets(&ctx, &state, entity_id);
+                        for p in effects {
+                            writer.queue(&p)?;
+                        }
+                        if let Some(p) = effect_data {
+                            writer.queue(&p)?;
+                        }
+                        if let Some(p) = attributes {
+                            writer.queue(&p)?;
+                        }
+                        let hands = ctx.inventories.lock().expect("inventories lock").get(&uuid).cloned().unwrap_or_default();
+                        windows.state_id += 1;
+                        writer.queue(&play::ContainerSetContent {
+                            window: 0,
+                            state_id: windows.state_id,
+                            slots: hands.slots.clone(),
+                            carried: None,
+                        })?;
+                        writer.queue(&play::SetHeldSlot { slot: hands.selected as i32 })?;
+                        let others: Vec<OnlinePlayer> = ctx.players.lock().expect("players lock").values()
+                            .filter(|p| p.profile.uuid != uuid && p.dimension == ctx.world.dimension)
+                            .cloned()
+                            .collect();
+                        for other in others {
+                            if let Some(other_pose) = other.pose {
+                                spawn_player(writer, &ctx, &other, other_pose)?;
+                                visible.insert(other.profile.uuid);
+                            }
+                        }
+                        let existing: Vec<mc_entity::Entity> = ctx.entities.lock().expect("entities lock").clone();
+                        for entity in existing {
+                            let (x, _, z) = entity.block_pos();
+                            if view.has_block(Position::new(x, 0, z)) {
+                                spawn_entity(writer, &ctx, &entity)?;
+                                seen_entities.insert(entity.id);
+                            }
+                        }
                         let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
                     }
                     Ok(Event::PlayerJoined(other)) if other.profile.uuid != uuid => {
@@ -2191,9 +2330,9 @@ fn world_spawn_pose(ctx: &ServerContext) -> Pose {
     }
 }
 
-/// Where a player respawns: their own point if `/spawnpoint` set one,
-/// else the world spawn.
-fn respawn_pose(ctx: &ServerContext, uuid: u128) -> Pose {
+/// Where a player respawns and in which dimension: their own point if
+/// `/spawnpoint` set one, else the world spawn.
+fn respawn_target(ctx: &ServerContext, uuid: u128) -> (String, Pose) {
     let own = ctx
         .players
         .lock()
@@ -2201,37 +2340,51 @@ fn respawn_pose(ctx: &ServerContext, uuid: u128) -> Pose {
         .get(&uuid)
         .and_then(|p| p.extra.respawn.clone());
     match own {
-        Some(r) if r.forced => Pose {
-            x: f64::from(r.pos.0) + 0.5,
-            y: f64::from(r.pos.1),
-            z: f64::from(r.pos.2) + 0.5,
-            yaw: r.yaw,
-            pitch: r.pitch,
-            on_ground: true,
-        },
+        Some(r) if r.forced => (
+            r.dimension.clone(),
+            Pose {
+                x: f64::from(r.pos.0) + 0.5,
+                y: f64::from(r.pos.1),
+                z: f64::from(r.pos.2) + 0.5,
+                yaw: r.yaw,
+                pitch: r.pitch,
+                on_ground: true,
+            },
+        ),
         // A bed or a charged anchor that is still there.
         Some(r) => {
+            let there = ctx.in_dimension(&r.dimension);
             let at = Position::new(r.pos.0, r.pos.1, r.pos.2);
             let blocks = &ctx.data.blocks;
-            let state = ctx.world.block(at, blocks);
+            let state = there.as_ref().and_then(|d| d.world.block(at, blocks));
             let name = state.and_then(|s| blocks.block_name(s));
             let anchor_ok = name == Some("minecraft:respawn_anchor")
                 && state.is_some_and(|s| blocks.property(s, "charges") != Some("0"));
             if name.is_some_and(|n| n.ends_with("_bed")) || anchor_ok {
-                Pose {
-                    x: f64::from(r.pos.0) + 0.5,
-                    y: f64::from(r.pos.1) + if anchor_ok { 1.0 } else { 0.6 },
-                    z: f64::from(r.pos.2) + 0.5,
-                    yaw: r.yaw,
-                    pitch: 0.0,
-                    on_ground: true,
-                }
+                (
+                    r.dimension.clone(),
+                    Pose {
+                        x: f64::from(r.pos.0) + 0.5,
+                        y: f64::from(r.pos.1) + if anchor_ok { 1.0 } else { 0.6 },
+                        z: f64::from(r.pos.2) + 0.5,
+                        yaw: r.yaw,
+                        pitch: 0.0,
+                        on_ground: true,
+                    },
+                )
             } else {
-                world_spawn_pose(ctx)
+                spawn_target(ctx)
             }
         }
-        None => world_spawn_pose(ctx),
+        None => spawn_target(ctx),
     }
+}
+
+fn spawn_target(ctx: &ServerContext) -> (String, Pose) {
+    (
+        ctx.spawn.lock().expect("spawn lock").dimension.clone(),
+        world_spawn_pose(ctx),
+    )
 }
 
 /// Tells a client where the world spawn is (the compass points there).

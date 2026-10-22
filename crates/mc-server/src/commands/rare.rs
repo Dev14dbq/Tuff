@@ -404,7 +404,7 @@ fn color_rgb(name: &str) -> String {
 }
 
 fn waypoint_list(r: &mut Run) -> Result<i32> {
-    let dimension = "minecraft:overworld";
+    let dimension = r.ctx.dimension_name();
     let mut entries = Vec::new();
     {
         let state = lock(&r.ctx.rare);

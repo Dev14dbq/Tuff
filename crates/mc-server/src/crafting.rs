@@ -262,10 +262,19 @@ impl Recipes {
         };
         mc_protocol::packets::play::UpdateRecipes {
             property_sets: vec![
-                ("minecraft:furnace_input".into(), cooked("minecraft:smelting")),
-                ("minecraft:blast_furnace_input".into(), cooked("minecraft:blasting")),
+                (
+                    "minecraft:furnace_input".into(),
+                    cooked("minecraft:smelting"),
+                ),
+                (
+                    "minecraft:blast_furnace_input".into(),
+                    cooked("minecraft:blasting"),
+                ),
                 ("minecraft:smoker_input".into(), cooked("minecraft:smoking")),
-                ("minecraft:campfire_input".into(), cooked("minecraft:campfire_cooking")),
+                (
+                    "minecraft:campfire_input".into(),
+                    cooked("minecraft:campfire_cooking"),
+                ),
                 ("minecraft:smithing_base".into(), smith(|s| &s.base)),
                 ("minecraft:smithing_template".into(), smith(|s| &s.template)),
                 ("minecraft:smithing_addition".into(), smith(|s| &s.addition)),

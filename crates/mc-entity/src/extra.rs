@@ -219,6 +219,9 @@ pub struct Vehicle {
     pub fuse: i32,
     /// What the minecart rolled on in the last tick.
     pub on_rail: bool,
+    /// A hopper minecart takes items in (an activator rail with power turns
+    /// it off, one without turns it on again).
+    pub enabled: bool,
 }
 
 impl Vehicle {
@@ -232,6 +235,7 @@ impl Vehicle {
             fuel: 0,
             fuse: -1,
             on_rail: false,
+            enabled: true,
         }
     }
 }

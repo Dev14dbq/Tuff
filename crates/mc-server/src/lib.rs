@@ -6,17 +6,19 @@
 //! the tick thread from ARCHITECTURE.md §4 arrives with world simulation.
 
 mod auth;
-mod blocks;
-mod border;
-mod combat;
 mod beacons;
+mod blocks;
+mod blockuse;
+mod border;
 mod bossbars;
+mod combat;
 mod commands;
 mod connection;
 mod containers;
 mod context;
 mod crafting;
 mod damage;
+mod daylight;
 mod decor;
 mod effects;
 mod explosion;
@@ -32,14 +34,16 @@ mod hoppers;
 mod interact;
 mod items;
 mod level;
-mod menus;
 mod lists;
 pub mod logs;
 mod loot;
+mod menus;
 mod mobs;
 mod packs;
 mod pipeline;
 mod players;
+mod portals;
+mod precipitation;
 mod projectiles;
 pub mod properties;
 mod random_ticks;
@@ -48,8 +52,8 @@ mod scoreboard;
 mod storage;
 mod summon;
 mod tick;
-mod useblocks;
 mod trading;
+mod useblocks;
 mod util;
 mod vehicles;
 mod vitals;
@@ -66,7 +70,7 @@ use anyhow::{Context as _, Result, ensure};
 use tokio::net::TcpListener;
 use tracing::{debug, info};
 
-pub use context::ServerContext;
+pub use context::{DIMENSIONS, ServerContext};
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -190,7 +194,7 @@ impl Server {
             mc_protocol::PROTOCOL_VERSION
         );
         let addr = SocketAddr::new(config.bind, config.port);
-        let ctx = Arc::new(ServerContext::new(config, data)?);
+        let ctx = ServerContext::new(config, data)?;
         let listener = TcpListener::bind(addr)
             .await
             .with_context(|| format!("cannot listen on {addr}"))?;
@@ -299,6 +303,7 @@ fn console(ctx: &Arc<ServerContext>) {
             continue;
         }
         let request = tick::Request {
+            dim: 0,
             actor: interact::Actor::console(),
             action: tick::Action::Command {
                 line,
@@ -341,7 +346,15 @@ fn save(ctx: &ServerContext) {
         save_player(ctx, uuid);
     }
     tracing::debug!("Saving worlds");
-    let saved = ctx.world.save(&ctx.data.blocks);
+    ctx.world.set_ticks_to_save(tick::ticks_by_chunk(ctx));
+    let mut saved = ctx.world.save(&ctx.data.blocks);
+    for other in ctx.open_dimensions().iter().filter(|d| d.dim != ctx.dim) {
+        other.border.lock().expect("border lock").save();
+        other.world.set_ticks_to_save(tick::ticks_by_chunk(other));
+        let more = other.world.save(&other.data.blocks);
+        saved.chunks += more.chunks;
+        saved.failed += more.failed;
+    }
     if saved.chunks > 0 || saved.failed > 0 {
         tracing::debug!(
             "saved {} chunks in {} ms{}",
@@ -383,6 +396,7 @@ pub(crate) fn saved_of(ctx: &ServerContext, uuid: u128) -> Option<players::Saved
         .unwrap_or_default();
     Some(players::Saved {
         pose,
+        dimension: player.dimension.clone(),
         game_mode: player.game_mode,
         flying: player.flying,
         hands,

@@ -226,7 +226,29 @@ fn emitted(level: &dyn Level, ctx: Ctx, at: BlockPos, state: u32, toward: Dir, w
             level.comparator_output(at)
         }
         Part::Wire if wires && wire_points(ctx, state, toward) => wire_power(ctx, state),
-        _ => crate::rails::emits(ctx, state, toward, false),
+        _ => crate::rails::emits(ctx, state, toward, false)
+            .max(crate::tripwire::emits(ctx, state, toward, false))
+            .max(other_power(ctx, state))
+            .max(trapped_chest(level, ctx, at, state)),
+    }
+}
+
+/// A trapped chest gives as much power as players have it open (at most
+/// 15), weakly around and strongly into the block below.
+fn trapped_chest(level: &dyn Level, ctx: Ctx, at: BlockPos, state: u32) -> u8 {
+    if ctx.shapes.block_name(state) == Some("minecraft:trapped_chest") {
+        level.viewers(at).min(15)
+    } else {
+        0
+    }
+}
+
+/// Weak power of the other sources that hold it in a `power` property:
+/// daylight detectors and targets.
+fn other_power(ctx: Ctx, state: u32) -> u8 {
+    match ctx.shapes.block_name(state) {
+        Some("minecraft:daylight_detector" | "minecraft:target") => level_of(ctx, state, "power"),
+        _ => 0,
     }
 }
 
@@ -256,7 +278,13 @@ fn emitted_strong(
             level.comparator_output(at)
         }
         Part::Wire if wires && wire_points(ctx, state, toward) => wire_power(ctx, state),
-        _ => crate::rails::emits(ctx, state, toward, true),
+        _ if toward == Dir::Down
+            && ctx.shapes.block_name(state) == Some("minecraft:trapped_chest") =>
+        {
+            trapped_chest(level, ctx, at, state)
+        }
+        _ => crate::rails::emits(ctx, state, toward, true)
+            .max(crate::tripwire::emits(ctx, state, toward, true)),
     }
 }
 
@@ -496,7 +524,18 @@ fn analog_signal(level: &dyn Level, ctx: Ctx, p: BlockPos) -> Option<u8> {
         }
         "minecraft:respawn_anchor" => level_of(ctx, state, "charges") * 15 / 4,
         "minecraft:beehive" | "minecraft:bee_nest" => level_of(ctx, state, "honey_level"),
+        n if n.ends_with("candle_cake") => 14,
+        n if n.ends_with("copper_bulb") => {
+            if is(ctx, state, "lit") {
+                15
+            } else {
+                0
+            }
+        }
         _ => {
+            if let Some(signal) = level.block_entity_signal(p) {
+                return Some(signal);
+            }
             return crate::rails::comparator_reading(level, ctx, p)
                 .or_else(|| level.container_signal(p));
         }
@@ -757,7 +796,55 @@ pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
                 level.schedule_block_tick(p, kind, repeater_delay(ctx, state), priority);
             }
         }
+        _ if is_bulb(ctx, state) => flip_bulb(level, ctx, p, state),
         _ => {}
+    }
+}
+
+fn is_bulb(ctx: Ctx, state: u32) -> bool {
+    ctx.shapes
+        .block_name(state)
+        .is_some_and(|n| n.ends_with("copper_bulb"))
+}
+
+/// A copper bulb toggles its light each time power arrives (minecraft.wiki,
+/// "Copper Bulb"); it remembers being powered so it waits for the power to
+/// go and come again.
+fn flip_bulb(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
+    let powered = received(level, ctx, p, true) > 0;
+    if powered == is(ctx, state, "powered") {
+        return;
+    }
+    let mut new = with_bool(ctx, state, "powered", powered);
+    if powered {
+        let lit = !is(ctx, state, "lit");
+        new = with_bool(ctx, new, "lit", lit);
+        let sound = if lit {
+            "block.copper_bulb.turn_on"
+        } else {
+            "block.copper_bulb.turn_off"
+        };
+        level.sound(sound, p);
+    }
+    set_block(level, ctx, p, new, Flags::ALL);
+}
+
+/// Redstone ore at `p` was stepped on or hit: it glows (until a random
+/// tick).
+pub fn touch_ore(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+    let state = level.block(p);
+    let ore = matches!(
+        ctx.shapes.block_name(state),
+        Some("minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore")
+    );
+    if ore && !is(ctx, state, "lit") {
+        set_block(
+            level,
+            ctx,
+            p,
+            with_bool(ctx, state, "lit", true),
+            Flags::ALL,
+        );
     }
 }
 
@@ -833,6 +920,9 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
 
 /// A component was placed or replaced: tell what it powers.
 pub fn on_place(level: &mut dyn Level, ctx: Ctx, p: BlockPos, old: u32, state: u32) {
+    if is_bulb(ctx, state) && ctx.shapes.block_index(old) != ctx.shapes.block_index(state) {
+        flip_bulb(level, ctx, p, state);
+    }
     for (s, placed) in [(old, false), (state, true)] {
         match part(ctx, s) {
             Part::Wire => {

@@ -10,7 +10,7 @@ fn darkness_follows_the_day() {
 }
 
 /// A superflat server context, `None` without the game data.
-fn flat() -> Option<ServerContext> {
+fn flat() -> Option<std::sync::Arc<ServerContext>> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
     let data = mc_data::McData::load(&dir).ok()?;
     ServerContext::new(crate::Config::new(dir), data).ok()
@@ -47,6 +47,7 @@ fn join(ctx: &ServerContext, pos: [f64; 3]) -> u128 {
                 pitch: 0.0,
                 on_ground: true,
             }),
+            dimension: "minecraft:overworld".into(),
             main_hand: None,
             flying: false,
             address: None,
@@ -148,7 +149,7 @@ fn hitting_a_cow_kills_it_and_it_drops_loot() {
     let id = put(&ctx, Species::Cow, [2.5, -60.0, 0.5]);
     run(&ctx, 5);
     let at = [0.5, -60.0, 0.5];
-    ctx.mobs.hit(id, steve(at), blow(4.0, at));
+    ctx.mobs.hit(ctx.dim, id, steve(at), blow(4.0, at));
     run(&ctx, 1);
     assert_eq!(with_mob(&ctx, id, |m| m.health), 6.0);
     // The animal runs.
@@ -159,7 +160,7 @@ fn hitting_a_cow_kills_it_and_it_drops_loot() {
         (after[0] - before[0]).hypot(after[2] - before[2]) > 1.5,
         "{before:?} {after:?}"
     );
-    ctx.mobs.hit(id, steve(after), blow(100.0, after));
+    ctx.mobs.hit(ctx.dim, id, steve(after), blow(100.0, after));
     run(&ctx, 1);
     assert!(items_of(&ctx, "minecraft:beef") > 0, "no beef");
     // Killed by a player: experience too, once.
@@ -214,7 +215,7 @@ fn shears_take_the_wool() {
     lock(&ctx.entities).push(sheep);
     hold(&ctx, "minecraft:shears", 1);
     let by = steve([0.5, -60.0, 0.5]);
-    ctx.mobs.use_on(id, by.clone(), 0);
+    ctx.mobs.use_on(ctx.dim, id, by.clone(), 0);
     run(&ctx, 1);
     assert!(with_mob(&ctx, id, |m| m.sheared));
     let dropped = items_of(&ctx, "minecraft:white_wool");
@@ -224,7 +225,7 @@ fn shears_take_the_wool() {
         .map(|s| s.damage);
     assert_eq!(worn, Some(1));
     // Shearing again does nothing.
-    ctx.mobs.use_on(id, by, 0);
+    ctx.mobs.use_on(ctx.dim, id, by, 0);
     run(&ctx, 1);
     assert_eq!(items_of(&ctx, "minecraft:white_wool"), dropped);
 }
@@ -238,7 +239,7 @@ fn a_dye_colours_a_sheep() {
     let _ = join(&ctx, [0.5, -60.0, 0.5]);
     let id = put(&ctx, Species::Sheep, [1.5, -60.0, 0.5]);
     hold(&ctx, "minecraft:red_dye", 2);
-    ctx.mobs.use_on(id, steve([0.5, -60.0, 0.5]), 0);
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 0.5]), 0);
     run(&ctx, 1);
     assert_eq!(with_mob(&ctx, id, |m| m.color), 14);
 }
@@ -269,8 +270,8 @@ fn two_cows_fed_wheat_make_a_calf() {
     run(&ctx, 2);
     hold(&ctx, "minecraft:wheat", 4);
     let by = steve([0.5, -60.0, 0.5]);
-    ctx.mobs.use_on(a, by.clone(), 0);
-    ctx.mobs.use_on(b, by, 0);
+    ctx.mobs.use_on(ctx.dim, a, by.clone(), 0);
+    ctx.mobs.use_on(ctx.dim, b, by, 0);
     run(&ctx, 1);
     assert!(with_mob(&ctx, a, |m| m.in_love()));
     run(&ctx, 200);
@@ -296,7 +297,7 @@ fn bones_tame_a_wolf() {
         if with_mob(&ctx, id, |m| m.is_tame()) {
             break;
         }
-        ctx.mobs.use_on(id, steve([0.5, -60.0, 0.5]), 0);
+        ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 0.5]), 0);
         run(&ctx, 1);
     }
     assert!(with_mob(&ctx, id, |m| m.is_tame() && m.owner == Some(STEVE)));
@@ -312,10 +313,10 @@ fn a_saddled_pig_carries_the_player() {
     let id = put(&ctx, Species::Pig, [1.5, -60.0, 0.5]);
     hold(&ctx, "minecraft:saddle", 1);
     let by = steve([0.5, -60.0, 0.5]);
-    ctx.mobs.use_on(id, by.clone(), 0);
+    ctx.mobs.use_on(ctx.dim, id, by.clone(), 0);
     run(&ctx, 1);
     assert!(with_mob(&ctx, id, |m| m.saddled()));
-    ctx.mobs.use_on(id, by, 0);
+    ctx.mobs.use_on(ctx.dim, id, by, 0);
     run(&ctx, 1);
     assert!(with_mob(&ctx, id, |m| m.riders == vec![7000]));
 }

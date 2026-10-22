@@ -177,15 +177,24 @@ impl Windows {
         self.close_current(writer, who)?;
         // Two chest halves open together as a large chest, the right half
         // first.
-        let state = ctx.world.block(position, &ctx.data.blocks).unwrap_or(0);
-        let partner = ctx.shapes.chest_partner(state).and_then(|d| {
-            let (dx, dy, dz) = d.offset();
-            let other = Position::new(position.x + dx, position.y + dy, position.z + dz);
-            let s = ctx.world.block(other, &ctx.data.blocks)?;
-            (ctx.data.blocks.block_name(s) == ctx.data.blocks.block_name(state)
-                && ctx.shapes.chest_partner(s) == Some(d.opposite()))
-            .then_some(other)
-        });
+        let entity = containers::entity_of(position).is_some();
+        let state = if entity {
+            0
+        } else {
+            ctx.world.block(position, &ctx.data.blocks).unwrap_or(0)
+        };
+        let partner = ctx
+            .shapes
+            .chest_partner(state)
+            .filter(|_| !entity)
+            .and_then(|d| {
+                let (dx, dy, dz) = d.offset();
+                let other = Position::new(position.x + dx, position.y + dy, position.z + dz);
+                let s = ctx.world.block(other, &ctx.data.blocks)?;
+                (ctx.data.blocks.block_name(s) == ctx.data.blocks.block_name(state)
+                    && ctx.shapes.chest_partner(s) == Some(d.opposite()))
+                .then_some(other)
+            });
         let (parts, menu, title) = match partner {
             Some(other) => {
                 let right = ctx.data.blocks.property(state, "type") == Some("right");

@@ -895,6 +895,7 @@ pub fn explode_all(
     let decay = ctx.game_rule_bool("minecraft:tnt_explosion_drop_decay");
     let victims: Vec<Victim> = lock(&ctx.players)
         .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
         .filter_map(|p| {
             p.pose.map(|pose| Victim {
                 uuid: p.profile.uuid,
@@ -1161,7 +1162,7 @@ mod tests {
     use super::*;
 
     /// A superflat server context, `None` without the game data.
-    fn flat() -> Option<ServerContext> {
+    fn flat() -> Option<std::sync::Arc<ServerContext>> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
         let data = mc_data::McData::load(&dir).ok()?;
         ServerContext::new(crate::Config::new(dir), data).ok()

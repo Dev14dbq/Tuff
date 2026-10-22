@@ -376,7 +376,7 @@ pub(crate) mod tests {
     use mc_entity::extra::Pickup;
 
     /// A superflat server context, `None` without the game data.
-    pub(crate) fn flat() -> Option<ServerContext> {
+    pub(crate) fn flat() -> Option<std::sync::Arc<ServerContext>> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
         let data = mc_data::McData::load(&dir).ok()?;
         ServerContext::new(crate::Config::new(dir), data).ok()

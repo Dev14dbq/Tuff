@@ -430,8 +430,8 @@ pub fn tick(
     day_time: i64,
     difficulty: i32,
 ) -> Vec<Entity> {
-    let mut sp = lock(&ctx.mobs.spawner);
-    let spawner = &mut *sp;
+    let mut all = lock(&ctx.mobs.spawner);
+    let spawner = all.entry(ctx.dim).or_default();
     let mut biome_table = spawner.biomes.take().unwrap_or_else(|| load_biomes(ctx));
     let out = spawn_round(ctx, spawner, &biome_table, ground, entities, targets, now, day_time, difficulty);
     spawner.biomes = Some(std::mem::take(&mut biome_table));
@@ -502,7 +502,7 @@ fn spawn_round(
         ground,
         targets,
         darken: sky_darken(day_time),
-        raining: weather.raining,
+        raining: weather.raining && ctx.world.dimension == "minecraft:overworld",
         thundering: weather.thundering,
         nether: ctx.world.dimension == "minecraft:the_nether",
         seed,
@@ -806,7 +806,8 @@ fn phantoms(
         return;
     }
     *next_at = now + 1200 + i64::from(below(1200));
-    if spots.nether
+    // Only under a sky that turns night.
+    if ctx.world.dimension != "minecraft:overworld"
         || difficulty == 0
         || spots.darken < 5
         || !ctx.game_rule_bool("minecraft:spawn_phantoms")
