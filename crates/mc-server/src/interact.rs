@@ -756,6 +756,22 @@ pub fn use_item_on(
     let Some(block) = held.and_then(|item| ctx.rules.block_for_item(item.item)) else {
         return refuse(outcome);
     };
+    // Game master blocks: only operators in creative place them.
+    let game_master = matches!(
+        held_name,
+        Some(
+            "minecraft:command_block"
+                | "minecraft:chain_command_block"
+                | "minecraft:repeating_command_block"
+                | "minecraft:structure_block"
+                | "minecraft:jigsaw"
+                | "minecraft:test_block"
+                | "minecraft:test_instance_block"
+        )
+    );
+    if game_master && !crate::command_blocks::may_use(ctx, actor.uuid, actor.game_mode) {
+        return refuse(outcome);
+    }
     let placement = Placement {
         clicked,
         face,
