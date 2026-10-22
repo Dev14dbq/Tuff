@@ -574,10 +574,20 @@ async fn placed_and_broken_blocks_are_seen_by_everyone() {
     // Placing on top of the grass two blocks east.
     bob.send("minecraft:use_item_on", use_item_on(2, -61, 0, 1))
         .await;
-    let (_, update) = alice.recv_until("minecraft:block_update").await;
-    assert_eq!(block_update(&update), ((2, -60, 0), stone));
-    let (_, swing) = alice.recv_until("minecraft:swing_animation").await;
-    assert_eq!(Reader::new(&swing).varint().unwrap(), bob_entity);
+    // The block and Bob's swing, in either order.
+    let (mut update, mut swing) = (None, None);
+    while update.is_none() || swing.is_none() {
+        let (name, body) = alice.recv().await;
+        match name.as_str() {
+            "minecraft:block_update" if update.is_none() => update = Some(block_update(&body)),
+            "minecraft:swing_animation" if swing.is_none() => {
+                swing = Some(Reader::new(&body).varint().unwrap());
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(update, Some(((2, -60, 0), stone)));
+    assert_eq!(swing, Some(bob_entity));
     let mut placer = Vec::new();
     let ack = loop {
         let (name, body) = bob.recv().await;
@@ -1401,6 +1411,8 @@ async fn players_hurt_each_other_and_give_works() {
         .find(|p| p.profile.name == "Target")
         .unwrap()
         .entity_id;
+    // A new item in the hand recharges first (a sword: 12.5 ticks).
+    tokio::time::sleep(Duration::from_millis(800)).await;
     let mut attack = Vec::new();
     attack.put_varint(target_entity);
     hitter.send("minecraft:attack", attack).await;

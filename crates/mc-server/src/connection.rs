@@ -2389,10 +2389,9 @@ fn respawn_target(ctx: &ServerContext, uuid: u128) -> (String, Pose) {
 }
 
 fn spawn_target(ctx: &ServerContext) -> (String, Pose) {
-    (
-        ctx.spawn.lock().expect("spawn lock").dimension.clone(),
-        world_spawn_pose(ctx),
-    )
+    // The lock is let go before `world_spawn_pose` takes it again.
+    let dimension = ctx.spawn.lock().expect("spawn lock").dimension.clone();
+    (dimension, world_spawn_pose(ctx))
 }
 
 /// Tells a client where the world spawn is (the compass points there).
