@@ -129,7 +129,8 @@ fn a_zombie_comes_for_the_player_and_hurts_them() {
         eprintln!("skipped: no game data");
         return;
     };
-    ctx.difficulty.store(2, std::sync::atomic::Ordering::Relaxed);
+    ctx.difficulty
+        .store(2, std::sync::atomic::Ordering::Relaxed);
     let uuid = join(&ctx, [0.5, -60.0, 0.5]);
     let id = put(&ctx, Species::Zombie, [12.5, -60.0, 0.5]);
     run(&ctx, 200);
@@ -180,7 +181,8 @@ fn animals_and_monsters_spawn_naturally() {
         eprintln!("skipped: no game data");
         return;
     };
-    ctx.difficulty.store(2, std::sync::atomic::Ordering::Relaxed);
+    ctx.difficulty
+        .store(2, std::sync::atomic::Ordering::Relaxed);
     let _ = join(&ctx, [0.5, -60.0, 0.5]);
     run(&ctx, 400);
     let all: Vec<_> = lock(&ctx.entities).clone();
@@ -250,11 +252,15 @@ fn a_creeper_blows_up_near_the_player() {
         eprintln!("skipped: no game data");
         return;
     };
-    ctx.difficulty.store(2, std::sync::atomic::Ordering::Relaxed);
+    ctx.difficulty
+        .store(2, std::sync::atomic::Ordering::Relaxed);
     let uuid = join(&ctx, [0.5, -60.0, 0.5]);
     let id = put(&ctx, Species::Creeper, [5.5, -60.0, 0.5]);
     run(&ctx, 160);
-    assert!(mob_of(&ctx, id).is_none(), "the creeper should have blown up");
+    assert!(
+        mob_of(&ctx, id).is_none(),
+        "the creeper should have blown up"
+    );
     assert!(lock(&ctx.vitals)[&uuid].health < 20.0);
 }
 
@@ -330,7 +336,12 @@ fn skeletons_carry_bows_and_metadata_matches_vanilla() {
     let e = new_mob(&ctx, Species::Skeleton, [0.5, -60.0, 0.5]);
     let Kind::Mob(m) = &e.kind else { panic!() };
     let bow = ctx.items.id("minecraft:bow").unwrap();
-    assert_eq!(m.gear[mc_entity::mob::slot::MAINHAND].as_ref().map(|g| g.item), Some(bow));
+    assert_eq!(
+        m.gear[mc_entity::mob::slot::MAINHAND]
+            .as_ref()
+            .map(|g| g.item),
+        Some(bow)
+    );
     let mut sheep = Mob::new(Species::Sheep, 3);
     sheep.set_color(14);
     sheep.shear();

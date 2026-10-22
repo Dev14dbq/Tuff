@@ -65,7 +65,11 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
     }
     if small {
         // Light the spot it hit.
-        let back = [e.pos[0] - e.vel[0] * 0.1, e.pos[1] - e.vel[1] * 0.1, e.pos[2] - e.vel[2] * 0.1];
+        let back = [
+            e.pos[0] - e.vel[0] * 0.1,
+            e.pos[1] - e.vel[1] * 0.1,
+            e.pos[2] - e.vel[2] * 0.1,
+        ];
         t.out.fires.push([
             back[0].floor() as i32,
             back[1].floor() as i32,

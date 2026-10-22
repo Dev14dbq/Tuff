@@ -222,7 +222,10 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
                 .collect(),
             _ => Vec::new(),
         };
-        let refs: Vec<(&str, &str)> = props.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let refs: Vec<(&str, &str)> = props
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         m.carried = ctx
             .data
             .blocks

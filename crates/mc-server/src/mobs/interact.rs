@@ -58,7 +58,10 @@ fn swing(ctx: &ServerContext, by: &Actor) {
 
 fn dye_color(name: &str) -> Option<u8> {
     let color = name.strip_prefix("minecraft:")?.strip_suffix("_dye")?;
-    WOOL_COLORS.iter().position(|c| *c == color).map(|i| i as u8)
+    WOOL_COLORS
+        .iter()
+        .position(|c| *c == color)
+        .map(|i| i as u8)
 }
 
 fn tame(ctx: &ServerContext, e: &mut Entity, by: &Actor) {
@@ -102,12 +105,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
     }
     let species = m.species;
     let tagged = |tag: Option<&str>| {
-        tag.is_some_and(|t| {
-            ctx.commands
-                .env
-                .tag("minecraft:item", t)
-                .contains(&name)
-        })
+        tag.is_some_and(|t| ctx.commands.env.tag("minecraft:item", t).contains(&name))
     };
     // A name tag.
     if name == "minecraft:name_tag" {
@@ -138,7 +136,14 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
             m.shear();
             let color = WOOL_COLORS[usize::from(m.color & 15)];
             let count = 1 + m.below(3) as i32;
-            fx::sound(ctx, "entity.sheep.shear", fx::category::PLAYERS, pos, 1.0, 1.0);
+            fx::sound(
+                ctx,
+                "entity.sheep.shear",
+                fx::category::PLAYERS,
+                pos,
+                1.0,
+                1.0,
+            );
             if by.game_mode != 1 {
                 crate::held::wear(ctx, by.uuid, hslot, 1);
             }
@@ -154,7 +159,14 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
             } else {
                 "minecraft:red_mushroom"
             };
-            fx::sound(ctx, "entity.mooshroom.shear", fx::category::PLAYERS, pos, 1.0, 1.0);
+            fx::sound(
+                ctx,
+                "entity.mooshroom.shear",
+                fx::category::PLAYERS,
+                pos,
+                1.0,
+                1.0,
+            );
             if by.game_mode != 1 {
                 crate::held::wear(ctx, by.uuid, hslot, 1);
             }
@@ -199,7 +211,14 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
         return;
     }
     if name == "minecraft:bowl" && species == Species::Mooshroom && !m.is_baby() {
-        fx::sound(ctx, "entity.mooshroom.milk", fx::category::PLAYERS, pos, 1.0, 1.0);
+        fx::sound(
+            ctx,
+            "entity.mooshroom.milk",
+            fx::category::PLAYERS,
+            pos,
+            1.0,
+            1.0,
+        );
         swap_one(ctx, by, hslot, "minecraft:mushroom_stew");
         return;
     }
@@ -207,7 +226,14 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
     if name == "minecraft:flint_and_steel" && species == Species::Creeper && !m.ignited {
         m.ignited = true;
         m.dirty = true;
-        fx::sound(ctx, "item.flintandsteel.use", fx::category::PLAYERS, pos, 1.0, 1.0);
+        fx::sound(
+            ctx,
+            "item.flintandsteel.use",
+            fx::category::PLAYERS,
+            pos,
+            1.0,
+            1.0,
+        );
         if by.game_mode != 1 {
             crate::held::wear(ctx, by.uuid, hslot, 1);
         }
@@ -284,7 +310,9 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
     if species.horse() && food {
         let golden = matches!(
             name.as_str(),
-            "minecraft:golden_carrot" | "minecraft:golden_apple" | "minecraft:enchanted_golden_apple"
+            "minecraft:golden_carrot"
+                | "minecraft:golden_apple"
+                | "minecraft:enchanted_golden_apple"
         );
         let mut used = false;
         if m.health < m.max_health {
@@ -305,7 +333,14 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
         }
         if used {
             consume(ctx, by, hslot);
-            fx::sound(ctx, &format!("entity.{}.eat", species.path()), fx::category::NEUTRAL, pos, 1.0, 1.0);
+            fx::sound(
+                ctx,
+                &format!("entity.{}.eat", species.path()),
+                fx::category::NEUTRAL,
+                pos,
+                1.0,
+                1.0,
+            );
             m.dirty = true;
             send_now(ctx, e);
             return;
@@ -316,7 +351,14 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
         if m.is_baby() {
             m.baby_age += -m.baby_age / 10;
             consume(ctx, by, hslot);
-            fx::particles(ctx, "minecraft:happy_villager", [pos[0], pos[1] + 0.5, pos[2]], 0.5, 0.0, 5);
+            fx::particles(
+                ctx,
+                "minecraft:happy_villager",
+                [pos[0], pos[1] + 0.5, pos[2]],
+                0.5,
+                0.0,
+                5,
+            );
             return;
         }
         let may_breed = m.baby_age == 0 && !m.in_love() && (!species.tameable() || m.is_tame());
@@ -336,7 +378,11 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
         }
         return;
     }
-    if name.ends_with("_horse_armor") && species == Species::Horse && m.is_tame() && m.gear[slot::BODY].is_none() {
+    if name.ends_with("_horse_armor")
+        && species == Species::Horse
+        && m.is_tame()
+        && m.gear[slot::BODY].is_none()
+    {
         if let Some(item) = item {
             m.gear[slot::BODY] = Some(Gear {
                 item,
@@ -344,7 +390,14 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
                 damage: 0,
             });
             consume(ctx, by, hslot);
-            fx::sound(ctx, "entity.horse.armor", fx::category::NEUTRAL, pos, 0.5, 1.0);
+            fx::sound(
+                ctx,
+                "entity.horse.armor",
+                fx::category::NEUTRAL,
+                pos,
+                0.5,
+                1.0,
+            );
             send_equipment(ctx, e);
         }
         return;
@@ -398,7 +451,12 @@ fn worth(ctx: &ServerContext, item: i32) -> f32 {
 
 /// Mobs that may pick things up take items they stand on: better armor or
 /// weapons (dropping what they had), and piglins gold.
-pub fn pick_up(ctx: &ServerContext, entities: &mut [Entity], data: &mut Vec<SetEntityData>, now: i64) {
+pub fn pick_up(
+    ctx: &ServerContext,
+    entities: &mut [Entity],
+    data: &mut Vec<SetEntityData>,
+    now: i64,
+) {
     let _ = (data, now);
     let pickers: Vec<usize> = entities
         .iter()
@@ -415,8 +473,13 @@ pub fn pick_up(ctx: &ServerContext, entities: &mut [Entity], data: &mut Vec<SetE
     for i in pickers {
         let mbox = entities[i].aabb();
         let Some(j) = entities.iter().position(|o| {
-            matches!(o.kind, Kind::Item { pickup_delay: 0, .. })
-                && !o.removed
+            matches!(
+                o.kind,
+                Kind::Item {
+                    pickup_delay: 0,
+                    ..
+                }
+            ) && !o.removed
                 && {
                     let b = o.aabb();
                     b.max[0] > mbox.min[0] - 1.0
@@ -463,7 +526,10 @@ pub fn pick_up(ctx: &ServerContext, entities: &mut [Entity], data: &mut Vec<SetE
         } else if m.can_pick_up {
             let Some(s) = super::meta::slot_of(ctx, item)
                 .filter(|s| matches!(*s, slot::HEAD | slot::CHEST | slot::LEGS | slot::FEET))
-                .or_else(|| (ctx.items.get(item).is_some_and(|i| i.attack_damage > 0.0)).then_some(slot::MAINHAND))
+                .or_else(|| {
+                    (ctx.items.get(item).is_some_and(|i| i.attack_damage > 0.0))
+                        .then_some(slot::MAINHAND)
+                })
             else {
                 continue;
             };
@@ -544,9 +610,15 @@ pub fn admire(ctx: &ServerContext, entities: &mut [Entity]) {
             .is_some_and(|n| n == "minecraft:gold_ingot");
         send_equipment(ctx, e);
         if is_ingot {
-            let drops = super::hurt::roll(ctx, e, "minecraft:gameplay/piglin_bartering", false, None);
+            let drops =
+                super::hurt::roll(ctx, e, "minecraft:gameplay/piglin_bartering", false, None);
             for d in drops {
-                crate::tick::spawn_item_at(ctx, [e.pos[0], e.pos[1] + 1.0, e.pos[2]], d.item, d.count);
+                crate::tick::spawn_item_at(
+                    ctx,
+                    [e.pos[0], e.pos[1] + 1.0, e.pos[2]],
+                    d.item,
+                    d.count,
+                );
             }
         } else if let Some(g) = gold {
             // Other gold it keeps... in its inventory, which it does not

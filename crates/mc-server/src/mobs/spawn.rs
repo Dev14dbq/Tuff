@@ -433,7 +433,17 @@ pub fn tick(
     let mut all = lock(&ctx.mobs.spawner);
     let spawner = all.entry(ctx.dim).or_default();
     let mut biome_table = spawner.biomes.take().unwrap_or_else(|| load_biomes(ctx));
-    let out = spawn_round(ctx, spawner, &biome_table, ground, entities, targets, now, day_time, difficulty);
+    let out = spawn_round(
+        ctx,
+        spawner,
+        &biome_table,
+        ground,
+        entities,
+        targets,
+        now,
+        day_time,
+        difficulty,
+    );
     spawner.biomes = Some(std::mem::take(&mut biome_table));
     out
 }
@@ -546,7 +556,14 @@ fn spawn_round(
         }
     }
     // Phantoms come for players who have not slept for three days.
-    phantoms(ctx, (&mut spawner.unrest, &mut spawner.phantoms_at), &spots, now, difficulty, &mut out);
+    phantoms(
+        ctx,
+        (&mut spawner.unrest, &mut spawner.phantoms_at),
+        &spots,
+        now,
+        difficulty,
+        &mut out,
+    );
     // Monsters, every tick, in a few chunks picked at random.
     if difficulty > 0 && monsters < monster_cap && ctx.game_rule_bool("minecraft:spawn_monsters") {
         for _ in 0..MONSTER_TRIES {
@@ -729,8 +746,7 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
         Horse => m.variant = m.below(7) as i32 | (m.below(5) as i32) << 8,
         Parrot => m.variant = m.below(5) as i32,
         Fox => {
-            let snow =
-                biome.is_some_and(|b| in_biome_tag(ctx, b, "minecraft:spawns_snow_foxes"));
+            let snow = biome.is_some_and(|b| in_biome_tag(ctx, b, "minecraft:spawns_snow_foxes"));
             m.variant = i32::from(snow);
         }
         Rabbit => {
@@ -760,7 +776,11 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
         Skeleton | Stray => Some("bow"),
         WitherSkeleton => Some("stone_sword"),
         ZombifiedPiglin => Some("golden_sword"),
-        Piglin => Some(if m.below(2) == 0 { "crossbow" } else { "golden_sword" }),
+        Piglin => Some(if m.below(2) == 0 {
+            "crossbow"
+        } else {
+            "golden_sword"
+        }),
         Drowned if m.next_f64() > 0.9 => Some(if m.below(16) < 10 {
             "trident"
         } else {
@@ -769,7 +789,11 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
         Zombie | Husk | ZombieVillager
             if m.next_f64() < if difficulty == 3 { 0.05 } else { 0.01 } =>
         {
-            Some(if m.below(3) == 0 { "iron_sword" } else { "iron_shovel" })
+            Some(if m.below(3) == 0 {
+                "iron_sword"
+            } else {
+                "iron_shovel"
+            })
         }
         _ => None,
     };
@@ -917,7 +941,10 @@ mod tests {
     #[test]
     fn villager_types_follow_biomes() {
         assert_eq!(villager_type(Some("minecraft:desert")), "minecraft:desert");
-        assert_eq!(villager_type(Some("minecraft:snowy_plains")), "minecraft:snow");
+        assert_eq!(
+            villager_type(Some("minecraft:snowy_plains")),
+            "minecraft:snow"
+        );
         assert_eq!(villager_type(None), "minecraft:plains");
     }
 

@@ -244,10 +244,15 @@ impl Senses<'_> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Missile {
     /// An arrow; strays' slow, and `damage` is the base.
-    Arrow { damage: f64, slowness: bool },
+    Arrow {
+        damage: f64,
+        slowness: bool,
+    },
     Trident,
     /// A ghast's fireball, with its explosion power.
-    Fireball { power: i32 },
+    Fireball {
+        power: i32,
+    },
     /// One of a blaze's three.
     SmallFireball,
     /// A witch's splash potion (`minecraft:harming`).

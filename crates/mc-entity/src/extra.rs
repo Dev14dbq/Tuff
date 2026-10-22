@@ -89,7 +89,9 @@ pub enum Shot {
         left: i32,
     },
     /// A ghast's fireball (explodes) or a blaze's small one (burns).
-    Fireball { small: bool },
+    Fireball {
+        small: bool,
+    },
     /// A fishing bobber; `hooked` is the entity it pulls.
     Bobber {
         hooked: Option<i32>,

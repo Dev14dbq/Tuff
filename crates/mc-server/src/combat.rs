@@ -150,9 +150,12 @@ pub fn swing(ctx: &ServerContext, uuid: u128, pose: Pose) -> Blow {
     if crit {
         damage *= 1.5;
     }
-    let sword = held
-        .as_ref()
-        .is_some_and(|h| ctx.commands.env.tag("minecraft:item", "minecraft:swords").contains(&h.name));
+    let sword = held.as_ref().is_some_and(|h| {
+        ctx.commands
+            .env
+            .tag("minecraft:item", "minecraft:swords")
+            .contains(&h.name)
+    });
     let sweep = full && !crit && !sprint_blow && pose.on_ground && sword;
     let sweeping = level("sweeping_edge");
     let mut knockback = f64::from(level("knockback"));
@@ -198,7 +201,14 @@ pub fn blow_sound(ctx: &ServerContext, blow: &Blow, at: [f64; 3], landed: bool) 
     };
     fx::sound(ctx, name, fx::category::PLAYERS, blow.from, 1.0, 1.0);
     if landed && blow.crit {
-        fx::particles(ctx, "minecraft:crit", [at[0], at[1] + 1.0, at[2]], 0.4, 0.2, 12);
+        fx::particles(
+            ctx,
+            "minecraft:crit",
+            [at[0], at[1] + 1.0, at[2]],
+            0.4,
+            0.2,
+            12,
+        );
     }
     if landed && blow.sweep {
         let yaw = f64::from(blow.yaw).to_radians();
@@ -248,7 +258,13 @@ pub fn push_player(ctx: &ServerContext, uuid: u128, entity_id: i32, velocity: [f
 
 /// A knockback push of `strength` away from `from`, as vanilla gives it:
 /// half the old speed plus the push, up to 0.4 upwards when on the ground.
-pub fn knockback(vel: [f64; 3], pos: [f64; 3], from: [f64; 3], strength: f64, on_ground: bool) -> [f64; 3] {
+pub fn knockback(
+    vel: [f64; 3],
+    pos: [f64; 3],
+    from: [f64; 3],
+    strength: f64,
+    on_ground: bool,
+) -> [f64; 3] {
     let (mut dx, mut dz) = (from[0] - pos[0], from[2] - pos[2]);
     let len = dx.hypot(dz);
     if len < 1e-4 {
@@ -316,9 +332,7 @@ fn blocks(ctx: &ServerContext, uuid: u128, pose: Pose, from: [f64; 3], t: i64) -
     if t - since < 5 || t < off {
         return None;
     }
-    let hand = [1, 0]
-        .into_iter()
-        .find(|&h| holds_shield(ctx, uuid, h))?;
+    let hand = [1, 0].into_iter().find(|&h| holds_shield(ctx, uuid, h))?;
     let look = crate::projectiles::look(pose.yaw, 0.0);
     let (dx, dz) = (from[0] - pose.x, from[2] - pose.z);
     if look[0] * dx + look[2] * dz <= 0.0 {
@@ -348,10 +362,24 @@ pub fn hurt_player(ctx: &ServerContext, uuid: u128, hit: &Hit) -> Option<bool> {
                 f.shield = None;
             });
             fx::status(ctx, entity_id, 30);
-            fx::sound(ctx, "item.shield.break", fx::category::PLAYERS, at, 0.8, 0.8 + crate::hits::rnd() as f32 * 0.4);
+            fx::sound(
+                ctx,
+                "item.shield.break",
+                fx::category::PLAYERS,
+                at,
+                0.8,
+                0.8 + crate::hits::rnd() as f32 * 0.4,
+            );
         } else {
             fx::status(ctx, entity_id, 29);
-            fx::sound(ctx, "item.shield.block", fx::category::PLAYERS, at, 1.0, 0.8 + crate::hits::rnd() as f32 * 0.4);
+            fx::sound(
+                ctx,
+                "item.shield.block",
+                fx::category::PLAYERS,
+                at,
+                1.0,
+                0.8 + crate::hits::rnd() as f32 * 0.4,
+            );
         }
         if hit.amount >= 3.0 {
             crate::held::wear(ctx, uuid, slot, 1 + hit.amount.floor() as i32);
@@ -393,7 +421,13 @@ pub fn hurt_player(ctx: &ServerContext, uuid: u128, hit: &Hit) -> Option<bool> {
         && !died
     {
         let strength = (0.4 + hit.knockback * 0.5) * (1.0 - worn_resistance(ctx, uuid));
-        let v = knockback([0.0; 3], [pose.x, pose.y, pose.z], from, strength, pose.on_ground);
+        let v = knockback(
+            [0.0; 3],
+            [pose.x, pose.y, pose.z],
+            from,
+            strength,
+            pose.on_ground,
+        );
         push_player(ctx, uuid, entity_id, v);
     }
     Some(died)

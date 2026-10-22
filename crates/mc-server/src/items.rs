@@ -191,7 +191,9 @@ fn parse(name: &str, c: &Value) -> Item {
         armor: modifier("minecraft:armor"),
         toughness: modifier("minecraft:armor_toughness"),
         knockback_resistance: modifier("minecraft:knockback_resistance"),
-        slot: c["minecraft:equippable"]["slot"].as_str().map(str::to_owned),
+        slot: c["minecraft:equippable"]["slot"]
+            .as_str()
+            .map(str::to_owned),
         weapon: c.get("minecraft:weapon").map(|w| {
             (
                 w["item_damage_per_attack"].as_i64().unwrap_or(1) as i32,

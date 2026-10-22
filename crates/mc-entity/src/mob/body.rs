@@ -56,9 +56,7 @@ fn head_in_water(m: &Mob, b: &Body, s: &Senses) -> bool {
 pub(super) fn in_water(b: &Body, s: &Senses) -> bool {
     let c = cell_of(b.pos);
     s.world.liquid(c[0], c[1], c[2]) == Liquid::Water
-        || s.world
-            .liquid(c[0], (b.pos[1] + 0.4).floor() as i32, c[2])
-            == Liquid::Water
+        || s.world.liquid(c[0], (b.pos[1] + 0.4).floor() as i32, c[2]) == Liquid::Water
 }
 
 /// What happens every tick whatever the mob wants.
@@ -131,7 +129,9 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
         });
     }
     // Endermen hate water.
-    if m.species == Species::Enderman && (wet || s.raining && sky_above(m, b, s)) && m.age.is_multiple_of(10)
+    if m.species == Species::Enderman
+        && (wet || s.raining && sky_above(m, b, s))
+        && m.age.is_multiple_of(10)
     {
         out.push(MobEvent::Hurt {
             amount: 1.0,
@@ -330,7 +330,11 @@ pub(super) fn drive(m: &mut Mob, b: &mut Body, s: &Senses) -> Option<Input> {
     // Fliers and swimmers head straight for the point.
     let swims = m.species == Species::Drowned && in_water(b, s);
     if m.species.flies() || swims {
-        let d = [point[0] - b.pos[0], point[1] - b.pos[1], point[2] - b.pos[2]];
+        let d = [
+            point[0] - b.pos[0],
+            point[1] - b.pos[1],
+            point[2] - b.pos[2],
+        ];
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
         if len < 0.1 {
             return None;
@@ -403,7 +407,13 @@ pub(super) fn physics(
         // Fliers: no gravity, a slow drift towards where they go.
         match &input {
             Some(i) => {
-                let want = speed_attr * i.speed * if m.species == Species::Ghast { 0.15 } else { 0.5 };
+                let want = speed_attr
+                    * i.speed
+                    * if m.species == Species::Ghast {
+                        0.15
+                    } else {
+                        0.5
+                    };
                 for (axis, d) in [0, 1, 2].into_iter().zip(i.dir) {
                     b.vel[axis] += (d * want - b.vel[axis]) * 0.1;
                 }

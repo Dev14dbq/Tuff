@@ -179,7 +179,11 @@ fn sees_player(m: &Mob, b: &Body, s: &Senses, p: &Target) -> bool {
 }
 
 fn center(c: Cell) -> [f64; 3] {
-    [f64::from(c[0]) + 0.5, f64::from(c[1]), f64::from(c[2]) + 0.5]
+    [
+        f64::from(c[0]) + 0.5,
+        f64::from(c[1]),
+        f64::from(c[2]) + 0.5,
+    ]
 }
 
 fn light_at(s: &Senses, pos: [f64; 3]) -> u8 {
@@ -240,7 +244,13 @@ fn random_air(m: &mut Mob, s: &Senses, from: [f64; 3], h: f64, v: f64) -> Option
 
 /// Moves the mob to a standable spot near `around` (within `r`); whether it
 /// found one.
-pub(super) fn teleport_near(m: &mut Mob, b: &mut Body, s: &Senses, around: [f64; 3], r: i32) -> bool {
+pub(super) fn teleport_near(
+    m: &mut Mob,
+    b: &mut Body,
+    s: &Senses,
+    around: [f64; 3],
+    r: i32,
+) -> bool {
     let p = params(m);
     for _ in 0..16 {
         let dx = m.below(2 * r as u32 + 1) as i32 - r;
@@ -479,7 +489,9 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             let Some((id, _)) = m.revenge else {
                 return false;
             };
-            if m.owner.is_some_and(|o| s.player(id).is_some_and(|p| p.uuid == o)) {
+            if m.owner
+                .is_some_and(|o| s.player(id).is_some_and(|p| p.uuid == o))
+            {
                 return false;
             }
             s.seen(id).is_some()
@@ -556,7 +568,9 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             };
             // Not the owner's other pets.
             let own = m.owner;
-            if s.mob(id).is_some_and(|x| x.owner.is_some() && x.owner == own) {
+            if s.mob(id)
+                .is_some_and(|x| x.owner.is_some() && x.owner == own)
+            {
                 return false;
             }
             if s.seen(id).is_none() {
@@ -584,9 +598,20 @@ fn looks_at(p: &Target, eye_pos: [f64; 3], s: &Senses) -> bool {
         return false;
     }
     let from = [p.pos[0], p.pos[1] + PLAYER_EYE, p.pos[2]];
-    let (yaw, pitch) = (f64::from(p.yaw).to_radians(), f64::from(p.pitch).to_radians());
-    let look = [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()];
-    let to = [eye_pos[0] - from[0], eye_pos[1] - from[1], eye_pos[2] - from[2]];
+    let (yaw, pitch) = (
+        f64::from(p.yaw).to_radians(),
+        f64::from(p.pitch).to_radians(),
+    );
+    let look = [
+        -yaw.sin() * pitch.cos(),
+        -pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    ];
+    let to = [
+        eye_pos[0] - from[0],
+        eye_pos[1] - from[1],
+        eye_pos[2] - from[2],
+    ];
     let d = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
     if d < 1e-6 {
         return false;
@@ -634,13 +659,11 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         Goal::EatGrass { left } => *left > 0,
         Goal::Tempt { player, .. } => {
             let tag = m.species.tempt_tag().unwrap_or("");
-            player
-                .and_then(|id| s.player(id))
-                .is_some_and(|p| p.present && holds_food(p, s, tag) && dist_sq(b.pos, p.pos) < 100.0)
+            player.and_then(|id| s.player(id)).is_some_and(|p| {
+                p.present && holds_food(p, s, tag) && dist_sq(b.pos, p.pos) < 100.0
+            })
         }
-        Goal::Breed {
-            partner, timer, ..
-        } => {
+        Goal::Breed { partner, timer, .. } => {
             let me = &*m;
             *timer < 60
                 && me.in_love()
@@ -832,9 +855,7 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
                 m.jump = true;
             }
         }
-        Goal::Panic { speed }
-        | Goal::Stroll { speed, .. }
-        | Goal::FleeSun { speed } => {
+        Goal::Panic { speed } | Goal::Stroll { speed, .. } | Goal::FleeSun { speed } => {
             if let Some(c) = m.nav.goal {
                 m.goto = Some((center(c), *speed));
             }
@@ -890,13 +911,17 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
             ..
         } => {
             let close = threat
-                .and_then(|id| s.seen(id).or_else(|| s.mob(id).map(|o| Seen {
-                    id,
-                    pos: o.pos,
-                    width: o.width,
-                    eye: o.height,
-                    player: false,
-                })))
+                .and_then(|id| {
+                    s.seen(id).or_else(|| {
+                        s.mob(id).map(|o| Seen {
+                            id,
+                            pos: o.pos,
+                            width: o.width,
+                            eye: o.height,
+                            player: false,
+                        })
+                    })
+                })
                 .is_some_and(|t| dist_sq(b.pos, t.pos) < 49.0);
             if let Some(c) = m.nav.goal {
                 m.goto = Some((center(c), if close { *sprint } else { *walk }));
@@ -904,8 +929,8 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
         }
         Goal::Swell => {
             m.nav.stop();
-            let near = target(m, s)
-                .is_some_and(|t| dist_sq(b.pos, t.pos) <= 49.0 && can_see(m, b, s, &t));
+            let near =
+                target(m, s).is_some_and(|t| dist_sq(b.pos, t.pos) <= 49.0 && can_see(m, b, s, &t));
             let dir = if m.ignited || near { 1 } else { -1 };
             if dir != m.swell_dir {
                 m.swell_dir = dir;
@@ -1021,7 +1046,8 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
         Goal::Hop { delay } => hop(m, b, s, delay, out),
         Goal::Hover { range, rise } => {
             if m.nav.goal.is_none() || m.below(40) == 0 {
-                let center_at = target(m, s).map_or(b.pos, |t| [t.pos[0], t.pos[1] + *rise, t.pos[2]]);
+                let center_at =
+                    target(m, s).map_or(b.pos, |t| [t.pos[0], t.pos[1] + *rise, t.pos[2]]);
                 if let Some(p) = random_air(m, s, center_at, *range, (*range / 2.0).max(2.0)) {
                     m.nav.goal = Some(cell_of(p));
                 }
@@ -1082,7 +1108,11 @@ fn ranged(
             } else if visible {
                 *timer -= 1;
                 if *timer <= -20 {
-                    let interval = if s.difficulty >= 3 { interval } else { interval * 2 };
+                    let interval = if s.difficulty >= 3 {
+                        interval
+                    } else {
+                        interval * 2
+                    };
                     *timer = interval;
                     out.push(MobEvent::Shoot {
                         target: t.id,
