@@ -177,15 +177,24 @@ impl Windows {
         self.close_current(writer, who)?;
         // Two chest halves open together as a large chest, the right half
         // first.
-        let state = ctx.world.block(position, &ctx.data.blocks).unwrap_or(0);
-        let partner = ctx.shapes.chest_partner(state).and_then(|d| {
-            let (dx, dy, dz) = d.offset();
-            let other = Position::new(position.x + dx, position.y + dy, position.z + dz);
-            let s = ctx.world.block(other, &ctx.data.blocks)?;
-            (ctx.data.blocks.block_name(s) == ctx.data.blocks.block_name(state)
-                && ctx.shapes.chest_partner(s) == Some(d.opposite()))
-            .then_some(other)
-        });
+        let entity = containers::entity_of(position).is_some();
+        let state = if entity {
+            0
+        } else {
+            ctx.world.block(position, &ctx.data.blocks).unwrap_or(0)
+        };
+        let partner = ctx
+            .shapes
+            .chest_partner(state)
+            .filter(|_| !entity)
+            .and_then(|d| {
+                let (dx, dy, dz) = d.offset();
+                let other = Position::new(position.x + dx, position.y + dy, position.z + dz);
+                let s = ctx.world.block(other, &ctx.data.blocks)?;
+                (ctx.data.blocks.block_name(s) == ctx.data.blocks.block_name(state)
+                    && ctx.shapes.chest_partner(s) == Some(d.opposite()))
+                .then_some(other)
+            });
         let (parts, menu, title) = match partner {
             Some(other) => {
                 let right = ctx.data.blocks.property(state, "type") == Some("right");
@@ -396,6 +405,7 @@ impl Windows {
         let id = open.id;
         let mut settle = None;
         let mut machine_shown = None;
+        let mut maps_taken = false;
         match &mut open.kind {
             Kind::Container { parts } => {
                 for &(p, _) in parts.iter() {
@@ -440,6 +450,7 @@ impl Windows {
                 let taken = result.is_some_and(|r| result_before.is_some() && m.slots[r].is_none());
                 let shown = m.slots.clone();
                 m.settle(ctx, uuid, taken);
+                maps_taken = taken && m.menu == Menu::Cartography;
                 machine_shown = Some(shown);
             }
             Kind::Merchant { grid, .. } => {
@@ -452,6 +463,25 @@ impl Windows {
         }
         if let Some(shown) = machine_shown {
             self.sync_machine(writer, who, shown)?;
+        }
+        if maps_taken {
+            // A zoomed or locked map gets its new map once it is taken.
+            let mut changed = Vec::new();
+            change_hands(ctx, uuid, entity_id, |hands| {
+                for (i, slot) in hands.slots.iter_mut().enumerate() {
+                    if let Some(stack) = slot
+                        && crate::maps::post_process(ctx, stack)
+                    {
+                        changed.push((i, stack.clone()));
+                    }
+                }
+                if let Some(stack) = &mut hands.carried {
+                    crate::maps::post_process(ctx, stack);
+                }
+            });
+            for (i, stack) in changed {
+                self.set_slot(writer, 0, i, Some(stack))?;
+            }
         }
         if let Some(before) = settle {
             self.settle_trade(writer, who, before, click.mode)?;
@@ -707,6 +737,24 @@ impl Windows {
             self.send_values(writer, &values)?;
         }
         Ok(())
+    }
+
+    /// The anvil's name field changed.
+    pub fn rename(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        name: &str,
+    ) -> anyhow::Result<()> {
+        let Some(open) = self.open.as_mut() else {
+            return Ok(());
+        };
+        let Kind::Machine(m) = &mut open.kind else {
+            return Ok(());
+        };
+        let shown = m.slots.clone();
+        m.rename(who.ctx, who.uuid, name);
+        self.sync_machine(writer, who, shown)
     }
 
     /// A button of the open window was pressed.

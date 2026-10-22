@@ -147,6 +147,8 @@ pub enum Action {
 
 #[derive(Debug)]
 pub struct Request {
+    /// The dimension the player is in (index in `context::DIMENSIONS`).
+    pub dim: usize,
     pub actor: Actor,
     pub action: Action,
     /// Gets the player's own answer; events for others are broadcast.
@@ -182,6 +184,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             let packet = lock(&ctx.time).packet(false);
             let _ = ctx.events.send(Event::Time(packet));
         }
+        let dimensions = ctx.open_dimensions();
         let runs = !control.frozen || control.steps > 0;
         if control.frozen && control.steps > 0 {
             control.steps -= 1;
@@ -189,25 +192,34 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         if runs {
             lock(&ctx.time).advance();
             crate::commands::run_functions(&ctx, &mut control);
-            run_scheduled_ticks(&ctx);
-            crate::random_ticks::tick(&ctx);
+            for d in &dimensions {
+                run_scheduled_ticks(d);
+                crate::precipitation::tick(d);
+                crate::random_ticks::tick(d);
+                crate::daylight::tick(d, lock(&d.time).age);
+                crate::furnaces::tick(d);
+                crate::beacons::tick(d, count as i64);
+                lock(&d.border).tick();
+            }
             crate::effects::tick(&ctx, count as i64);
             crate::vitals::tick(&ctx);
             crate::vitals::tick_using(&ctx);
-            crate::furnaces::tick(&ctx);
-            crate::beacons::tick(&ctx, count as i64);
+            crate::portals::tick(&ctx);
             crate::useblocks::tick(&ctx);
             let advance = ctx.game_rule_bool("advance_weather");
             let changes = lock(&ctx.weather).tick(advance);
             if changes != crate::weather::Changes::default() {
                 let _ = ctx.events.send(Event::Weather(changes));
             }
-            lock(&ctx.border).tick();
         }
 
         while let Ok(request) = requests.try_recv() {
             let actor = request.actor.uuid;
-            let mut outcome = handle(&ctx, &mut control, request.actor, request.action);
+            let here = ctx
+                .dimension(request.dim)
+                .unwrap_or_else(|| Arc::clone(&ctx));
+            let ctx = &here;
+            let mut outcome = handle(ctx, &mut control, request.actor, request.action);
             // Packets sent to the player come before the reply, as in
             // vanilla, so the reply then goes the same way.
             let after = outcome.events.iter().any(|e| match e {
@@ -230,19 +242,24 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
                 }
             }
             for (at, drop) in std::mem::take(&mut outcome.drops) {
-                drop_item(&ctx, at, drop);
+                drop_item(ctx, at, drop);
             }
             let _ = request.reply.send(outcome);
         }
-        containers_changed(&ctx);
+        for d in &dimensions {
+            containers_changed(d);
+        }
 
         if count.is_multiple_of(UNLOAD_EVERY) {
-            let dropped = ctx.world.unload_unused();
-            if dropped > 0 {
-                debug!(
-                    "unloaded {dropped} chunks, {} in memory",
-                    ctx.world.loaded_chunks()
-                );
+            for d in &dimensions {
+                let dropped = d.world.unload_unused();
+                if dropped > 0 {
+                    debug!(
+                        "unloaded {dropped} chunks of {}, {} in memory",
+                        d.dimension_name(),
+                        d.world.loaded_chunks()
+                    );
+                }
             }
         }
         if count.is_multiple_of(autosave) && ctx.world.autosaving() {
@@ -268,16 +285,97 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
     }
 }
 
+/// The waiting scheduled ticks as chunk files keep them, by chunk.
+pub(crate) fn ticks_by_chunk(
+    ctx: &ServerContext,
+) -> std::collections::HashMap<(i32, i32), crate::world::PendingTicks> {
+    let now = lock(&ctx.time).age;
+    let ticks = lock(&ctx.ticks);
+    let mut out: std::collections::HashMap<(i32, i32), crate::world::PendingTicks> =
+        Default::default();
+    for (pos, kind, time, priority) in ticks.blocks.pending() {
+        let Some(id) = ctx.shapes.index_name(kind) else {
+            continue;
+        };
+        let tick = crate::world::SavedTick {
+            fluid: false,
+            id: id.to_owned(),
+            pos,
+            delay: time - now,
+            priority,
+        };
+        out.entry((pos.x >> 4, pos.z >> 4))
+            .or_default()
+            .0
+            .push(tick.tag());
+    }
+    for (pos, kind, time, priority) in ticks.fluids.pending() {
+        let lava = kind == mc_tick::fluids::Fluid::Lava as u32;
+        let still = ctx
+            .world
+            .block(crate::level::to_position(pos), &ctx.data.blocks)
+            .and_then(|s| ctx.data.blocks.property(s, "level"))
+            == Some("0");
+        let id = match (lava, still) {
+            (false, true) => "minecraft:water",
+            (false, false) => "minecraft:flowing_water",
+            (true, true) => "minecraft:lava",
+            (true, false) => "minecraft:flowing_lava",
+        };
+        let tick = crate::world::SavedTick {
+            fluid: true,
+            id: id.to_owned(),
+            pos,
+            delay: time - now,
+            priority,
+        };
+        out.entry((pos.x >> 4, pos.z >> 4))
+            .or_default()
+            .1
+            .push(tick.tag());
+    }
+    out
+}
+
+/// Ticks stored in chunks just read go back in the queues.
+fn queue_saved_ticks(ctx: &ServerContext, ticks: &mut mc_tick::ScheduledTicks, now: i64) {
+    for t in ctx.world.take_saved_ticks() {
+        if t.fluid {
+            let fluid = if t.id.ends_with("lava") {
+                mc_tick::fluids::Fluid::Lava
+            } else {
+                mc_tick::fluids::Fluid::Water
+            };
+            ticks
+                .fluids
+                .schedule(t.pos, fluid as u32, now + t.delay, t.priority);
+        } else if let Some(state) = ctx.data.blocks.default_state(&t.id) {
+            let kind = ctx.shapes.block_index(state);
+            ticks
+                .blocks
+                .schedule(t.pos, kind, now + t.delay, t.priority);
+        }
+    }
+}
+
 /// Due block ticks, then due fluid ticks, then entities; what they change
 /// goes to everyone.
 pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     let now = lock(&ctx.time).age;
+    for (p, id) in ctx.world.take_woken() {
+        match id.as_str() {
+            "minecraft:hopper" => crate::hoppers::register(ctx, p),
+            "minecraft:daylight_detector" => crate::daylight::register(ctx, p),
+            _ => crate::furnaces::wake(ctx, p),
+        }
+    }
     let relit = ctx.world.take_relit();
     if !relit.is_empty() {
         let _ = ctx.events.send(Event::LightChanged(relit));
     }
     let due = {
         let mut ticks = lock(&ctx.ticks);
+        queue_saved_ticks(ctx, &mut ticks, now);
         // Flow new chunks pass on to chunks players already have.
         for (pos, fluid) in ctx.world.take_live_ticks() {
             let delay = if fluid == mc_tick::fluids::Fluid::Lava as u32 {
@@ -293,6 +391,8 @@ pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     };
     let mut level = crate::level::WorldLevel::new(ctx);
     let logic = level.logic();
+    // Detector rails look for minecarts in their ticks.
+    level.minecarts = minecart_boxes(&lock(&ctx.entities));
     for (pos, block) in due.0 {
         mc_tick::block_tick(&mut level, logic, pos, block);
     }
@@ -306,6 +406,7 @@ pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     press_plates(ctx, &mut level);
     mc_tick::pistons::tick(&mut level, logic);
     crate::hoppers::tick(ctx, &mut level);
+    crate::hoppers::tick_carts(ctx);
     let (changes, spawned) = level.finish();
     if !changes.is_empty() {
         let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
@@ -317,6 +418,25 @@ pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
             entities.push(entity);
         }
     }
+}
+
+/// Ids, boxes and container kinds of the minecarts.
+type CartBox = (i32, mc_entity::Aabb, Option<crate::containers::Kind>);
+
+fn minecart_boxes(entities: &[mc_entity::Entity]) -> Vec<CartBox> {
+    entities
+        .iter()
+        .filter(|e| !e.removed)
+        .filter_map(|e| match &e.kind {
+            mc_entity::Kind::Vehicle(v)
+                if matches!(v.craft, mc_entity::extra::Craft::Minecart(_)) =>
+            {
+                let kind = crate::containers::entity_kind(&crate::vehicles::item_of(&v.craft));
+                Some((e.id, e.aabb(), kind))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Block events queued so far (and those they queue), each once.
@@ -351,8 +471,10 @@ fn run_block_events(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
 
 /// Comparators look at containers whose contents changed (even while the
 /// game is frozen: they only schedule their ticks).
-fn containers_changed(ctx: &ServerContext) {
-    let changed = std::mem::take(&mut *lock(&ctx.container_updates));
+pub(crate) fn containers_changed(ctx: &ServerContext) {
+    let mut changed = std::mem::take(&mut *lock(&ctx.container_updates));
+    // Entities holding items have no comparators next to them.
+    changed.retain(|&p| crate::containers::entity_of(p).is_none());
     if changed.is_empty() {
         return;
     }
@@ -362,7 +484,22 @@ fn containers_changed(ctx: &ServerContext) {
     let mut level = crate::level::WorldLevel::new(ctx);
     let logic = level.logic();
     for p in changed {
-        mc_tick::redstone::container_changed(&mut level, logic, crate::level::to_pos(p));
+        let at = crate::level::to_pos(p);
+        mc_tick::redstone::container_changed(&mut level, logic, at);
+        // A trapped chest's power follows its viewers.
+        if ctx
+            .world
+            .block(p, &ctx.data.blocks)
+            .and_then(|s| ctx.data.blocks.block_name(s))
+            == Some("minecraft:trapped_chest")
+        {
+            mc_tick::redstone::update_neighbors_at(&mut level, logic, at);
+            mc_tick::redstone::update_neighbors_at(
+                &mut level,
+                logic,
+                at.offset(mc_tick::Dir::Down),
+            );
+        }
     }
     let changes = level.into_changes();
     if !changes.is_empty() {
@@ -370,12 +507,13 @@ fn containers_changed(ctx: &ServerContext) {
     }
 }
 
-/// Players standing in pressure plates press them (other entities do as
-/// they move).
+/// Players standing in pressure plates and string press them (other
+/// entities do as they move).
 fn press_plates(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     use mc_tick::Level as _;
     let at: Vec<mc_tick::BlockPos> = lock(&ctx.players)
         .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
         .filter(|p| p.game_mode != 3)
         .filter_map(|p| p.pose)
         .map(|pose| {
@@ -388,9 +526,12 @@ fn press_plates(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         .collect();
     let logic = level.logic();
     for p in at {
+        mc_tick::redstone::touch_ore(level, logic, p.offset(mc_tick::Dir::Down));
         let name = ctx.shapes.block_name(level.block(p)).unwrap_or("");
         if name.ends_with("_pressure_plate") {
             mc_tick::redstone::entity_inside(level, logic, p);
+        } else if name == "minecraft:tripwire" {
+            mc_tick::tripwire::entity_inside(level, logic, p);
         }
     }
 }
@@ -428,6 +569,12 @@ pub fn drop_item(ctx: &ServerContext, at: mc_protocol::Position, drop: crate::lo
         removed: false,
         tags: Vec::new(),
     };
+    let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
+    lock(&ctx.entities).push(entity);
+}
+
+/// Adds a new entity to the world and shows it to everyone.
+pub fn spawn_entity(ctx: &ServerContext, entity: mc_entity::Entity) {
     let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
     lock(&ctx.entities).push(entity);
 }
@@ -542,6 +689,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     let logic = level.logic();
     let players: Vec<(u128, i32, i32, crate::context::Pose)> = lock(&ctx.players)
         .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
         .filter_map(|p| {
             p.pose
                 .map(|pose| (p.profile.uuid, p.entity_id, p.game_mode, pose))
@@ -570,13 +718,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         })
         .collect();
     crate::decor::leash::tick(ctx);
-    level.minecarts = entities
-        .iter()
-        .filter(|e| {
-            matches!(&e.kind, mc_entity::Kind::Vehicle(v) if matches!(v.craft, mc_entity::extra::Craft::Minecart(_)))
-        })
-        .map(|e| (e.id, e.aabb()))
-        .collect();
+    level.minecarts = minecart_boxes(&entities);
     let mut out = crate::hits::Out::default();
     let (mut moved, mut removed) = (Vec::new(), Vec::new());
     let mut gone = Vec::new();
@@ -687,7 +829,11 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         if let Some(boxes) = level.entity_boxes.as_mut() {
             boxes[i] = entity.aabb();
         }
-        if let Some(m) = level.minecarts.iter_mut().find(|(id, _)| *id == entity.id) {
+        if let Some(m) = level
+            .minecarts
+            .iter_mut()
+            .find(|(id, _, _)| *id == entity.id)
+        {
             m.1 = entity.aabb();
         }
         if !entity.removed {
@@ -698,12 +844,16 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             {
                 mc_tick::rails::entity_inside(level, logic, at);
             }
-            if ctx
-                .shapes
-                .block_name(level.block(at))
-                .is_some_and(|n| n.ends_with("_pressure_plate"))
-            {
-                mc_tick::redstone::entity_inside(level, logic, at);
+            // Walking on redstone ore lights it.
+            if entity.on_ground {
+                mc_tick::redstone::touch_ore(level, logic, at.offset(mc_tick::Dir::Down));
+            }
+            match ctx.shapes.block_name(level.block(at)) {
+                Some(n) if n.ends_with("_pressure_plate") => {
+                    mc_tick::redstone::entity_inside(level, logic, at);
+                }
+                Some("minecraft:tripwire") => mc_tick::tripwire::entity_inside(level, logic, at),
+                _ => {}
             }
         }
         if entity.removed {
@@ -861,6 +1011,52 @@ pub fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scheduled_ticks_survive_a_save() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        if mc_data::McData::load(&dir).is_err() {
+            eprintln!("skipped: no game data");
+            return;
+        }
+        let data = || mc_data::McData::load(&dir).expect("game data");
+        let folder = std::env::temp_dir().join(format!("mc-ticks-{}", std::process::id()));
+        let open = |data: mc_data::McData| {
+            let mut config = crate::Config::new(dir.clone());
+            config.world = Some(folder.clone());
+            config.seed = Some(12345);
+            ServerContext::new(config, data).expect("context")
+        };
+        let p = Position::new(3, 200, 5);
+        {
+            let ctx = open(data());
+            let repeater = ctx.data.blocks.default_state("minecraft:repeater").unwrap();
+            crate::level::WorldLevel::new(&ctx).set_block(p, repeater);
+            let kind = ctx.shapes.block_index(repeater);
+            let now = lock(&ctx.time).age;
+            lock(&ctx.ticks)
+                .blocks
+                .schedule(crate::level::to_pos(p), kind, now + 7, -1);
+            crate::save(&ctx);
+        }
+        let ctx = open(data());
+        let _ = ctx.world.block(p, &ctx.data.blocks);
+        let now = lock(&ctx.time).age;
+        let mut ticks = lock(&ctx.ticks);
+        queue_saved_ticks(&ctx, &mut ticks, now);
+        let pending: Vec<_> = ticks.blocks.pending().collect();
+        let _ = std::fs::remove_dir_all(&folder);
+        let repeater = ctx.data.blocks.default_state("minecraft:repeater").unwrap();
+        assert_eq!(
+            pending,
+            vec![(
+                crate::level::to_pos(p),
+                ctx.shapes.block_index(repeater),
+                now + 7,
+                -1
+            )]
+        );
+    }
 
     #[test]
     fn stopped_clocks_do_not_advance() {

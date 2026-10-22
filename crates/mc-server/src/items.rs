@@ -41,6 +41,8 @@ pub struct Item {
     pub enchantable: Option<i32>,
     /// `jukebox_playable`: the song's id.
     pub jukebox_song: Option<String>,
+    /// Every default component (`minecraft:dye`...), as in the report.
+    pub defaults: Value,
 }
 
 #[derive(Debug, Default)]
@@ -88,6 +90,30 @@ impl Items {
     pub fn max_damage(&self, id: i32) -> i32 {
         self.get(id).map_or(0, |i| i.max_damage)
     }
+
+    /// A default component of an item (`dye` or `minecraft:dye`).
+    pub fn default_component(&self, id: i32, name: &str) -> Option<&Value> {
+        let name = mc_protocol::components::full_name(name);
+        self.get(id)?.defaults.get(name.as_ref())
+    }
+
+    /// How well it takes enchantments; 0 if not at all.
+    pub fn enchantable(&self, id: i32) -> i32 {
+        self.get(id).and_then(|i| i.enchantable).unwrap_or(0)
+    }
+}
+
+/// A stack of `item` with saved components (damage among them).
+pub fn stack_with(
+    item: i32,
+    count: i32,
+    comps: Option<&mc_nbt::Compound>,
+) -> mc_protocol::packets::play::ItemStack {
+    let mut stack = mc_protocol::packets::play::ItemStack::new(item, count);
+    if let Some(c) = comps {
+        (stack.damage, stack.components) = mc_protocol::components::Components::from_nbt(c);
+    }
+    stack
 }
 
 fn parse(name: &str, c: &Value) -> Item {
@@ -108,6 +134,7 @@ fn parse(name: &str, c: &Value) -> Item {
         .filter_map(|m| m["amount"].as_f64())
         .sum::<f64>() as f32;
     Item {
+        defaults: c.clone(),
         name: name.to_owned(),
         max_stack: c["minecraft:max_stack_size"].as_i64().unwrap_or(64) as i32,
         food,

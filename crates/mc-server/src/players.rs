@@ -23,6 +23,8 @@ use crate::util::uuid_string;
 #[derive(Clone, Debug)]
 pub struct Saved {
     pub pose: Pose,
+    /// `minecraft:overworld`, `minecraft:the_nether` or `minecraft:the_end`.
+    pub dimension: String,
     pub game_mode: i32,
     /// `abilities.flying`.
     pub flying: bool,
@@ -86,6 +88,8 @@ pub struct Extra {
     pub respawn: Option<Respawn>,
     /// `/tag` (`Tags`).
     pub tags: Vec<String>,
+    /// What the enchanting table offers next (`XpSeed`).
+    pub enchantment_seed: i32,
     /// The ender chest (`EnderItems`): 27 slots.
     pub ender: Vec<Option<ItemStack>>,
 }
@@ -254,6 +258,10 @@ impl Store {
         }
         let extra = Extra {
             ender,
+            enchantment_seed: match root.get("XpSeed") {
+                Some(Tag::Int(s)) => *s,
+                _ => crate::util::random_u64() as i32,
+            },
             respawn: match root.get("respawn") {
                 Some(Tag::Compound(c)) => Respawn::from_nbt(c),
                 _ => None,
@@ -269,7 +277,12 @@ impl Store {
                 _ => Vec::new(),
             },
         };
+        let dimension = match root.get("Dimension") {
+            Some(Tag::String(d)) => d.clone(),
+            _ => "minecraft:overworld".to_owned(),
+        };
         Ok(Some(Saved {
+            dimension,
             pose,
             game_mode,
             flying,
@@ -301,6 +314,7 @@ impl Store {
             Tag::List(vec![Tag::Float(p.yaw), Tag::Float(p.pitch)]),
         );
         root.insert("OnGround", Tag::Byte(i8::from(p.on_ground)));
+        root.insert("Dimension", Tag::String(saved.dimension.clone()));
         root.insert("playerGameType", Tag::Int(saved.game_mode));
         // What the game mode allows, and whether the player was flying.
         let mut abilities = match root.get("abilities") {
@@ -338,6 +352,7 @@ impl Store {
                 root.remove("respawn");
             }
         }
+        root.insert("XpSeed", Tag::Int(saved.extra.enchantment_seed));
         if saved.extra.tags.is_empty() {
             root.remove("Tags");
         } else {

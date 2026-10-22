@@ -110,7 +110,7 @@ fn spawn_point(r: &mut Run) -> Result<i32> {
     let pos = pos_or_here(r, "pos");
     let (yaw, pitch) = rotation(r, "rotation");
     let respawn = crate::players::Respawn {
-        dimension: "minecraft:overworld".into(),
+        dimension: r.ctx.dimension_name().into(),
         pos,
         yaw,
         pitch,

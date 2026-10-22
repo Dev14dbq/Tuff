@@ -192,6 +192,9 @@ pub fn on_place(level: &mut dyn Level, ctx: Ctx, p: BlockPos, old: u32, state: u
     if name(ctx, state) != "fire" || ctx.shapes.block_index(old) == ctx.shapes.block_index(state) {
         return;
     }
+    if crate::portal::try_light(level, ctx, p) {
+        return;
+    }
     let mut rng = Rng::at(p, level.game_time());
     schedule(level, ctx, p, state, &mut rng);
 }

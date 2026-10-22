@@ -59,6 +59,8 @@ pub struct Smithing {
     pub base: HashSet<i32>,
     pub addition: HashSet<i32>,
     pub result: Option<ItemStack>,
+    /// A trim's pattern (`minecraft:coast`).
+    pub pattern: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -122,6 +124,7 @@ impl Recipes {
                         base,
                         addition,
                         result: None,
+                        pattern: json["pattern"].as_str().map(str::to_owned),
                     });
                 }
                 continue;
@@ -153,6 +156,7 @@ impl Recipes {
                         base,
                         addition,
                         result: Some(result),
+                        pattern: None,
                     });
                 }
                 continue;

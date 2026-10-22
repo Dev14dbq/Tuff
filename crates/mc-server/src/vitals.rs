@@ -584,6 +584,8 @@ pub fn tick(ctx: &ServerContext) {
         .filter_map(|p| p.pose.map(|pose| (p.profile.uuid, p.game_mode, pose)))
         .collect();
     for (uuid, game_mode, pose) in players {
+        let here = ctx.of_player(uuid);
+        let ctx = &*here;
         let mut hurt_by: Option<(f32, &str, &str)> = None;
         let mut changed = None;
         {

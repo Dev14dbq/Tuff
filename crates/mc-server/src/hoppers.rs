@@ -9,6 +9,8 @@ use mc_protocol::Position;
 use mc_protocol::packets::play::ItemStack;
 use mc_tick::Dir;
 
+use mc_entity::extra::{Cart, Craft};
+
 use crate::containers::{self, Kind};
 use crate::context::ServerContext;
 use crate::tick::lock;
@@ -21,6 +23,51 @@ fn kind_at(ctx: &ServerContext, p: Position) -> Option<(Kind, &str)> {
     let name = blocks.block_name(state)?;
     let kind = containers::kind_of(name)?;
     Some((kind, name))
+}
+
+/// Something holding items at a block's place: the block itself, or else an
+/// entity holding items (a chest minecart...) whose box is in that space.
+#[derive(Clone, Copy)]
+struct Store<'a> {
+    at: Position,
+    kind: Kind,
+    /// Block name (empty for an entity).
+    name: &'a str,
+}
+
+fn store_at(ctx: &ServerContext, p: Position) -> Option<Store<'_>> {
+    if let Some((kind, name)) = kind_at(ctx, p) {
+        return Some(Store { at: p, kind, name });
+    }
+    let (lo, hi) = (
+        [f64::from(p.x), f64::from(p.y), f64::from(p.z)],
+        [
+            f64::from(p.x) + 1.0,
+            f64::from(p.y) + 1.0,
+            f64::from(p.z) + 1.0,
+        ],
+    );
+    let found: Vec<(i32, Kind)> = lock(&ctx.entities)
+        .iter()
+        .filter(|e| !e.removed)
+        .filter_map(|e| {
+            let mc_entity::Kind::Vehicle(v) = &e.kind else {
+                return None;
+            };
+            let kind = containers::entity_kind(&crate::vehicles::item_of(&v.craft))?;
+            let b = e.aabb();
+            (0..3)
+                .all(|i| b.min[i] < hi[i] && b.max[i] > lo[i])
+                .then_some((e.id, kind))
+        })
+        .collect();
+    // One of them, at random.
+    let pick = found.get((crate::util::random_u64() % found.len().max(1) as u64) as usize)?;
+    Some(Store {
+        at: containers::entity_key(pick.0),
+        kind: pick.1,
+        name: "",
+    })
 }
 
 /// The slots a neighbour may push into through the face `side` of the
@@ -54,14 +101,20 @@ pub fn transfer(
     to: Position,
     to_side: Dir,
 ) -> bool {
-    let (Some((from_kind, from_name)), Some(_)) = (kind_at(ctx, from), kind_at(ctx, to)) else {
+    let (Some(src), Some(dst)) = (store_at(ctx, from), store_at(ctx, to)) else {
         return false;
     };
-    let src = containers::slots(ctx, from, from_kind);
-    sided_slots(from_name, src.len(), from_side, false)
+    move_one(ctx, src, from_side, dst, to_side)
+}
+
+/// Moves one item from `src` (out through `from_side`) into `dst` (in
+/// through `to_side`).
+fn move_one(ctx: &ServerContext, src: Store, from_side: Dir, dst: Store, to_side: Dir) -> bool {
+    let slots = containers::slots(ctx, src.at, src.kind);
+    sided_slots(src.name, slots.len(), from_side, false)
         .into_iter()
-        .filter(|&slot| src[slot].is_some())
-        .any(|slot| transfer_from_slot(ctx, from, from_kind, slot, to, to_side))
+        .filter(|&slot| slots[slot].is_some())
+        .any(|slot| transfer_from_slot(ctx, src.at, src.kind, slot, dst, to_side))
 }
 
 pub fn cooldown(ctx: &ServerContext, p: Position) -> i32 {
@@ -97,20 +150,20 @@ pub fn pickup(ctx: &ServerContext, p: Position) -> bool {
     let Some((kind, _)) = kind_at(ctx, p) else {
         return false;
     };
+    let (x, y, z) = (f64::from(p.x), f64::from(p.y), f64::from(p.z));
+    pickup_into(ctx, p, kind, [x, y + 0.6, z], [x + 1.0, y + 2.0, z + 1.0])
+}
+
+/// Takes one item entity whose position is in the box from `min` to `max`
+/// into the container at `p`.
+fn pickup_into(ctx: &ServerContext, p: Position, kind: Kind, min: [f64; 3], max: [f64; 3]) -> bool {
     let mut entities = lock(&ctx.entities);
     for e in entities.iter_mut() {
         let Some(found) = e.kind.as_stack() else {
             continue;
         };
         let (item, count) = (found.item, found.count);
-        if e.removed
-            || e.pos[0] < f64::from(p.x)
-            || e.pos[0] >= f64::from(p.x) + 1.0
-            || e.pos[2] < f64::from(p.z)
-            || e.pos[2] >= f64::from(p.z) + 1.0
-            || e.pos[1] < f64::from(p.y) + 0.6
-            || e.pos[1] >= f64::from(p.y) + 2.0
-        {
+        if e.removed || (0..3).any(|i| e.pos[i] < min[i] || e.pos[i] >= max[i]) {
             continue;
         }
         let mut slots = containers::slots(ctx, p, kind);
@@ -346,6 +399,7 @@ fn dress_player(ctx: &ServerContext, front: Position, stack: &ItemStack) -> bool
     let (fx, fy, fz) = (f64::from(front.x), f64::from(front.y), f64::from(front.z));
     let candidates: Vec<u128> = lock(&ctx.players)
         .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
         .filter(|p| p.game_mode != 3)
         .filter_map(|p| p.pose.map(|pose| (p.profile.uuid, pose)))
         .filter(|(_, pose)| {
@@ -417,8 +471,8 @@ pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, 
     };
     let (dx, dy, dz) = facing.offset();
     let front = Position::new(p.x + dx, p.y + dy, p.z + dz);
-    if dropper && kind_at(ctx, front).is_some() {
-        transfer_from_slot(ctx, p, kind, slot, front, facing.opposite());
+    if dropper && let Some(dst) = store_at(ctx, front) {
+        transfer_from_slot(ctx, p, kind, slot, dst, facing.opposite());
         return;
     }
     let action = if dropper {
@@ -489,30 +543,16 @@ fn transfer_from_slot(
     from: Position,
     from_kind: Kind,
     slot: usize,
-    to: Position,
+    dst: Store,
     side: Dir,
 ) -> bool {
-    let Some((to_kind, to_name)) = kind_at(ctx, to) else {
-        return false;
-    };
     let src = containers::slots(ctx, from, from_kind);
-    let mut dst = containers::slots(ctx, to, to_kind);
     let Some(stack) = src[slot].clone() else {
         return false;
     };
-    let into = sided_slots(to_name, dst.len(), side, true);
-    let max = ctx.items.max_stack(stack.item);
-    let merge = into.iter().copied().find(|&i| {
-        dst[i]
-            .as_ref()
-            .is_some_and(|d| d.same_kind(&stack) && d.count < max)
-    });
-    let Some(t) = merge.or_else(|| into.iter().copied().find(|&i| dst[i].is_none())) else {
+    if !insert_one(ctx, dst, side, &stack) {
         return false;
-    };
-    let moved = stack.with_count(dst[t].as_ref().map_or(0, |d| d.count) + 1);
-    dst[t] = Some(moved.clone());
-    containers::put(ctx, to, to_kind, &[(t, Some(moved))]);
+    }
     let left = (stack.count > 1).then(|| ItemStack {
         count: stack.count - 1,
         ..stack.clone()
@@ -521,9 +561,165 @@ fn transfer_from_slot(
     true
 }
 
+/// Puts one of `stack` into `dst` through its face `side`,
+/// onto a matching stack first. `false` if there is no room.
+fn insert_one(ctx: &ServerContext, dst: Store, side: Dir, stack: &ItemStack) -> bool {
+    let (to, to_kind, to_name) = (dst.at, dst.kind, dst.name);
+    let mut dst = containers::slots(ctx, to, to_kind);
+    let into = sided_slots(to_name, dst.len(), side, true);
+    let max = ctx.items.max_stack(stack.item);
+    let merge = into.iter().copied().find(|&i| {
+        dst[i]
+            .as_ref()
+            .is_some_and(|d| d.same_kind(stack) && d.count < max)
+    });
+    let Some(t) = merge.or_else(|| into.iter().copied().find(|&i| dst[i].is_none())) else {
+        return false;
+    };
+    let moved = stack.with_count(dst[t].as_ref().map_or(0, |d| d.count) + 1);
+    dst[t] = Some(moved.clone());
+    containers::put(ctx, to, to_kind, &[(t, Some(moved))]);
+    true
+}
+
+/// Hoppers and composters (minecraft.wiki, "Composter" → "Hopper"): one
+/// above puts compostable items in from the top, one below takes the bone
+/// meal out. `None` if neither end is a composter.
+pub fn composter_transfer(
+    level: &mut crate::level::WorldLevel,
+    from: Position,
+    from_side: Dir,
+    to: Position,
+    to_side: Dir,
+) -> Option<bool> {
+    let ctx = level.context();
+    let logic = level.logic();
+    let blocks = &ctx.data.blocks;
+    let composter = |p: Position| {
+        ctx.world
+            .block(p, blocks)
+            .filter(|&s| blocks.block_name(s) == Some("minecraft:composter"))
+    };
+    let layers = |s: u32| -> i32 {
+        blocks
+            .property(s, "level")
+            .and_then(|l| l.parse().ok())
+            .unwrap_or(0)
+    };
+    if let Some(state) = composter(to) {
+        if to_side != Dir::Up || layers(state) >= 7 {
+            return Some(false);
+        }
+        let Some(src) = store_at(ctx, from) else {
+            return Some(false);
+        };
+        let slots = containers::slots(ctx, src.at, src.kind);
+        let pick = sided_slots(src.name, slots.len(), from_side, false)
+            .into_iter()
+            .find_map(|i| {
+                let s = slots[i].as_ref()?;
+                let chance = crate::useblocks::compost_chance(ctx.items.name(s.item)?);
+                (chance > 0).then_some((i, s.clone(), chance))
+            });
+        let Some((slot, stack, chance)) = pick else {
+            return Some(false);
+        };
+        let left = (stack.count > 1).then(|| ItemStack {
+            count: stack.count - 1,
+            ..stack
+        });
+        containers::put(ctx, src.at, src.kind, &[(slot, left)]);
+        let success = crate::util::random_u64() % 100 < u64::from(chance);
+        mc_tick::composter::add(level, logic, crate::level::to_pos(to), state, success);
+        return Some(true);
+    }
+    let state = composter(from)?;
+    if from_side != Dir::Down || layers(state) != 8 {
+        return Some(false);
+    }
+    let (Some(dst), Some(bone_meal)) = (store_at(ctx, to), ctx.items.id("minecraft:bone_meal"))
+    else {
+        return Some(false);
+    };
+    if !insert_one(ctx, dst, to_side, &ItemStack::new(bone_meal, 1)) {
+        return Some(false);
+    }
+    mc_tick::composter::empty(level, logic, crate::level::to_pos(from), state);
+    Some(true)
+}
+
 /// A hopper exists at `p`: it gets ticked.
 pub fn register(ctx: &ServerContext, p: Position) {
     lock(&ctx.hoppers).insert((p.x, p.y, p.z));
+}
+
+/// One game tick of every hopper minecart that is on: it pulls one item
+/// from the container above it, or else picks up an item entity around it,
+/// then rests 4 ticks.
+pub fn tick_carts(ctx: &ServerContext) {
+    let carts: Vec<(i32, [f64; 3])> = lock(&ctx.entities)
+        .iter()
+        .filter(|e| {
+            !e.removed
+                && matches!(&e.kind, mc_entity::Kind::Vehicle(v)
+                    if v.enabled && v.craft == Craft::Minecart(Cart::Hopper))
+        })
+        .map(|e| (e.id, e.pos))
+        .collect();
+    let Some(kind) = containers::entity_kind("minecraft:hopper_minecart") else {
+        return;
+    };
+    let mut rests = lock(&ctx.cart_rests);
+    rests.retain(|id, _| carts.iter().any(|c| c.0 == *id));
+    let resting: Vec<i32> = rests
+        .iter_mut()
+        .filter_map(|(&id, left)| {
+            *left -= 1;
+            (*left > 0).then_some(id)
+        })
+        .collect();
+    rests.retain(|_, left| *left > 0);
+    drop(rests);
+    for (id, pos) in carts {
+        if resting.contains(&id) {
+            continue;
+        }
+        let dst = Store {
+            at: containers::entity_key(id),
+            kind,
+            name: "",
+        };
+        // The container above: the block over the cart's middle.
+        let above = Position::new(
+            pos[0].floor() as i32,
+            (pos[1] + 0.5 + 1.0).floor() as i32,
+            pos[2].floor() as i32,
+        );
+        let pulled = match kind_at(ctx, above) {
+            Some((k, name)) => {
+                let src = Store {
+                    at: above,
+                    kind: k,
+                    name,
+                };
+                move_one(ctx, src, Dir::Down, dst, Dir::Up)
+            }
+            None => false,
+        };
+        let moved = pulled || {
+            let (x, y, z) = (pos[0], pos[1] + 0.5, pos[2]);
+            pickup_into(
+                ctx,
+                dst.at,
+                kind,
+                [x - 0.5, y - 0.5, z - 0.5],
+                [x + 0.5, y + 1.0, z + 0.5],
+            )
+        };
+        if moved {
+            lock(&ctx.cart_rests).insert(id, 4);
+        }
+    }
 }
 
 /// One game tick of every known hopper.
@@ -532,6 +728,11 @@ pub fn tick(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     let all: Vec<_> = lock(&ctx.hoppers).iter().copied().collect();
     for key in all {
         let p = Position::new(key.0, key.1, key.2);
+        // Hoppers in unloaded chunks wait; loading the chunk wakes them again.
+        if !ctx.world.is_loaded(p) {
+            lock(&ctx.hoppers).remove(&key);
+            continue;
+        }
         let is_hopper = ctx
             .world
             .block(p, &ctx.data.blocks)
@@ -550,7 +751,7 @@ mod tests {
     use super::*;
     use crate::level::WorldLevel;
 
-    fn context() -> Option<ServerContext> {
+    fn context() -> Option<std::sync::Arc<ServerContext>> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
         let data = mc_data::McData::load(&dir).ok()?;
         ServerContext::new(crate::Config::new(dir), data).ok()
@@ -677,5 +878,89 @@ mod tests {
         fire(&ctx, p);
         assert_eq!(slot0(&ctx, p).map(|s| s.count), Some(1));
         assert_eq!(lock(&ctx.entities).len(), 1);
+    }
+
+    fn cart(ctx: &ServerContext, cart: Cart, pos: [f64; 3]) -> i32 {
+        let id = ctx.next_entity_id();
+        lock(&ctx.entities).push(mc_entity::Entity {
+            id,
+            uuid: 1,
+            kind: mc_entity::Kind::Vehicle(mc_entity::extra::Vehicle::new(
+                Craft::Minecart(cart),
+                0.0,
+            )),
+            pos,
+            vel: [0.0; 3],
+            on_ground: true,
+            age: 0,
+            removed: false,
+            tags: Vec::new(),
+        });
+        id
+    }
+
+    #[test]
+    fn hoppers_and_minecarts_pass_items() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let blocks = &ctx.data.blocks;
+        let hopper = Position::new(0, -60, 0);
+        WorldLevel::new(&ctx).set_block(hopper, blocks.default_state("minecraft:hopper").unwrap());
+        WorldLevel::new(&ctx).set_block(
+            Position::new(0, -59, 0),
+            blocks.default_state("minecraft:rail").unwrap(),
+        );
+        // A chest minecart on the rail over the hopper is emptied into it.
+        let chest = cart(&ctx, Cart::Chest, [0.5, -59.0, 0.5]);
+        let chest_kind = containers::entity_kind("minecraft:chest_minecart").unwrap();
+        let stick = ctx.items.id("minecraft:stick").unwrap();
+        containers::put(
+            &ctx,
+            containers::entity_key(chest),
+            chest_kind,
+            &[(3, Some(ItemStack::new(stick, 2)))],
+        );
+        assert!(transfer(
+            &ctx,
+            Position::new(0, -59, 0),
+            Dir::Down,
+            hopper,
+            Dir::Up
+        ));
+        let hopper_kind = containers::kind_of("minecraft:hopper").unwrap();
+        assert_eq!(
+            containers::slots(&ctx, hopper, hopper_kind)[0]
+                .as_ref()
+                .map(|s| s.count),
+            Some(1)
+        );
+        assert_eq!(
+            containers::slots(&ctx, containers::entity_key(chest), chest_kind)[3]
+                .as_ref()
+                .map(|s| s.count),
+            Some(1)
+        );
+        // A hopper minecart under a chest takes from it.
+        let box_at = Position::new(5, -59, 0);
+        WorldLevel::new(&ctx).set_block(box_at, blocks.default_state("minecraft:chest").unwrap());
+        let chest_block = containers::kind_of("minecraft:chest").unwrap();
+        containers::put(
+            &ctx,
+            box_at,
+            chest_block,
+            &[(0, Some(ItemStack::new(stick, 1)))],
+        );
+        let hc = cart(&ctx, Cart::Hopper, [5.5, -60.0, 0.5]);
+        tick_carts(&ctx);
+        let hc_kind = containers::entity_kind("minecraft:hopper_minecart").unwrap();
+        assert_eq!(
+            containers::slots(&ctx, containers::entity_key(hc), hc_kind)[0]
+                .as_ref()
+                .map(|s| s.item),
+            Some(stick)
+        );
+        assert!(containers::slots(&ctx, box_at, chest_block)[0].is_none());
     }
 }

@@ -26,10 +26,22 @@ pub trait Level {
     /// Whether `p` is inside the world's height.
     fn in_world(&self, p: BlockPos) -> bool;
 
+    /// Whether fire may light a nether portal here (the overworld and the
+    /// Nether).
+    fn allows_nether_portal(&self) -> bool {
+        true
+    }
+
     /// Lava flows fast, far and thin here (the dimension's
     /// `gameplay/fast_lava`, the Nether).
     fn fast_lava(&self) -> bool {
         false
+    }
+
+    /// Whether two sources of `fluid` make a new one between them (game rules
+    /// `water_source_conversion`, `lava_source_conversion`).
+    fn source_conversion(&self, fluid: crate::fluids::Fluid) -> bool {
+        fluid == crate::fluids::Fluid::Water
     }
 
     /// Water cannot stay here (the Nether): wet sponges dry at once.
@@ -39,6 +51,12 @@ pub trait Level {
 
     /// A wet sponge dried at `p`: it hisses and steams.
     fn sponge_dried(&mut self, _p: BlockPos) {}
+
+    /// A block sound (`block.copper_bulb.turn_on`...) at `p`.
+    fn sound(&mut self, _name: &str, _p: BlockPos) {}
+
+    /// A world event (sound and particles clients play) at `p`.
+    fn level_event(&mut self, _event: i32, _p: BlockPos, _data: i32) {}
 
     /// Turns the block that was at `p` into a falling block entity.
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32);
@@ -101,6 +119,18 @@ pub trait Level {
         None
     }
 
+    /// What a comparator reads from the block entity at `p` when the block
+    /// state alone does not tell (chiseled bookshelves, lecterns,
+    /// jukeboxes); `None` to read it as a container.
+    fn block_entity_signal(&self, _p: BlockPos) -> Option<u8> {
+        None
+    }
+
+    /// How many players have the container at `p` open.
+    fn viewers(&self, _p: BlockPos) -> u8 {
+        0
+    }
+
     /// The signal a comparator at `p` holds (kept in its block entity).
     fn comparator_output(&self, _p: BlockPos) -> u8 {
         0
@@ -129,6 +159,12 @@ pub trait Level {
     /// Minecarts whose boxes touch the block at `p`.
     fn minecarts_at(&self, _p: BlockPos) -> u32 {
         0
+    }
+
+    /// How full a minecart holding items (chest, hopper) in the block at
+    /// `p` is, as a comparator reads it; `None` if there is none.
+    fn minecart_container_signal(&self, _p: BlockPos) -> Option<u8> {
+        None
     }
 
     /// Records a redstone torch toggle at `p` (when `add`) and tells whether

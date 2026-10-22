@@ -96,6 +96,84 @@ fn key(p: Position) -> (i32, i32, i32) {
     (p.x, p.y, p.z)
 }
 
+/// Containers that are entities (chest minecarts...) are keyed like blocks,
+/// at a place no block can be: `x` is `i32::MIN`, `y` the entity id.
+pub fn entity_key(id: i32) -> Position {
+    Position::new(i32::MIN, id, 0)
+}
+
+/// The entity id behind a key from [`entity_key`].
+pub fn entity_of(p: Position) -> Option<i32> {
+    (p.x == i32::MIN).then_some(p.y)
+}
+
+/// What an entity holding items opens.
+pub fn entity_kind(name: &str) -> Option<Kind> {
+    let chest = |title| Kind {
+        entity: "",
+        slots: 27,
+        menu: "minecraft:generic_9x3",
+        title,
+    };
+    Some(match name {
+        "minecraft:chest_minecart" => chest("Minecart with Chest"),
+        "minecraft:hopper_minecart" => Kind {
+            entity: "",
+            slots: 5,
+            menu: "minecraft:hopper",
+            title: "Minecart with Hopper",
+        },
+        "minecraft:oak_chest_boat" => chest("Oak Boat with Chest"),
+        "minecraft:spruce_chest_boat" => chest("Spruce Boat with Chest"),
+        "minecraft:birch_chest_boat" => chest("Birch Boat with Chest"),
+        "minecraft:jungle_chest_boat" => chest("Jungle Boat with Chest"),
+        "minecraft:acacia_chest_boat" => chest("Acacia Boat with Chest"),
+        "minecraft:cherry_chest_boat" => chest("Cherry Boat with Chest"),
+        "minecraft:dark_oak_chest_boat" => chest("Dark Oak Boat with Chest"),
+        "minecraft:pale_oak_chest_boat" => chest("Pale Oak Boat with Chest"),
+        "minecraft:mangrove_chest_boat" => chest("Mangrove Boat with Chest"),
+        "minecraft:bamboo_chest_raft" => chest("Bamboo Raft with Chest"),
+        _ => return None,
+    })
+}
+
+/// The stored data (`Items`) of the container at `p`: a block entity, or an
+/// entity's contents.
+fn stored_data(ctx: &ServerContext, p: Position) -> Option<Compound> {
+    match entity_of(p) {
+        Some(id) => ctx
+            .entity_items
+            .lock()
+            .expect("entity items lock")
+            .get(&id)
+            .cloned(),
+        None => ctx
+            .world
+            .block_entity(p, &ctx.data.blocks)
+            .map(|be| be.data),
+    }
+}
+
+/// The entity `id` holding items is gone: its items (to drop), and who had
+/// it open.
+pub fn entity_gone(ctx: &ServerContext, id: i32) -> (Vec<ItemStack>, Vec<u128>) {
+    let p = entity_key(id);
+    let mut all = ctx.containers.lock().expect("containers lock");
+    let data = ctx
+        .entity_items
+        .lock()
+        .expect("entity items lock")
+        .remove(&id);
+    let (slots, viewers) = match all.remove(&key(p)) {
+        Some(open) => (open.slots, open.viewers),
+        None => match data {
+            Some(data) => (read_items(ctx, &data, 27), Vec::new()),
+            None => return (Vec::new(), Vec::new()),
+        },
+    };
+    (slots.into_iter().flatten().collect(), viewers)
+}
+
 pub fn item_name(ctx: &ServerContext, item: i32) -> Option<String> {
     ctx.items.name(item).map(str::to_owned)
 }
@@ -143,6 +221,15 @@ pub fn write_items(ctx: &ServerContext, slots: &[Option<ItemStack>]) -> Tag {
 
 /// Writes the slots back to the block entity.
 fn store(ctx: &ServerContext, p: Position, open: &Open) {
+    if let Some(id) = entity_of(p) {
+        ctx.entity_items
+            .lock()
+            .expect("entity items lock")
+            .entry(id)
+            .or_default()
+            .insert("Items", write_items(ctx, &open.slots));
+        return;
+    }
     let blocks = &ctx.data.blocks;
     let mut be = ctx
         .world
@@ -175,18 +262,23 @@ pub fn signal(ctx: &ServerContext, p: Position) -> Option<u8> {
             slots.extend(self::slots(ctx, other, kind));
         }
     }
-    let total = slots.len();
+    Some(fullness(ctx, &slots))
+}
+
+/// The comparator reading of these slots (see [`signal`]).
+pub fn fullness(ctx: &ServerContext, slots: &[Option<ItemStack>]) -> u8 {
+    let total = slots.len().max(1);
     let fullness: f64 = slots
         .iter()
         .flatten()
         .map(|s| f64::from(s.count) / f64::from(ctx.items.max_stack(s.item).max(1)))
         .sum::<f64>()
         / total as f64;
-    Some(if slots.iter().all(Option::is_none) {
+    if slots.iter().all(Option::is_none) {
         0
     } else {
         (1.0 + fullness * 14.0).floor() as u8
-    })
+    }
 }
 
 /// The slots of the container at `p` as they are now.
@@ -194,8 +286,8 @@ pub fn slots(ctx: &ServerContext, p: Position, kind: Kind) -> Vec<Option<ItemSta
     if let Some(open) = ctx.containers.lock().expect("containers lock").get(&key(p)) {
         return open.slots.clone();
     }
-    match ctx.world.block_entity(p, &ctx.data.blocks) {
-        Some(be) => read_items(ctx, &be.data, kind.slots),
+    match stored_data(ctx, p) {
+        Some(data) => read_items(ctx, &data, kind.slots),
         None => vec![None; kind.slots],
     }
 }
@@ -205,8 +297,8 @@ pub fn slots(ctx: &ServerContext, p: Position, kind: Kind) -> Vec<Option<ItemSta
 pub fn put(ctx: &ServerContext, p: Position, kind: Kind, changes: &[(usize, Option<ItemStack>)]) {
     let mut all = ctx.containers.lock().expect("containers lock");
     let open = all.entry(key(p)).or_insert_with(|| {
-        let slots = match ctx.world.block_entity(p, &ctx.data.blocks) {
-            Some(be) => read_items(ctx, &be.data, kind.slots),
+        let slots = match stored_data(ctx, p) {
+            Some(data) => read_items(ctx, &data, kind.slots),
             None => vec![None; kind.slots],
         };
         Open {
@@ -243,11 +335,7 @@ pub fn put(ctx: &ServerContext, p: Position, kind: Kind, changes: &[(usize, Opti
 pub fn open(ctx: &ServerContext, uuid: u128, p: Position, kind: Kind) -> Vec<Option<ItemStack>> {
     let mut all = ctx.containers.lock().expect("containers lock");
     let open = all.entry(key(p)).or_insert_with(|| {
-        let data = ctx
-            .world
-            .block_entity(p, &ctx.data.blocks)
-            .map(|be| be.data)
-            .unwrap_or_default();
+        let data = stored_data(ctx, p).unwrap_or_default();
         let slots = read_items(ctx, &data, kind.slots);
         Open {
             kind,
@@ -258,7 +346,14 @@ pub fn open(ctx: &ServerContext, uuid: u128, p: Position, kind: Kind) -> Vec<Opt
     if !open.viewers.contains(&uuid) {
         open.viewers.push(uuid);
     }
-    open.slots.clone()
+    let slots = open.slots.clone();
+    drop(all);
+    // Trapped chests give power by how many look in.
+    ctx.container_updates
+        .lock()
+        .expect("container updates lock")
+        .push(p);
+    slots
 }
 
 /// Applies the client's view of changed container slots (0..size). Returns
@@ -324,6 +419,11 @@ pub fn close(ctx: &ServerContext, uuid: u128, p: Position) {
             store(ctx, p, open);
             all.remove(&key(p));
         }
+        drop(all);
+        ctx.container_updates
+            .lock()
+            .expect("container updates lock")
+            .push(p);
     }
 }
 

@@ -6,6 +6,7 @@
 //! - for each line of `--lines` (one command per line, `#` comments; by
 //!   default `xtask/commands.txt`): `> text` asks for suggestions, any other
 //!   line runs the command; the replies are recorded as text components;
+//! - `@use` uses the item in the main hand;
 //! - with `--packets a,b`, the bodies of those packets too (hex; a boss
 //!   bar's random UUID left out);
 //! - with `--datapack <dir>`, that data pack is put in the world first.
@@ -204,7 +205,15 @@ fn observe(
     let mut replies = Vec::new();
     for (n, line) in lines.iter().enumerate() {
         let mut entry = json!({ "line": line });
-        if let Some(text) = line.strip_prefix('>') {
+        if line.trim() == "@use" {
+            // Uses the item in the main hand.
+            let mut body = Vec::new();
+            body.put_varint(0);
+            body.put_varint(n as i32 + 1);
+            body.put_f32(0.0);
+            body.put_f32(90.0);
+            client.send("minecraft:use_item", body)?;
+        } else if let Some(text) = line.strip_prefix('>') {
             let mut body = Vec::new();
             body.put_varint(n as i32 + 1);
             body.put_string(text.trim_start());

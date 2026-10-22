@@ -43,8 +43,16 @@ fn i(c: &Compound, k: &str, default: i64) -> i64 {
 
 impl Border {
     pub fn load(world: Option<&Path>, data_version: i32) -> Self {
-        let file =
-            world.map(|w| w.join("dimensions/minecraft/overworld/data/minecraft/world_border.dat"));
+        Self::load_in(world, "overworld", data_version)
+    }
+
+    /// The border of the dimension whose folder is `minecraft/<name>`.
+    pub fn load_in(world: Option<&Path>, name: &str, data_version: i32) -> Self {
+        let file = world.map(|w| {
+            w.join(format!(
+                "dimensions/minecraft/{name}/data/minecraft/world_border.dat"
+            ))
+        });
         let d = file
             .as_ref()
             .and_then(|f| crate::world::read_nbt_gz_compound(f).ok())

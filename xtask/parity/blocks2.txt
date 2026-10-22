@@ -1,0 +1,54 @@
+# Copper bulbs, lava meeting water and blue ice, daylight detector,
+# trapped chest, cauldron and candle cake comparators (stone floor at y=-60).
+region -2 -61 -2 22 -55 12
+run fill -2 -60 -2 22 -60 12 stone
+compare
+
+# A copper bulb toggles on each rising edge.
+run setblock 0 -59 0 copper_bulb
+run setblock 1 -59 0 redstone_block
+step 2
+run setblock 1 -59 0 air
+step 2
+run setblock 1 -59 0 redstone_block
+step 2
+run setblock 1 -59 0 air
+step 2
+# A comparator reads a lit bulb.
+run setblock 0 -59 2 copper_bulb[lit=true]
+run setblock 1 -59 2 comparator[facing=west]
+run setblock 2 -59 2 redstone_wire
+step 2
+step 2
+
+# Lava source by water: obsidian; flowing lava by water: cobblestone.
+run setblock 5 -59 0 lava
+run setblock 6 -59 0 water
+step 10
+step 40
+# Lava over soul soil beside blue ice: basalt.
+run setblock 10 -60 0 soul_soil
+run setblock 11 -59 0 blue_ice
+run setblock 10 -58 0 lava
+step 40
+step 40
+
+# Two lava sources make none between them (game rule off by default).
+run fill 14 -59 0 18 -59 2 stone
+run setblock 15 -59 1 air
+run setblock 16 -59 1 air
+run setblock 17 -59 1 air
+run setblock 15 -59 1 lava
+run setblock 17 -59 1 lava
+step 40
+step 40
+
+# Comparators on a cauldron and a candle cake.
+run setblock 0 -59 6 water_cauldron[level=2]
+run setblock 1 -59 6 comparator[facing=west]
+run setblock 2 -59 6 redstone_wire
+run setblock 0 -59 8 candle_cake
+run setblock 1 -59 8 comparator[facing=west]
+run setblock 2 -59 8 redstone_wire
+step 2
+step 2

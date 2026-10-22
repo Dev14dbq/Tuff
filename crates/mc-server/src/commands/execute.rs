@@ -49,7 +49,9 @@ pub fn dimension(ctx: &ServerContext, c: &Context) -> Result<String> {
 /// counted (`if items`).
 pub fn condition(ctx: &ServerContext, c: &Context, s: &Src, rest: &[&str]) -> Option<Result<bool>> {
     Some(match rest {
-        ["dimension", "dimension"] => dimension(ctx, c).map(|d| d == "minecraft:overworld"),
+        ["dimension", "dimension"] => {
+            dimension(ctx, c).map(|d| d == ctx.at(s.dim).dimension_name())
+        }
         ["loaded", "pos"] => {
             let p = block_pos(c, s, "pos")?;
             Ok(super::world::in_world(ctx, p) && ctx.world.is_loaded(p))

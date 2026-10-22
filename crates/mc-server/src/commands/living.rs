@@ -228,9 +228,7 @@ fn rotate(r: &mut Run, rest: &[&str]) -> Result<i32> {
             pose.yaw = f(yaw, r.src.rot[0]);
             pose.pitch = f(pitch, r.src.rot[1]).clamp(-90.0, 90.0);
         }
-        r.out
-            .events
-            .push(crate::context::Event::Teleport { uuid: *uuid, pose });
+        r.teleport(*uuid, pose);
     }
     r.success(
         translate("commands.rotate.success", vec![t.display()]),
@@ -349,9 +347,7 @@ fn spread_players(r: &mut Run) -> Result<i32> {
         let y = f64::from(ground(x, z).unwrap_or(max_height));
         if let Target::Player { uuid, pose, .. } = t {
             let pose = crate::context::Pose { x, y, z, ..*pose };
-            r.out
-                .events
-                .push(crate::context::Event::Teleport { uuid: *uuid, pose });
+            r.teleport(*uuid, pose);
         } else if let Some(e) = crate::tick::lock(&r.ctx.entities)
             .iter_mut()
             .find(|e| e.uuid == t.uuid())

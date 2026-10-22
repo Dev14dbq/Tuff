@@ -203,13 +203,14 @@ fn composter(
     state: u32,
     held: Option<&str>,
 ) -> bool {
-    let blocks = &ctx.data.blocks;
     let level = level_of(ctx, state, "level");
-    let with = |l: i32| blocks.state_id("minecraft:composter", &[("level", &l.to_string())]);
     if level == 8 {
-        if let Some(empty) = with(0) {
-            set(ctx, outcome, p, empty);
-        }
+        let mut world = crate::level::WorldLevel::new(ctx);
+        let logic = world.logic();
+        mc_tick::composter::empty(&mut world, logic, crate::level::to_pos(p), state);
+        let changes = world.into_changes();
+        outcome.updates.extend(changes.iter().copied());
+        outcome.events.push(Event::BlocksChanged { by: 0, changes });
         if let Some(bone_meal) = ctx.items.id("minecraft:bone_meal") {
             crate::tick::drop_item(
                 ctx,
@@ -221,14 +222,6 @@ fn composter(
                 },
             );
         }
-        fx::sound(
-            ctx,
-            "block.composter.empty",
-            fx::category::BLOCKS,
-            centre(p),
-            1.0,
-            1.0,
-        );
         return true;
     }
     let chance = held.map_or(0, compost_chance);
@@ -236,31 +229,12 @@ fn composter(
         return false;
     }
     let success = crate::util::random_u64() % 100 < u64::from(chance);
-    if success {
-        // At 7 it is ready after a moment; here at once.
-        let next = if level + 1 == 7 { 8 } else { level + 1 };
-        if let Some(new) = with(next) {
-            set(ctx, outcome, p, new);
-        }
-        fx::sound(
-            ctx,
-            "block.composter.fill_success",
-            fx::category::BLOCKS,
-            centre(p),
-            1.0,
-            1.0,
-        );
-    } else {
-        fx::sound(
-            ctx,
-            "block.composter.fill",
-            fx::category::BLOCKS,
-            centre(p),
-            1.0,
-            1.0,
-        );
-    }
-    fx::level_event(ctx, 1500, centre(p), i32::from(success));
+    let mut world = crate::level::WorldLevel::new(ctx);
+    let logic = world.logic();
+    mc_tick::composter::add(&mut world, logic, crate::level::to_pos(p), state, success);
+    let changes = world.into_changes();
+    outcome.updates.extend(changes.iter().copied());
+    outcome.events.push(Event::BlocksChanged { by: 0, changes });
     if actor.game_mode != CREATIVE {
         consume_held(ctx, actor, hand);
     }

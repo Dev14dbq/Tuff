@@ -673,6 +673,8 @@ static MODIFIER: [Field; 6] = [
     opt("display", Net::Display),
 ];
 
+static MAP_POST: Net = Net::Enum(&["lock", "scale"]);
+
 /// The encoding of component `name`, if we know it.
 pub fn codec(name: &str) -> Option<&'static Net> {
     static ENCHANTMENTS: Net = Net::Map(&Net::Holder("minecraft:enchantment"), &Net::VarInt);
@@ -799,6 +801,7 @@ pub fn codec(name: &str) -> Option<&'static Net> {
         "fireworks" => &N16,
         "firework_explosion" => &N17,
         "banner_patterns" => &BANNER,
+        "map_post_processing" => &MAP_POST,
         "base_color" => &N18,
         "suspicious_stew_effects" => &STEW,
         "profile" => &N19,

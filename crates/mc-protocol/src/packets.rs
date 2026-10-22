@@ -624,6 +624,13 @@ pub mod play {
         RenameItem {
             name: String,
         },
+        /// A book and quill written in (hotbar slot 0–8, 40 the off hand),
+        /// signed when `title` is given.
+        EditBook {
+            slot: i32,
+            pages: Vec<String>,
+            title: Option<String>,
+        },
         /// The effects chosen at a beacon (`minecraft:mob_effect` ids).
         SetBeacon {
             primary: Option<i32>,
@@ -791,8 +798,21 @@ pub mod play {
                     button: r.varint()?,
                 },
                 "minecraft:rename_item" => Serverbound::RenameItem {
-                    name: r.string(50)?,
+                    name: r.string(32767)?,
                 },
+                "minecraft:edit_book" => {
+                    let slot = r.varint()?;
+                    let n = r.length_prefix()?;
+                    if n > 100 {
+                        return Err(crate::codec::DecodeError::Invalid("book pages"));
+                    }
+                    let mut pages = Vec::with_capacity(n);
+                    for _ in 0..n {
+                        pages.push(r.string(1024)?);
+                    }
+                    let title = if r.bool()? { Some(r.string(32)?) } else { None };
+                    Serverbound::EditBook { slot, pages, title }
+                }
                 "minecraft:set_beacon" => {
                     let mut effect = || -> Result<Option<i32>> {
                         Ok(if r.bool()? { Some(r.varint()?) } else { None })
@@ -1420,6 +1440,18 @@ pub mod play {
                 Some(d) => put_nbt(out, &mc_nbt::Tag::Compound(d.clone())),
                 None => out.put_u8(mc_nbt::tag_type::END),
             }
+        }
+    }
+
+    /// Opens the written book in a hand (0 main, 1 off).
+    #[derive(Clone, Debug)]
+    pub struct OpenBook {
+        pub hand: i32,
+    }
+    packet!(OpenBook, Play, "minecraft:open_book");
+    impl Encode for OpenBook {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.hand);
         }
     }
 

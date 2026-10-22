@@ -179,6 +179,7 @@ fn apply(ctx: &ServerContext, p: Position, levels: i32, primary: &str, secondary
         .lock()
         .expect("players lock")
         .values()
+        .filter(|pl| pl.dimension == ctx.world.dimension)
         .filter(|pl| pl.game_mode != 3)
         .filter(|pl| {
             pl.pose.is_some_and(|pose| {
