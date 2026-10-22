@@ -430,17 +430,37 @@ async fn players_see_each_other_spawn_move_and_leave() {
     let (mut alice, _) = join_offline(addr, ids.clone(), "Alice").await;
     let (mut bob, spawn) = join_offline(addr, ids.clone(), "Bob").await;
 
-    // Alice learns about Bob, then sees his entity appear.
-    let (_, info) = alice.recv_until("minecraft:player_info_update").await;
-    let mut r = Reader::new(&info);
-    r.u8().unwrap();
-    r.length_prefix().unwrap();
-    let bob_uuid = r.uuid().unwrap();
-    assert_eq!(r.string(16).unwrap(), "Bob");
-    let (_, spawned) = alice.recv_until("minecraft:add_entity").await;
+    // Alice learns about Bob and sees his entity appear; mobs near the
+    // spawn may appear around it, in any order.
+    let (mut bob_uuid, mut entities) = (None, Vec::new());
+    let spawned = loop {
+        let (name, body) = alice.recv().await;
+        match name.as_str() {
+            "minecraft:player_info_update" if bob_uuid.is_none() => {
+                let mut r = Reader::new(&body);
+                r.u8().unwrap();
+                r.length_prefix().unwrap();
+                let uuid = r.uuid().unwrap();
+                assert_eq!(r.string(16).unwrap(), "Bob");
+                bob_uuid = Some(uuid);
+            }
+            "minecraft:add_entity" => entities.push(body),
+            _ => {}
+        }
+        if let Some(uuid) = bob_uuid
+            && let Some(i) = entities.iter().position(|b| {
+                let mut r = Reader::new(b);
+                r.varint().unwrap();
+                r.uuid().unwrap() == uuid
+            })
+        {
+            break entities.swap_remove(i);
+        }
+    };
+    let bob_uuid = bob_uuid.unwrap();
     let mut r = Reader::new(&spawned);
     let bob_entity = r.varint().unwrap();
-    assert_eq!(r.uuid().unwrap(), bob_uuid);
+    r.uuid().unwrap();
     assert_eq!(r.varint().unwrap(), player_type);
     assert_eq!(
         (r.f64().unwrap(), r.f64().unwrap(), r.f64().unwrap()),
@@ -456,7 +476,12 @@ async fn players_see_each_other_spawn_move_and_leave() {
     moved.put_f32(-15.0);
     moved.put_u8(0x01);
     bob.send("minecraft:move_player_pos_rot", moved).await;
-    let (_, sync) = alice.recv_until("minecraft:entity_position_sync").await;
+    let sync = loop {
+        let (_, sync) = alice.recv_until("minecraft:entity_position_sync").await;
+        if Reader::new(&sync).varint().unwrap() == bob_entity {
+            break sync;
+        }
+    };
     let mut r = Reader::new(&sync);
     assert_eq!(r.varint().unwrap(), bob_entity);
     assert_eq!(r.varint().unwrap(), 0, "linear path");
@@ -574,14 +599,20 @@ async fn placed_and_broken_blocks_are_seen_by_everyone() {
     // Placing on top of the grass two blocks east.
     bob.send("minecraft:use_item_on", use_item_on(2, -61, 0, 1))
         .await;
-    // The swing may come before the block update (it is sent at once, the
-    // block with the tick's changes).
-    let (seen, update) = alice.recv_until("minecraft:block_update").await;
-    assert_eq!(block_update(&update), ((2, -60, 0), stone));
-    if !seen.iter().any(|n| n == "minecraft:swing_animation") {
-        let (_, swing) = alice.recv_until("minecraft:swing_animation").await;
-        assert_eq!(Reader::new(&swing).varint().unwrap(), bob_entity);
+    // The block and Bob's swing, in either order.
+    let (mut update, mut swing) = (None, None);
+    while update.is_none() || swing.is_none() {
+        let (name, body) = alice.recv().await;
+        match name.as_str() {
+            "minecraft:block_update" if update.is_none() => update = Some(block_update(&body)),
+            "minecraft:swing_animation" if swing.is_none() => {
+                swing = Some(Reader::new(&body).varint().unwrap());
+            }
+            _ => {}
+        }
     }
+    assert_eq!(update, Some(((2, -60, 0), stone)));
+    assert_eq!(swing, Some(bob_entity));
     let mut placer = Vec::new();
     let ack = loop {
         let (name, body) = bob.recv().await;
@@ -717,12 +748,12 @@ async fn chunks_nobody_has_are_unloaded() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(ctx.world.loaded_chunks(), 25, "a 5×5 view");
-    assert_eq!(ctx.world.unload_unused(), 0, "Alice still has them");
+    assert!(ctx.world.unload_unused().is_empty(), "Alice still has them");
     drop(alice);
     // The server notices the closed connection and forgets her chunks.
     let mut dropped = 0;
     for _ in 0..50 {
-        dropped += ctx.world.unload_unused();
+        dropped += ctx.world.unload_unused().len();
         if ctx.world.loaded_chunks() == 0 {
             break;
         }
@@ -3245,5 +3276,285 @@ async fn standing_in_a_lit_frame_takes_a_survival_player_to_the_nether() {
         })
     });
     assert!(near, "no portal around {here:?}");
+    let _ = stop.send(());
+}
+
+/// A velocity packed as `LpVec3`: a zero byte for none, else two low bytes
+/// and a big-endian int holding a 2-bit scale, a "scale continues" bit and
+/// three 15-bit axes, then a VarInt with the rest of the scale if flagged.
+fn lpvec3(r: &mut Reader) -> [f64; 3] {
+    let first = r.u8().unwrap();
+    if first == 0 {
+        return [0.0; 3];
+    }
+    let second = r.u8().unwrap();
+    let rest = r.i32().unwrap() as u32;
+    let bits = u64::from(first) | u64::from(second) << 8 | u64::from(rest) << 16;
+    let mut scale = bits & 3;
+    if bits & 4 != 0 {
+        scale |= (r.varint().unwrap() as u64) << 2;
+    }
+    let axis = |shift: u32| {
+        let v = ((bits >> shift) & 0x7fff).min(32766) as f64;
+        (v / 32766.0 * 2.0 - 1.0) * scale as f64
+    };
+    [axis(3), axis(18), axis(33)]
+}
+
+#[tokio::test]
+async fn thrown_items_fly_and_are_picked_up_for_everyone() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Thrower".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let item_type = ctx
+        .data
+        .builtin
+        .id("minecraft:entity_type", "minecraft:item")
+        .unwrap();
+    let cobblestone = ctx
+        .data
+        .builtin
+        .id("minecraft:item", "minecraft:cobblestone")
+        .unwrap();
+    let (mut thrower, at) = join_offline(addr, ctx.ids.clone(), "Thrower").await;
+    let (mut watcher, _) = join_offline(addr, ctx.ids.clone(), "Watcher").await;
+    // The watcher stands aside, out of reach of the item.
+    let mut aside = Vec::new();
+    aside.put_f64(at.0 + 6.0);
+    aside.put_f64(at.1);
+    aside.put_f64(at.2);
+    aside.put_u8(0x01);
+    watcher.send("minecraft:move_player_pos", aside).await;
+    chat_command(&mut thrower, "gamemode survival").await;
+    let (_, seen) = chat_command(&mut thrower, "give Thrower cobblestone 5").await;
+    packet(&mut thrower, &seen, "minecraft:container_set_slot").await;
+
+    // Q: one item out of the hand, looking straight ahead (south).
+    let mut drop = Vec::new();
+    drop.put_varint(4);
+    drop.put_position(mc_protocol::Position::new(0, 0, 0));
+    drop.put_i8(0);
+    drop.put_varint(0);
+    thrower.send("minecraft:player_action", drop).await;
+
+    let spawned = |body: &[u8]| {
+        let mut r = Reader::new(body);
+        let id = r.varint().unwrap();
+        r.uuid().unwrap();
+        let kind = r.varint().unwrap();
+        let pos = [r.f64().unwrap(), r.f64().unwrap(), r.f64().unwrap()];
+        (id, kind, pos, lpvec3(&mut r))
+    };
+    let mut item = None;
+    let mut hand = None;
+    for bot in [&mut thrower, &mut watcher] {
+        let (id, kind, pos, vel) = loop {
+            let (name, body) = bot.recv().await;
+            if name == "minecraft:container_set_slot" {
+                let mut r = Reader::new(&body);
+                r.varint().unwrap();
+                r.varint().unwrap();
+                hand = Some((r.i16().unwrap(), r.varint().unwrap()));
+            }
+            if name == "minecraft:add_entity" && spawned(&body).1 == item_type {
+                break spawned(&body);
+            }
+        };
+        assert_eq!(kind, item_type);
+        assert!(
+            (pos[1] - (at.1 + 1.32)).abs() < 0.01,
+            "from the eyes: {pos:?}"
+        );
+        assert!(
+            (0.25..0.35).contains(&vel[2]) && vel[0].abs() < 0.05 && vel[1].abs() < 0.25,
+            "thrown forward, not dropped dead: {vel:?}"
+        );
+        assert!(item.is_none_or(|i| i == id));
+        item = Some(id);
+    }
+    let item = item.unwrap();
+    assert_eq!(hand, Some((36, 4)), "four left in the hand");
+
+    // Watching: positions come with velocities and not every tick. The
+    // thrower walks onto the item where it landed and picks it up once its
+    // 40 ticks are over; both see it taken and gone.
+    let mut syncs = 0;
+    let mut order = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let begin = std::time::Instant::now();
+    while !order.contains(&"remove") {
+        assert!(std::time::Instant::now() < deadline, "no pickup: {order:?}");
+        let (name, body) = thrower.recv().await;
+        let mut r = Reader::new(&body);
+        match name.as_str() {
+            "minecraft:keep_alive" => thrower.send("minecraft:keep_alive", body).await,
+            "minecraft:entity_position_sync" if r.varint().unwrap() == item => {
+                syncs += 1;
+                r.varint().unwrap();
+                let (x, y, z) = (r.f64().unwrap(), r.f64().unwrap(), r.f64().unwrap());
+                let mut moved = Vec::new();
+                moved.put_f64(x);
+                moved.put_f64(y);
+                moved.put_f64(z);
+                moved.put_u8(0x01);
+                thrower.send("minecraft:move_player_pos", moved).await;
+            }
+            "minecraft:take_item_entity" if r.varint().unwrap() == item => {
+                assert!(
+                    begin.elapsed() > Duration::from_millis(1500),
+                    "not before the pickup delay"
+                );
+                assert_eq!(r.varint().unwrap(), {
+                    let players = ctx.players.lock().unwrap();
+                    players
+                        .values()
+                        .find(|p| p.profile.name == "Thrower")
+                        .unwrap()
+                        .entity_id
+                });
+                assert_eq!(r.varint().unwrap(), 1);
+                order.push("take");
+            }
+            "minecraft:container_set_slot" => {
+                r.varint().unwrap();
+                r.varint().unwrap();
+                assert_eq!(
+                    (r.i16().unwrap(), r.varint().unwrap(), r.varint().unwrap()),
+                    (36, 5, cobblestone),
+                    "back in the hand"
+                );
+                order.push("slot");
+            }
+            "minecraft:remove_entities" => {
+                let n = r.varint().unwrap();
+                if (0..n).any(|_| r.varint().unwrap() == item) {
+                    order.push("remove");
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(order, ["take", "slot", "remove"], "vanilla's order");
+    assert!(
+        (1..=6).contains(&syncs),
+        "{syncs} position syncs in about 2 s: not every tick"
+    );
+    let mut taken = false;
+    loop {
+        let (name, body) = watcher.recv().await;
+        let mut r = Reader::new(&body);
+        match name.as_str() {
+            "minecraft:keep_alive" => watcher.send("minecraft:keep_alive", body).await,
+            "minecraft:take_item_entity" if r.varint().unwrap() == item => taken = true,
+            "minecraft:remove_entities" => {
+                let n = r.varint().unwrap();
+                if (0..n).any(|_| r.varint().unwrap() == item) {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(taken, "the watcher sees the pickup too");
+    assert!(
+        !ctx.entities.lock().unwrap().iter().any(|e| e.id == item),
+        "the item is gone"
+    );
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn items_thrown_from_the_inventory_window_and_the_cursor_on_close() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Sorter".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let item_type = ctx
+        .data
+        .builtin
+        .id("minecraft:entity_type", "minecraft:item")
+        .unwrap();
+    let cobblestone = ctx
+        .data
+        .builtin
+        .id("minecraft:item", "minecraft:cobblestone")
+        .unwrap();
+    let (mut bot, _) = join_offline(addr, ctx.ids.clone(), "Sorter").await;
+    chat_command(&mut bot, "gamemode survival").await;
+    let (_, seen) = chat_command(&mut bot, "give Sorter cobblestone 5").await;
+    packet(&mut bot, &seen, "minecraft:container_set_slot").await;
+    let click = |slot: i16, button: i8, changed: &[(i16, i32)], carried: i32| {
+        let mut b = Vec::new();
+        b.put_varint(0);
+        b.put_varint(1);
+        b.put_i16(slot);
+        b.put_i8(button);
+        b.put_varint(0);
+        b.put_varint(changed.len() as i32);
+        let hashed = |b: &mut Vec<u8>, count: i32| {
+            b.put_bool(count > 0);
+            if count > 0 {
+                b.put_varint(cobblestone);
+                b.put_varint(count);
+                b.put_varint(0);
+                b.put_varint(0);
+            }
+        };
+        for &(s, count) in changed {
+            b.put_i16(s);
+            hashed(&mut b, count);
+        }
+        hashed(&mut b, carried);
+        b
+    };
+    // Pick the stack up, drop one outside the window, close with the rest.
+    bot.send("minecraft:container_click", click(36, 0, &[(36, 0)], 5))
+        .await;
+    bot.send("minecraft:container_click", click(-999, 1, &[], 4))
+        .await;
+    let mut close = Vec::new();
+    close.put_varint(0);
+    bot.send("minecraft:container_close", close).await;
+    let mut spawned = Vec::new();
+    let mut counts = Vec::new();
+    while counts.len() < 2 {
+        let (name, body) = bot.recv().await;
+        let mut r = Reader::new(&body);
+        match name.as_str() {
+            "minecraft:add_entity" => {
+                let id = r.varint().unwrap();
+                r.uuid().unwrap();
+                if r.varint().unwrap() == item_type {
+                    spawned.push(id);
+                }
+            }
+            "minecraft:set_entity_data" if spawned.contains(&r.varint().unwrap()) => {
+                assert_eq!((r.u8().unwrap(), r.varint().unwrap()), (8, 7));
+                let count = r.varint().unwrap();
+                assert_eq!(r.varint().unwrap(), cobblestone);
+                counts.push(count);
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(counts, [1, 4], "one thrown, then the rest on close");
+    {
+        let inventories = ctx.inventories.lock().unwrap();
+        let hands = inventories.values().next().unwrap();
+        assert!(hands.carried.is_none() && hands.slots[36].is_none());
+    }
     let _ = stop.send(());
 }

@@ -2248,6 +2248,8 @@ pub mod play {
         pub x: f64,
         pub y: f64,
         pub z: f64,
+        /// The velocity clients start predicting the entity with.
+        pub velocity: [f64; 3],
         pub pitch: f32,
         pub yaw: f32,
         pub head_yaw: f32,
@@ -2262,7 +2264,7 @@ pub mod play {
             out.put_f64(self.x);
             out.put_f64(self.y);
             out.put_f64(self.z);
-            out.put_u8(0); // LpVec3 zero velocity
+            put_lpvec3(out, self.velocity);
             out.put_angle(self.pitch);
             out.put_angle(self.yaw);
             out.put_angle(self.head_yaw);

@@ -751,6 +751,12 @@ async fn play(
                             writer.queue(&answer)?;
                         }
                     }
+                    play::Serverbound::SetCreativeModeSlot { slot: -1, item: Some(stack) } if game_mode == CREATIVE => {
+                        // Dropped out of the creative inventory.
+                        if stack.count > 0 {
+                            crate::tick::throw_item_aged(&ctx, pose, stack, crate::dropped::LIFETIME - 1200);
+                        }
+                    }
                     play::Serverbound::SetCreativeModeSlot { slot, item } if game_mode == CREATIVE => {
                         if let Ok(slot) = usize::try_from(slot) {
                             change_hands(&ctx, uuid, entity_id, |hands| {
@@ -1356,13 +1362,18 @@ async fn play(
                     Ok(Event::InventorySlot { uuid: who, slot, item }) if who == uuid => {
                         windows.inventory_slot(writer, slot, item)?;
                     }
-                    Ok(Event::ItemTaken { item_entity, collector, count }) => {
+                    Ok(Event::ItemTaken { item_entity, collector, count, slots }) => {
                         if seen_entities.contains(&item_entity) {
                             writer.queue(&play::TakeItemEntity {
                                 collected: item_entity,
                                 collector,
                                 count,
                             })?;
+                        }
+                        if collector == entity_id {
+                            for (slot, item) in slots {
+                                windows.inventory_slot(writer, slot, item)?;
+                            }
                         }
                     }
                     Ok(Event::TickingStep(packet)) => writer.queue(&packet)?,
@@ -1868,6 +1879,7 @@ fn spawn_player(
         x: pose.x,
         y: pose.y,
         z: pose.z,
+        velocity: [0.0; 3],
         pitch: pose.pitch,
         yaw: pose.yaw,
         head_yaw: pose.yaw,
@@ -1935,17 +1947,12 @@ fn spawn_entity(
             x: entity.pos[0],
             y: entity.pos[1],
             z: entity.pos[2],
+            velocity: d.vel,
             pitch: d.pitch,
             yaw: d.yaw,
             head_yaw: d.yaw,
             data: d.data,
         })?;
-        if d.vel != [0.0; 3] {
-            writer.queue(&play::SetEntityMotion {
-                entity_id: entity.id,
-                velocity: d.vel,
-            })?;
-        }
         if !d.meta.is_empty() {
             writer.queue(&play::SetEntityData {
                 entity_id: entity.id,
@@ -1989,6 +1996,7 @@ fn spawn_entity(
         x: entity.pos[0],
         y: entity.pos[1],
         z: entity.pos[2],
+        velocity: entity.vel,
         pitch,
         yaw,
         head_yaw,
@@ -2405,7 +2413,7 @@ fn respawn_target(ctx: &ServerContext, uuid: u128) -> (String, Pose) {
 }
 
 fn spawn_target(ctx: &ServerContext) -> (String, Pose) {
-    // The lock must be let go before `world_spawn_pose` takes it again.
+    // The lock is let go before `world_spawn_pose` takes it again.
     let dimension = ctx.spawn.lock().expect("spawn lock").dimension.clone();
     (dimension, world_spawn_pose(ctx))
 }

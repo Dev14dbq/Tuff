@@ -290,6 +290,7 @@ fn pick_up(t: &mut Tick, e: &mut Entity) {
             item_entity: e.id,
             collector: who.entity_id,
             count: 1,
+            slots: Vec::new(),
         });
         e.removed = true;
         return;

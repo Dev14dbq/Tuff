@@ -564,6 +564,7 @@ pub fn pick_up(
             item_entity: item_id,
             collector,
             count: 1,
+            slots: Vec::new(),
         });
         if count <= 1 {
             let _ = ctx.events.send(Event::EntitiesRemoved(vec![item_id]));

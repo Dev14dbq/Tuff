@@ -42,6 +42,11 @@ pub fn random_u64() -> u64 {
     hasher.finish()
 }
 
+/// A random number in `[0, 1)`.
+pub fn random_f64() -> f64 {
+    (random_u64() >> 11) as f64 / (1u64 << 53) as f64
+}
+
 pub fn random_uuid() -> u128 {
     let mut bytes = ((u128::from(random_u64()) << 64) | u128::from(random_u64())).to_be_bytes();
     bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4

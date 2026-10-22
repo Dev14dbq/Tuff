@@ -187,6 +187,7 @@ pub fn tick(ctx: &ServerContext, entity: &mut Entity, players: &[(u128, i32, i32
             item_entity: entity.id,
             collector,
             count,
+            slots: Vec::new(),
         });
         entity.removed = true;
     }
