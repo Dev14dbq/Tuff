@@ -3432,3 +3432,92 @@ async fn thrown_items_fly_and_are_picked_up_for_everyone() {
     );
     let _ = stop.send(());
 }
+
+#[tokio::test]
+async fn items_thrown_from_the_inventory_window_and_the_cursor_on_close() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Sorter".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let item_type = ctx
+        .data
+        .builtin
+        .id("minecraft:entity_type", "minecraft:item")
+        .unwrap();
+    let cobblestone = ctx
+        .data
+        .builtin
+        .id("minecraft:item", "minecraft:cobblestone")
+        .unwrap();
+    let (mut bot, _) = join_offline(addr, ctx.ids.clone(), "Sorter").await;
+    chat_command(&mut bot, "gamemode survival").await;
+    let (_, seen) = chat_command(&mut bot, "give Sorter cobblestone 5").await;
+    packet(&mut bot, &seen, "minecraft:container_set_slot").await;
+    let click = |slot: i16, button: i8, changed: &[(i16, i32)], carried: i32| {
+        let mut b = Vec::new();
+        b.put_varint(0);
+        b.put_varint(1);
+        b.put_i16(slot);
+        b.put_i8(button);
+        b.put_varint(0);
+        b.put_varint(changed.len() as i32);
+        let hashed = |b: &mut Vec<u8>, count: i32| {
+            b.put_bool(count > 0);
+            if count > 0 {
+                b.put_varint(cobblestone);
+                b.put_varint(count);
+                b.put_varint(0);
+                b.put_varint(0);
+            }
+        };
+        for &(s, count) in changed {
+            b.put_i16(s);
+            hashed(&mut b, count);
+        }
+        hashed(&mut b, carried);
+        b
+    };
+    // Pick the stack up, drop one outside the window, close with the rest.
+    bot.send("minecraft:container_click", click(36, 0, &[(36, 0)], 5))
+        .await;
+    bot.send("minecraft:container_click", click(-999, 1, &[], 4))
+        .await;
+    let mut close = Vec::new();
+    close.put_varint(0);
+    bot.send("minecraft:container_close", close).await;
+    let mut spawned = Vec::new();
+    let mut counts = Vec::new();
+    while counts.len() < 2 {
+        let (name, body) = bot.recv().await;
+        let mut r = Reader::new(&body);
+        match name.as_str() {
+            "minecraft:add_entity" => {
+                let id = r.varint().unwrap();
+                r.uuid().unwrap();
+                if r.varint().unwrap() == item_type {
+                    spawned.push(id);
+                }
+            }
+            "minecraft:set_entity_data" if spawned.contains(&r.varint().unwrap()) => {
+                assert_eq!((r.u8().unwrap(), r.varint().unwrap()), (8, 7));
+                let count = r.varint().unwrap();
+                assert_eq!(r.varint().unwrap(), cobblestone);
+                counts.push(count);
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(counts, [1, 4], "one thrown, then the rest on close");
+    {
+        let inventories = ctx.inventories.lock().unwrap();
+        let hands = inventories.values().next().unwrap();
+        assert!(hands.carried.is_none() && hands.slots[36].is_none());
+    }
+    let _ = stop.send(());
+}

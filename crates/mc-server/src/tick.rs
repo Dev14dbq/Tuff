@@ -615,6 +615,17 @@ pub fn throw_item(
     pose: crate::context::Pose,
     stack: mc_protocol::packets::play::ItemStack,
 ) {
+    throw_item_aged(ctx, pose, stack, 0);
+}
+
+/// [`throw_item`] for an item that starts `age` ticks old (items dropped
+/// from the creative inventory last one minute instead of five).
+pub fn throw_item_aged(
+    ctx: &ServerContext,
+    pose: crate::context::Pose,
+    stack: mc_protocol::packets::play::ItemStack,
+    age: u32,
+) {
     let (yaw, pitch) = (
         f64::from(pose.yaw).to_radians(),
         f64::from(pose.pitch).to_radians(),
@@ -634,7 +645,7 @@ pub fn throw_item(
             yaw.cos() * pitch.cos() * speed + angle.sin() * spread,
         ],
         on_ground: false,
-        age: 0,
+        age,
         removed: false,
         tags: Vec::new(),
     };

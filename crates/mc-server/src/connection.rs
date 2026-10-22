@@ -745,6 +745,12 @@ async fn play(
                             writer.queue(&answer)?;
                         }
                     }
+                    play::Serverbound::SetCreativeModeSlot { slot: -1, item: Some(stack) } if game_mode == CREATIVE => {
+                        // Dropped out of the creative inventory.
+                        if stack.count > 0 {
+                            crate::tick::throw_item_aged(&ctx, pose, stack, crate::dropped::LIFETIME - 1200);
+                        }
+                    }
                     play::Serverbound::SetCreativeModeSlot { slot, item } if game_mode == CREATIVE => {
                         if let Ok(slot) = usize::try_from(slot) {
                             change_hands(&ctx, uuid, entity_id, |hands| {

@@ -57,15 +57,23 @@ pub fn tick(
         || horizontal > 1.0e-5
         || (entity.age as i64 + i64::from(entity.id)) % 4 == 0
     {
-        let solid = crate::tick::Solid(level);
-        let (moved, on_ground) = mc_entity::move_entity(entity.aabb(), entity.vel, &solid);
-        for ((pos, vel), moved) in entity.pos.iter_mut().zip(&mut entity.vel).zip(moved) {
-            *pos += moved;
-            if (moved - *vel).abs() > 1.0e-9 {
-                *vel = 0.0;
+        if pushed {
+            // Stuck items pass through blocks on their way out.
+            for (pos, vel) in entity.pos.iter_mut().zip(entity.vel) {
+                *pos += vel;
             }
+            entity.on_ground = false;
+        } else {
+            let solid = crate::tick::Solid(level);
+            let (moved, on_ground) = mc_entity::move_entity(entity.aabb(), entity.vel, &solid);
+            for ((pos, vel), moved) in entity.pos.iter_mut().zip(&mut entity.vel).zip(moved) {
+                *pos += moved;
+                if (moved - *vel).abs() > 1.0e-9 {
+                    *vel = 0.0;
+                }
+            }
+            entity.on_ground = on_ground;
         }
-        entity.on_ground = on_ground;
         let friction = if entity.on_ground {
             slipperiness(ctx, level, entity) * 0.98
         } else {
@@ -485,4 +493,183 @@ fn join(ctx: &ServerContext, entities: &mut [Entity], into: usize, from: usize) 
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mc_protocol::Position;
+
+    /// A superflat server context (ground surface at y = -60) with the
+    /// chunks around the origin loaded, `None` without the game data.
+    fn flat() -> Option<std::sync::Arc<ServerContext>> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let data = mc_data::McData::load(&dir).ok()?;
+        let ctx = ServerContext::new(crate::Config::new(dir), data).ok()?;
+        for cx in -1..=1 {
+            for cz in -1..=1 {
+                let _ = ctx
+                    .world
+                    .block(Position::new(cx * 16, 0, cz * 16), &ctx.data.blocks);
+            }
+        }
+        Some(ctx)
+    }
+
+    fn item(ctx: &ServerContext, name: &str, count: i32, pos: [f64; 3]) -> Entity {
+        Entity {
+            id: ctx.next_entity_id(),
+            uuid: 1,
+            kind: Kind::item(ctx.items.id(name).unwrap(), count, 0, 10),
+            pos,
+            vel: [0.0; 3],
+            on_ground: false,
+            age: 0,
+            removed: false,
+            tags: Vec::new(),
+        }
+    }
+
+    /// Ticks one item `n` times; the rows clients got.
+    fn run(ctx: &ServerContext, e: &mut Entity, n: usize) -> Vec<Sync> {
+        let mut sync = Vec::new();
+        for _ in 0..n {
+            let level = WorldLevel::new(ctx);
+            tick(ctx, &level, e, &[], &mut sync);
+        }
+        sync
+    }
+
+    fn set(ctx: &ServerContext, p: Position, block: &str) {
+        let state = ctx.data.blocks.default_state(block).unwrap();
+        WorldLevel::new(ctx).set_block(p, state);
+    }
+
+    #[test]
+    fn items_fall_land_and_are_synced_rarely() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut e = item(&ctx, "minecraft:stone", 1, [0.5, -50.0, 0.5]);
+        run(&ctx, &mut e, 1);
+        assert!((e.vel[1] + 0.04 * 0.98).abs() < 1e-9, "{:?}", e.vel);
+        assert!((e.pos[1] + 50.04).abs() < 1e-9);
+        let rows = run(&ctx, &mut e, 59);
+        assert!(e.on_ground && (e.pos[1] + 60.0).abs() < 1e-9, "{:?}", e.pos);
+        // Landing, and once every 20 ticks.
+        assert!(rows.len() <= 4, "{} rows", rows.len());
+        assert!(rows.iter().any(|r| r.on_ground));
+    }
+
+    #[test]
+    fn items_slide_to_a_stop_faster_on_dirt_than_on_ice() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let slide = |ground: &str| {
+            set(&ctx, Position::new(0, -61, 0), ground);
+            let mut e = item(&ctx, "minecraft:stone", 1, [0.5, -60.0, 0.5]);
+            e.on_ground = true;
+            e.vel = [0.2, 0.0, 0.0];
+            run(&ctx, &mut e, 1);
+            e.vel[0]
+        };
+        assert!((slide("minecraft:dirt") - 0.2 * 0.6 * 0.98).abs() < 1e-9);
+        assert!((slide("minecraft:ice") - 0.2 * 0.98 * 0.98).abs() < 1e-9);
+    }
+
+    #[test]
+    fn items_float_up_in_water() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        for y in -60..-55 {
+            set(&ctx, Position::new(3, y, 3), "minecraft:water");
+        }
+        let mut e = item(&ctx, "minecraft:stone", 1, [3.5, -59.0, 3.5]);
+        run(&ctx, &mut e, 40);
+        assert!(e.pos[1] > -59.0, "rises: {:?}", e.pos);
+        assert!(e.vel[1] > 0.0 && e.vel[1] <= 0.0605);
+    }
+
+    #[test]
+    fn lava_burns_items_but_not_netherite() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        set(&ctx, Position::new(-3, -60, -3), "minecraft:lava");
+        let mut e = item(&ctx, "minecraft:stone", 1, [-2.5, -60.0, -2.5]);
+        run(&ctx, &mut e, 2);
+        assert!(e.removed, "burnt");
+        let mut e = item(&ctx, "minecraft:netherite_ingot", 1, [-2.5, -60.0, -2.5]);
+        run(&ctx, &mut e, 20);
+        assert!(!e.removed, "netherite survives lava");
+    }
+
+    #[test]
+    fn items_stuck_in_a_block_drift_out() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        // Inside the dirt, near its top: the way out is up.
+        let mut e = item(&ctx, "minecraft:stone", 1, [5.5, -61.3, 5.5]);
+        let rows = run(&ctx, &mut e, 1);
+        assert!(e.vel[1] > 0.05, "{:?}", e.vel);
+        assert_eq!(rows.len(), 1, "a push clients cannot foresee");
+    }
+
+    #[test]
+    fn items_despawn_after_five_minutes() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut e = item(&ctx, "minecraft:stone", 1, [0.5, -60.0, 0.5]);
+        e.age = LIFETIME - 2;
+        run(&ctx, &mut e, 1);
+        assert!(!e.removed);
+        run(&ctx, &mut e, 1);
+        assert!(e.removed);
+    }
+
+    #[test]
+    fn nearby_stacks_merge_into_the_larger() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut a = item(&ctx, "minecraft:stone", 3, [0.5, -60.0, 0.5]);
+        a.age = 40;
+        let mut b = item(&ctx, "minecraft:stone", 5, [0.9, -60.0, 0.5]);
+        b.age = 80;
+        if let Kind::Item { pickup_delay, .. } = &mut a.kind {
+            *pickup_delay = 30;
+        }
+        let far = item(&ctx, "minecraft:stone", 1, [3.0, -60.0, 0.5]);
+        let other = item(&ctx, "minecraft:dirt", 1, [0.6, -60.0, 0.5]);
+        let mut all = vec![a, b, far, other];
+        let (gone, grown) = merge(&ctx, &mut all, &[]);
+        assert_eq!((gone, grown), (vec![0], vec![1]));
+        assert!(all[0].removed);
+        let Kind::Item {
+            count,
+            pickup_delay,
+            ..
+        } = all[1].kind
+        else {
+            panic!()
+        };
+        assert_eq!((count, pickup_delay, all[1].age), (8, 30, 40));
+        // Full stacks do not join.
+        let mut full = vec![
+            item(&ctx, "minecraft:stone", 40, [0.5, -60.0, 0.5]),
+            item(&ctx, "minecraft:stone", 40, [0.6, -60.0, 0.5]),
+        ];
+        assert_eq!(merge(&ctx, &mut full, &[]).0, Vec::<usize>::new());
+    }
 }
