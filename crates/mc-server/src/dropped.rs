@@ -103,7 +103,7 @@ pub fn tick(
     if entity.removed {
         return;
     }
-    if pushed || entity.on_ground != was_on_ground || entity.age % UPDATE_INTERVAL == 0 {
+    if pushed || entity.on_ground != was_on_ground || entity.age.is_multiple_of(UPDATE_INTERVAL) {
         sync.push(row(entity));
     }
     if matches!(
@@ -389,7 +389,7 @@ pub fn merge(
             continue;
         }
         let period = if moved.contains(&e.id) { 2 } else { 40 };
-        if e.age % period != 0 {
+        if !e.age.is_multiple_of(period) {
             continue;
         }
         let reach = {
