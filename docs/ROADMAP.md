@@ -544,13 +544,14 @@ heightmap тоже. Генерация в секунду на ядро ≥ ва�
     `immediate_respawn`, `limited_crafting`, `reduced_debug_info` (при входе и при смене), `pvp` и
     огонь по своим, `block_drops`, `entity_drops`, `mob_drops` (опыт игрока), `mob_griefing` и
     затухание дропа для взрыва крипера, `spawn_mobs`, `spawn_monsters`,
-    `players_sleeping_percentage`, `respawn_radius`, `ender_pearls_vanish_on_death`;
+    `players_sleeping_percentage`, `respawn_radius`, `ender_pearls_vanish_on_death`, задержки
+    порталов Незера и `allow_entering_nether_using_portals`;
   - правила, чьих механик ещё нет: `command_blocks_work`, `command_block_output`,
     `spawner_blocks_work`, `spread_vines`, `max_entity_cramming`, `universal_anger`,
     `forgive_dead_players`, `raids`, `spawn_patrols`, `spawn_phantoms`, `spawn_wardens`,
     `projectiles_can_break_blocks`, `global_sound_events`, `locator_bar`,
     `player_movement_check`, `elytra_movement_check`, `spectators_generate_chunks`,
-    `block_explosion_drop_decay` (взрывы кровати и якоря), правила порталов Незера;
+    `block_explosion_drop_decay` (взрывы кровати и якоря);
   - решить владельцу: демо-режим, окно GUI сервера, `gametest`, отладочные пакеты (`/debug`), старый ping списка серверов.
 
 **Готово, когда:** популярные датапаки работают, набор тестов на ванильные команды зелёный,
