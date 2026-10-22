@@ -355,7 +355,11 @@ impl Species {
     pub fn tameable(self) -> bool {
         matches!(
             self,
-            Species::Wolf | Species::Cat | Species::Parrot | Species::Horse | Species::Donkey
+            Species::Wolf
+                | Species::Cat
+                | Species::Parrot
+                | Species::Horse
+                | Species::Donkey
                 | Species::Mule
         )
     }

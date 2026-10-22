@@ -18,7 +18,7 @@ use mc_nbt::Tag;
 use mc_protocol::Position;
 use mc_protocol::packets::play::{ChunkBlockEntity, LevelChunkWithLight, LightData, heightmap};
 use mc_storage::{Decoded, Names, Palettes, RegionStorage, decode_chunk, encode_chunk};
-use mc_world::Chunk;
+use mc_world::{Chunk, Section};
 use mc_worldgen::{FlatGenerator, FlatLayer};
 use tracing::warn;
 
@@ -679,6 +679,19 @@ impl World {
                 .extend(done.live_ticks);
         }
         let mut chunk = done.chunk;
+        // The generator's height can be less than the dimension's (the Nether
+        // and the End generate 128 blocks of their 256): the sections above
+        // are air, and clients read as many sections as the dimension has.
+        let sections = (self.height / 16) as usize;
+        if chunk.sections.len() < sections {
+            let biome = chunk
+                .sections
+                .last()
+                .map_or(anvil.fallback_biome, |s| s.biomes.first());
+            chunk
+                .sections
+                .resize(sections, Section::filled(anvil.air, biome));
+        }
         for (i, name) in HEIGHTMAPS.iter().enumerate() {
             let words =
                 chunk.heightmap(|s| g.counts.get(s as usize).is_some_and(|b| b & (1 << i) != 0));
@@ -1075,6 +1088,14 @@ impl World {
                 }
             }
             found
+        })
+    }
+
+    /// How many sections the chunk at `x, z` has (loading or making it).
+    #[cfg(test)]
+    pub fn section_count(&self, x: i32, z: i32, blocks: &Blocks) -> Option<usize> {
+        self.with_slot(x, z, blocks, |slot| {
+            slot.chunk.as_ref().map(|c| c.sections.len())
         })
     }
 

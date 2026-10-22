@@ -475,7 +475,8 @@ impl Eval<'_> {
             .map(|t| t.trim_start_matches("minecraft:"))
         {
             Some("linear") => {
-                self.float(&v["base"]) + self.float(&v["per_level_above_first"]) * (level - 1) as f32
+                self.float(&v["base"])
+                    + self.float(&v["per_level_above_first"]) * (level - 1) as f32
             }
             Some("constant") => self.float(&v["value"]),
             _ => self.float(v),

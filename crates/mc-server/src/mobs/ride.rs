@@ -43,11 +43,15 @@ pub fn steered_by(ctx: &ServerContext, e: &Entity) -> bool {
         Species::Pig => {
             m.saddled()
                 && uuid_of(ctx, rider).is_some_and(|u| {
-                    crate::held::find(ctx, u, |n| n == "minecraft:carrot_on_a_stick")
-                        .is_some_and(|h| h.slot == 45 || {
-                            let inv = lock(&ctx.inventories);
-                            inv.get(&u).is_some_and(|hands| hands.hand_slot(0) == h.slot)
-                        })
+                    crate::held::find(ctx, u, |n| n == "minecraft:carrot_on_a_stick").is_some_and(
+                        |h| {
+                            h.slot == 45 || {
+                                let inv = lock(&ctx.inventories);
+                                inv.get(&u)
+                                    .is_some_and(|hands| hands.hand_slot(0) == h.slot)
+                            }
+                        },
+                    )
                 })
         }
         _ => false,

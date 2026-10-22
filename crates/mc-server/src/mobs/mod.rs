@@ -143,7 +143,12 @@ pub fn new_mob(ctx: &ServerContext, species: Species, pos: [f64; 3]) -> Entity {
 }
 
 /// A new mob dressed for the biome it spawns in.
-pub fn new_mob_in(ctx: &ServerContext, species: Species, pos: [f64; 3], biome: Option<&str>) -> Entity {
+pub fn new_mob_in(
+    ctx: &ServerContext,
+    species: Species,
+    pos: [f64; 3],
+    biome: Option<&str>,
+) -> Entity {
     let mob = Mob::new(species, crate::util::random_u64());
     let mut e = Entity {
         id: ctx.next_entity_id(),
@@ -223,7 +228,11 @@ fn players(ctx: &ServerContext) -> Vec<Target> {
             let main = hands.map_or(-1, |h| item(h.hand_slot(0)));
             let gold = (5..9).any(|s| {
                 let i = item(s);
-                i >= 0 && ctx.items.name(i).is_some_and(|n| n.starts_with("minecraft:golden_"))
+                i >= 0
+                    && ctx
+                        .items
+                        .name(i)
+                        .is_some_and(|n| n.starts_with("minecraft:golden_"))
             });
             let mut t = Target::at(p.entity_id, p.profile.uuid, [pose.x, pose.y, pose.z]);
             t.targetable = matches!(p.game_mode, 0 | 2) && alive;
@@ -444,7 +453,17 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             o.baby = m.is_baby();
         }
         for ev in events.drain(..) {
-            handle(ctx, level, &mut entities, i, ev, &targets, difficulty, now, &mut out);
+            handle(
+                ctx,
+                level,
+                &mut entities,
+                i,
+                ev,
+                &targets,
+                difficulty,
+                now,
+                &mut out,
+            );
         }
         let e = &mut entities[i];
         if e.removed {
@@ -730,13 +749,30 @@ fn shoot(
                 0.75,
                 8.0,
             );
-            fx::sound(ctx, "entity.witch.throw", 5, e.pos, 1.0, 0.8 + crate::hits::rnd() as f32 * 0.4);
+            fx::sound(
+                ctx,
+                "entity.witch.throw",
+                5,
+                e.pos,
+                1.0,
+                0.8 + crate::hits::rnd() as f32 * 0.4,
+            );
         }
         Missile::Fireball { .. } => {
             let yaw = f64::from(m.yaw).to_radians();
-            let from = [e.pos[0] - yaw.sin() * 4.0, e.pos[1] + 2.0, e.pos[2] + yaw.cos() * 4.0];
+            let from = [
+                e.pos[0] - yaw.sin() * 4.0,
+                e.pos[1] + 2.0,
+                e.pos[2] + yaw.cos() * 4.0,
+            ];
             let dir = [aim[0] - from[0], aim[1] - from[1], aim[2] - from[2]];
-            spawn(mc_entity::extra::Shot::Fireball { small: false }, from, dir, 1.0, 0.0);
+            spawn(
+                mc_entity::extra::Shot::Fireball { small: false },
+                from,
+                dir,
+                1.0,
+                0.0,
+            );
         }
         Missile::SmallFireball => {
             let spread = flat.sqrt() * 0.5;
@@ -746,7 +782,13 @@ fn shoot(
                 d[2] + crate::hits::gauss() * spread * 0.3,
             ];
             let from = [e.pos[0], e.pos[1] + m.size().1 / 2.0 + 0.5, e.pos[2]];
-            spawn(mc_entity::extra::Shot::Fireball { small: true }, from, dir, 1.0, 0.0);
+            spawn(
+                mc_entity::extra::Shot::Fireball { small: true },
+                from,
+                dir,
+                1.0,
+                0.0,
+            );
             fx::level_event(ctx, 1018, e.pos, 0);
         }
     }

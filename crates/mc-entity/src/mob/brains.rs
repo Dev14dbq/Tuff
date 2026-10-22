@@ -161,7 +161,13 @@ fn leap(p: u8, up: f64) -> Slot {
 /// The animals of a farm: float, panic, breed, tempt, follow the parents,
 /// stroll and look about.
 fn farm(speeds: [f64; 5]) -> Vec<Slot> {
-    let [panic_speed, breed_speed, tempt_speed, parent_speed, stroll_speed] = speeds;
+    let [
+        panic_speed,
+        breed_speed,
+        tempt_speed,
+        parent_speed,
+        stroll_speed,
+    ] = speeds;
     vec![
         float(),
         panic(1, panic_speed),
@@ -277,7 +283,14 @@ pub(super) fn brain(species: Species) -> Brain {
                 look(1, 8.0),
                 sit(2),
                 follow_owner(2, 1.0, 5.0, 1.0),
-                slot(3, MOVE, Goal::Hover { range: 8.0, rise: 0.0 }),
+                slot(
+                    3,
+                    MOVE,
+                    Goal::Hover {
+                        range: 8.0,
+                        rise: 0.0,
+                    },
+                ),
             ],
             vec![],
         ),
@@ -383,7 +396,14 @@ pub(super) fn brain(species: Species) -> Brain {
         ),
         Ghast => (
             vec![
-                slot(5, MOVE, Goal::Hover { range: 16.0, rise: 6.0 }),
+                slot(
+                    5,
+                    MOVE,
+                    Goal::Hover {
+                        range: 16.0,
+                        rise: 6.0,
+                    },
+                ),
                 ranged(7, Ranged::Fireball, 0, 64.0),
                 look(7, 16.0),
             ],
@@ -392,7 +412,14 @@ pub(super) fn brain(species: Species) -> Brain {
         Blaze => (
             vec![
                 ranged(4, Ranged::Blaze, 0, 48.0),
-                slot(5, MOVE, Goal::Hover { range: 6.0, rise: 2.0 }),
+                slot(
+                    5,
+                    MOVE,
+                    Goal::Hover {
+                        range: 6.0,
+                        rise: 2.0,
+                    },
+                ),
                 look(8, 8.0),
                 random_look(8),
             ],

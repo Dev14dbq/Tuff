@@ -102,10 +102,7 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
     use Species::*;
     let burning = m.burning > 0 && !m.species.fire_immune() || m.species == Blaze && m.charge > 0;
     let mut v = vec![
-        (
-            field::FLAGS,
-            MetadataValue::Byte(i8::from(burning)),
-        ),
+        (field::FLAGS, MetadataValue::Byte(i8::from(burning))),
         (metadata::HEALTH, MetadataValue::Float(m.health.max(0.0))),
         (
             field::MOB_FLAGS,
@@ -157,7 +154,11 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             v.push((a + 3, MetadataValue::VarInt(i32::from(m.collar))));
             v.push((
                 a + 4,
-                MetadataValue::VarLong(if m.anger > 0 { now + i64::from(m.anger) } else { -1 }),
+                MetadataValue::VarLong(if m.anger > 0 {
+                    now + i64::from(m.anger)
+                } else {
+                    -1
+                }),
             ));
             v.push((a + 5, MetadataValue::Holder(holder::WOLF, m.variant)));
         }
@@ -184,11 +185,12 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             ));
             if m.species == ZombieVillager {
                 v.push((19, MetadataValue::Boolean(m.conversion >= 0)));
-                let (kind, profession, level) = m
-                    .villager
-                    .clone()
-                    .unwrap_or(("minecraft:plains".into(), None, 1));
-                let id = |registry: &str, name: &str| ctx.data.builtin.id(registry, name).unwrap_or(0);
+                let (kind, profession, level) =
+                    m.villager
+                        .clone()
+                        .unwrap_or(("minecraft:plains".into(), None, 1));
+                let id =
+                    |registry: &str, name: &str| ctx.data.builtin.id(registry, name).unwrap_or(0);
                 let p = format!("minecraft:{}", profession.as_deref().unwrap_or("none"));
                 v.push((
                     20,
@@ -209,7 +211,10 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
         Spider | CaveSpider => v.push((16, MetadataValue::Byte(i8::from(m.climbing)))),
         Enderman => {
             v.push((16, MetadataValue::OptBlockState(m.carried)));
-            v.push((17, MetadataValue::Boolean(m.anger > 0 && m.target.is_some())));
+            v.push((
+                17,
+                MetadataValue::Boolean(m.anger > 0 && m.target.is_some()),
+            ));
         }
         Witch => v.push((17, MetadataValue::Boolean(m.drinking > 0))),
         Slime | MagmaCube => v.push((18, MetadataValue::VarInt(m.size))),

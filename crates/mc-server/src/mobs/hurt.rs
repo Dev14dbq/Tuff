@@ -77,7 +77,9 @@ fn armor_of(ctx: &ServerContext, m: &Mob) -> (f32, f32) {
         .iter()
         .flatten()
         .filter_map(|g| ctx.items.get(g.item))
-        .fold((m.species.armor(), 0.0), |a, i| (a.0 + i.armor, a.1 + i.toughness))
+        .fold((m.species.armor(), 0.0), |a, i| {
+            (a.0 + i.armor, a.1 + i.toughness)
+        })
 }
 
 /// Hurts a mob; whether the hit counted. A death starts [`die`].
@@ -89,12 +91,17 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     if m.dying.is_some() || m.is_dead() {
         return false;
     }
-    if m.species.fire_immune() && (FIRE.contains(&h.kind) || h.kind == "minecraft:fireball" && h.fire > 0) {
+    if m.species.fire_immune()
+        && (FIRE.contains(&h.kind) || h.kind == "minecraft:fireball" && h.fire > 0)
+    {
         return false;
     }
     // Endermen dodge what is thrown at them.
     if m.species == Species::Enderman
-        && matches!(h.kind, "minecraft:arrow" | "minecraft:trident" | "minecraft:thrown")
+        && matches!(
+            h.kind,
+            "minecraft:arrow" | "minecraft:trident" | "minecraft:thrown"
+        )
     {
         let ground = super::Ground::new(ctx);
         if mc_entity::mob::random_teleport(e, &ground, 32) {
@@ -114,8 +121,10 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
         m.burning = m.burning.max(h.fire * 20);
     }
     // Neutral mobs get angry at a player who hits them.
-    if matches!(m.species, Species::ZombifiedPiglin | Species::Wolf | Species::Enderman)
-        && h.by.is_some()
+    if matches!(
+        m.species,
+        Species::ZombifiedPiglin | Species::Wolf | Species::Enderman
+    ) && h.by.is_some()
         && !m.is_tame()
     {
         m.anger = 400 + m.below(400) as i32;
@@ -158,9 +167,10 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
         }),
     );
     if dead {
-        let killer = h.killer.clone().or_else(|| {
-            h.player.map(|_| "minecraft:player".to_owned())
-        });
+        let killer = h
+            .killer
+            .clone()
+            .or_else(|| h.player.map(|_| "minecraft:player".to_owned()));
         die(ctx, e, killer.as_deref().map(|k| (k, h.weapon.clone())), 0);
     }
     true
@@ -191,7 +201,15 @@ pub fn player_blow(
         enchants: enchant_list(h.comps.as_ref()),
     });
     let target_pos = entities[i].pos;
-    let landed = hit_with_blow(ctx, &mut entities[i], by, blow, blow.damage, blow.knockback, weapon.clone());
+    let landed = hit_with_blow(
+        ctx,
+        &mut entities[i],
+        by,
+        blow,
+        blow.damage,
+        blow.knockback,
+        weapon.clone(),
+    );
     crate::combat::blow_sound(ctx, blow, target_pos, landed);
     if !landed {
         return;
@@ -342,9 +360,7 @@ fn harm_at(ctx: &ServerContext, entities: &mut [Entity], j: usize, h: &Harm) {
 /// Effects some mobs give with their bite.
 fn poison(ctx: &ServerContext, uuid: u128, species: Species, difficulty: i32) {
     let (effect, seconds) = match species {
-        Species::CaveSpider if difficulty >= 2 => {
-            ("poison", if difficulty == 3 { 15 } else { 7 })
-        }
+        Species::CaveSpider if difficulty >= 2 => ("poison", if difficulty == 3 { 15 } else { 7 }),
         Species::Husk => ("hunger", 7 * difficulty),
         Species::WitherSkeleton => ("wither", 10),
         _ => return,
@@ -389,7 +405,14 @@ fn villager_hit(
         }),
     );
     let pos = entities[j].pos;
-    fx::sound(ctx, "entity.villager.hurt", fx::category::NEUTRAL, pos, 1.0, 1.0);
+    fx::sound(
+        ctx,
+        "entity.villager.hurt",
+        fx::category::NEUTRAL,
+        pos,
+        1.0,
+        1.0,
+    );
     if left > 0.0 {
         return;
     }
@@ -411,7 +434,14 @@ fn villager_hit(
         lock(&ctx.entities).push(z);
     } else {
         fx::status(ctx, id, 3);
-        fx::sound(ctx, "entity.villager.death", fx::category::NEUTRAL, pos, 1.0, 1.0);
+        fx::sound(
+            ctx,
+            "entity.villager.death",
+            fx::category::NEUTRAL,
+            pos,
+            1.0,
+            1.0,
+        );
     }
     let _ = ctx.events.send(Event::EntitiesRemoved(vec![id]));
 }
@@ -426,7 +456,10 @@ fn ent_of(ctx: &ServerContext, m: &Mob) -> crate::loot::Ent {
         ));
     }
     if let Some(name) = super::meta::variant_name(ctx, m.species, m.variant) {
-        components.push((format!("minecraft:{}/variant", m.species.path()), name.to_owned()));
+        components.push((
+            format!("minecraft:{}/variant", m.species.path()),
+            name.to_owned(),
+        ));
     }
     crate::loot::Ent {
         kind: m.species.id().to_owned(),
@@ -657,7 +690,12 @@ pub fn lay(ctx: &ServerContext, e: &Entity, fallback: &str) {
 }
 
 /// Two mobs in love make a baby; returns it (not yet in the world).
-pub fn breed(ctx: &ServerContext, entities: &mut [Entity], i: usize, partner: i32) -> Option<Entity> {
+pub fn breed(
+    ctx: &ServerContext,
+    entities: &mut [Entity],
+    i: usize,
+    partner: i32,
+) -> Option<Entity> {
     let j = entities.iter().position(|e| e.id == partner)?;
     let (a, b) = (&entities[i], &entities[j]);
     let (Kind::Mob(ma), Kind::Mob(mb)) = (&a.kind, &b.kind) else {
