@@ -992,6 +992,7 @@ fn explode_one(
     let reach = f64::from(blast.power) * 2.0;
     let c = blast.center;
     let mut knockback: Vec<(u128, [f64; 3])> = Vec::new();
+    let mut pushed = Vec::new();
     let mut candidates = std::mem::take(&mut sc.candidates);
     grid.near(c, reach + 2.0, &mut candidates);
     for &i in &candidates {
@@ -1050,8 +1051,15 @@ fn explode_one(
         for (v, d) in e.vel.iter_mut().zip(dir) {
             *v += d * impact;
         }
+        // Clients move dropped items themselves and need the push.
+        if matches!(e.kind, Kind::Item { .. }) {
+            pushed.push(crate::dropped::row(e));
+        }
     }
     sc.candidates = candidates;
+    if !pushed.is_empty() {
+        let _ = ctx.events.send(Event::EntitySync(pushed));
+    }
 
     // Players.
     let attacker = blast

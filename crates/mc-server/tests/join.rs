@@ -3241,3 +3241,194 @@ async fn standing_in_a_lit_frame_takes_a_survival_player_to_the_nether() {
     assert!(near, "no portal around {here:?}");
     let _ = stop.send(());
 }
+
+/// A velocity packed as `LpVec3`: a zero byte for none, else two low bytes
+/// and a big-endian int holding a 2-bit scale, a "scale continues" bit and
+/// three 15-bit axes, then a VarInt with the rest of the scale if flagged.
+fn lpvec3(r: &mut Reader) -> [f64; 3] {
+    let first = r.u8().unwrap();
+    if first == 0 {
+        return [0.0; 3];
+    }
+    let second = r.u8().unwrap();
+    let rest = r.i32().unwrap() as u32;
+    let bits = u64::from(first) | u64::from(second) << 8 | u64::from(rest) << 16;
+    let mut scale = bits & 3;
+    if bits & 4 != 0 {
+        scale |= (r.varint().unwrap() as u64) << 2;
+    }
+    let axis = |shift: u32| {
+        let v = ((bits >> shift) & 0x7fff).min(32766) as f64;
+        (v / 32766.0 * 2.0 - 1.0) * scale as f64
+    };
+    [axis(3), axis(18), axis(33)]
+}
+
+#[tokio::test]
+async fn thrown_items_fly_and_are_picked_up_for_everyone() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Thrower".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let item_type = ctx
+        .data
+        .builtin
+        .id("minecraft:entity_type", "minecraft:item")
+        .unwrap();
+    let cobblestone = ctx
+        .data
+        .builtin
+        .id("minecraft:item", "minecraft:cobblestone")
+        .unwrap();
+    let (mut thrower, at) = join_offline(addr, ctx.ids.clone(), "Thrower").await;
+    let (mut watcher, _) = join_offline(addr, ctx.ids.clone(), "Watcher").await;
+    // The watcher stands aside, out of reach of the item.
+    let mut aside = Vec::new();
+    aside.put_f64(at.0 + 6.0);
+    aside.put_f64(at.1);
+    aside.put_f64(at.2);
+    aside.put_u8(0x01);
+    watcher.send("minecraft:move_player_pos", aside).await;
+    chat_command(&mut thrower, "gamemode survival").await;
+    let (_, seen) = chat_command(&mut thrower, "give Thrower cobblestone 5").await;
+    packet(&mut thrower, &seen, "minecraft:container_set_slot").await;
+
+    // Q: one item out of the hand, looking straight ahead (south).
+    let mut drop = Vec::new();
+    drop.put_varint(4);
+    drop.put_position(mc_protocol::Position::new(0, 0, 0));
+    drop.put_i8(0);
+    drop.put_varint(0);
+    thrower.send("minecraft:player_action", drop).await;
+
+    let spawned = |body: &[u8]| {
+        let mut r = Reader::new(body);
+        let id = r.varint().unwrap();
+        r.uuid().unwrap();
+        let kind = r.varint().unwrap();
+        let pos = [r.f64().unwrap(), r.f64().unwrap(), r.f64().unwrap()];
+        (id, kind, pos, lpvec3(&mut r))
+    };
+    let mut item = None;
+    let mut hand = None;
+    for bot in [&mut thrower, &mut watcher] {
+        let (id, kind, pos, vel) = loop {
+            let (name, body) = bot.recv().await;
+            if name == "minecraft:container_set_slot" {
+                let mut r = Reader::new(&body);
+                r.varint().unwrap();
+                r.varint().unwrap();
+                hand = Some((r.i16().unwrap(), r.varint().unwrap()));
+            }
+            if name == "minecraft:add_entity" && spawned(&body).1 == item_type {
+                break spawned(&body);
+            }
+        };
+        assert_eq!(kind, item_type);
+        assert!(
+            (pos[1] - (at.1 + 1.32)).abs() < 0.01,
+            "from the eyes: {pos:?}"
+        );
+        assert!(
+            (0.25..0.35).contains(&vel[2]) && vel[0].abs() < 0.05 && vel[1].abs() < 0.25,
+            "thrown forward, not dropped dead: {vel:?}"
+        );
+        assert!(item.is_none_or(|i| i == id));
+        item = Some(id);
+    }
+    let item = item.unwrap();
+    assert_eq!(hand, Some((36, 4)), "four left in the hand");
+
+    // Watching: positions come with velocities and not every tick. The
+    // thrower walks onto the item where it landed and picks it up once its
+    // 40 ticks are over; both see it taken and gone.
+    let mut syncs = 0;
+    let mut order = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let begin = std::time::Instant::now();
+    while !order.contains(&"remove") {
+        assert!(std::time::Instant::now() < deadline, "no pickup: {order:?}");
+        let (name, body) = thrower.recv().await;
+        let mut r = Reader::new(&body);
+        match name.as_str() {
+            "minecraft:keep_alive" => thrower.send("minecraft:keep_alive", body).await,
+            "minecraft:entity_position_sync" if r.varint().unwrap() == item => {
+                syncs += 1;
+                r.varint().unwrap();
+                let (x, y, z) = (r.f64().unwrap(), r.f64().unwrap(), r.f64().unwrap());
+                let mut moved = Vec::new();
+                moved.put_f64(x);
+                moved.put_f64(y);
+                moved.put_f64(z);
+                moved.put_u8(0x01);
+                thrower.send("minecraft:move_player_pos", moved).await;
+            }
+            "minecraft:take_item_entity" if r.varint().unwrap() == item => {
+                assert!(
+                    begin.elapsed() > Duration::from_millis(1500),
+                    "not before the pickup delay"
+                );
+                assert_eq!(r.varint().unwrap(), {
+                    let players = ctx.players.lock().unwrap();
+                    players
+                        .values()
+                        .find(|p| p.profile.name == "Thrower")
+                        .unwrap()
+                        .entity_id
+                });
+                assert_eq!(r.varint().unwrap(), 1);
+                order.push("take");
+            }
+            "minecraft:container_set_slot" => {
+                r.varint().unwrap();
+                r.varint().unwrap();
+                assert_eq!(
+                    (r.i16().unwrap(), r.varint().unwrap(), r.varint().unwrap()),
+                    (36, 5, cobblestone),
+                    "back in the hand"
+                );
+                order.push("slot");
+            }
+            "minecraft:remove_entities" => {
+                let n = r.varint().unwrap();
+                if (0..n).any(|_| r.varint().unwrap() == item) {
+                    order.push("remove");
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(order, ["take", "slot", "remove"], "vanilla's order");
+    assert!(
+        (1..=6).contains(&syncs),
+        "{syncs} position syncs in about 2 s: not every tick"
+    );
+    let mut taken = false;
+    loop {
+        let (name, body) = watcher.recv().await;
+        let mut r = Reader::new(&body);
+        match name.as_str() {
+            "minecraft:keep_alive" => watcher.send("minecraft:keep_alive", body).await,
+            "minecraft:take_item_entity" if r.varint().unwrap() == item => taken = true,
+            "minecraft:remove_entities" => {
+                let n = r.varint().unwrap();
+                if (0..n).any(|_| r.varint().unwrap() == item) {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(taken, "the watcher sees the pickup too");
+    assert!(
+        !ctx.entities.lock().unwrap().iter().any(|e| e.id == item),
+        "the item is gone"
+    );
+    let _ = stop.send(());
+}

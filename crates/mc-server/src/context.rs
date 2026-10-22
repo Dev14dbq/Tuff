@@ -217,11 +217,13 @@ pub enum Event {
     ContainerGone {
         position: Position,
     },
-    /// A player picked up an item entity (the pickup animation).
+    /// A player picked up an item entity (the pickup animation), and the
+    /// collector's inventory slots that changed, sent to them right after.
     ItemTaken {
         item_entity: i32,
         collector: i32,
         count: i32,
+        slots: Vec<(i16, Option<mc_protocol::packets::play::ItemStack>)>,
     },
     /// A player's health or food changed (for them).
     Health {

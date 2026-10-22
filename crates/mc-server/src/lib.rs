@@ -20,6 +20,7 @@ mod crafting;
 mod damage;
 mod daylight;
 mod decor;
+mod dropped;
 mod effects;
 mod explosion;
 mod fastmap;

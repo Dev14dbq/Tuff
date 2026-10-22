@@ -54,6 +54,8 @@ pub struct Item {
     pub enchantable: Option<i32>,
     /// `jukebox_playable`: the song's id.
     pub jukebox_song: Option<String>,
+    /// `damage_resistant` against fire: survives fire and lava as an item.
+    pub fire_resistant: bool,
 }
 
 #[derive(Debug, Default)]
@@ -215,6 +217,7 @@ fn parse(name: &str, c: &Value) -> Item {
             Value::String(s) => Some(s.clone()),
             other => other["song"].as_str().map(str::to_owned),
         },
+        fire_resistant: c["minecraft:damage_resistant"]["types"] == "#minecraft:is_fire",
         enchantable: c["minecraft:enchantable"]["value"]
             .as_i64()
             .map(|v| v as i32),

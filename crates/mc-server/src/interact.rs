@@ -201,8 +201,9 @@ impl Hands {
         if hand == 1 { 45 } else { 36 + self.selected }
     }
 
-    /// Puts items in: first onto matching stacks, then into empty slots
-    /// (hotbar first, then the main inventory). Returns how many went in and
+    /// Puts items in: first onto matching stacks (the one in the main hand,
+    /// then the off hand, then the hotbar and the main inventory), then into
+    /// empty slots (hotbar first). Returns how many went in and
     /// the container slots that changed.
     pub fn insert(&mut self, item: i32, count: i32, max: i32) -> (i32, Vec<usize>) {
         self.insert_stack(&ItemStack::new(item, count), max)
@@ -212,10 +213,14 @@ impl Hands {
     /// stacks with the same damage.
     pub fn insert_stack(&mut self, stack: &ItemStack, max: i32) -> (i32, Vec<usize>) {
         let order: Vec<usize> = (36..45).chain(9..36).collect();
+        let hands = [self.hand_slot(0), self.hand_slot(1)];
         let mut changed = Vec::new();
         let mut count = stack.count;
         if !stack.has_component_changes {
-            for &slot in &order {
+            for &slot in hands
+                .iter()
+                .chain(order.iter().filter(|s| !hands.contains(s)))
+            {
                 if count == 0 {
                     break;
                 }
