@@ -949,6 +949,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     entities.append(&mut stored);
     *stored = entities;
     drop(stored);
+    crate::command_blocks::run_carts(ctx, level, std::mem::take(&mut out.carts));
     if !moved.is_empty() {
         let _ = ctx.events.send(Event::EntitiesMoved(moved));
     }

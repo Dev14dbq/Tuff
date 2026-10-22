@@ -210,10 +210,18 @@ pub fn build(
                     "furnace_minecart" => Cart::Furnace,
                     "hopper_minecart" => Cart::Hopper,
                     "tnt_minecart" => Cart::Tnt,
+            "command_block_minecart" => Cart::Command,
                     _ => return None,
                 })
             };
-            Some((Kind::Vehicle(Vehicle::new(craft, yaw)), None))
+            let mut v = Vehicle::new(craft, yaw);
+            if let Some(Tag::String(c)) = nbt.get("Command") {
+                v.command.command = c.clone();
+            }
+            if let Some(Tag::Byte(b)) = nbt.get("TrackOutput") {
+                v.command.track_output = *b != 0;
+            }
+            Some((Kind::Vehicle(v), None))
         }
     }
 }

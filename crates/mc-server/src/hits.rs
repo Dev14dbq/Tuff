@@ -71,6 +71,9 @@ pub struct Out {
     pub blasts: Vec<crate::explosion::Blast>,
     /// Cells a fireball set alight (fire goes there if they are air).
     pub fires: Vec<[i32; 3]>,
+    /// Command block minecarts an activator rail set off (entity ids): they
+    /// run once the entities are back in the world.
+    pub carts: Vec<i32>,
 }
 
 pub struct Tick<'a> {

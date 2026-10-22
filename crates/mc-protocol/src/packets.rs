@@ -2319,6 +2319,9 @@ pub mod play {
         VarLong(i64),
         /// A custom name (a text component), or none.
         OptComponent(Option<mc_nbt::Tag>),
+        String(String),
+        /// A text component.
+        Component(mc_nbt::Tag),
         /// A living entity by UUID (a pet's owner), or none.
         OptUuid(Option<u128>),
         /// A block state (an enderman's), or none.
@@ -2344,6 +2347,14 @@ pub mod play {
                 MetadataValue::VarLong(v) => {
                     out.put_varint(2);
                     out.put_varlong(*v);
+                }
+                MetadataValue::String(s) => {
+                    out.put_varint(4);
+                    out.put_string(s);
+                }
+                MetadataValue::Component(tag) => {
+                    out.put_varint(5);
+                    crate::codec::put_nbt(out, tag);
                 }
                 MetadataValue::OptComponent(tag) => {
                     out.put_varint(6);

@@ -433,6 +433,69 @@ pub fn configure(
     ))
 }
 
+/// The command block minecart with entity id `id`, if there is one.
+fn cart(ctx: &ServerContext, id: i32) -> Option<(u128, [f64; 3], mc_entity::extra::CommandCart)> {
+    crate::tick::lock(&ctx.entities)
+        .iter()
+        .find(|e| e.id == id && !e.removed)
+        .and_then(|e| match &e.kind {
+            mc_entity::Kind::Vehicle(v)
+                if v.craft == mc_entity::extra::Craft::Minecart(mc_entity::extra::Cart::Command) =>
+            {
+                Some((e.uuid, e.pos, (*v.command).clone()))
+            }
+            _ => None,
+        })
+}
+
+/// Stores a command block minecart's state and shows it to the players.
+fn put_cart(ctx: &ServerContext, id: i32, c: mc_entity::extra::CommandCart) {
+    let mut entities = crate::tick::lock(&ctx.entities);
+    if let Some(e) = entities.iter_mut().find(|e| e.id == id)
+        && let mc_entity::Kind::Vehicle(v) = &mut e.kind
+    {
+        let entries = crate::fx::command_cart_meta(&c);
+        *v.command = c;
+        drop(entities);
+        let _ = ctx.events.send(Event::EntitiesData(vec![
+            mc_protocol::packets::play::SetEntityData {
+                entity_id: id,
+                entries,
+            },
+        ]));
+    }
+}
+
+/// Command block minecarts an activator rail set off: each runs its
+/// command as itself, where it is.
+pub fn run_carts(ctx: &ServerContext, level: &mut WorldLevel, ids: Vec<i32>) {
+    for id in ids {
+        let Some((uuid, pos, c)) = cart(ctx, id) else {
+            continue;
+        };
+        let mut d = Compound::new();
+        d.insert("Command", Tag::String(c.command.clone()));
+        set_flag(&mut d, "TrackOutput", c.track_output);
+        set_flag(&mut d, "UpdateLastExecution", true);
+        d.insert("LastExecution", Tag::Long(c.last_execution));
+        let source = Source::Cart {
+            uuid,
+            pos,
+            name: "Minecart with Command Block".to_owned(),
+        };
+        let now = level.game_time();
+        perform(ctx, level.control.as_deref_mut(), source, &mut d, now);
+        let last_output = d.get("LastOutput").map(|t| ctx.commands.lang.render(t));
+        let c = mc_entity::extra::CommandCart {
+            success_count: int(&d, "SuccessCount"),
+            last_execution: long(&d, "LastExecution"),
+            last_output,
+            ..c
+        };
+        put_cart(ctx, id, c);
+    }
+}
+
 /// A command block minecart's window was done: its command and whether it
 /// tracks output.
 pub fn configure_cart(
@@ -446,12 +509,23 @@ pub fn configure_cart(
     if !may_use(ctx, uuid, game_mode) {
         return Some(mc_protocol::text::translate("advMode.notAllowed", Vec::new()));
     }
-    let _ = (entity_id, track_output);
+    let (_, _, mut c) = cart(ctx, entity_id)?;
+    c.command = command.to_owned();
+    c.track_output = track_output;
+    if !track_output {
+        c.last_output = None;
+    }
+    put_cart(ctx, entity_id, c);
     if command.is_empty() {
         return None;
     }
+    let key = if ctx.game_rule_bool("command_blocks_work") {
+        "advMode.setCommand.success"
+    } else {
+        "advMode.setCommand.disabled"
+    };
     Some(mc_protocol::text::translate(
-        "advMode.setCommand.success",
+        key,
         vec![Tag::String(command.to_owned())],
     ))
 }
@@ -567,5 +641,25 @@ mod tests {
         // Nothing to kill: the conditional chain block does not run.
         assert_eq!(name(&ctx, Position::new(9, -55, 0)), "minecraft:air");
         assert_eq!(signal(&ctx, q), Some(0));
+    }
+
+    #[test]
+    fn a_command_block_minecart_runs_as_itself() {
+        let Some(ctx) = context() else {
+            return;
+        };
+        let craft = mc_entity::extra::Craft::Minecart(mc_entity::extra::Cart::Command);
+        let mut e = crate::vehicles::new(&ctx, craft, [12.5, -60.0, 0.5], 0.0);
+        if let mc_entity::Kind::Vehicle(v) = &mut e.kind {
+            v.command.command = "setblock ~ ~5 ~ minecraft:stone".into();
+        }
+        let id = e.id;
+        lock(&ctx.entities).push(e);
+        let mut level = WorldLevel::new(&ctx);
+        run_carts(&ctx, &mut level, vec![id]);
+        drop(level);
+        assert_eq!(name(&ctx, Position::new(12, -55, 0)), "minecraft:stone");
+        let (_, _, c) = cart(&ctx, id).expect("cart");
+        assert_eq!(c.success_count, 1);
     }
 }

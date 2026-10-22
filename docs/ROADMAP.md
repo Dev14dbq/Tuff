@@ -560,8 +560,15 @@ heightmap тоже. Генерация в секунду на ядро ≥ ва�
     затухание дропа для взрыва крипера, `spawn_mobs`, `spawn_monsters`,
     `players_sleeping_percentage`, `respawn_radius`, `ender_pearls_vanish_on_death`, задержки
     порталов Незера и `allow_entering_nether_using_portals`;
-  - правила, чьих механик ещё нет: `command_blocks_work`, `command_block_output`,
-    `spawner_blocks_work`, `spread_vines`, `max_entity_cramming`, `universal_anger`,
+  - ✅ командные блоки: импульсный, цепной и повторяющийся; условный режим, «нужен сигнал» и
+    «всегда активен», запуск по фронту сигнала, цепочка до `max_command_sequence_length`, счётчик
+    успехов для компаратора, последний вывод и «отслеживать вывод», правила
+    `command_block_output` и `command_blocks_work` (в 26.3 оно заменило `enable-command-block`),
+    окно (данные блок-сущности оператору в креативе, `set_command_block`), источник — центр
+    блока без сущности, имя `@`; ставят только операторы в креативе; команда не уходит в данные
+    чанков. Вагонетка с командным блоком: призыв с `Command`, активаторные рельсы раз в 4 тика,
+    `set_command_minecart`, метаданные команды и вывода (13, 14), выпадает простая вагонетка;
+  - правила, чьих механик ещё нет: `spawner_blocks_work`, `spread_vines`, `max_entity_cramming`, `universal_anger`,
     `forgive_dead_players`, `raids`, `spawn_patrols`, `spawn_phantoms`, `spawn_wardens`,
     `projectiles_can_break_blocks`, `global_sound_events`, `locator_bar`,
     `player_movement_check`, `elytra_movement_check`, `spectators_generate_chunks`,

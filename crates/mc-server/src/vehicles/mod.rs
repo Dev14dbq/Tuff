@@ -53,6 +53,7 @@ fn craft_of(item: &str) -> Option<Craft> {
             "furnace_minecart" => Cart::Furnace,
             "hopper_minecart" => Cart::Hopper,
             "tnt_minecart" => Cart::Tnt,
+            "command_block_minecart" => Cart::Command,
             _ => return None,
         })
     })
@@ -73,6 +74,7 @@ pub fn item_of(craft: &Craft) -> String {
             Cart::Furnace => "minecraft:furnace_minecart",
             Cart::Hopper => "minecraft:hopper_minecart",
             Cart::Tnt => "minecraft:tnt_minecart",
+            Cart::Command => "minecraft:command_block_minecart",
         }
         .into(),
     }
@@ -282,7 +284,12 @@ pub fn destroy(ctx: &ServerContext, e: &mut Entity, fresh: &mut Vec<Entity>, dro
         &mut kept
     };
     if drop_item {
-        fresh.extend(crate::decor::dropped(ctx, e.pos, &item_of(&v.craft), 1, 0));
+        // A command block minecart leaves only the minecart.
+        let item = match v.craft {
+            Craft::Minecart(Cart::Command) => "minecraft:minecart".to_owned(),
+            _ => item_of(&v.craft),
+        };
+        fresh.extend(crate::decor::dropped(ctx, e.pos, &item, 1, 0));
     }
     // What it held spills out, and windows on it close.
     let (items, viewers) = crate::containers::entity_gone(ctx, e.id);
@@ -398,7 +405,12 @@ pub fn interact(
         );
         return;
     }
-    if matches!(v.craft, Craft::Minecart(Cart::Chest | Cart::Hopper)) {
+    // Only the plain minecart is ridden; a command block one opens its
+    // window in the operator's game.
+    if matches!(
+        v.craft,
+        Craft::Minecart(Cart::Chest | Cart::Hopper | Cart::Command | Cart::Furnace | Cart::Tnt)
+    ) {
         return;
     }
     if v.riders.len() < capacity(&v.craft) && !v.riders.contains(&actor.entity_id) {
