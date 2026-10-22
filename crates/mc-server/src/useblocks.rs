@@ -174,6 +174,20 @@ pub fn try_use(
         }
         n if n.ends_with("_bed") => bed(ctx, outcome, actor, clicked, state),
         "minecraft:respawn_anchor" => anchor(ctx, outcome, actor, hand, clicked, state, held_name),
+        "minecraft:command_block"
+        | "minecraft:chain_command_block"
+        | "minecraft:repeating_command_block" => {
+            match crate::command_blocks::open(ctx, actor.uuid, actor.game_mode, clicked) {
+                Some(packet) => {
+                    outcome.events.push(Event::Direct {
+                        uuid: actor.uuid,
+                        packet: crate::context::Direct::BlockEntityData(packet),
+                    });
+                    true
+                }
+                None => false,
+            }
+        }
         _ => false,
     };
     if reacted {

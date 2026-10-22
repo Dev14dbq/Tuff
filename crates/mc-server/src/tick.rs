@@ -73,7 +73,7 @@ impl WorldTime {
         }
     }
 
-    fn advance(&mut self) {
+    pub(crate) fn advance(&mut self) {
         self.age += 1;
         for clock in self.clocks.iter_mut().filter(|c| c.running) {
             clock.fraction += clock.rate;
@@ -143,6 +143,20 @@ pub enum Action {
         /// Where on the entity the click landed.
         at: Option<[f64; 3]>,
     },
+    /// A command block's window was done (`mode`: 0 chain, 1 repeating, 2
+    /// impulse; `flags`: 1 track output, 2 conditional, 4 always active).
+    CommandBlock {
+        position: Position,
+        command: String,
+        mode: i32,
+        flags: u8,
+    },
+    /// A command block minecart's window was done.
+    CommandMinecart {
+        entity_id: i32,
+        command: String,
+        track_output: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -193,7 +207,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             lock(&ctx.time).advance();
             crate::commands::run_functions(&ctx, &mut control);
             for d in &dimensions {
-                run_scheduled_ticks(d);
+                run_scheduled_ticks_with(d, Some(&mut control));
                 crate::precipitation::tick(d);
                 crate::random_ticks::tick(d);
                 crate::daylight::tick(d, lock(&d.time).age);
@@ -360,7 +374,16 @@ fn queue_saved_ticks(ctx: &ServerContext, ticks: &mut mc_tick::ScheduledTicks, n
 
 /// Due block ticks, then due fluid ticks, then entities; what they change
 /// goes to everyone.
+#[cfg(test)]
 pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
+    run_scheduled_ticks_with(ctx, None);
+}
+
+/// [`run_scheduled_ticks`], with the tick's state for command blocks.
+pub(crate) fn run_scheduled_ticks_with<'a>(
+    ctx: &'a ServerContext,
+    control: Option<&'a mut TickControl>,
+) {
     let now = lock(&ctx.time).age;
     for (p, id) in ctx.world.take_woken() {
         match id.as_str() {
@@ -390,6 +413,7 @@ pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
         (blocks, fluids)
     };
     let mut level = crate::level::WorldLevel::new(ctx);
+    level.control = control;
     let logic = level.logic();
     // Detector rails look for minecarts in their ticks.
     level.minecarts = minecart_boxes(&lock(&ctx.entities));
@@ -1018,6 +1042,42 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             attack,
             at,
         } => crate::hits::use_entity(ctx, actor, entity_id, hand, attack, at),
+        Action::CommandBlock {
+            position,
+            command,
+            mode,
+            flags,
+        } => Outcome {
+            messages: crate::command_blocks::configure(
+                ctx,
+                actor.uuid,
+                actor.game_mode,
+                position,
+                &command,
+                mode,
+                flags,
+            )
+            .into_iter()
+            .collect(),
+            ..Outcome::default()
+        },
+        Action::CommandMinecart {
+            entity_id,
+            command,
+            track_output,
+        } => Outcome {
+            messages: crate::command_blocks::configure_cart(
+                ctx,
+                actor.uuid,
+                actor.game_mode,
+                entity_id,
+                &command,
+                track_output,
+            )
+            .into_iter()
+            .collect(),
+            ..Outcome::default()
+        },
     }
 }
 

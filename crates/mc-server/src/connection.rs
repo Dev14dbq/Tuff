@@ -1025,6 +1025,16 @@ async fn play(
                             let _ = ctx.events.send(Event::Teleport { uuid, pose: to });
                         }
                     }
+                    play::Serverbound::SetCommandBlock { position, command, mode, flags } => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::CommandBlock { position, command, mode, flags };
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                    }
+                    play::Serverbound::SetCommandMinecart { entity_id: cart, command, track_output } => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::CommandMinecart { entity_id: cart, command, track_output };
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                    }
                     play::Serverbound::SignUpdate { position, front, lines } => {
                         let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                         if let Some(event) = crate::interact::sign_update(&ctx, actor, position, front, lines) {
@@ -1395,6 +1405,7 @@ async fn play(
                             Direct::ClearDialog(p) => writer.queue(&p)?,
                             Direct::PostEffects(p) => writer.queue(&p)?,
                             Direct::GameEvent(p) => writer.queue(&p)?,
+                            Direct::BlockEntityData(p) => writer.queue(&p)?,
                             Direct::EntityEvent(p) => writer.queue(&p)?,
                             Direct::Motion(p) => writer.queue(&p)?,
                         }

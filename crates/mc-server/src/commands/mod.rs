@@ -89,6 +89,17 @@ pub enum Source {
         name: String,
         pose: Pose,
     },
+    /// A command block: from the middle of the block, as no entity.
+    Block {
+        pos: mc_protocol::Position,
+        name: String,
+    },
+    /// A command block minecart: the minecart itself.
+    Cart {
+        uuid: u128,
+        pos: [f64; 3],
+        name: String,
+    },
 }
 
 /// A player's permission level: their op level, 0 if not an op.
@@ -115,6 +126,8 @@ pub struct Output {
     pub forks: i64,
     /// A limit was hit: everything left is dropped.
     pub aborted: bool,
+    /// Results that succeeded (a command block's success count).
+    pub successes: i32,
 }
 
 /// Where and as whom a command runs (`execute` changes it).
@@ -134,6 +147,9 @@ pub struct Src {
     pub stores: Vec<Store>,
     /// In a function: no feedback, errors dropped.
     pub silent: bool,
+    /// A command block or its minecart: feedback follows
+    /// `command_block_output`, not `send_command_feedback`.
+    pub machine: bool,
 }
 
 /// Where `execute store result|success ...` puts what a command returned.
@@ -195,8 +211,37 @@ impl Src {
                     eyes: false,
                     stores: Vec::new(),
                     silent: false,
+                    machine: false,
                 }
             }
+            Source::Block { pos, name } => Src {
+                who: Who::Console,
+                name: name.clone(),
+                pos: [
+                    f64::from(pos.x) + 0.5,
+                    f64::from(pos.y) + 0.5,
+                    f64::from(pos.z) + 0.5,
+                ],
+                rot: [0.0, 0.0],
+                level: 2,
+                dim: ctx.dim,
+                eyes: false,
+                stores: Vec::new(),
+                silent: false,
+                machine: true,
+            },
+            Source::Cart { uuid, pos, name } => Src {
+                who: Who::Entity(*uuid),
+                name: name.clone(),
+                pos: *pos,
+                rot: [0.0, 0.0],
+                level: 2,
+                dim: ctx.dim,
+                eyes: false,
+                stores: Vec::new(),
+                silent: false,
+                machine: true,
+            },
             Source::Player { uuid, name, pose } => Src {
                 who: Who::Player(*uuid),
                 name: name.clone(),
@@ -207,6 +252,7 @@ impl Src {
                 eyes: false,
                 stores: Vec::new(),
                 silent: false,
+                machine: false,
             },
         }
     }
@@ -254,7 +300,12 @@ impl Run<'_> {
         if self.src.silent {
             return;
         }
-        if self.ctx.game_rule_bool("send_command_feedback") || self.src.who == Who::Console {
+        let shown = if self.src.machine {
+            self.ctx.game_rule_bool("command_block_output")
+        } else {
+            self.ctx.game_rule_bool("send_command_feedback") || self.src.who == Who::Console
+        };
+        if shown {
             self.out.lines.push(message.clone());
         }
         if broadcast {
@@ -295,11 +346,17 @@ pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, lin
     if let Err(e) = result {
         report(ctx, source, &e, &mut out);
     }
+    // A command block tells the operators only with `command_block_output`.
+    if src.machine && !ctx.game_rule_bool("command_block_output") {
+        admin.clear();
+    }
     for message in admin {
         let text = commands.lang.render(&message);
         match source {
             Source::Console => {}
-            Source::Player { name, .. } => info!("[{name}: {text}]"),
+            Source::Player { name, .. } | Source::Block { name, .. } | Source::Cart { name, .. } => {
+                info!("[{name}: {text}]")
+            }
         }
         if ctx.game_rule_bool("log_admin_commands") {
             out.events.push(Event::AdminFeedback {
@@ -320,7 +377,9 @@ pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, lin
 fn report(ctx: &ServerContext, source: &Source, e: &CommandError, out: &mut Output) {
     match source {
         Source::Console => warn!("{}", e.console(&ctx.commands.lang)),
-        Source::Player { .. } => out.lines.extend(e.lines()),
+        Source::Player { .. } | Source::Block { .. } | Source::Cart { .. } => {
+            out.lines.extend(e.lines())
+        }
     }
 }
 
@@ -459,7 +518,10 @@ pub(crate) fn run_chain(
             });
         }
         match result {
-            Some(Ok(n)) => total += n,
+            Some(Ok(n)) => {
+                total += n;
+                r.out.successes += 1;
+            }
             Some(Err(_)) if silent => {}
             Some(Err(e)) if many => r.out.lines.extend(e.lines()),
             Some(Err(e)) => return Err(e),
