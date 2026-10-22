@@ -466,6 +466,7 @@ async fn play(
     let mut ctx = writer.ctx.of_player(uuid);
     // Subscribe before reading the player list, so nobody slips through.
     let mut events = ctx.events.subscribe();
+    crate::commands::load_progress(&ctx, uuid, &me.extra.recipes);
     let mut pose = session
         .saved
         .as_ref()

@@ -39,6 +39,7 @@ use crate::context::{Event, Pose, ServerContext};
 use crate::tick::{TickControl, lock};
 pub(crate) use functions::tick as run_functions;
 
+pub use progress::{known_recipes, load_progress, save_advancements};
 pub use suggest::suggest;
 
 /// The command tree with what its arguments are checked against, and the

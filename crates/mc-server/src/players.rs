@@ -92,6 +92,8 @@ pub struct Extra {
     /// beside them.
     pub ender: Vec<Option<ItemStack>>,
     pub ender_components: std::collections::HashMap<usize, Tag>,
+    /// Known recipes (`recipeBook.recipes`).
+    pub recipes: Vec<String>,
 }
 
 /// Container slot of each equipment key.
@@ -285,6 +287,19 @@ impl Store {
         let extra = Extra {
             ender,
             ender_components,
+            recipes: match root.get("recipeBook") {
+                Some(Tag::Compound(book)) => match book.get("recipes") {
+                    Some(Tag::List(l)) => l
+                        .iter()
+                        .filter_map(|t| match t {
+                            Tag::String(s) => Some(s.clone()),
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                },
+                _ => Vec::new(),
+            },
             respawn: match root.get("respawn") {
                 Some(Tag::Compound(c)) => Respawn::from_nbt(c),
                 _ => None,
@@ -383,6 +398,18 @@ impl Store {
                 root.remove("respawn");
             }
         }
+        let mut book = match root.get("recipeBook") {
+            Some(Tag::Compound(b)) => b.clone(),
+            _ => Compound::new(),
+        };
+        book.insert(
+            "recipes",
+            Tag::List(saved.extra.recipes.iter().map(|r| Tag::String(r.clone())).collect()),
+        );
+        if book.get("toBeDisplayed").is_none() {
+            book.insert("toBeDisplayed", Tag::List(Vec::new()));
+        }
+        root.insert("recipeBook", Tag::Compound(book));
         if saved.extra.tags.is_empty() {
             root.remove("Tags");
         } else {
