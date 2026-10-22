@@ -660,6 +660,12 @@ pub fn use_item_on(
         });
         return outcome;
     }
+    // Spawn eggs of mobs (and a spawner's kind).
+    if let Some(name) = held_name
+        && crate::mobs::eggs::use_on_block(ctx, &mut outcome, actor, hand, name, clicked, face)
+    {
+        return refuse(outcome);
+    }
     // Spawn eggs of villagers and wandering traders.
     if let Some(egg @ ("minecraft:villager_spawn_egg" | "minecraft:wandering_trader_spawn_egg")) =
         held_name
@@ -1055,6 +1061,9 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
         return outcome;
     }
     if let Some(done) = crate::projectiles::use_item(ctx, actor, hand, yaw, pitch) {
+        return done;
+    }
+    if let Some(done) = crate::mobs::eggs::use_in_air(ctx, actor, hand, yaw, pitch) {
         return done;
     }
     if let Some(h) = crate::held::held(ctx, actor.uuid, hand)

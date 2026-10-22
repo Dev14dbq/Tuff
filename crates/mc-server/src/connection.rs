@@ -1004,6 +1004,45 @@ async fn play(
                             }
                         }
                     }
+                    play::Serverbound::PickItemFromEntity { entity_id: target, .. } if game_mode != 3 => {
+                        // The tick thread has the entities out while it moves
+                        // them: look again a little later.
+                        let mut item = None;
+                        for _ in 0..5 {
+                            let found = ctx.entities.lock().expect("entities lock").iter()
+                                .find(|e| e.id == target && !e.removed)
+                                .map(|e| {
+                                    let (dx, dy, dz) = (e.pos[0] - pose.x, e.pos[1] - pose.y, e.pos[2] - pose.z);
+                                    (dx * dx + dy * dy + dz * dz <= 64.0, crate::mobs::eggs::pick(&ctx, e))
+                                });
+                            if let Some((near, egg)) = found {
+                                item = egg.filter(|_| near);
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        }
+                        if let Some(item) = item {
+                            let mut changed = Vec::new();
+                            let mut selected = None;
+                            change_hands(&ctx, uuid, entity_id, |hands| {
+                                let was = hands.selected;
+                                changed = hands
+                                    .pick(item, game_mode == CREATIVE)
+                                    .into_iter()
+                                    .map(|i| (i, hands.slots[i].clone()))
+                                    .collect();
+                                if hands.selected != was {
+                                    selected = Some(hands.selected);
+                                }
+                            });
+                            for (slot, stack) in changed {
+                                windows.inventory_slot(writer, slot as i16, stack)?;
+                            }
+                            if let Some(slot) = selected {
+                                writer.queue(&play::SetHeldSlot { slot: slot as i32 })?;
+                            }
+                        }
+                    }
                     play::Serverbound::ClientCommand { action: 1 } => {
                         // No statistics are kept yet: an empty list, so the
                         // menu opens instead of waiting.
