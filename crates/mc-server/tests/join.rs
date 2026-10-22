@@ -713,12 +713,12 @@ async fn chunks_nobody_has_are_unloaded() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(ctx.world.loaded_chunks(), 25, "a 5×5 view");
-    assert_eq!(ctx.world.unload_unused(), 0, "Alice still has them");
+    assert!(ctx.world.unload_unused().is_empty(), "Alice still has them");
     drop(alice);
     // The server notices the closed connection and forgets her chunks.
     let mut dropped = 0;
     for _ in 0..50 {
-        dropped += ctx.world.unload_unused();
+        dropped += ctx.world.unload_unused().len();
         if ctx.world.loaded_chunks() == 0 {
             break;
         }

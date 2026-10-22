@@ -253,9 +253,11 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         if count.is_multiple_of(UNLOAD_EVERY) {
             for d in &dimensions {
                 let dropped = d.world.unload_unused();
-                if dropped > 0 {
+                crate::dropped::unloaded(d, &dropped);
+                if !dropped.is_empty() {
                     debug!(
-                        "unloaded {dropped} chunks of {}, {} in memory",
+                        "unloaded {} chunks of {}, {} in memory",
+                        dropped.len(),
                         d.dimension_name(),
                         d.world.loaded_chunks()
                     );
@@ -361,6 +363,7 @@ fn queue_saved_ticks(ctx: &ServerContext, ticks: &mut mc_tick::ScheduledTicks, n
 /// Due block ticks, then due fluid ticks, then entities; what they change
 /// goes to everyone.
 pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
+    crate::dropped::load_stored(ctx);
     let now = lock(&ctx.time).age;
     for (p, id) in ctx.world.take_woken() {
         match id.as_str() {

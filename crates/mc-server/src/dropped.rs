@@ -7,7 +7,10 @@
 //! (landing, being pushed out of a block). Sending positions every tick
 //! instead fights the client's own prediction and the item shakes.
 
+use std::collections::HashMap;
+
 use mc_entity::{Entity, Kind};
+use mc_nbt::{Compound, Tag};
 use mc_protocol::packets::play;
 
 use crate::context::{Event, ServerContext};
@@ -495,6 +498,188 @@ fn join(ctx: &ServerContext, entities: &mut [Entity], into: usize, from: usize) 
     false
 }
 
+/// The item as chunk files keep it (`entities/r.x.z.mca`), `None` for other
+/// entities.
+pub fn to_nbt(ctx: &ServerContext, e: &Entity) -> Option<Tag> {
+    let Kind::Item {
+        item,
+        count,
+        damage,
+        pickup_delay,
+        health,
+    } = e.kind
+    else {
+        return None;
+    };
+    let doubles = |v: [f64; 3]| Tag::List(v.iter().map(|d| Tag::Double(*d)).collect());
+    let mut stack = Compound::new();
+    stack.insert("id", Tag::String(ctx.items.name(item)?.to_owned()));
+    stack.insert("count", Tag::Int(count));
+    if let Some(components) = crate::items::join_damage(damage, None) {
+        stack.insert("components", components);
+    }
+    let mut c = Compound::new();
+    c.insert("id", Tag::String("minecraft:item".into()));
+    c.insert("Pos", doubles(e.pos));
+    c.insert("Motion", doubles(e.vel));
+    c.insert(
+        "Rotation",
+        Tag::List(vec![Tag::Float(0.0), Tag::Float(0.0)]),
+    );
+    c.insert("fall_distance", Tag::Double(0.0));
+    c.insert("Fire", Tag::Short(-1));
+    c.insert("Air", Tag::Short(300));
+    c.insert("OnGround", Tag::Byte(i8::from(e.on_ground)));
+    c.insert("Invulnerable", Tag::Byte(0));
+    c.insert("PortalCooldown", Tag::Int(0));
+    c.insert(
+        "UUID",
+        Tag::IntArray(
+            (0..4)
+                .map(|i| (e.uuid >> (96 - 32 * i)) as u32 as i32)
+                .collect(),
+        ),
+    );
+    if !e.tags.is_empty() {
+        c.insert(
+            "Tags",
+            Tag::List(e.tags.iter().map(|t| Tag::String(t.clone())).collect()),
+        );
+    }
+    c.insert("Health", Tag::Short(health.ceil() as i16));
+    c.insert("Age", Tag::Short(e.age.min(i16::MAX as u32) as i16));
+    c.insert("PickupDelay", Tag::Short(pickup_delay as i16));
+    c.insert("Item", Tag::Compound(stack));
+    Some(Tag::Compound(c))
+}
+
+/// An item read back from a chunk file; `None` for other entities.
+pub fn from_nbt(ctx: &ServerContext, tag: &Tag) -> Option<Entity> {
+    let Tag::Compound(c) = tag else {
+        return None;
+    };
+    if !matches!(c.get("id"), Some(Tag::String(id)) if id == "minecraft:item") {
+        return None;
+    }
+    let int = |t: Option<&Tag>| match t {
+        Some(Tag::Byte(v)) => Some(i32::from(*v)),
+        Some(Tag::Short(v)) => Some(i32::from(*v)),
+        Some(Tag::Int(v)) => Some(*v),
+        _ => None,
+    };
+    let triple = |key: &str| match c.get(key) {
+        Some(Tag::List(l)) if l.len() == 3 => {
+            let d = |i: usize| match l[i] {
+                Tag::Double(v) => v,
+                _ => 0.0,
+            };
+            Some([d(0), d(1), d(2)])
+        }
+        _ => None,
+    };
+    let Some(Tag::Compound(stack)) = c.get("Item") else {
+        return None;
+    };
+    let Some(Tag::String(name)) = stack.get("id") else {
+        return None;
+    };
+    let item = ctx.items.id(name)?;
+    let (damage, _) = crate::items::split_damage(stack.get("components"));
+    let uuid = match c.get("UUID") {
+        Some(Tag::IntArray(v)) if v.len() == 4 => v
+            .iter()
+            .fold(0u128, |u, &part| (u << 32) | u128::from(part as u32)),
+        _ => crate::util::random_uuid(),
+    };
+    Some(Entity {
+        id: ctx.next_entity_id(),
+        uuid,
+        kind: Kind::Item {
+            item,
+            count: int(stack.get("count")).unwrap_or(1).max(1),
+            damage,
+            pickup_delay: int(c.get("PickupDelay")).unwrap_or(0),
+            health: int(c.get("Health")).unwrap_or(5) as f32,
+        },
+        pos: triple("Pos")?,
+        vel: triple("Motion").unwrap_or([0.0; 3]),
+        on_ground: int(c.get("OnGround")).unwrap_or(0) != 0,
+        age: int(c.get("Age")).unwrap_or(0).max(0) as u32,
+        removed: false,
+        tags: match c.get("Tags") {
+            Some(Tag::List(l)) => l
+                .iter()
+                .filter_map(|t| match t {
+                    Tag::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
+    })
+}
+
+/// Brings in the items stored with chunks that were read since the last
+/// call.
+pub fn load_stored(ctx: &ServerContext) {
+    for tag in ctx.world.take_loaded_entities() {
+        if let Some(e) = from_nbt(ctx, &tag) {
+            crate::tick::spawn_entity(ctx, e);
+        }
+    }
+}
+
+/// The items in `entities` by chunk, as NBT.
+fn by_chunk(
+    ctx: &ServerContext,
+    entities: &[Entity],
+    within: Option<&[(i32, i32)]>,
+) -> HashMap<(i32, i32), Vec<Tag>> {
+    let mut out: HashMap<(i32, i32), Vec<Tag>> = HashMap::new();
+    for e in entities.iter().filter(|e| !e.removed) {
+        let (x, _, z) = e.block_pos();
+        let key = (x >> 4, z >> 4);
+        if within.is_some_and(|w| !w.contains(&key)) {
+            continue;
+        }
+        if let Some(tag) = to_nbt(ctx, e) {
+            out.entry(key).or_default().push(tag);
+        }
+    }
+    out
+}
+
+/// Writes the items of every loaded chunk (world folders only).
+pub fn save(ctx: &ServerContext) {
+    load_stored(ctx);
+    let stored = by_chunk(ctx, &lock(&ctx.entities), None);
+    ctx.world.save_entities(stored, None);
+}
+
+/// Chunks were unloaded: their items are written and leave the world.
+pub fn unloaded(ctx: &ServerContext, chunks: &[(i32, i32)]) {
+    if chunks.is_empty() || !ctx.world.is_saved() {
+        return;
+    }
+    load_stored(ctx);
+    let mut entities = lock(&ctx.entities);
+    let stored = by_chunk(ctx, &entities, Some(chunks));
+    ctx.world.save_entities(stored, Some(chunks));
+    let mut gone = Vec::new();
+    entities.retain(|e| {
+        let (x, _, z) = e.block_pos();
+        let leaves = matches!(e.kind, Kind::Item { .. }) && chunks.contains(&(x >> 4, z >> 4));
+        if leaves {
+            gone.push(e.id);
+        }
+        !leaves
+    });
+    drop(entities);
+    if !gone.is_empty() {
+        let _ = ctx.events.send(Event::EntitiesRemoved(gone));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -671,5 +856,61 @@ mod tests {
             item(&ctx, "minecraft:stone", 40, [0.6, -60.0, 0.5]),
         ];
         assert_eq!(merge(&ctx, &mut full, &[]).0, Vec::<usize>::new());
+    }
+
+    #[test]
+    fn items_are_saved_with_their_chunk_and_come_back() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        if mc_data::McData::load(&dir).is_err() {
+            eprintln!("skipped: no game data");
+            return;
+        }
+        let folder = std::env::temp_dir().join(format!("mc-items-{}", std::process::id()));
+        let open = || {
+            let mut config = crate::Config::new(dir.clone());
+            config.world = Some(folder.clone());
+            config.seed = Some(12345);
+            ServerContext::new(config, mc_data::McData::load(&dir).unwrap()).unwrap()
+        };
+        let at = Position::new(40, 100, 40);
+        let uuid = {
+            let ctx = open();
+            let _ = ctx.world.block(at, &ctx.data.blocks);
+            load_stored(&ctx);
+            let mut e = item(&ctx, "minecraft:diamond", 7, [40.5, 100.0, 40.5]);
+            e.age = 1234;
+            e.uuid = 0x1234_5678_9abc_def0_1122_3344_5566_7788;
+            lock(&ctx.entities).push(e.clone());
+            crate::save(&ctx);
+            e.uuid
+        };
+        let ctx = open();
+        let _ = ctx.world.block(at, &ctx.data.blocks);
+        load_stored(&ctx);
+        let back: Vec<Entity> = lock(&ctx.entities)
+            .iter()
+            .filter(|e| matches!(e.kind, Kind::Item { .. }))
+            .cloned()
+            .collect();
+        assert_eq!(back.len(), 1, "{back:?}");
+        let e = &back[0];
+        assert_eq!((e.uuid, e.age, e.pos), (uuid, 1234, [40.5, 100.0, 40.5]));
+        assert!(matches!(e.kind, Kind::Item { count: 7, .. }));
+        // Unloading writes the chunk's items and takes them out of the world;
+        // loading the chunk again brings them back, once.
+        crate::save(&ctx);
+        let dropped = ctx.world.unload_unused();
+        assert!(dropped.contains(&(2, 2)), "{dropped:?}");
+        unloaded(&ctx, &dropped);
+        assert!(lock(&ctx.entities).iter().all(|e| e.uuid != uuid));
+        let _ = ctx.world.block(at, &ctx.data.blocks);
+        let _ = ctx.world.block(at, &ctx.data.blocks);
+        load_stored(&ctx);
+        let n = lock(&ctx.entities)
+            .iter()
+            .filter(|e| e.uuid == uuid)
+            .count();
+        let _ = std::fs::remove_dir_all(&folder);
+        assert_eq!(n, 1);
     }
 }

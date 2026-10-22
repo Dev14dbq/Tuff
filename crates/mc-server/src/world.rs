@@ -61,6 +61,12 @@ pub struct World {
     saved_ticks: Mutex<Vec<SavedTick>>,
     /// Scheduled ticks to store with each chunk at the next save.
     ticks_to_save: Mutex<HashMap<(i32, i32), PendingTicks>>,
+    /// Entities read from `entities/` with chunks since the last call to
+    /// [`World::take_loaded_entities`].
+    loaded_entities: Mutex<Vec<Tag>>,
+    /// Chunks whose entities are in memory, with the entities last written
+    /// for each (to skip unchanged ones).
+    entity_chunks: Mutex<HashMap<(i32, i32), Vec<Tag>>>,
     /// Loaded chunks whose light a new neighbour changed.
     relit: Mutex<Vec<(i32, i32)>>,
     /// New chunks are lit with their neighbours outside the chunks lock;
@@ -135,6 +141,8 @@ enum Source {
 #[derive(Debug)]
 struct Anvil {
     storage: Mutex<RegionStorage>,
+    /// `entities/`, next to the region folder.
+    entities: Mutex<RegionStorage>,
     /// Makes the chunks the folder does not have.
     generation: Option<Generation>,
     biome_ids: HashMap<String, u32>,
@@ -322,6 +330,8 @@ impl World {
             woken: Mutex::new(Vec::new()),
             saved_ticks: Mutex::new(Vec::new()),
             ticks_to_save: Mutex::new(HashMap::new()),
+            loaded_entities: Mutex::new(Vec::new()),
+            entity_chunks: Mutex::new(HashMap::new()),
             relit: Mutex::new(Vec::new()),
             lighting: crate::util::Claims::default(),
             no_autosave: std::sync::atomic::AtomicBool::new(false),
@@ -462,6 +472,11 @@ impl World {
         tracing::debug!("world {} from {}", name, regions.display());
         Ok(Self {
             source: Source::Anvil(Box::new(Anvil {
+                entities: Mutex::new(RegionStorage::new(
+                    regions
+                        .parent()
+                        .map_or_else(|| regions.join("entities"), |d| d.join("entities")),
+                )),
                 storage: Mutex::new(RegionStorage::new(regions)),
                 generation,
                 biome_ids: biomes.iter().map(|(k, &v)| (k.clone(), v as u32)).collect(),
@@ -481,6 +496,8 @@ impl World {
             woken: Mutex::new(Vec::new()),
             saved_ticks: Mutex::new(Vec::new()),
             ticks_to_save: Mutex::new(HashMap::new()),
+            loaded_entities: Mutex::new(Vec::new()),
+            entity_chunks: Mutex::new(HashMap::new()),
             relit: Mutex::new(Vec::new()),
             lighting: crate::util::Claims::default(),
             no_autosave: std::sync::atomic::AtomicBool::new(false),
@@ -610,6 +627,94 @@ impl World {
         woken.extend(ticking.map(|be| (Position::new(be.x, be.y, be.z), be.id.clone())));
     }
 
+    /// Queues the entities stored for a chunk, once while it stays loaded.
+    fn read_entities(&self, anvil: &Anvil, x: i32, z: i32) {
+        let mut chunks = self.entity_chunks.lock().expect("entity chunks lock");
+        if chunks.contains_key(&(x, z)) {
+            return;
+        }
+        let read = anvil
+            .entities
+            .lock()
+            .expect("entity storage")
+            .read_chunk(x, z);
+        let list = match read {
+            Ok(Some(Tag::Compound(root))) => match root.get("Entities") {
+                Some(Tag::List(list)) => list.clone(),
+                _ => Vec::new(),
+            },
+            Ok(_) => Vec::new(),
+            Err(err) => {
+                warn!("entities of chunk {x},{z}: {err:#}");
+                Vec::new()
+            }
+        };
+        chunks.insert((x, z), list.clone());
+        self.loaded_entities
+            .lock()
+            .expect("loaded entities lock")
+            .extend(list);
+    }
+
+    /// Entities stored with chunks read since the last call, as NBT.
+    pub fn take_loaded_entities(&self) -> Vec<Tag> {
+        std::mem::take(&mut *self.loaded_entities.lock().expect("loaded entities lock"))
+    }
+
+    /// Writes the entities of chunks whose entities are in memory (only
+    /// those in `only`, if given) to `entities/`: `by_chunk` holds them
+    /// (chunks it does not name have none). Chunks in `only` are forgotten
+    /// after: their entities are read again when they load again.
+    pub fn save_entities(
+        &self,
+        mut by_chunk: HashMap<(i32, i32), Vec<Tag>>,
+        only: Option<&[(i32, i32)]>,
+    ) -> usize {
+        let Source::Anvil(anvil) = &self.source else {
+            return 0;
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as u32);
+        let mut chunks = self.entity_chunks.lock().expect("entity chunks lock");
+        let keys: Vec<(i32, i32)> = match only {
+            Some(only) => only
+                .iter()
+                .copied()
+                .filter(|k| chunks.contains_key(k))
+                .collect(),
+            None => chunks.keys().copied().collect(),
+        };
+        let mut storage = anvil.entities.lock().expect("entity storage");
+        if let Err(err) = std::fs::create_dir_all(storage.dir()) {
+            warn!("creating {}: {err}", storage.dir().display());
+        }
+        let mut written = 0;
+        for (x, z) in keys {
+            let list = by_chunk.remove(&(x, z)).unwrap_or_default();
+            if chunks.get(&(x, z)) != Some(&list) {
+                let mut root = mc_nbt::Compound::new();
+                root.insert("DataVersion", Tag::Int(self.data_version));
+                root.insert("Position", Tag::IntArray(vec![x, z]));
+                root.insert("Entities", Tag::List(list.clone()));
+                let mut bytes = Vec::new();
+                let result = mc_nbt::write_named("", &Tag::Compound(root), &mut bytes)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|()| Ok(storage.write_chunk(x, z, &bytes, now)?));
+                match result {
+                    Ok(()) => written += 1,
+                    Err(err) => warn!("saving entities of chunk {x},{z}: {err:#}"),
+                }
+            }
+            if only.is_some() {
+                chunks.remove(&(x, z));
+            } else {
+                chunks.insert((x, z), list);
+            }
+        }
+        written
+    }
+
     /// Scheduled ticks of chunks read from disk since the last call.
     pub fn take_saved_ticks(&self) -> Vec<SavedTick> {
         std::mem::take(&mut *self.saved_ticks.lock().expect("saved ticks lock"))
@@ -636,6 +741,7 @@ impl World {
             }
             Source::Anvil(anvil) => match anvil.load(x, z, blocks, self.min_y, self.height) {
                 Ok(Some((chunk, ticks))) => {
+                    self.read_entities(anvil, x, z);
                     self.wake_ticking(&chunk);
                     if !ticks.is_empty() {
                         self.saved_ticks
@@ -646,7 +752,10 @@ impl World {
                     (Some(chunk), false)
                 }
                 Ok(None) => match &anvil.generation {
-                    Some(g) => (Some(self.generate(g, x, z, anvil, blocks)), true),
+                    Some(g) => {
+                        self.read_entities(anvil, x, z);
+                        (Some(self.generate(g, x, z, anvil, blocks)), true)
+                    }
                     None => (None, false),
                 },
                 Err(err) => {
@@ -806,13 +915,19 @@ impl World {
         }
     }
 
-    /// Drops chunks no player has and that have nothing to save. Returns how
-    /// many were dropped.
-    pub fn unload_unused(&self) -> usize {
+    /// Drops chunks no player has and that have nothing to save. Returns
+    /// the dropped ones.
+    pub fn unload_unused(&self) -> Vec<(i32, i32)> {
         let mut chunks = self.chunks.lock().expect("chunks lock");
-        let before = chunks.len();
-        chunks.retain(|_, slot| slot.viewers > 0 || slot.dirty);
-        before - chunks.len()
+        let mut dropped = Vec::new();
+        chunks.retain(|&key, slot| {
+            let keep = slot.viewers > 0 || slot.dirty;
+            if !keep {
+                dropped.push(key);
+            }
+            keep
+        });
+        dropped
     }
 
     /// Whether the chunk holding `p` is in memory (vanilla's "loaded").
