@@ -198,6 +198,16 @@ pub trait Level {
 
     fn set_hopper_cooldown(&mut self, _p: BlockPos, _ticks: i32) {}
 
+    /// Stores whether the command block at `p` is powered; returns whether
+    /// it was before and whether it is always active (`None` without its
+    /// block entity).
+    fn command_block_power(&mut self, _p: BlockPos, _powered: bool) -> Option<(bool, bool)> {
+        None
+    }
+
+    /// The due tick of the command block at `p`: it runs.
+    fn command_block_tick(&mut self, _p: BlockPos) {}
+
     /// The hopper at `p` picks up an item entity from the space above it.
     fn hopper_pickup(&mut self, _p: BlockPos) -> bool {
         false

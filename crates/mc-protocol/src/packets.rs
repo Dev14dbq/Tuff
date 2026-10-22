@@ -564,6 +564,21 @@ pub mod play {
         TeleportToEntity {
             target: u128,
         },
+        /// A command block's settings from its window. `mode`: 0 chain,
+        /// 1 repeating, 2 impulse; `flags`: 1 track output, 2 conditional,
+        /// 4 always active.
+        SetCommandBlock {
+            position: Position,
+            command: String,
+            mode: i32,
+            flags: u8,
+        },
+        /// A command block minecart's settings from its window.
+        SetCommandMinecart {
+            entity_id: i32,
+            command: String,
+            track_output: bool,
+        },
         /// The text written on a sign.
         SignUpdate {
             position: Position,
@@ -1050,6 +1065,17 @@ pub mod play {
                 "minecraft:teleport_to_entity" => {
                     Serverbound::TeleportToEntity { target: r.uuid()? }
                 }
+                "minecraft:set_command_block" => Serverbound::SetCommandBlock {
+                    position: r.position()?,
+                    command: r.string(32767)?,
+                    mode: r.varint()?,
+                    flags: r.u8()?,
+                },
+                "minecraft:set_command_minecart" => Serverbound::SetCommandMinecart {
+                    entity_id: r.varint()?,
+                    command: r.string(32767)?,
+                    track_output: r.bool()?,
+                },
                 "minecraft:sign_update" => Serverbound::SignUpdate {
                     position: r.position()?,
                     front: r.bool()?,
