@@ -768,8 +768,17 @@ fn clear(
         }
     });
     loop {
-        if sc.block(ctx, level, cell[0], cell[1], cell[2]) & SOLID != 0 {
-            return false;
+        let here = sc.block(ctx, level, cell[0], cell[1], cell[2]);
+        if here & SOLID != 0 {
+            // A block that is not a whole cube is hit only where it is.
+            match &crate::collision::table(ctx)[(here & !SOLID) as usize] {
+                Some(boxes) => {
+                    if crate::collision::enters(cell, boxes, from, to).is_some() {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
         }
         if cell == end {
             return true;
@@ -1468,5 +1477,34 @@ mod tests {
         let fire = ctx.data.blocks.default_state("minecraft:fire").unwrap();
         let fires = changes.iter().filter(|(_, s)| *s == fire).count();
         assert!(fires > 0, "some blown spots burn");
+    }
+
+    #[test]
+    fn exposure_sees_over_a_slab_but_not_over_a_cube() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let center = [0.5, -59.2, 0.5];
+        let (min, max) = ([3.7, -60.0, 0.2], [4.3, -59.0, 0.8]);
+        let seen = |wall: u32| {
+            let mut level = WorldLevel::new(&ctx);
+            for z in -1..=2 {
+                level.set_block(Position::new(2, -60, z), wall);
+            }
+            let mut sc = Scratch::default();
+            sc.begin(&ctx, center);
+            sc.index_solids(&ctx);
+            exposure(&ctx, &level, &mut sc, center, min, max)
+        };
+        let slab = ctx
+            .data
+            .blocks
+            .state_id("minecraft:stone_slab", &[("type", "bottom"), ("waterlogged", "false")])
+            .unwrap();
+        let stone = block(&ctx, "minecraft:stone");
+        assert_eq!(seen(stone), 0.0);
+        let over = seen(slab);
+        assert!(over > 0.0 && over < 1.0, "{over}");
     }
 }

@@ -14,6 +14,7 @@ mod border;
 mod bossbars;
 mod brewing;
 mod campfires;
+mod collision;
 mod combat;
 mod command_blocks;
 mod commands;
