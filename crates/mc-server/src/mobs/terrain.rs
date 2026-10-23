@@ -93,7 +93,11 @@ fn spans(ctx: &ServerContext) -> &'static [(u8, u8)] {
                     return (0, 24);
                 }
                 if name.ends_with("_fence_gate") {
-                    return if prop("open") == Some("true") { (0, 0) } else { (0, 24) };
+                    return if prop("open") == Some("true") {
+                        (0, 0)
+                    } else {
+                        (0, 24)
+                    };
                 }
                 if name.ends_with("_trapdoor") {
                     return match (prop("open"), prop("half")) {

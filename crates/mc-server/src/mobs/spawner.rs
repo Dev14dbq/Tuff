@@ -69,9 +69,7 @@ pub fn tick(
         ];
         let near = targets.iter().any(|t| {
             t.targetable
-                && (0..3)
-                    .map(|i| (t.pos[i] - center[i]).powi(2))
-                    .sum::<f64>()
+                && (0..3).map(|i| (t.pos[i] - center[i]).powi(2)).sum::<f64>()
                     < PLAYER_RANGE * PLAYER_RANGE
         });
         if !near {
@@ -96,7 +94,8 @@ pub fn tick(
         *delay = min + below((max - min).max(1) as u32) as i32;
         let range = short(&be.data, "SpawnRange").unwrap_or(SPAWN_RANGE);
         let count = short(&be.data, "SpawnCount").map_or(SPAWN_COUNT, |c| c.max(0) as u32);
-        let max_nearby = short(&be.data, "MaxNearbyEntities").map_or(MAX_NEARBY, |c| c.max(0) as usize);
+        let max_nearby =
+            short(&be.data, "MaxNearbyEntities").map_or(MAX_NEARBY, |c| c.max(0) as usize);
         let around = |e: &Entity| {
             matches!(&e.kind, Kind::Mob(m) if m.species == species)
                 && (e.pos[0] - center[0]).abs() <= f64::from(range) + 0.5

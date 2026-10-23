@@ -3269,7 +3269,9 @@ mod sign_update_tests {
     #[test]
     fn sign_update_as_a_26_3_client_sends_it() {
         // Position, four empty lines, front side: captured from the client.
-        let body = [0x00, 0x09, 0xc3, 0x40, 0x02, 0x6c, 0xc0, 0x40, 0, 0, 0, 0, 1];
+        let body = [
+            0x00, 0x09, 0xc3, 0x40, 0x02, 0x6c, 0xc0, 0x40, 0, 0, 0, 0, 1,
+        ];
         let packet = Serverbound::decode("minecraft:sign_update", &mut Reader::new(&body)).unwrap();
         let Serverbound::SignUpdate { front, lines, .. } = packet else {
             panic!("{packet:?}")

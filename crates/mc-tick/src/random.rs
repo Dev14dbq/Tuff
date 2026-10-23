@@ -765,6 +765,18 @@ fn farmland(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
     }
 }
 
+/// Something landed on farmland hard enough to trample it: back to dirt,
+/// and whatever grew on it pops off.
+pub fn trample(level: &mut dyn Level, ctx: Ctx, p: BlockPos) -> bool {
+    let state = level.block(p);
+    if name(ctx, state) != "farmland" {
+        return false;
+    }
+    let dirt = ctx.shapes.default_state("minecraft:dirt").unwrap_or(state);
+    set_block(level, ctx, p, dirt, Flags::ALL);
+    true
+}
+
 fn grow_moisture(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, moisture: u32) {
     let new = ctx.shapes.with(state, "moisture", &moisture.to_string());
     set_block(level, ctx, p, new, Flags::SHAPES_ONLY);

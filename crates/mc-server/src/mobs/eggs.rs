@@ -167,7 +167,13 @@ fn set_spawner(ctx: &ServerContext, outcome: &mut Outcome, at: Position, species
 }
 
 /// A spawn egg used on a grown mob of its kind: a baby of it.
-pub fn breed_with_egg(ctx: &ServerContext, e: &Entity, by: &super::Actor, name: &str, slot: usize) -> bool {
+pub fn breed_with_egg(
+    ctx: &ServerContext,
+    e: &Entity,
+    by: &super::Actor,
+    name: &str,
+    slot: usize,
+) -> bool {
     let Kind::Mob(m) = &e.kind else {
         return false;
     };

@@ -330,7 +330,10 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
 /// shows them.
 pub fn command_cart_meta(c: &mc_entity::extra::CommandCart) -> Vec<(u8, MetadataValue)> {
     let mut output = mc_nbt::Compound::new();
-    output.insert("text", mc_nbt::Tag::String(c.last_output.clone().unwrap_or_default()));
+    output.insert(
+        "text",
+        mc_nbt::Tag::String(c.last_output.clone().unwrap_or_default()),
+    );
     vec![
         (13, MetadataValue::String(c.command.clone())),
         (14, MetadataValue::Component(mc_nbt::Tag::Compound(output))),

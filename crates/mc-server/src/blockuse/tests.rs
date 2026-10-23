@@ -478,3 +478,92 @@ fn copper_weathers_and_amethyst_buds() {
         .count();
     assert_eq!(clusters, 6);
 }
+
+#[test]
+fn seeds_berries_and_dust_are_planted() {
+    let Some((ctx, actor)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let above = Position::new(AT.x, AT.y + 1, AT.z);
+    for (item, on, grows) in [
+        (
+            "minecraft:wheat_seeds",
+            "minecraft:farmland",
+            "minecraft:wheat",
+        ),
+        (
+            "minecraft:carrot",
+            "minecraft:farmland",
+            "minecraft:carrots",
+        ),
+        (
+            "minecraft:potato",
+            "minecraft:farmland",
+            "minecraft:potatoes",
+        ),
+        (
+            "minecraft:beetroot_seeds",
+            "minecraft:farmland",
+            "minecraft:beetroots",
+        ),
+        (
+            "minecraft:melon_seeds",
+            "minecraft:farmland",
+            "minecraft:melon_stem",
+        ),
+        (
+            "minecraft:sweet_berries",
+            "minecraft:grass_block",
+            "minecraft:sweet_berry_bush",
+        ),
+        (
+            "minecraft:redstone",
+            "minecraft:stone",
+            "minecraft:redstone_wire",
+        ),
+    ] {
+        put(&ctx, above, "minecraft:air", &[]);
+        put(&ctx, AT, on, &[]);
+        hold(&ctx, item, 2, None);
+        click(&ctx, actor, AT, 1);
+        assert!(
+            block(&ctx, above).starts_with(grows),
+            "{item}: {}",
+            block(&ctx, above)
+        );
+        assert_eq!(held(&ctx).1, 1, "{item} is used up");
+    }
+    // Not on bare stone.
+    put(&ctx, above, "minecraft:air", &[]);
+    put(&ctx, AT, "minecraft:stone", &[]);
+    hold(&ctx, "minecraft:wheat_seeds", 1, None);
+    click(&ctx, actor, AT, 1);
+    assert_eq!(block(&ctx, above), "minecraft:air");
+}
+
+#[test]
+fn a_fall_tramples_farmland() {
+    let Some((ctx, _)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let above = Position::new(AT.x, AT.y + 1, AT.z);
+    put(&ctx, AT, "minecraft:farmland", &[]);
+    put(&ctx, above, "minecraft:wheat", &[]);
+    let pose = |y: f64, on_ground: bool| Pose {
+        x: f64::from(AT.x) + 0.5,
+        y,
+        z: f64::from(AT.z) + 0.5,
+        yaw: 0.0,
+        pitch: 0.0,
+        on_ground,
+    };
+    let top = f64::from(AT.y) + 1.0;
+    // A step down never tramples; a fall of more than 1.5 always does.
+    crate::vitals::moved(&ctx, 7, pose(top + 0.4, false), pose(top, true), false);
+    assert!(block(&ctx, AT).starts_with("minecraft:farmland"));
+    crate::vitals::moved(&ctx, 7, pose(top + 2.0, false), pose(top, true), false);
+    assert_eq!(block(&ctx, AT), "minecraft:dirt");
+    assert_eq!(block(&ctx, above), "minecraft:air");
+}

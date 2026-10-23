@@ -563,6 +563,22 @@ pub fn moved(ctx: &ServerContext, uuid: u128, before: Pose, after: Pose, in_wate
                 )
             })
         };
+        // Farmland gives way under a fall, the higher the likelier
+        // (wiki, "Farmland" → "Trampling").
+        let below = mc_protocol::Position::new(
+            after.x.floor() as i32,
+            (after.y - 0.2).floor() as i32,
+            after.z.floor() as i32,
+        );
+        let roll = (crate::util::random_u64() >> 40) as f64 / (1u64 << 24) as f64;
+        if roll < fell - 0.5 {
+            let mut level = crate::level::WorldLevel::new(ctx);
+            let logic = level.logic();
+            if mc_tick::random::trample(&mut level, logic, crate::level::to_pos(below)) {
+                let changes = level.into_changes();
+                let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
+            }
+        }
         let damage = (fell - safe).ceil();
         if damage > 0.0 && !floating {
             let below = mc_protocol::Position::new(
@@ -807,7 +823,9 @@ pub fn drop_pearls(ctx: &ServerContext, uuid: u128) {
 /// Tells the players a death message, as the dead player's team allows:
 /// everyone, only their team, everyone else, or no one.
 pub fn announce_death(ctx: &ServerContext, uuid: u128, message: Tag) {
-    let name = lock(&ctx.players).get(&uuid).map(|p| p.profile.name.clone());
+    let name = lock(&ctx.players)
+        .get(&uuid)
+        .map(|p| p.profile.name.clone());
     let (visibility, team) = {
         let board = lock(&ctx.scoreboard);
         match name.as_deref().and_then(|n| board.team_of(n)) {

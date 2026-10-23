@@ -2435,15 +2435,26 @@ fn world_spawn_pose(ctx: &ServerContext, game_mode: i32) -> Pose {
     if game_mode == 2 || spawn.dimension != "minecraft:overworld" {
         return pose;
     }
-    let radius = ctx.game_rules.lock().expect("rules lock").int("respawn_radius").max(0);
+    let radius = ctx
+        .game_rules
+        .lock()
+        .expect("rules lock")
+        .int("respawn_radius")
+        .max(0);
     let side = i64::from(radius) * 2 + 1;
     let count = (side * side).min(i64::from(i32::MAX));
     // Every column once, in a random order: a fixed step coprime to the count.
-    let step = (count / 2 + 1..=count).chain(1..=count / 2).find(|&n| gcd(n, count) == 1).unwrap_or(1);
+    let step = (count / 2 + 1..=count)
+        .chain(1..=count / 2)
+        .find(|&n| gcd(n, count) == 1)
+        .unwrap_or(1);
     let start = (crate::util::random_u64() % count as u64) as i64;
     for i in 0..count {
         let q = (start + step * i) % count;
-        let (x, z) = (spawn.pos.0 + (q % side) as i32 - radius, spawn.pos.2 + (q / side) as i32 - radius);
+        let (x, z) = (
+            spawn.pos.0 + (q % side) as i32 - radius,
+            spawn.pos.2 + (q / side) as i32 - radius,
+        );
         if let Some(y) = respawn_surface(ctx, x, z) {
             (pose.x, pose.y, pose.z) = (f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
             break;
@@ -2525,7 +2536,12 @@ fn respawn_target(ctx: &ServerContext, uuid: u128) -> (String, Pose) {
 }
 
 fn spawn_target(ctx: &ServerContext, uuid: u128) -> (String, Pose) {
-    let game_mode = ctx.players.lock().expect("players lock").get(&uuid).map_or(0, |p| p.game_mode);
+    let game_mode = ctx
+        .players
+        .lock()
+        .expect("players lock")
+        .get(&uuid)
+        .map_or(0, |p| p.game_mode);
     // The lock is let go before `world_spawn_pose` takes it again.
     let dimension = ctx.spawn.lock().expect("spawn lock").dimension.clone();
     (dimension, world_spawn_pose(ctx, game_mode))

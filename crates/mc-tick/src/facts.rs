@@ -25,6 +25,25 @@ pub struct BlockRules {
     pub water: u32,
 }
 
+/// Block items whose block has another name (minecraft.wiki, each item's
+/// page).
+const ITEM_BLOCKS: &[(&str, &str)] = &[
+    ("minecraft:wheat_seeds", "minecraft:wheat"),
+    ("minecraft:beetroot_seeds", "minecraft:beetroots"),
+    ("minecraft:carrot", "minecraft:carrots"),
+    ("minecraft:potato", "minecraft:potatoes"),
+    ("minecraft:melon_seeds", "minecraft:melon_stem"),
+    ("minecraft:pumpkin_seeds", "minecraft:pumpkin_stem"),
+    ("minecraft:torchflower_seeds", "minecraft:torchflower_crop"),
+    ("minecraft:pitcher_pod", "minecraft:pitcher_crop"),
+    ("minecraft:sweet_berries", "minecraft:sweet_berry_bush"),
+    ("minecraft:glow_berries", "minecraft:cave_vines"),
+    ("minecraft:cocoa_beans", "minecraft:cocoa"),
+    ("minecraft:redstone", "minecraft:redstone_wire"),
+    ("minecraft:string", "minecraft:tripwire"),
+    ("minecraft:bamboo", "minecraft:bamboo_sapling"),
+];
+
 /// Blocks without collision that no tag covers.
 const PASSABLE: &[&str] = &[
     "minecraft:torch",
@@ -142,11 +161,19 @@ impl BlockRules {
             .builtin
             .get("minecraft:item")
             .ok_or("minecraft:item missing from the registries report")?;
-        let item_blocks = items
+        let mut item_blocks: HashMap<i32, String> = items
             .iter()
             .filter(|(name, _)| blocks.get(name).is_some())
             .map(|(name, &id)| (id, name.clone()))
             .collect();
+        // The rest are named after what they grow into or lay down.
+        for (item, block) in ITEM_BLOCKS {
+            if let Some(&id) = items.get(*item)
+                && blocks.get(block).is_some()
+            {
+                item_blocks.insert(id, (*block).to_owned());
+            }
+        }
         Ok(Self {
             replaceable,
             passable,

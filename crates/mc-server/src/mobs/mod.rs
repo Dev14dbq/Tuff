@@ -17,8 +17,8 @@ mod interact;
 pub mod meta;
 pub mod nbt;
 pub mod ride;
-mod spawner;
 mod spawn;
+mod spawner;
 mod terrain;
 
 use std::collections::HashMap;

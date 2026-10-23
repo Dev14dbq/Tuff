@@ -381,23 +381,37 @@ fn spawn_eggs_work_on_the_ground_and_on_grown_mobs() {
         return;
     };
     let _ = join(&ctx, [0.5, -60.0, 0.5]);
-    assert_eq!(eggs::species_of("minecraft:cow_spawn_egg"), Some(Species::Cow));
+    assert_eq!(
+        eggs::species_of("minecraft:cow_spawn_egg"),
+        Some(Species::Cow)
+    );
     hold(&ctx, "minecraft:cow_spawn_egg", 3);
     // Clicking the top of the ground.
     let ground = mc_protocol::Position::new(2, -61, 0);
-    crate::interact::use_item_on(&ctx, actor_at([0.5, -60.0, 0.5]), 0, ground, 1, [0.5, 1.0, 0.5], 1);
+    crate::interact::use_item_on(
+        &ctx,
+        actor_at([0.5, -60.0, 0.5]),
+        0,
+        ground,
+        1,
+        [0.5, 1.0, 0.5],
+        1,
+    );
     let cows = mobs_of(&ctx, Species::Cow);
     assert_eq!(cows.len(), 1);
     assert_eq!(cows[0].pos, [2.5, -60.0, 0.5]);
     // On the grown cow: a calf.
-    ctx.mobs.use_on(ctx.dim, cows[0].id, steve([0.5, -60.0, 0.5]), 0);
+    ctx.mobs
+        .use_on(ctx.dim, cows[0].id, steve([0.5, -60.0, 0.5]), 0);
     run(&ctx, 1);
     let calves = mobs_of(&ctx, Species::Cow)
         .iter()
         .filter(|e| matches!(&e.kind, Kind::Mob(m) if m.is_baby()))
         .count();
     assert_eq!(calves, 1);
-    let left = lock(&ctx.inventories)[&STEVE].slots[36].as_ref().map(|s| s.count);
+    let left = lock(&ctx.inventories)[&STEVE].slots[36]
+        .as_ref()
+        .map(|s| s.count);
     assert_eq!(left, Some(1));
     // Picking the cow gives its egg.
     let egg = ctx.items.id("minecraft:cow_spawn_egg");
@@ -438,7 +452,12 @@ fn mobs_suffocate_inside_blocks() {
     let stone = ctx.data.blocks.default_state("minecraft:stone").unwrap();
     for y in -60..=-58 {
         ctx.world
-            .set_block(mc_protocol::Position::new(0, y, 0), stone, &ctx.data.blocks, &ctx.rules)
+            .set_block(
+                mc_protocol::Position::new(0, y, 0),
+                stone,
+                &ctx.data.blocks,
+                &ctx.rules,
+            )
             .unwrap();
     }
     let id = put(&ctx, Species::Cow, [0.5, -60.0, 0.5]);

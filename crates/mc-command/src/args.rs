@@ -575,7 +575,10 @@ fn required_after_negated(
 ) -> Result<()> {
     if !neg && v.iter().any(|(n, _)| *n) {
         r.cursor = at;
-        return Err(r.error(builtin::invalid("argument.entity.options.inapplicable", name)));
+        return Err(r.error(builtin::invalid(
+            "argument.entity.options.inapplicable",
+            name,
+        )));
     }
     Ok(())
 }

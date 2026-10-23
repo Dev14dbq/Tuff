@@ -263,7 +263,13 @@ pub fn tick(level: &mut WorldLevel, p: Position) {
             if was_met {
                 if has_command {
                     let now = level.game_time();
-                    perform(ctx, level.control.as_deref_mut(), source_of(&d, p), &mut d, now);
+                    perform(
+                        ctx,
+                        level.control.as_deref_mut(),
+                        source_of(&d, p),
+                        &mut d,
+                        now,
+                    );
                 } else {
                     d.insert("SuccessCount", Tag::Int(0));
                 }
@@ -310,7 +316,13 @@ fn chain(level: &mut WorldLevel, from: Position, mut dir: Dir) {
         if flag(&d, "powered") || flag(&d, "auto") {
             if mark_condition_met(ctx, p, state, &mut d) {
                 let now = level.game_time();
-                let ran = perform(ctx, level.control.as_deref_mut(), source_of(&d, p), &mut d, now);
+                let ran = perform(
+                    ctx,
+                    level.control.as_deref_mut(),
+                    source_of(&d, p),
+                    &mut d,
+                    now,
+                );
                 store(ctx, p, d);
                 if !ran {
                     break;
@@ -377,7 +389,10 @@ pub fn configure(
     flags: u8,
 ) -> Option<Tag> {
     if !may_use(ctx, uuid, game_mode) {
-        return Some(mc_protocol::text::translate("advMode.notAllowed", Vec::new()));
+        return Some(mc_protocol::text::translate(
+            "advMode.notAllowed",
+            Vec::new(),
+        ));
     }
     let blocks = &ctx.data.blocks;
     let state = ctx.world.block(p, blocks)?;
@@ -406,7 +421,8 @@ pub fn configure(
         level.set_block(p, new_state);
     }
     // Turned always active (and not powered): it starts a tick later.
-    let starts = auto && !was_auto && !flag(&d, "powered") && name != "minecraft:chain_command_block";
+    let starts =
+        auto && !was_auto && !flag(&d, "powered") && name != "minecraft:chain_command_block";
     if starts {
         mark_condition_met(ctx, p, new_state, &mut d);
     }
@@ -440,7 +456,8 @@ fn cart(ctx: &ServerContext, id: i32) -> Option<(u128, [f64; 3], mc_entity::extr
         .find(|e| e.id == id && !e.removed)
         .and_then(|e| match &e.kind {
             mc_entity::Kind::Vehicle(v)
-                if v.craft == mc_entity::extra::Craft::Minecart(mc_entity::extra::Cart::Command) =>
+                if v.craft
+                    == mc_entity::extra::Craft::Minecart(mc_entity::extra::Cart::Command) =>
             {
                 Some((e.uuid, e.pos, (*v.command).clone()))
             }
@@ -507,7 +524,10 @@ pub fn configure_cart(
     track_output: bool,
 ) -> Option<Tag> {
     if !may_use(ctx, uuid, game_mode) {
-        return Some(mc_protocol::text::translate("advMode.notAllowed", Vec::new()));
+        return Some(mc_protocol::text::translate(
+            "advMode.notAllowed",
+            Vec::new(),
+        ));
     }
     let (_, _, mut c) = cart(ctx, entity_id)?;
     c.command = command.to_owned();
@@ -556,7 +576,12 @@ mod tests {
     }
 
     fn command_block(ctx: &ServerContext, p: Position, block: &str, command: &str, auto: bool) {
-        put(ctx, p, block, &[("facing", "east"), ("conditional", "false")]);
+        put(
+            ctx,
+            p,
+            block,
+            &[("facing", "east"), ("conditional", "false")],
+        );
         let mut d = blank(auto, true);
         d.insert("Command", Tag::String(command.to_owned()));
         store(ctx, p, d);
@@ -575,7 +600,13 @@ mod tests {
             return;
         };
         let p = Position::new(0, -60, 0);
-        command_block(&ctx, p, "minecraft:command_block", "setblock 0 -55 0 minecraft:stone", false);
+        command_block(
+            &ctx,
+            p,
+            "minecraft:command_block",
+            "setblock 0 -55 0 minecraft:stone",
+            false,
+        );
         command_block(
             &ctx,
             Position::new(1, -60, 0),
@@ -585,7 +616,12 @@ mod tests {
         );
         ticks(&ctx, 2);
         assert_eq!(name(&ctx, Position::new(0, -55, 0)), "minecraft:air");
-        put(&ctx, Position::new(-1, -60, 0), "minecraft:redstone_block", &[]);
+        put(
+            &ctx,
+            Position::new(-1, -60, 0),
+            "minecraft:redstone_block",
+            &[],
+        );
         ticks(&ctx, 2);
         assert_eq!(name(&ctx, Position::new(0, -55, 0)), "minecraft:stone");
         assert_eq!(name(&ctx, Position::new(1, -55, 0)), "minecraft:dirt");
@@ -602,8 +638,19 @@ mod tests {
             return;
         };
         let p = Position::new(4, -60, 0);
-        command_block(&ctx, p, "minecraft:command_block", "kill @e[type=minecraft:pig]", false);
-        put(&ctx, Position::new(4, -59, 0), "minecraft:redstone_block", &[]);
+        command_block(
+            &ctx,
+            p,
+            "minecraft:command_block",
+            "kill @e[type=minecraft:pig]",
+            false,
+        );
+        put(
+            &ctx,
+            Position::new(4, -59, 0),
+            "minecraft:redstone_block",
+            &[],
+        );
         ticks(&ctx, 2);
         assert_eq!(signal(&ctx, p), Some(0));
         let d = data(&ctx, p).expect("data");
@@ -616,7 +663,13 @@ mod tests {
             return;
         };
         let p = Position::new(8, -60, 0);
-        command_block(&ctx, p, "minecraft:repeating_command_block", "kill @e[type=minecraft:pig]", true);
+        command_block(
+            &ctx,
+            p,
+            "minecraft:repeating_command_block",
+            "kill @e[type=minecraft:pig]",
+            true,
+        );
         let q = Position::new(9, -60, 0);
         put(
             &ctx,
@@ -625,7 +678,10 @@ mod tests {
             &[("facing", "east"), ("conditional", "true")],
         );
         let mut d = blank(true, true);
-        d.insert("Command", Tag::String("setblock 9 -55 0 minecraft:stone".into()));
+        d.insert(
+            "Command",
+            Tag::String("setblock 9 -55 0 minecraft:stone".into()),
+        );
         store(&ctx, q, d);
         let state = ctx.world.block(p, &ctx.data.blocks).expect("block");
         let mut level = WorldLevel::new(&ctx);
@@ -637,7 +693,10 @@ mod tests {
         ticks(&ctx, 3);
         let first = long(&data(&ctx, p).expect("data"), "LastExecution");
         ticks(&ctx, 1);
-        assert_eq!(long(&data(&ctx, p).expect("data"), "LastExecution"), first + 1);
+        assert_eq!(
+            long(&data(&ctx, p).expect("data"), "LastExecution"),
+            first + 1
+        );
         // Nothing to kill: the conditional chain block does not run.
         assert_eq!(name(&ctx, Position::new(9, -55, 0)), "minecraft:air");
         assert_eq!(signal(&ctx, q), Some(0));

@@ -122,7 +122,9 @@ pub fn move_stepping(
         let (across, side) = slide(raised, [motion[0], 0.0, motion[2]], world);
         let down = sweep(across, 1, -(up + EPSILON.max(-motion[1].min(0.0))), world);
         let total = [side[0], up + down, side[2]];
-        if total[0] * total[0] + total[2] * total[2] > moved[0] * moved[0] + moved[2] * moved[2] + EPSILON {
+        if total[0] * total[0] + total[2] * total[2]
+            > moved[0] * moved[0] + moved[2] * moved[2] + EPSILON
+        {
             return (total, true);
         }
     }
@@ -172,7 +174,10 @@ mod tests {
             max: [1.9, 0.9, 0.9],
         };
         let (moved, ground) = move_stepping(b, [0.3, -0.08, 0.0], &Step(0.5), 0.6, true);
-        assert!(ground && (moved[1] - 0.5).abs() < 1e-6 && moved[0] > 0.29, "{moved:?}");
+        assert!(
+            ground && (moved[1] - 0.5).abs() < 1e-6 && moved[0] > 0.29,
+            "{moved:?}"
+        );
         let (moved, _) = move_stepping(b, [0.3, -0.08, 0.0], &Step(1.5), 0.6, true);
         assert!(moved[0] < 0.11 && moved[1].abs() < 1e-6, "{moved:?}");
         // A fence's top reaches into the cell above: no walking over it.

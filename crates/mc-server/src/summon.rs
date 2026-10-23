@@ -212,7 +212,7 @@ pub fn build(
                     "furnace_minecart" => Cart::Furnace,
                     "hopper_minecart" => Cart::Hopper,
                     "tnt_minecart" => Cart::Tnt,
-            "command_block_minecart" => Cart::Command,
+                    "command_block_minecart" => Cart::Command,
                     _ => return None,
                 })
             };

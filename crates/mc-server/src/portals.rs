@@ -100,11 +100,15 @@ pub fn tick(ctx: &ServerContext) {
                 Some(Kind::End) => jobs.push((uuid, here, Kind::End, pose)),
                 // `allow_entering_nether_using_portals` off: no way in,
                 // but the way back still works.
-                Some(Kind::Nether)
-                    if !to_nether && dimension != "minecraft:the_nether" => {}
+                Some(Kind::Nether) if !to_nether && dimension != "minecraft:the_nether" => {}
                 Some(Kind::Nether) => {
                     wait.ticks += 1;
-                    let need = if matches!(game_mode, 1 | 3) { creative_wait } else { survival_wait }.max(1);
+                    let need = if matches!(game_mode, 1 | 3) {
+                        creative_wait
+                    } else {
+                        survival_wait
+                    }
+                    .max(1);
                     if wait.ticks >= need {
                         jobs.push((uuid, here, Kind::Nether, pose));
                     }

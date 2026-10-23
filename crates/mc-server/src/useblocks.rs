@@ -494,7 +494,11 @@ pub fn tick(ctx: &ServerContext) {
         .collect();
     // `players_sleeping_percentage` of the players (at least one) must
     // have slept 100 ticks.
-    let percentage = ctx.game_rules.lock().expect("rules lock").int("players_sleeping_percentage");
+    let percentage = ctx
+        .game_rules
+        .lock()
+        .expect("rules lock")
+        .int("players_sleeping_percentage");
     let required = ((online.len() as f64 * f64::from(percentage) / 100.0).ceil() as usize).max(1);
     let slept = online
         .iter()

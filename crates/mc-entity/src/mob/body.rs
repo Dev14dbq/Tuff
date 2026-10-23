@@ -250,8 +250,14 @@ pub(super) fn in_wall(m: &Mob, b: &Body, s: &Senses) -> bool {
     let half = m.size().0 * 0.4;
     let eye = b.pos[1] + m.eye_height();
     let y = eye.floor() as i32;
-    let xs = [(b.pos[0] - half).floor() as i32, (b.pos[0] + half).floor() as i32];
-    let zs = [(b.pos[2] - half).floor() as i32, (b.pos[2] + half).floor() as i32];
+    let xs = [
+        (b.pos[0] - half).floor() as i32,
+        (b.pos[0] + half).floor() as i32,
+    ];
+    let zs = [
+        (b.pos[2] - half).floor() as i32,
+        (b.pos[2] + half).floor() as i32,
+    ];
     xs.iter().any(|&x| {
         zs.iter().any(|&z| {
             [y, y - 1].into_iter().any(|cy| {

@@ -69,14 +69,24 @@ pub fn tick(ctx: &ServerContext, entities: &mut [Entity], targets: &[Target], no
     // Two-block buckets, so each body looks at its neighbours only.
     let mut grid: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
     for (k, b) in bodies.iter().enumerate() {
-        let key = ((b.pos[0] / 2.0).floor() as i32, (b.pos[2] / 2.0).floor() as i32);
+        let key = (
+            (b.pos[0] / 2.0).floor() as i32,
+            (b.pos[2] / 2.0).floor() as i32,
+        );
         grid.entry(key).or_default().push(k);
     }
-    let limit = ctx.game_rules.lock().expect("game rules lock").int("minecraft:max_entity_cramming");
+    let limit = ctx
+        .game_rules
+        .lock()
+        .expect("game rules lock")
+        .int("minecraft:max_entity_cramming");
     let mut pushes = vec![[0.0f64; 2]; bodies.len()];
     let mut crowd = vec![0usize; bodies.len()];
     for (k, a) in bodies.iter().enumerate() {
-        let (gx, gz) = ((a.pos[0] / 2.0).floor() as i32, (a.pos[2] / 2.0).floor() as i32);
+        let (gx, gz) = (
+            (a.pos[0] / 2.0).floor() as i32,
+            (a.pos[2] / 2.0).floor() as i32,
+        );
         for x in gx - 1..=gx + 1 {
             for z in gz - 1..=gz + 1 {
                 for &j in grid.get(&(x, z)).into_iter().flatten() {

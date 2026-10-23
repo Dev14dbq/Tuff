@@ -331,8 +331,200 @@ pub fn put(ctx: &ServerContext, p: Position, kind: Kind, changes: &[(usize, Opti
     }
 }
 
+/// A generated chest (or minecart, barrel...) still holds only the name of
+/// its loot table: roll it into the slots, the first time anyone looks
+/// (minecraft.wiki, "Loot table" → "Containers"). Stacks are split to fill
+/// empty slots and spread over them at random.
+fn unpack_loot(ctx: &ServerContext, p: Position, size: usize) {
+    let Some(mut data) = stored_data(ctx, p) else {
+        return;
+    };
+    let Some(Tag::String(table)) = data.remove("LootTable") else {
+        return;
+    };
+    data.remove("LootTableSeed");
+    let mut slots = read_items(ctx, &data, size);
+    if let Some(table) = ctx.loot.table(&table).cloned() {
+        let cx = crate::loot::LootCtx {
+            origin: Some([
+                f64::from(p.x) + 0.5,
+                f64::from(p.y) + 0.5,
+                f64::from(p.z) + 0.5,
+            ]),
+            ..crate::loot::LootCtx::default()
+        };
+        let env = crate::commands::loot::Env(ctx);
+        let rolled: Vec<ItemStack> = ctx
+            .loot
+            .roll(&env, &table, &cx)
+            .iter()
+            .map(crate::loot::Drop::stack)
+            .collect();
+        fill(&mut slots, rolled, &mut || crate::util::random_u64());
+    }
+    data.insert("Items", write_items(ctx, &slots));
+    match entity_of(p) {
+        Some(id) => {
+            ctx.entity_items
+                .lock()
+                .expect("entity items lock")
+                .insert(id, data);
+        }
+        None => {
+            let blocks = &ctx.data.blocks;
+            if let Some(mut be) = ctx.world.block_entity(p, blocks) {
+                be.data = data;
+                ctx.world.set_block_entity(be, blocks);
+            }
+        }
+    }
+}
+
+/// Puts rolled loot in the empty slots of `slots`: stacks are halved at
+/// random while there are more empty slots than stacks, then each goes to
+/// a random empty slot. What does not fit is lost, as in vanilla.
+fn fill(slots: &mut [Option<ItemStack>], rolled: Vec<ItemStack>, rng: &mut dyn FnMut() -> u64) {
+    let mut empty: Vec<usize> = (0..slots.len()).filter(|&i| slots[i].is_none()).collect();
+    for i in (1..empty.len()).rev() {
+        empty.swap(i, (rng() % (i as u64 + 1)) as usize);
+    }
+    let (mut splittable, mut done): (Vec<ItemStack>, Vec<ItemStack>) = rolled
+        .into_iter()
+        .filter(|s| s.count > 0)
+        .partition(|s| s.count > 1);
+    while !splittable.is_empty() && done.len() + splittable.len() < empty.len() {
+        let at = (rng() % splittable.len() as u64) as usize;
+        let mut stack = splittable.swap_remove(at);
+        let half = stack.count / 2;
+        let part = 1 + (rng() % half as u64) as i32;
+        let mut piece = stack.clone();
+        piece.count = part;
+        stack.count -= part;
+        for s in [stack, piece] {
+            if s.count > 1 && rng().is_multiple_of(2) {
+                splittable.push(s);
+            } else {
+                done.push(s);
+            }
+        }
+    }
+    done.extend(splittable);
+    for i in (1..done.len()).rev() {
+        done.swap(i, (rng() % (i as u64 + 1)) as usize);
+    }
+    for (slot, stack) in empty.into_iter().zip(done) {
+        slots[slot] = Some(stack);
+    }
+}
+
+/// Lids show how many look in: chests and shulker boxes by a block event
+/// (both halves of a double chest), barrels by their `open` state, with the
+/// sound when the first opens it and the last closes it.
+fn lid(ctx: &ServerContext, p: Position, viewers: usize) {
+    if entity_of(p).is_some() {
+        return;
+    }
+    let blocks = &ctx.data.blocks;
+    let Some(state) = ctx.world.block(p, blocks) else {
+        return;
+    };
+    let Some(name) = blocks.block_name(state) else {
+        return;
+    };
+    let edge = viewers <= 1;
+    let opening = viewers > 0;
+    let centre = [
+        f64::from(p.x) + 0.5,
+        f64::from(p.y) + 0.5,
+        f64::from(p.z) + 0.5,
+    ];
+    let pitch = || (crate::util::random_u64() >> 40) as f32 / (1u64 << 24) as f32 * 0.1 + 0.9;
+    if name == "minecraft:barrel" {
+        let want = if opening { "true" } else { "false" };
+        if blocks.property(state, "open") != Some(want) {
+            let new = ctx.shapes.with(state, "open", want);
+            let mut level = crate::level::WorldLevel::new(ctx);
+            level.set_block(p, new);
+            let changes = level.into_changes();
+            let _ = ctx
+                .events
+                .send(crate::context::Event::BlocksChanged { by: 0, changes });
+            let sound = if opening {
+                "block.barrel.open"
+            } else {
+                "block.barrel.close"
+            };
+            crate::fx::sound(
+                ctx,
+                sound,
+                crate::fx::category::BLOCKS,
+                centre,
+                0.5,
+                pitch(),
+            );
+        }
+        return;
+    }
+    let chest = matches!(name, "minecraft:chest" | "minecraft:trapped_chest");
+    let shulker = name.ends_with("shulker_box");
+    if !chest && !shulker {
+        return;
+    }
+    let block = ctx.data.builtin.id("minecraft:block", name).unwrap_or(0);
+    let mut at = vec![p];
+    if chest && let Some(other) = chest_partner(ctx, p, state) {
+        at.push(other);
+    }
+    for &q in &at {
+        let _ = ctx.events.send(crate::context::Event::BlockAction {
+            position: q,
+            action: 1,
+            param: viewers.min(255) as u8,
+            block,
+        });
+    }
+    if edge {
+        let mid = if at.len() == 2 {
+            [
+                (f64::from(at[0].x) + f64::from(at[1].x)) / 2.0 + 0.5,
+                f64::from(p.y) + 0.5,
+                (f64::from(at[0].z) + f64::from(at[1].z)) / 2.0 + 0.5,
+            ]
+        } else {
+            centre
+        };
+        let sound = match (shulker, opening) {
+            (true, true) => "block.shulker_box.open",
+            (true, false) => "block.shulker_box.close",
+            (false, true) => "block.chest.open",
+            (false, false) => "block.chest.close",
+        };
+        crate::fx::sound(ctx, sound, crate::fx::category::BLOCKS, mid, 0.5, pitch());
+    }
+}
+
+/// The other half of a double chest: clockwise of `facing` for the left
+/// half, anticlockwise for the right.
+fn chest_partner(ctx: &ServerContext, p: Position, state: u32) -> Option<Position> {
+    let blocks = &ctx.data.blocks;
+    let (dx, dz) = match blocks.property(state, "facing")? {
+        "north" => (1, 0),
+        "east" => (0, 1),
+        "south" => (-1, 0),
+        "west" => (0, -1),
+        _ => return None,
+    };
+    let (dx, dz) = match blocks.property(state, "type")? {
+        "left" => (dx, dz),
+        "right" => (-dx, -dz),
+        _ => return None,
+    };
+    Some(Position::new(p.x + dx, p.y, p.z + dz))
+}
+
 /// A player opens the container at `p`: its kind and current slots.
 pub fn open(ctx: &ServerContext, uuid: u128, p: Position, kind: Kind) -> Vec<Option<ItemStack>> {
+    unpack_loot(ctx, p, kind.slots);
     let mut all = ctx.containers.lock().expect("containers lock");
     let open = all.entry(key(p)).or_insert_with(|| {
         let data = stored_data(ctx, p).unwrap_or_default();
@@ -343,11 +535,16 @@ pub fn open(ctx: &ServerContext, uuid: u128, p: Position, kind: Kind) -> Vec<Opt
             viewers: Vec::new(),
         }
     });
-    if !open.viewers.contains(&uuid) {
+    let first = !open.viewers.contains(&uuid);
+    if first {
         open.viewers.push(uuid);
     }
+    let viewers = open.viewers.len();
     let slots = open.slots.clone();
     drop(all);
+    if first {
+        lid(ctx, p, viewers);
+    }
     // Trapped chests give power by how many look in.
     ctx.container_updates
         .lock()
@@ -414,12 +611,17 @@ pub fn change(
 pub fn close(ctx: &ServerContext, uuid: u128, p: Position) {
     let mut all = ctx.containers.lock().expect("containers lock");
     if let Some(open) = all.get_mut(&key(p)) {
+        let before = open.viewers.len();
         open.viewers.retain(|&v| v != uuid);
+        let viewers = open.viewers.len();
         if open.viewers.is_empty() {
             store(ctx, p, open);
             all.remove(&key(p));
         }
         drop(all);
+        if viewers != before {
+            lid(ctx, p, viewers);
+        }
         ctx.container_updates
             .lock()
             .expect("container updates lock")
@@ -429,6 +631,7 @@ pub fn close(ctx: &ServerContext, uuid: u128, p: Position) {
 
 /// The block at `p` was broken: its items, and who had it open.
 pub fn broken(ctx: &ServerContext, p: Position) -> (Vec<ItemStack>, Vec<u128>) {
+    unpack_loot(ctx, p, 54);
     let mut all = ctx.containers.lock().expect("containers lock");
     let (slots, viewers) = match all.remove(&key(p)) {
         Some(open) => (open.slots, open.viewers),
@@ -483,4 +686,94 @@ pub fn placed(ctx: &ServerContext, p: Position, state: u32) {
         },
         blocks,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loot_is_split_and_spread_over_empty_slots() {
+        let mut seed = 1u64;
+        let mut rng = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            seed >> 16
+        };
+        let mut slots = vec![None; 27];
+        slots[0] = Some(ItemStack::new(5, 1));
+        fill(
+            &mut slots,
+            vec![ItemStack::new(1, 20), ItemStack::new(2, 1)],
+            &mut rng,
+        );
+        let total: i32 = slots
+            .iter()
+            .flatten()
+            .filter(|s| s.item == 1)
+            .map(|s| s.count)
+            .sum();
+        assert_eq!(total, 20, "nothing is lost or made");
+        assert!(
+            slots.iter().flatten().filter(|s| s.item == 1).count() > 1,
+            "the 20 are split"
+        );
+        assert_eq!(
+            slots[0].as_ref().map(|s| s.item),
+            Some(5),
+            "full slots are kept"
+        );
+        assert_eq!(slots.iter().flatten().filter(|s| s.item == 2).count(), 1);
+    }
+
+    #[test]
+    fn a_generated_chest_is_filled_once_and_its_lid_opens() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let Ok(data) = mc_data::McData::load(&dir) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let ctx = ServerContext::new(crate::Config::new(dir), data).unwrap();
+        let p = Position::new(0, -60, 0);
+        let chest = ctx.data.blocks.default_state("minecraft:chest").unwrap();
+        crate::level::WorldLevel::new(&ctx).set_block(p, chest);
+        let mut nbt = Compound::new();
+        nbt.insert(
+            "LootTable",
+            Tag::String("minecraft:chests/simple_dungeon".into()),
+        );
+        ctx.world.set_block_entity(
+            mc_world::BlockEntity {
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                id: "minecraft:chest".into(),
+                data: nbt,
+            },
+            &ctx.data.blocks,
+        );
+        let mut events = ctx.events.subscribe();
+        let kind = kind_of("minecraft:chest").unwrap();
+        let first = open(&ctx, 1, p, kind);
+        assert!(first.iter().any(Option::is_some), "the dungeon loot is in");
+        let be = ctx.world.block_entity(p, &ctx.data.blocks).unwrap();
+        assert!(be.data.get("LootTable").is_none(), "rolled only once");
+        let mut lid = None;
+        while let Some(e) = events.try_changed() {
+            if let crate::context::Event::BlockAction {
+                action: 1, param, ..
+            } = e
+            {
+                lid = Some(param);
+            }
+        }
+        assert_eq!(lid, Some(1));
+        close(&ctx, 1, p);
+        assert_eq!(
+            open(&ctx, 2, p, kind),
+            first,
+            "the same items the next time"
+        );
+    }
 }

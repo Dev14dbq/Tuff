@@ -487,7 +487,10 @@ fn bounds(ctx: &ServerContext, t: &Target) -> ([f64; 3], [f64; 3]) {
         let b = e.aabb();
         return (b.min, b.max);
     }
-    ([p[0] - 0.3, p[1], p[2] - 0.3], [p[0] + 0.3, p[1] + 1.8, p[2] + 0.3])
+    (
+        [p[0] - 0.3, p[1], p[2] - 0.3],
+        [p[0] + 0.3, p[1] + 1.8, p[2] + 0.3],
+    )
 }
 
 /// A target's [yaw, pitch].

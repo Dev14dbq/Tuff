@@ -374,7 +374,14 @@ impl Store {
         };
         book.insert(
             "recipes",
-            Tag::List(saved.extra.recipes.iter().map(|r| Tag::String(r.clone())).collect()),
+            Tag::List(
+                saved
+                    .extra
+                    .recipes
+                    .iter()
+                    .map(|r| Tag::String(r.clone()))
+                    .collect(),
+            ),
         );
         if book.get("toBeDisplayed").is_none() {
             book.insert("toBeDisplayed", Tag::List(Vec::new()));

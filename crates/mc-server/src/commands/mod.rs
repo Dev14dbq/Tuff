@@ -354,7 +354,9 @@ pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, lin
         let text = commands.lang.render(&message);
         match source {
             Source::Console => {}
-            Source::Player { name, .. } | Source::Block { name, .. } | Source::Cart { name, .. } => {
+            Source::Player { name, .. }
+            | Source::Block { name, .. }
+            | Source::Cart { name, .. } => {
                 info!("[{name}: {text}]")
             }
         }

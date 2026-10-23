@@ -387,14 +387,26 @@ fn walk_east(world: &dyn Terrain, ticks: u64) -> ([f64; 3], usize) {
 
 #[test]
 fn walkers_step_onto_slabs_without_jumping() {
-    let (pos, jumps) = walk_east(&Barrier { span: (0.0, 0.5), high: false }, 200);
+    let (pos, jumps) = walk_east(
+        &Barrier {
+            span: (0.0, 0.5),
+            high: false,
+        },
+        200,
+    );
     assert!(pos[0] > 5.0, "{pos:?}");
     assert_eq!(jumps, 0);
 }
 
 #[test]
 fn walkers_jump_onto_a_block_once() {
-    let (pos, jumps) = walk_east(&Barrier { span: (0.0, 1.0), high: false }, 200);
+    let (pos, jumps) = walk_east(
+        &Barrier {
+            span: (0.0, 1.0),
+            high: false,
+        },
+        200,
+    );
     assert!(pos[0] > 5.0, "{pos:?}");
     assert!((1..=2).contains(&jumps), "{jumps}");
 }
@@ -402,8 +414,14 @@ fn walkers_jump_onto_a_block_once() {
 #[test]
 fn walkers_do_not_hop_forever_at_a_wall_or_fence() {
     for world in [
-        Barrier { span: (0.0, 1.0), high: true },
-        Barrier { span: (0.0, 1.5), high: false },
+        Barrier {
+            span: (0.0, 1.0),
+            high: true,
+        },
+        Barrier {
+            span: (0.0, 1.5),
+            high: false,
+        },
     ] {
         let (pos, jumps) = walk_east(&world, 300);
         assert!(pos[0] < 3.0, "{pos:?}");
