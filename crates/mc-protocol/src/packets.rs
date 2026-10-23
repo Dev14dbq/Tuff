@@ -2177,6 +2177,8 @@ pub mod play {
         OptUuid(Option<u128>),
         /// A block state (an enderman's), or none.
         OptBlockState(Option<u32>),
+        /// An entity id or none (a firework's rocketeer).
+        OptVarInt(Option<i32>),
         /// A registry id under its own serializer type (cat, cow, wolf, pig
         /// and chicken variants): (type id, value).
         Holder(i32, i32),
@@ -2224,6 +2226,10 @@ pub mod play {
                 MetadataValue::OptBlockState(state) => {
                     out.put_varint(15);
                     out.put_varint(state.map_or(0, |s| s as i32));
+                }
+                MetadataValue::OptVarInt(v) => {
+                    out.put_varint(19);
+                    out.put_varint(v.map_or(0, |v| v + 1));
                 }
                 MetadataValue::Holder(kind, value) => {
                     out.put_varint(*kind);

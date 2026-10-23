@@ -116,11 +116,17 @@ pub struct Blow {
 /// The blow a player swings now; resets the charge and stops a sprint
 /// blow's sprint. Sounds come with the hit ([`blow_sound`]).
 pub fn swing(ctx: &ServerContext, uuid: u128, pose: Pose) -> Blow {
+    swing_with(ctx, uuid, pose, None)
+}
+
+/// [`swing`] with the base damage set (a riptide spin hits for 8 instead
+/// of the attack damage).
+pub fn swing_with(ctx: &ServerContext, uuid: u128, pose: Pose, base: Option<f32>) -> Blow {
     let held = crate::held::held(ctx, uuid, 0);
     let info = held.as_ref().and_then(|h| ctx.items.get(h.stack.item));
     let comps = held.as_ref().and_then(|h| h.comps.as_ref());
     let level = |name: &str| crate::held::enchant(comps, name);
-    let base = 1.0 + info.map_or(0.0, |i| i.attack_damage);
+    let base = base.unwrap_or(1.0 + info.map_or(0.0, |i| i.attack_damage));
     let speed = (4.0 + info.map_or(0.0, |i| i.attack_speed)).max(0.1);
     let period = 20.0 / speed;
     let t = now(ctx);
@@ -479,7 +485,18 @@ pub fn player_hits_player(
     name: &str,
     victim: u128,
 ) {
-    let blow = swing(ctx, attacker.uuid, attacker.pose);
+    player_hits_player_with(ctx, attacker, name, victim, None);
+}
+
+/// [`player_hits_player`] with the blow's base damage set (riptide).
+pub fn player_hits_player_with(
+    ctx: &ServerContext,
+    attacker: &crate::interact::Actor,
+    name: &str,
+    victim: u128,
+    base: Option<f32>,
+) {
+    let blow = swing_with(ctx, attacker.uuid, attacker.pose, base);
     let Some(at) = lock(&ctx.players).get(&victim).and_then(|p| p.pose) else {
         return;
     };

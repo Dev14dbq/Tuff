@@ -95,7 +95,7 @@ fn add(a: [f64; 3], b: [f64; 3], k: f64) -> [f64; 3] {
 
 /// Whether a block is still holding a stuck arrow: the one it is in or one
 /// beside it.
-fn held_by_block(ctx: &crate::context::ServerContext, pos: [f64; 3]) -> bool {
+pub(super) fn held_by_block(ctx: &crate::context::ServerContext, pos: [f64; 3]) -> bool {
     let c = pos.map(|v| v.floor() as i32);
     [
         [0, 0, 0],

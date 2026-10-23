@@ -63,6 +63,9 @@ pub struct Vitals {
     pub fire: i32,
     /// Gliding with an elytra.
     pub gliding: bool,
+    /// Where a push (a wind burst, a mace smash) launched the player: a
+    /// fall counts only below it.
+    pub impulse_y: Option<f64>,
     /// What the enchantments of the gear do over time.
     pub worn: crate::worn::Worn,
 }
@@ -144,6 +147,7 @@ impl Default for Vitals {
             last_attacker: None,
             fire: -20,
             gliding: false,
+            impulse_y: None,
             worn: crate::worn::Worn::default(),
         }
     }
@@ -552,7 +556,10 @@ pub fn moved(ctx: &ServerContext, uuid: u128, before: Pose, after: Pose, in_wate
             None
         } else if after.on_ground {
             // The move that lands is part of the fall.
-            let fell = v.fall_distance + (before.y - after.y).max(0.0);
+            let mut fell = v.fall_distance + (before.y - after.y).max(0.0);
+            if let Some(y) = v.impulse_y.take() {
+                fell = fell.min((y - after.y).max(0.0));
+            }
             v.fall_distance = 0.0;
             Some(fell)
         } else {

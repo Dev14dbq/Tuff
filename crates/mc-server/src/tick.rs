@@ -218,6 +218,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             crate::effects::tick(&ctx, count as i64);
             crate::vitals::tick(&ctx);
             crate::worn::tick(&ctx);
+            crate::projectiles::trident::tick_spins(&ctx);
             crate::vitals::tick_using(&ctx);
             crate::portals::tick(&ctx);
             crate::useblocks::tick(&ctx);
@@ -756,6 +757,10 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         .map(|e| crate::hits::Target {
             id: e.id,
             aabb: e.aabb(),
+            kind: match &e.kind {
+                mc_entity::Kind::Mob(m) => Some(m.species.id()),
+                _ => None,
+            },
         })
         .collect();
     crate::decor::leash::tick(ctx);
@@ -960,6 +965,9 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         let _ = ctx
             .events
             .send(Event::EntitySync(std::mem::take(&mut out.sync)));
+    }
+    for g in std::mem::take(&mut out.gusts) {
+        crate::projectiles::wind::burst(ctx, &mut entities, &g);
     }
     for hit in std::mem::take(&mut out.hits) {
         crate::hits::apply(ctx, &mut entities, &mut removed, &mut gone, hit);

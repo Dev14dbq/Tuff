@@ -41,6 +41,8 @@ impl Who {
 pub struct Target {
     pub id: i32,
     pub aabb: Aabb,
+    /// The entity type of a mob (`minecraft:cod`), for Impaling.
+    pub kind: Option<&'static str>,
 }
 
 /// An entity hurt by a projectile or a player; the tick applies it once the
@@ -69,6 +71,8 @@ pub struct Out {
     pub data: Vec<mc_protocol::packets::play::SetEntityData>,
     /// Explosions to set off.
     pub blasts: Vec<crate::explosion::Blast>,
+    /// Wind bursts to set off.
+    pub gusts: Vec<crate::projectiles::wind::Gust>,
     /// Cells a fireball set alight (fire goes there if they are air).
     pub fires: Vec<[i32; 3]>,
     /// Command block minecarts an activator rail set off (entity ids): they

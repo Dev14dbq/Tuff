@@ -113,6 +113,7 @@ pub fn build(
             boosts: None,
             stars: Vec::new(),
             shot_at_angle: false,
+            stack: None,
         })),
         "armor_stand" => {
             let mut s = Stand {

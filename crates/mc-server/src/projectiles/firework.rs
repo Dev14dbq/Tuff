@@ -6,6 +6,7 @@
 use mc_entity::extra::{Firework, Shot};
 use mc_entity::{Entity, Kind};
 use mc_nbt::Tag;
+use mc_protocol::packets::play::ItemStack;
 
 use super::spawn;
 use crate::fx;
@@ -48,6 +49,10 @@ pub fn launch(
         boosts: None,
         stars: vec![Vec::new(); stars],
         shot_at_angle: at_angle,
+        stack: Some(ItemStack {
+            count: 1,
+            ..held.stack.clone()
+        }),
     });
     let vel = [hits::gauss() * 0.0006, 0.05, hits::gauss() * 0.0006];
     let id = spawn(ctx, shot, Some(actor.uuid), pos, vel);

@@ -228,11 +228,7 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                 })
             };
             match &p.shot {
-                Shot::Arrow(a) => {
-                    if a.crit {
-                        s.meta.push((8, MetadataValue::Byte(1)));
-                    }
-                }
+                Shot::Arrow(a) => s.meta.extend(arrow_meta(a)),
                 Shot::Snowball => {
                     s.meta.extend(item("minecraft:snowball"));
                 }
@@ -242,20 +238,35 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                 Shot::Pearl => {
                     s.meta.extend(item("minecraft:ender_pearl"));
                 }
-                Shot::Potion { item, .. } => {
+                Shot::Potion { item, color, .. } => {
                     s.meta.push((
                         play::metadata::ITEM,
-                        MetadataValue::Item(Some(ItemStack::new(*item, 1))),
+                        MetadataValue::Item(Some(potion_stack(*item, *color))),
                     ));
                 }
-                Shot::Firework(_) => {
-                    s.meta.extend(item("minecraft:firework_rocket"));
+                Shot::Firework(f) => {
+                    match &f.stack {
+                        Some(st) => s.meta.push((
+                            play::metadata::ITEM,
+                            MetadataValue::Item(Some(st.clone())),
+                        )),
+                        None => s.meta.extend(item("minecraft:firework_rocket")),
+                    }
+                    if let Some(rider) = f.boosts {
+                        let id = owner_id(Some(rider));
+                        s.meta.push((9, MetadataValue::OptVarInt(Some(id))));
+                    }
+                    if f.shot_at_angle {
+                        s.meta.push((10, MetadataValue::Boolean(true)));
+                    }
                 }
                 Shot::Fireball { .. } => {}
                 Shot::Cloud { radius, .. } => {
                     s.meta.push((8, MetadataValue::Float(*radius)));
                 }
                 Shot::Bobber { .. } => {}
+                Shot::Lightning { .. } => s.data = 0,
+                Shot::WindCharge { .. } => {}
             }
         }
         Kind::Hung(h) => {
@@ -326,6 +337,61 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
     Some(s)
 }
 
+/// An arrow's or trident's metadata: flags (critical, flying back
+/// through blocks), Piercing, in the ground, the tipped arrow's colour,
+/// the trident's Loyalty and glint.
+pub fn arrow_meta(a: &mc_entity::extra::Arrow) -> Vec<(u8, MetadataValue)> {
+    let mut meta = Vec::new();
+    let flags = i8::from(a.crit) | if a.returning { 2 } else { 0 };
+    if flags != 0 {
+        meta.push((8, MetadataValue::Byte(flags)));
+    }
+    if a.pierce > 0 {
+        meta.push((9, MetadataValue::Byte(a.pierce.min(127) as i8)));
+    }
+    if a.stuck > 0 {
+        meta.push((10, MetadataValue::Boolean(true)));
+    }
+    if a.trident {
+        let stack = a.stack.as_ref();
+        let loyalty = stack.map_or(0, |s| {
+            crate::enchants::levels(s)
+                .iter()
+                .find(|(n, _)| n == "minecraft:loyalty")
+                .map_or(0, |l| l.1)
+        });
+        if loyalty > 0 {
+            meta.push((11, MetadataValue::Byte(loyalty.min(127) as i8)));
+        }
+        if stack.is_some_and(shines) {
+            meta.push((12, MetadataValue::Boolean(true)));
+        }
+    } else if !a.spectral && !a.effects.is_empty() {
+        let color = crate::projectiles::potions::color(&a.effects);
+        meta.push((11, MetadataValue::VarInt(color)));
+    }
+    meta
+}
+
+/// Whether a stack has the enchantment glint: enchanted, or its
+/// `enchantment_glint_override` says so.
+pub fn shines(stack: &ItemStack) -> bool {
+    match stack.components.get("minecraft:enchantment_glint_override") {
+        Some(mc_nbt::Tag::Byte(b)) => *b != 0,
+        _ => !crate::enchants::levels(stack).is_empty(),
+    }
+}
+
+/// A thrown potion's item as clients draw it: tinted its colour.
+fn potion_stack(item: i32, color: i32) -> ItemStack {
+    let mut s = ItemStack::new(item, 1);
+    let mut c = mc_nbt::Compound::new();
+    c.insert("custom_color", mc_nbt::Tag::Int(color));
+    s.components
+        .set("minecraft:potion_contents", mc_nbt::Tag::Compound(c));
+    s
+}
+
 /// A command block minecart's command and last output, as its window
 /// shows them.
 pub fn command_cart_meta(c: &mc_entity::extra::CommandCart) -> Vec<(u8, MetadataValue)> {
@@ -364,6 +430,9 @@ pub fn type_name(kind: &Kind) -> Option<String> {
             Shot::Firework(_) => "firework_rocket",
             Shot::Cloud { .. } => "area_effect_cloud",
             Shot::Bobber { .. } => "fishing_bobber",
+            Shot::Lightning { .. } => "lightning_bolt",
+            Shot::WindCharge { breeze: true } => "breeze_wind_charge",
+            Shot::WindCharge { breeze: false } => "wind_charge",
         }
         .into(),
         Kind::Hung(h) => match &h.decor {
