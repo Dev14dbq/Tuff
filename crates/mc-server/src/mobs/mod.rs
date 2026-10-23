@@ -613,6 +613,7 @@ fn handle(
             let harm = hurt::Harm::new(amount, kind);
             hurt::harm(ctx, &mut entities[i], &harm);
         }
+        MobEvent::Landed { distance } => trample_farmland(ctx, level, m, pos, distance),
         MobEvent::Breed { partner } => {
             if let Some(baby) = hurt::breed(ctx, entities, i, partner) {
                 out.fresh.push(baby);
@@ -672,6 +673,38 @@ fn handle(
         MobEvent::Wear { slot, amount } => hurt::wear_gear(ctx, &mut entities[i], slot, amount),
         MobEvent::Buck => ride::eject(ctx, &mut entities[i]),
     }
+}
+
+/// A living mob landed after falling `fell` blocks. Farmland gives way
+/// under a fall, the higher the likelier (wiki, "Farmland" → "Trampling").
+/// A mob does it only while `mob_griefing` is on, and only when its box
+/// (width × width × height) is bigger than 0.512. A chicken, a rabbit or
+/// a baby is too light.
+fn trample_farmland(
+    ctx: &ServerContext,
+    level: &mut WorldLevel,
+    m: &Mob,
+    pos: [f64; 3],
+    fell: f64,
+) {
+    if m.is_dead() || !ctx.game_rule_bool("mob_griefing") {
+        return;
+    }
+    let (w, h) = m.size();
+    if w * w * h <= 0.512 {
+        return;
+    }
+    let roll = (crate::util::random_u64() >> 40) as f64 / (1u64 << 24) as f64;
+    if roll >= fell - 0.5 {
+        return;
+    }
+    let below = mc_protocol::Position::new(
+        pos[0].floor() as i32,
+        (pos[1] - 0.2).floor() as i32,
+        pos[2].floor() as i32,
+    );
+    let logic = level.logic();
+    mc_tick::random::trample(level, logic, crate::level::to_pos(below));
 }
 
 /// A mob shoots or throws at its target.
