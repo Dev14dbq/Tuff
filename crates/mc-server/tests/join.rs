@@ -2449,10 +2449,10 @@ async fn game_mode_switcher_pick_block_and_signs() {
     admin.recv_until("minecraft:block_update").await;
     let mut sign = Vec::new();
     sign.put_position(mc_protocol::Position::new(x, y, z));
-    sign.put_bool(true);
     for line in ["Hello", "", "world", ""] {
         sign.put_string(line);
     }
+    sign.put_bool(true);
     admin.send("minecraft:sign_update", sign).await;
     let (_, data) = admin.recv_until("minecraft:block_entity_data").await;
     let text = format!("{data:?}");

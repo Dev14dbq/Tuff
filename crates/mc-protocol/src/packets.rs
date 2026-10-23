@@ -910,16 +910,21 @@ pub mod play {
                     command: r.string(32767)?,
                     track_output: r.bool()?,
                 },
-                "minecraft:sign_update" => Serverbound::SignUpdate {
-                    position: r.position()?,
-                    front: r.bool()?,
-                    lines: [
+                // The lines come before the side (seen from a 26.3 client).
+                "minecraft:sign_update" => {
+                    let position = r.position()?;
+                    let lines = [
                         r.string(384)?,
                         r.string(384)?,
                         r.string(384)?,
                         r.string(384)?,
-                    ],
-                },
+                    ];
+                    Serverbound::SignUpdate {
+                        position,
+                        front: r.bool()?,
+                        lines,
+                    }
+                }
                 "minecraft:player_abilities" => Serverbound::PlayerAbilities { flags: r.u8()? },
                 other => Serverbound::Other(other.to_owned()),
             })
@@ -3253,5 +3258,23 @@ mod tests {
             0x80, 0x00, 0x00,
         ];
         assert_eq!(out, expected);
+    }
+}
+
+#[cfg(test)]
+mod sign_update_tests {
+    use super::play::Serverbound;
+    use crate::codec::Reader;
+
+    #[test]
+    fn sign_update_as_a_26_3_client_sends_it() {
+        // Position, four empty lines, front side: captured from the client.
+        let body = [0x00, 0x09, 0xc3, 0x40, 0x02, 0x6c, 0xc0, 0x40, 0, 0, 0, 0, 1];
+        let packet = Serverbound::decode("minecraft:sign_update", &mut Reader::new(&body)).unwrap();
+        let Serverbound::SignUpdate { front, lines, .. } = packet else {
+            panic!("{packet:?}")
+        };
+        assert!(front);
+        assert!(lines.iter().all(String::is_empty));
     }
 }
