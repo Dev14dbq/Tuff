@@ -650,6 +650,12 @@ pub fn die(
     for (item, count, damage) in gear_drops {
         spawn_stack(ctx, pos, item, count, damage);
     }
+    // A chest on its back spills.
+    if let Kind::Mob(m) = &e.kind
+        && m.chested
+    {
+        super::chest::spill(ctx, id, pos);
+    }
     // An enderman lets its block fall.
     if let Kind::Mob(m) = &mut e.kind
         && let Some(state) = m.carried.take()

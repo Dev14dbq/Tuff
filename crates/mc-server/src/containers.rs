@@ -157,6 +157,42 @@ fn stored_data(ctx: &ServerContext, p: Position) -> Option<Compound> {
 /// The entity `id` holding items is gone: its items (to drop), and who had
 /// it open.
 pub fn entity_gone(ctx: &ServerContext, id: i32) -> (Vec<ItemStack>, Vec<u128>) {
+    entity_gone_skipping(ctx, id, 0)
+}
+
+/// The slots of the entity container `id`, if a window has it open.
+pub fn peek_entity(ctx: &ServerContext, id: i32) -> Option<Vec<Option<ItemStack>>> {
+    let all = ctx.containers.lock().expect("containers lock");
+    all.get(&key(entity_key(id))).map(|o| o.slots.clone())
+}
+
+/// Sets the stored slots of entity container `id` (before it is opened).
+pub fn set_entity_slots(ctx: &ServerContext, id: i32, slots: &[Option<ItemStack>]) {
+    let mut all = ctx.containers.lock().expect("containers lock");
+    if let Some(open) = all.get_mut(&key(entity_key(id))) {
+        for (i, s) in slots.iter().enumerate() {
+            if let Some(d) = open.slots.get_mut(i) {
+                *d = s.clone();
+            }
+        }
+        return;
+    }
+    drop(all);
+    ctx.entity_items
+        .lock()
+        .expect("entity items lock")
+        .entry(id)
+        .or_default()
+        .insert("Items", write_items(ctx, slots));
+}
+
+/// As [`entity_gone`], leaving out the first `skip` slots (a horse's
+/// saddle and armor are worn, not carried).
+pub fn entity_gone_skipping(
+    ctx: &ServerContext,
+    id: i32,
+    skip: usize,
+) -> (Vec<ItemStack>, Vec<u128>) {
     let p = entity_key(id);
     let mut all = ctx.containers.lock().expect("containers lock");
     let data = ctx
@@ -171,7 +207,7 @@ pub fn entity_gone(ctx: &ServerContext, id: i32) -> (Vec<ItemStack>, Vec<u128>) 
             None => return (Vec::new(), Vec::new()),
         },
     };
-    (slots.into_iter().flatten().collect(), viewers)
+    (slots.into_iter().skip(skip).flatten().collect(), viewers)
 }
 
 pub fn item_name(ctx: &ServerContext, item: i32) -> Option<String> {

@@ -253,6 +253,9 @@ pub struct Outcome {
     pub drops: Vec<(Position, crate::loot::Drop)>,
     /// A container the player opened.
     pub open: Option<(Position, crate::containers::Kind)>,
+    /// The inventory of the mount with this entity id, opened for the
+    /// player (with the columns of its chest).
+    pub open_mount: Option<(i32, i32)>,
     /// The player opened a crafting table.
     pub open_crafting: bool,
     /// The player opened a block's menu (beacon, anvil...).

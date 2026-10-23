@@ -150,6 +150,8 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             v.push((a, MetadataValue::Byte(f)));
             if m.species == Horse {
                 v.push((a + 1, MetadataValue::VarInt(m.variant)));
+            } else {
+                v.push((a + 1, MetadataValue::Boolean(m.chested)));
             }
         }
         Wolf => {

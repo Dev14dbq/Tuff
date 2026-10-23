@@ -332,7 +332,11 @@ pub fn use_entity(
             Kind::Vehicle(_) => {
                 crate::vehicles::interact(ctx, actor, e, hand, attack, &mut outcome, &mut fresh);
             }
-            Kind::Mob(_) => crate::mobs::clicked(ctx, &actor, entity_id, hand, attack),
+            Kind::Mob(_) => {
+                if !crate::mobs::chest::use_on(ctx, &actor, e, hand, attack, &mut outcome) {
+                    crate::mobs::clicked(ctx, &actor, entity_id, hand, attack);
+                }
+            }
             _ => {}
         }
     }

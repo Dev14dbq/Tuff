@@ -11,6 +11,7 @@
 //! - [`nbt`]: mobs as `/summon` and `/data` see them.
 
 mod blocks;
+pub mod chest;
 mod crowd;
 pub mod eggs;
 pub mod hurt;
@@ -395,6 +396,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
 
     apply_pending(ctx, &mut entities, pending, now);
     crate::decor::leash::tell_mobs(ctx, &mut entities);
+    chest::mirror(ctx, &mut entities);
 
     let ground = Ground::new(ctx);
     let items = ItemSense {

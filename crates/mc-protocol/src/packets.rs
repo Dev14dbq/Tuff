@@ -2821,6 +2821,23 @@ pub mod play {
         }
     }
 
+    /// Mount Screen Open: the inventory of a horse, donkey or mule (saddle,
+    /// armor, then `columns` columns of three chest slots).
+    #[derive(Clone, Debug)]
+    pub struct MountScreenOpen {
+        pub window: i32,
+        pub columns: i32,
+        pub entity_id: i32,
+    }
+    packet!(MountScreenOpen, Play, "minecraft:mount_screen_open");
+    impl Encode for MountScreenOpen {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.window);
+            out.put_varint(self.columns);
+            out.put_i32(self.entity_id);
+        }
+    }
+
     /// Close Container: the server closes a window.
     #[derive(Clone, Debug)]
     pub struct ContainerCloseClientbound {

@@ -417,8 +417,9 @@ pub struct Mob {
     pub breaks_doors: bool,
     /// Where the lead it is on is held (set by the world every tick).
     pub leash: Option<[f64; 3]>,
-    /// Donkeys and mules: the chest on its back and what is in it.
-    pub chest: Option<Vec<Option<mc_protocol::components::ItemStack>>>,
+    /// Donkeys and mules: a chest on the back (its items are a container
+    /// of the server's, keyed by the entity).
+    pub chested: bool,
     /// Enderman: a player looks it in the eyes.
     pub stared: bool,
     /// Cat: lying down (on a bed), or sitting on a block it chose.
@@ -509,7 +510,7 @@ impl Mob {
             boost_total: 0,
             breaks_doors: false,
             leash: None,
-            chest: None,
+            chested: false,
             stared: false,
             lying: false,
             perched: false,

@@ -136,6 +136,8 @@ pub enum Action {
     /// A click on an entity: `attack` for the left one.
     /// What a rider says about their vehicle.
     Vehicle(crate::vehicles::Act),
+    /// A rider opens the inventory of their mount.
+    MountInventory,
     UseEntity {
         entity_id: i32,
         hand: i32,
@@ -1014,6 +1016,11 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
         } => interact::use_item_on(ctx, actor, hand, position, face, cursor, sequence),
         Action::UseItem { hand, yaw, pitch } => interact::use_item(ctx, actor, hand, yaw, pitch),
         Action::Vehicle(act) => crate::vehicles::act(ctx, actor, act),
+        Action::MountInventory => {
+            let mut outcome = Outcome::default();
+            crate::mobs::chest::open_riding(ctx, &actor, &mut outcome);
+            outcome
+        }
         Action::UseEntity {
             entity_id,
             hand,

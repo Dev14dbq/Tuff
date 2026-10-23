@@ -677,3 +677,63 @@ fn the_holder_takes_a_lead_off() {
     assert!(!lock(&ctx.leashes).links.contains_key(&pig));
     assert_eq!(items_of(&ctx, "minecraft:lead"), 1);
 }
+
+fn tame_donkey(ctx: &ServerContext) -> i32 {
+    let id = put(ctx, Species::Donkey, [2.5, -60.0, 0.5]);
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.owner = Some(STEVE);
+        m.tame = true;
+    }
+    id
+}
+
+#[test]
+fn a_chest_goes_on_a_tame_donkey_and_its_window_mirrors_the_saddle() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = tame_donkey(&ctx);
+    let wild = put(&ctx, Species::Donkey, [4.5, -60.0, 0.5]);
+    hold(&ctx, "minecraft:chest", 2);
+    let mut actor = actor_at([0.5, -60.0, 0.5]);
+    // A wild one takes no chest.
+    let out = crate::hits::use_entity(&ctx, actor, wild, 0, false, None);
+    assert!(out.open_mount.is_none());
+    assert!(!with_mob(&ctx, wild, |m| m.chested));
+    crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    assert!(with_mob(&ctx, id, |m| m.chested));
+    assert_eq!(lock(&ctx.inventories)[&STEVE].slots[36].as_ref().map(|s| s.count), Some(1));
+    // Sneaking opens the window: 2 + 15 slots.
+    actor.sneaking = true;
+    let out = crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    assert_eq!(out.open_mount, Some((id, 5)));
+    let key = crate::containers::entity_key(id);
+    let kind = crate::containers::Kind {
+        entity: "",
+        slots: 17,
+        menu: "",
+        title: "",
+    };
+    let slots = crate::containers::open(&ctx, STEVE, key, kind);
+    assert_eq!(slots.len(), 17);
+    // A saddle put in the first slot saddles it; a stack in the chest is
+    // dropped when it dies.
+    let saddle = ctx.items.id("minecraft:saddle").unwrap();
+    let dirt = ctx.items.id("minecraft:dirt").unwrap();
+    {
+        let mut all = lock(&ctx.containers);
+        let open = all.get_mut(&(key.x, key.y, key.z)).unwrap();
+        open.slots[0] = Some(mc_protocol::packets::play::ItemStack::new(saddle, 1));
+        open.slots[5] = Some(mc_protocol::packets::play::ItemStack::new(dirt, 3));
+    }
+    run(&ctx, 1);
+    assert!(with_mob(&ctx, id, |m| m.saddled()));
+    ctx.mobs.hit(ctx.dim, id, steve([2.5, -60.0, 0.5]), blow(1000.0, [2.5, -60.0, 0.5]));
+    run(&ctx, 1);
+    assert_eq!(items_of(&ctx, "minecraft:dirt"), 3);
+    assert_eq!(items_of(&ctx, "minecraft:chest"), 1);
+}

@@ -689,6 +689,9 @@ async fn play(
                 if let Some((position, kind)) = outcome.open.take() {
                     windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
                 }
+                if let Some((mount, columns)) = outcome.open_mount.take() {
+                    windows.open_mount(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, mount, columns)?;
+                }
                 if let Some((position, front)) = outcome.open_sign.take() {
                     writer.queue(&play::OpenSignEditor { position, front })?;
                 }
@@ -827,6 +830,10 @@ async fn play(
                     play::Serverbound::PlayerAction { status: 5, .. } => {
                         crate::vitals::stop_using(&ctx, uuid);
                         crate::combat::shield(&ctx, uuid, false);
+                    }
+                    play::Serverbound::PlayerCommand { action: 5, .. } => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action: Action::MountInventory, reply: replies_tx.clone() });
                     }
                     play::Serverbound::PlayerCommand { action: action @ (1 | 2), .. } => {
                         crate::combat::set_sprinting(&ctx, uuid, action == 1);
