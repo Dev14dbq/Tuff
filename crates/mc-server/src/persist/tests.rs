@@ -60,6 +60,16 @@ fn mob(ctx: &ServerContext, species: Species, pos: [f64; 3]) -> Entity {
     crate::mobs::new_mob(ctx, species, pos)
 }
 
+/// A worn, enchanted and named piece of `name`.
+fn enchanted(ctx: &ServerContext, name: &str) -> ItemStack {
+    let c = nbt(&format!(
+        r#"{{id:"{name}",count:1,components:{{"minecraft:damage":3,"minecraft:enchantments":{{"minecraft:protection":2}},"minecraft:custom_name":"Shiny"}}}}"#
+    ));
+    let stack = ItemStack::from_nbt_with(&c, ctx.items.id(name).unwrap());
+    assert!(!stack.components.is_empty(), "{stack:?}");
+    stack
+}
+
 /// One of every kind of entity there is, all in chunk 2, 2.
 fn everything(ctx: &ServerContext) -> Vec<Entity> {
     let item_id = |n: &str| ctx.items.id(n).unwrap();
@@ -159,10 +169,12 @@ fn everything(ctx: &ServerContext) -> Vec<Entity> {
         m.health = 11.0;
         m.burning = 40;
         m.fall_distance = 2.5;
+        let helmet = enchanted(ctx, "minecraft:iron_helmet");
         m.gear[mc_entity::mob::slot::HEAD] = Some(mc_entity::mob::Gear {
-            item: item_id("minecraft:iron_helmet"),
+            item: helmet.item,
             count: 1,
-            damage: 30,
+            damage: helmet.damage,
+            components: helmet.components,
         });
         m.drop_chance[mc_entity::mob::slot::HEAD] = 1.0;
         m.yaw = 45.0;
@@ -196,6 +208,7 @@ fn everything(ctx: &ServerContext) -> Vec<Entity> {
             item: item_id("minecraft:saddle"),
             count: 1,
             damage: 0,
+            components: Default::default(),
         });
     }
     all.push(horse);
@@ -278,7 +291,7 @@ fn everything(ctx: &ServerContext) -> Vec<Entity> {
     all.push(summoned(
         ctx,
         "minecraft:item_frame",
-        r#"{Facing:3b,Item:{id:"minecraft:map",count:1},ItemRotation:3b}"#,
+        r#"{Facing:3b,Item:{id:"minecraft:diamond_sword",count:1,components:{"minecraft:custom_name":"Blade"}},ItemRotation:3b}"#,
         [33.5, 101.0, 38.5],
     ));
     all.push(summoned(
@@ -306,8 +319,8 @@ fn everything(ctx: &ServerContext) -> Vec<Entity> {
     if let Kind::Hung(h) = &mut stand.kind
         && let Decor::Stand(s) = &mut h.decor
     {
-        s.gear[5] = Some((item_id("minecraft:golden_helmet"), 3));
-        s.gear[0] = Some((item_id("minecraft:stick"), 0));
+        s.gear[5] = Some(enchanted(ctx, "minecraft:golden_helmet"));
+        s.gear[0] = Some(ItemStack::new(item_id("minecraft:stick"), 1));
     }
     all.push(stand);
     let knot = entity(
@@ -642,7 +655,7 @@ fn unknown_entities_and_keys_are_written_back() {
     let marker =
         nbt(r#"{id:"minecraft:marker",Pos:[40.5d,100d,40.5d],UUID:[I;1,2,3,4],data:{a:1b}}"#);
     let cow =
-        nbt(r#"{id:"minecraft:cow",Pos:[41.5d,100d,40.5d],UUID:[I;5,6,7,8],Silent:1b,Glowing:1b}"#);
+        nbt(r#"{id:"minecraft:cow",Pos:[41.5d,100d,40.5d],UUID:[I;5,6,7,8],Silent:1b,Glowing:1b,attributes:[{id:"minecraft:max_health",base:10d,modifiers:[{id:"minecraft:test",amount:2d,operation:"add_value"}]},{id:"minecraft:scale",base:2d}],Brain:{memories:{"minecraft:home":{value:{pos:[I;1,2,3],dimension:"minecraft:overworld"}}}},active_effects:[{id:"minecraft:speed",amplifier:1b,duration:100}]}"#);
     ctx.world
         .loaded_entities_for_test(vec![Tag::Compound(marker.clone()), Tag::Compound(cow)]);
     load_stored(&ctx);
@@ -669,5 +682,25 @@ fn unknown_entities_and_keys_are_written_back() {
         .unwrap();
     assert_eq!(cow.get("Silent"), Some(&Tag::Byte(1)));
     assert_eq!(cow.get("Glowing"), Some(&Tag::Byte(1)));
+    assert!(cow.get("active_effects").is_some());
+    let Some(Tag::List(attrs)) = cow.get("attributes") else {
+        panic!()
+    };
+    let attr = |id: &str| {
+        attrs.iter().find_map(|a| match a {
+            Tag::Compound(a) if a.get("id") == Some(&Tag::String(id.into())) => Some(a.clone()),
+            _ => None,
+        })
+    };
+    let health = attr("minecraft:max_health").unwrap();
+    assert_eq!(health.get("base"), Some(&Tag::Double(10.0)));
+    assert!(health.get("modifiers").is_some());
+    assert!(attr("minecraft:scale").is_some());
+    let Some(Tag::Compound(brain)) = cow.get("Brain") else {
+        panic!()
+    };
+    assert!(
+        matches!(brain.get("memories"), Some(Tag::Compound(m)) if m.get("minecraft:home").is_some())
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

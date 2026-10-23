@@ -78,14 +78,12 @@ fn gear(ctx: &ServerContext, tag: &Tag) -> Option<Gear> {
         return None;
     };
     let item = ctx.items.id(&mc_command::args::full_id(string(c, "id")?))?;
-    let damage = match c.get("components") {
-        Some(Tag::Compound(comps)) => mc_protocol::components::Components::from_nbt(comps).0,
-        _ => 0,
-    };
+    let stack = mc_protocol::components::ItemStack::from_nbt_with(c, item);
     Some(Gear {
         item,
-        count: int(c, "count").unwrap_or(1),
-        damage,
+        count: int(c, "count").unwrap_or(1).max(1),
+        damage: stack.damage,
+        components: stack.components,
     })
 }
 
@@ -308,6 +306,7 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
         {
             let stack = mc_protocol::components::ItemStack {
                 damage: g.damage,
+                components: g.components.clone(),
                 ..mc_protocol::components::ItemStack::new(g.item, g.count)
             };
             eq.insert(name, Tag::Compound(stack.to_nbt_with(id)));

@@ -41,6 +41,71 @@ const SOMETIMES: &[&str] = &[
     "Leash",
 ];
 
+/// Keys written from what is known and from what was read alike.
+const MERGED: &[&str] = &["attributes", "Brain"];
+
+fn attribute_id(t: &Tag) -> Option<String> {
+    match t {
+        Tag::Compound(a) => match a.get("id") {
+            Some(Tag::String(id)) => Some(mc_command::args::full_id(id)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Our attributes with the modifiers they had when read, then the
+/// attributes we do not keep, as read.
+fn merge_attributes(ours: Vec<Tag>, read: &Tag) -> Vec<Tag> {
+    let Tag::List(read) = read else {
+        return ours;
+    };
+    let mut out: Vec<Tag> = ours
+        .into_iter()
+        .map(|t| {
+            let id = attribute_id(&t);
+            let old = read.iter().find(|r| attribute_id(r) == id);
+            match (t, old) {
+                (Tag::Compound(mut a), Some(Tag::Compound(o))) => {
+                    if let Some(m) = o.get("modifiers") {
+                        a.insert("modifiers", m.clone());
+                    }
+                    Tag::Compound(a)
+                }
+                (t, _) => t,
+            }
+        })
+        .collect();
+    let known: Vec<Option<String>> = out.iter().map(attribute_id).collect();
+    for r in read {
+        if !known.contains(&attribute_id(r)) {
+            out.push(r.clone());
+        }
+    }
+    out
+}
+
+/// Our memories over the ones read.
+fn merge_brain(ours: Compound, read: &Tag) -> Compound {
+    let Tag::Compound(read) = read else {
+        return ours;
+    };
+    let mut out = read.clone();
+    let mut memories = match read.get("memories") {
+        Some(Tag::Compound(m)) => m.clone(),
+        _ => Compound::new(),
+    };
+    // A villager's job site is ours to say, there or not.
+    memories.remove("minecraft:job_site");
+    if let Some(Tag::Compound(m)) = ours.get("memories") {
+        for (k, v) in m.iter() {
+            memories.insert(k, v.clone());
+        }
+    }
+    out.insert("memories", Tag::Compound(memories));
+    out
+}
+
 /// Stack size and position of every item a stack's NBT can carry.
 fn stack_tag(ctx: &ServerContext, stack: &ItemStack) -> Option<Compound> {
     Some(stack.to_nbt_with(ctx.items.name(stack.item)?))
@@ -288,8 +353,17 @@ pub fn write(ctx: &ServerContext, e: &Entity, all: &[Entity]) -> Option<Compound
     }
     if let Some(extra) = super::extra_of(ctx, e.uuid) {
         for (k, v) in extra.iter() {
-            if c.get(k).is_none() {
-                c.insert(k, v.clone());
+            match (k, c.get(k).cloned()) {
+                (_, None) => {
+                    c.insert(k, v.clone());
+                }
+                ("attributes", Some(Tag::List(ours))) => {
+                    c.insert("attributes", Tag::List(merge_attributes(ours, v)));
+                }
+                ("Brain", Some(Tag::Compound(ours))) => {
+                    c.insert("Brain", Tag::Compound(merge_brain(ours, v)));
+                }
+                _ => {}
             }
         }
     }
@@ -631,15 +705,7 @@ fn hung(ctx: &ServerContext, e: &Entity, h: &Hung, c: &mut Compound) {
         Decor::Frame(f) => {
             c.insert("block_pos", Tag::IntArray(cell.to_vec()));
             c.insert("Facing", Tag::Byte(h.facing as i8));
-            if let Some((item, damage)) = f.item
-                && let Some(stack) = stack_tag(
-                    ctx,
-                    &ItemStack {
-                        damage,
-                        ..ItemStack::new(item, 1)
-                    },
-                )
-            {
+            if let Some(stack) = f.item.as_ref().and_then(|s| stack_tag(ctx, s)) {
                 c.insert("Item", Tag::Compound(stack));
             }
             c.insert("ItemDropChance", Tag::Float(1.0));
@@ -659,15 +725,7 @@ fn hung(ctx: &ServerContext, e: &Entity, h: &Hung, c: &mut Compound) {
             living(c, s.health, &[("max_health", 20.0)]);
             let mut eq = Compound::new();
             for (i, name) in STAND_SLOTS.iter().enumerate() {
-                if let Some((item, damage)) = s.gear[i]
-                    && let Some(stack) = stack_tag(
-                        ctx,
-                        &ItemStack {
-                            damage,
-                            ..ItemStack::new(item, 1)
-                        },
-                    )
-                {
+                if let Some(stack) = s.gear[i].as_ref().and_then(|g| stack_tag(ctx, g)) {
                     eq.insert(*name, Tag::Compound(stack));
                 }
             }
@@ -883,7 +941,11 @@ pub fn read(ctx: &ServerContext, c: &Compound) -> Vec<Loaded> {
     let mut extra = c.clone();
     if let Some(ours) = write(ctx, &loaded.entity, &[]) {
         for (k, _) in ours.iter() {
-            extra.remove(k);
+            // These two are merged with ours when written (modifiers,
+            // memories nothing here keeps).
+            if !MERGED.contains(&k) {
+                extra.remove(k);
+            }
         }
     }
     for k in SOMETIMES {
@@ -1166,7 +1228,7 @@ fn read_stand(ctx: &ServerContext, c: &Compound, s: &mut Stand) {
     }
     if let Some(Tag::Compound(eq)) = c.get("equipment") {
         for (i, name) in STAND_SLOTS.iter().enumerate() {
-            s.gear[i] = stack_of(ctx, eq.get(name)).map(|st| (st.item, st.damage));
+            s.gear[i] = stack_of(ctx, eq.get(name));
         }
     }
 }

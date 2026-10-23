@@ -47,6 +47,8 @@ pub struct Gear {
     pub item: i32,
     pub count: i32,
     pub damage: i32,
+    /// The stack's other component changes (enchantments, a name...).
+    pub components: mc_protocol::components::Components,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -354,6 +356,9 @@ pub struct Mob {
     /// Chicken: ticks until an egg.
     pub egg_time: i32,
     pub age: u32,
+    /// Vanilla's `noActionTime`: ticks since a player was near or it was
+    /// hurt; past 600 a far mob may despawn.
+    pub idle: i32,
     /// Spider: clinging to a wall.
     pub climbing: bool,
     /// Vanilla's `Age`: below zero a baby growing up, above zero the
@@ -453,6 +458,7 @@ impl Mob {
             powered: false,
             egg_time: 0,
             age: 0,
+            idle: 0,
             climbing: false,
             baby_age: 0,
             love: 0,
@@ -630,6 +636,7 @@ impl Mob {
             amount
         };
         self.health = (self.health - amount).max(0.0);
+        self.idle = 0;
         if let Some(by) = attacker {
             self.revenge = Some((by, 100));
         } else if self.species.category() == Category::Creature {
@@ -772,6 +779,7 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
         on_ground: entity.on_ground,
     };
     m.age += 1;
+    m.idle += 1;
     m.invulnerable = (m.invulnerable - 1).max(0);
     m.attack_cooldown = (m.attack_cooldown - 1).max(0);
     if let Some((_, ticks)) = &mut m.revenge {
@@ -846,6 +854,7 @@ pub fn tick_ridden(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
         on_ground: true,
     };
     m.age += 1;
+    m.idle += 1;
     m.invulnerable = (m.invulnerable - 1).max(0);
     if m.is_dead() || m.dying.is_some() {
         return;

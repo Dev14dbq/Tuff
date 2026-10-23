@@ -115,8 +115,8 @@ pub struct Projectile {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
     pub glow: bool,
-    /// Item shown: id, damage.
-    pub item: Option<(i32, i32)>,
+    /// Item shown (one).
+    pub item: Option<mc_protocol::components::ItemStack>,
     /// Quarter turns... eighths of a turn, 0..8.
     pub rotation: u8,
     pub invisible: bool,
@@ -132,8 +132,8 @@ pub struct Stand {
     pub invisible: bool,
     /// Head, body, left arm, right arm, left leg, right leg (degrees).
     pub pose: [[f32; 3]; 6],
-    /// Main hand, off hand, feet, legs, chest, head: (item, damage).
-    pub gear: [Option<(i32, i32)>; 6],
+    /// Main hand, off hand, feet, legs, chest, head.
+    pub gear: [Option<mc_protocol::components::ItemStack>; 6],
     pub health: f32,
     /// World age of the last punch, for the second one that breaks it.
     pub last_hit: i64,
@@ -155,7 +155,7 @@ impl Default for Stand {
                 [-1.0, 0.0, -1.0],
                 [1.0, 0.0, 1.0],
             ],
-            gear: [None; 6],
+            gear: Default::default(),
             health: 20.0,
             last_hit: -100,
         }

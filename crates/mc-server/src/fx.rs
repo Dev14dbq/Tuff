@@ -185,13 +185,6 @@ pub fn hung_yaw(facing: u8) -> f32 {
     }
 }
 
-fn stack(item: (i32, i32)) -> ItemStack {
-    ItemStack {
-        damage: item.1,
-        ..ItemStack::new(item.0, 1)
-    }
-}
-
 /// The entity's type name and fields for clients, for the kinds in
 /// `mc_entity::extra`; `None` for the others.
 pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
@@ -269,8 +262,8 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                         1 => -90.0,
                         _ => 0.0,
                     };
-                    if let Some(item) = f.item {
-                        s.meta.push((8, MetadataValue::Item(Some(stack(item)))));
+                    if let Some(item) = &f.item {
+                        s.meta.push((8, MetadataValue::Item(Some(item.clone()))));
                     }
                     if f.rotation != 0 {
                         s.meta
@@ -309,7 +302,7 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                     }
                     for (slot, gear) in a.gear.iter().enumerate() {
                         if let Some(item) = gear {
-                            s.gear.push((slot as u8, Some(stack(*item))));
+                            s.gear.push((slot as u8, Some(item.clone())));
                         }
                     }
                 }

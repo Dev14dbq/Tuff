@@ -263,6 +263,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
             item,
             count: 1,
             damage: 0,
+            components: Default::default(),
         });
         m.charge = 120;
         m.nav.stop();
@@ -388,6 +389,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
                 item,
                 count: 1,
                 damage: 0,
+                components: Default::default(),
             });
             consume(ctx, by, hslot);
             fx::sound(
@@ -496,11 +498,13 @@ pub fn pick_up(
             item,
             count,
             damage,
+            ref components,
             ..
         } = entities[j].kind
         else {
             continue;
         };
+        let components = components.clone();
         let item_id = entities[j].id;
         let Kind::Mob(m) = &mut entities[i].kind else {
             continue;
@@ -521,6 +525,7 @@ pub fn pick_up(
                 item,
                 count: 1,
                 damage: 0,
+                components: Default::default(),
             });
             m.charge = 120;
         } else if m.can_pick_up {
@@ -548,6 +553,7 @@ pub fn pick_up(
                 item,
                 count: 1,
                 damage,
+                components,
             });
             m.drop_chance[s] = 2.0;
             m.persistent = true;

@@ -238,6 +238,7 @@ pub fn equipment_of(m: &Mob) -> Vec<(u8, Option<ItemStack>)> {
                 s as u8,
                 m.gear[s].as_ref().map(|g| ItemStack {
                     damage: g.damage,
+                    components: g.components.clone(),
                     ..ItemStack::new(g.item, g.count)
                 }),
             )

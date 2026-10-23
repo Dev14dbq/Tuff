@@ -547,8 +547,14 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     out.fresh.extend(spawned);
     let made = spawner::tick(ctx, &ground, &entities, &targets, difficulty);
     out.fresh.extend(made);
-    out.removed
-        .extend(spawn::despawn(&mut entities, &targets, difficulty));
+    let leashed: std::collections::HashSet<i32> =
+        lock(&ctx.leashes).links.keys().copied().collect();
+    out.removed.extend(spawn::despawn(
+        &mut entities,
+        &targets,
+        difficulty,
+        &leashed,
+    ));
     drop(ground);
 
     for e in entities.iter().filter(|e| e.removed) {
