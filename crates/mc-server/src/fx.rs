@@ -166,6 +166,9 @@ pub fn facing_of(v: [f64; 3]) -> (f32, f32) {
 /// How a spawned entity is described to clients.
 pub struct Spawn {
     pub kind: String,
+    /// Where clients are told it is, when not the entity's own position
+    /// (a painting's block).
+    pub at: Option<[f64; 3]>,
     pub data: i32,
     pub yaw: f32,
     pub pitch: f32,
@@ -173,6 +176,9 @@ pub struct Spawn {
     pub meta: Vec<(u8, MetadataValue)>,
     pub gear: Vec<(u8, Option<ItemStack>)>,
 }
+
+/// Serializer type of a painting variant holder.
+const PAINTING_VARIANT: i32 = 34;
 
 /// Yaw a hanging entity looks out with, from its facing (north 2, south 3,
 /// west 4, east 5).
@@ -204,6 +210,7 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
     };
     let mut s = Spawn {
         kind: type_name(&e.kind)?,
+        at: None,
         data: 0,
         yaw: 0.0,
         pitch: 0.0,
@@ -269,21 +276,32 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                         1 => -90.0,
                         _ => 0.0,
                     };
+                    s.meta
+                        .push((8, MetadataValue::Direction(i32::from(h.facing))));
                     if let Some(item) = f.item {
-                        s.meta.push((8, MetadataValue::Item(Some(stack(item)))));
+                        s.meta.push((9, MetadataValue::Item(Some(stack(item)))));
                     }
                     if f.rotation != 0 {
                         s.meta
-                            .push((9, MetadataValue::VarInt(i32::from(f.rotation))));
+                            .push((10, MetadataValue::VarInt(i32::from(f.rotation))));
                     }
                     if f.invisible {
                         s.meta
                             .push((play::metadata::FLAGS, MetadataValue::Byte(0x20)));
                     }
                 }
-                Decor::Painting { .. } => {
+                Decor::Painting { variant, size } => {
                     s.data = i32::from(h.facing);
                     s.yaw = hung_yaw(h.facing);
+                    // Clients work its box out from its block, size and facing.
+                    let cell = crate::decor::painting::cell_of(e.pos, h.facing, *size);
+                    s.at = Some(cell.map(f64::from));
+                    s.meta
+                        .push((8, MetadataValue::Direction(i32::from(h.facing))));
+                    if let Some(id) = crate::decor::painting::network_id(ctx, variant) {
+                        // A holder: the registry id plus one (0 is inline).
+                        s.meta.push((9, MetadataValue::Holder(PAINTING_VARIANT, id + 1)));
+                    }
                 }
                 Decor::LeashKnot => {
                     s.data = i32::from(h.facing);

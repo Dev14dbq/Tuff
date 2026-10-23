@@ -2005,13 +2005,14 @@ fn spawn_entity(
         let Some(kind) = crate::fx::type_id(ctx, &d.kind) else {
             return Ok(());
         };
+        let at = d.at.unwrap_or(entity.pos);
         writer.queue(&play::AddEntity {
             entity_id: entity.id,
             uuid: entity.uuid,
             kind,
-            x: entity.pos[0],
-            y: entity.pos[1],
-            z: entity.pos[2],
+            x: at[0],
+            y: at[1],
+            z: at[2],
             velocity: d.vel,
             pitch: d.pitch,
             yaw: d.yaw,

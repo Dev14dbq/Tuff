@@ -2177,6 +2177,9 @@ pub mod play {
         OptUuid(Option<u128>),
         /// A block state (an enderman's), or none.
         OptBlockState(Option<u32>),
+        /// A direction, by its 3D value (down 0, up 1, north 2, south 3,
+        /// west 4, east 5).
+        Direction(i32),
         /// A registry id under its own serializer type (cat, cow, wolf, pig
         /// and chicken variants): (type id, value).
         Holder(i32, i32),
@@ -2228,6 +2231,10 @@ pub mod play {
                 MetadataValue::Holder(kind, value) => {
                     out.put_varint(*kind);
                     out.put_varint(*value);
+                }
+                MetadataValue::Direction(v) => {
+                    out.put_varint(12);
+                    out.put_varint(*v);
                 }
                 MetadataValue::VarInt(v) => {
                     out.put_varint(1);

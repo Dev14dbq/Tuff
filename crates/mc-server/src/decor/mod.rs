@@ -7,6 +7,7 @@
 //! Follows minecraft.wiki ("Item Frame", "Armor Stand", "Painting", "Lead").
 
 pub mod leash;
+pub mod painting;
 
 use mc_entity::extra::{Decor, Frame, Hung, Stand};
 use mc_entity::{Entity, Kind};
@@ -31,7 +32,7 @@ pub fn hung_pos(cell: [i32; 3], facing: u8) -> [f64; 3] {
     ]
 }
 
-fn entity(ctx: &ServerContext, pos: [f64; 3], hung: Hung) -> Entity {
+pub(crate) fn entity(ctx: &ServerContext, pos: [f64; 3], hung: Hung) -> Entity {
     Entity {
         id: ctx.next_entity_id(),
         uuid: crate::util::random_uuid(),
@@ -150,18 +151,18 @@ pub fn place(
             },
             "entity.item_frame.place",
         ),
-        "minecraft:painting" if face >= 2 => (
-            Hung {
-                decor: Decor::Painting {
-                    variant: pick_painting(),
-                    size: (1, 1),
-                },
-                facing: face8,
-                yaw: 0.0,
-                anchor: wall,
-            },
-            "entity.painting.place",
-        ),
+        "minecraft:painting" if face >= 2 => {
+            let wanted = held::held(ctx, actor.uuid, hand).and_then(|h| {
+                match h.stack.components.get("minecraft:painting/variant") {
+                    Some(mc_nbt::Tag::String(v)) => Some(mc_command::args::full_id(v)),
+                    _ => None,
+                }
+            });
+            let Some(e) = painting::create(ctx, cell, face8, wanted.as_deref()) else {
+                return false;
+            };
+            return finish(ctx, outcome, actor, hand, e, "entity.painting.place");
+        }
         "minecraft:armor_stand" => {
             // Stands stand in the block clicked into, two tall, turned to
             // face the player in eighths of a turn.
@@ -203,23 +204,6 @@ pub fn place(
     finish(ctx, outcome, actor, hand, entity(ctx, pos, hung), sound)
 }
 
-/// The painting a player gets: any of the single-block ones at random.
-fn pick_painting() -> String {
-    const SMALL: [&str; 7] = [
-        "kebab",
-        "aztec",
-        "alban",
-        "aztec2",
-        "bomb",
-        "plant",
-        "wasteland",
-    ];
-    format!(
-        "minecraft:{}",
-        SMALL[(hits::rnd() * SMALL.len() as f64) as usize]
-    )
-}
-
 fn finish(
     ctx: &ServerContext,
     outcome: &mut Outcome,
@@ -256,7 +240,7 @@ fn frame_data(e: &Entity, f: &Frame) -> Event {
         entity_id: e.id,
         entries: vec![
             (
-                8,
+                9,
                 MetadataValue::Item(f.item.map(|(item, damage)| {
                     mc_protocol::packets::play::ItemStack {
                         damage,
@@ -264,7 +248,7 @@ fn frame_data(e: &Entity, f: &Frame) -> Event {
                     }
                 })),
             ),
-            (9, MetadataValue::VarInt(i32::from(f.rotation))),
+            (10, MetadataValue::VarInt(i32::from(f.rotation))),
         ],
     }])
 }
@@ -347,7 +331,20 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
     };
     e.age += 1;
     match &h.decor {
-        Decor::Frame(_) | Decor::Painting { .. } | Decor::LeashKnot => {
+        Decor::Painting { size, .. } => {
+            // Every 100 ticks: does it still hang?
+            let size = *size;
+            if e.age.is_multiple_of(100) {
+                let cell = painting::cell_of(e.pos, h.facing, size);
+                let others = lock(&t.ctx.entities).clone();
+                if !painting::survives(t.ctx, &others, Some(e.id), cell, h.facing, size) {
+                    let mut fresh = Vec::new();
+                    break_hung(t.ctx, e, &mut fresh, true);
+                    t.out.spawn.extend(fresh);
+                }
+            }
+        }
+        Decor::Frame(_) | Decor::LeashKnot => {
             // Checked once a second: does the wall hold?
             if e.age.is_multiple_of(20)
                 && !hits::stops(t.ctx, h.anchor)
