@@ -333,4 +333,103 @@ mod tests {
         let now = mc_tick::Level::block(&level, mc_tick::BlockPos::new(0, -60, 0));
         assert_eq!(ctx.data.blocks.block_name(now), Some("minecraft:birch_log"));
     }
+
+    #[test]
+    fn propagules_ripen_and_plant_into_trees() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let at = Position::new(0, -60, 0);
+        let hanging = ctx
+            .data
+            .blocks
+            .state_id(
+                "minecraft:mangrove_propagule",
+                &[("hanging", "true"), ("age", "0"), ("stage", "0")],
+            )
+            .unwrap();
+        let mut level = WorldLevel::new(&ctx);
+        level.set_block(at, hanging);
+        let logic = level.logic();
+        let mut rng = mc_tick::rng::Rng::new(3);
+        let bp = mc_tick::BlockPos::new(0, -60, 0);
+        for _ in 0..6 {
+            let state = mc_tick::Level::block(&level, bp);
+            mc_tick::random::tick(&mut level, logic, bp, state, &mut rng);
+        }
+        let state = mc_tick::Level::block(&level, bp);
+        assert_eq!(ctx.data.blocks.property(state, "age"), Some("4"));
+        // Planted: stage 0 → 1 → tree, in the dark too.
+        let planted = ctx
+            .data
+            .blocks
+            .state_id(
+                "minecraft:mangrove_propagule",
+                &[("hanging", "false"), ("age", "0"), ("stage", "0")],
+            )
+            .unwrap();
+        level.set_block(at, planted);
+        for _ in 0..600 {
+            let state = mc_tick::Level::block(&level, bp);
+            if ctx.data.blocks.block_name(state) != Some("minecraft:mangrove_propagule") {
+                break;
+            }
+            mc_tick::random::tick(&mut level, logic, bp, state, &mut rng);
+        }
+        // A mangrove stands there now (its roots may reach above the ground).
+        let grown = (-62..-40).any(|y| {
+            let s = mc_tick::Level::block(&level, mc_tick::BlockPos::new(0, y, 0));
+            ctx.data.blocks.block_name(s) == Some("minecraft:mangrove_log")
+        });
+        assert!(grown);
+    }
+
+    #[test]
+    fn four_saplings_make_a_big_tree_and_cherry_grows() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let name = |p: Position| {
+            ctx.world
+                .block(p, &ctx.data.blocks)
+                .and_then(|s| ctx.data.blocks.block_name(s))
+                .map(str::to_owned)
+        };
+        // 2×2 dark oak (the only way it grows) and pale oak.
+        for (sapling, log, x) in [
+            ("minecraft:dark_oak_sapling", "minecraft:dark_oak_log", 0),
+            ("minecraft:pale_oak_sapling", "minecraft:pale_oak_log", 40),
+            ("minecraft:spruce_sapling", "minecraft:spruce_log", 80),
+        ] {
+            let state = ctx.data.blocks.state_id(sapling, &[("stage", "1")]).unwrap();
+            let mut level = WorldLevel::new(&ctx);
+            for (dx, dz) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                level.set_block(Position::new(x + dx, -60, dz), state);
+            }
+            assert!(grow_tree(&mut level, mc_tick::BlockPos::new(x + 1, -60, 1), state), "{sapling}");
+            drop(level);
+            assert_eq!(name(Position::new(x, -60, 0)).as_deref(), Some(log), "{sapling}");
+            assert_eq!(name(Position::new(x + 1, -60, 1)).as_deref(), Some(log), "{sapling}");
+        }
+        // A lone dark oak sapling does not grow; cherry does.
+        let dark = ctx
+            .data
+            .blocks
+            .state_id("minecraft:dark_oak_sapling", &[("stage", "1")])
+            .unwrap();
+        let mut level = WorldLevel::new(&ctx);
+        level.set_block(Position::new(0, -60, 20), dark);
+        assert!(!grow_tree(&mut level, mc_tick::BlockPos::new(0, -60, 20), dark));
+        let cherry = ctx
+            .data
+            .blocks
+            .state_id("minecraft:cherry_sapling", &[("stage", "1")])
+            .unwrap();
+        level.set_block(Position::new(0, -60, 40), cherry);
+        assert!(grow_tree(&mut level, mc_tick::BlockPos::new(0, -60, 40), cherry));
+        drop(level);
+        assert_eq!(name(Position::new(0, -60, 40)).as_deref(), Some("minecraft:cherry_log"));
+    }
 }

@@ -80,9 +80,8 @@ impl Behaviour {
             "lava" => Self::Lava,
             _ if name.ends_with("_leaves") => Self::Leaves,
             "oak_sapling" | "spruce_sapling" | "birch_sapling" | "jungle_sapling"
-            | "acacia_sapling" | "dark_oak_sapling" | "pale_oak_sapling" | "cherry_sapling" => {
-                Self::Sapling
-            }
+            | "acacia_sapling" | "dark_oak_sapling" | "pale_oak_sapling" | "cherry_sapling"
+            | "mangrove_propagule" => Self::Sapling,
             _ => Self::None,
         }
     }
@@ -168,6 +167,23 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut 
             if crate::leaves::decays(ctx, state) {
                 level.destroyed(p, state);
                 set_block(level, ctx, p, ctx.shapes.air(), Flags::ALL);
+            }
+        }
+        Behaviour::Sapling if name(ctx, state) == "mangrove_propagule" => {
+            // Hanging ones ripen one stage a tick; planted ones need no
+            // light and grow like saplings (wiki, "Mangrove Propagule").
+            if ctx.shapes.property(state, "hanging") == Some("true") {
+                let age = int(ctx, state, "age");
+                if age < 4 {
+                    grow(level, ctx, p, state, age + 1);
+                }
+            } else if rng.below(7) == 0 {
+                if int(ctx, state, "stage") == 0 {
+                    let next = ctx.shapes.with(state, "stage", "1");
+                    set_block(level, ctx, p, next, Flags::NONE);
+                } else {
+                    level.grow_tree(p, state);
+                }
             }
         }
         Behaviour::Sapling => {
