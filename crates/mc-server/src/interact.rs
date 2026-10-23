@@ -1045,6 +1045,9 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
     if actor.game_mode == SPECTATOR {
         return outcome;
     }
+    if crate::mobs::ride::boost(ctx, &actor, hand).is_some() {
+        return outcome;
+    }
     if let Some(done) = crate::projectiles::use_item(ctx, actor, hand, yaw, pitch) {
         return done;
     }

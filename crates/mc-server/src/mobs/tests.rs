@@ -580,3 +580,43 @@ fn an_enderman_puts_its_block_on_firm_ground_only() {
     let Kind::Mob(m) = &entities[i].kind else { panic!() };
     assert_eq!(m.carried, Some(dirt));
 }
+
+#[test]
+fn a_carrot_on_a_stick_boosts_the_pig_and_wears_to_a_rod() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = put(&ctx, Species::Pig, [0.5, -60.0, 0.5]);
+    let saddle = ctx.items.id("minecraft:saddle").unwrap();
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.gear[mc_entity::mob::slot::SADDLE] = Some(mc_entity::mob::Gear {
+            item: saddle,
+            count: 1,
+            damage: 0,
+        });
+        m.riders.push(7000);
+    }
+    hold(&ctx, "minecraft:carrot_on_a_stick", 1);
+    let actor = actor_at([0.5, -60.0, 0.5]);
+    let held = |ctx: &ServerContext| lock(&ctx.inventories)[&STEVE].slots[36].clone().unwrap();
+    for n in 1..=3 {
+        crate::interact::use_item(&ctx, actor, 0, 0.0, 0.0);
+        let boost = with_mob(&ctx, id, |m| (m.boost, m.boost_total));
+        assert!((140..=980).contains(&boost.0) && boost.0 == boost.1, "{boost:?}");
+        assert_eq!(held(&ctx).damage, 7 * n);
+        // Still fast: another use does nothing.
+        crate::interact::use_item(&ctx, actor, 0, 0.0, 0.0);
+        assert_eq!(held(&ctx).damage, 7 * n);
+        if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+            && let Kind::Mob(m) = &mut e.kind
+        {
+            m.boost = 0;
+        }
+    }
+    crate::interact::use_item(&ctx, actor, 0, 0.0, 0.0);
+    assert_eq!(ctx.items.name(held(&ctx).item), Some("minecraft:fishing_rod"));
+}

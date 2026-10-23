@@ -216,3 +216,45 @@ pub fn saddle(ctx: &ServerContext, e: &mut Entity, item: i32) -> bool {
     );
     true
 }
+
+/// A rider uses a carrot on a stick: the pig they steer speeds up for 7 to
+/// 49 seconds and the stick wears by 7 (a broken one leaves a fishing rod).
+/// `None` when it does nothing (not steering a pig, or it is still fast).
+pub fn boost(ctx: &ServerContext, actor: &crate::interact::Actor, hand: i32) -> Option<()> {
+    let held = crate::held::held(ctx, actor.uuid, hand)?;
+    if held.name != "minecraft:carrot_on_a_stick" {
+        return None;
+    }
+    let mut entities = lock(&ctx.entities);
+    let e = entities.iter_mut().find(|e| {
+        matches!(&e.kind, Kind::Mob(m) if m.species == Species::Pig
+            && m.riders.first() == Some(&actor.entity_id))
+            && !e.removed
+    })?;
+    if !steered_by(ctx, e) {
+        return None;
+    }
+    let Kind::Mob(m) = &mut e.kind else {
+        return None;
+    };
+    if m.boost > 0 {
+        return None;
+    }
+    m.boost = 140 + m.below(841) as i32;
+    m.boost_total = m.boost;
+    m.dirty = false;
+    let packet = crate::mobs::metadata_packet(ctx, e);
+    drop(entities);
+    if let Some(p) = packet {
+        fx::emit(ctx, fx::Fx::Data(p));
+    }
+    if actor.game_mode != 1 {
+        crate::held::wear_into(ctx, actor.uuid, held.slot, 7, "minecraft:fishing_rod");
+    }
+    let _ = ctx.events.send(Event::Swing {
+        uuid: actor.uuid,
+        entity_id: actor.entity_id,
+        times: 1,
+    });
+    Some(())
+}

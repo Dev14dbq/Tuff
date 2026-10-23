@@ -133,7 +133,11 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
         Cow => v.push((a, MetadataValue::Holder(holder::COW, m.variant))),
         Mooshroom => v.push((a, MetadataValue::VarInt(m.variant))),
         Pig => {
-            v.push((a, MetadataValue::VarInt(m.boost)));
+            // Clients run the boost themselves from its length: sent only
+            // while it lasts, as a fresh value starts it over.
+            if m.boost > 0 {
+                v.push((a, MetadataValue::VarInt(m.boost_total)));
+            }
             v.push((a + 1, MetadataValue::Holder(holder::PIG, m.variant)));
         }
         Chicken => v.push((a, MetadataValue::Holder(holder::CHICKEN, m.variant))),
