@@ -198,6 +198,14 @@ pub trait Level {
 
     fn set_hopper_cooldown(&mut self, _p: BlockPos, _ticks: i32) {}
 
+    /// Whether the hopper at `p` has had its turn already this game tick.
+    fn hopper_ticked(&self, _p: BlockPos) -> bool {
+        false
+    }
+
+    /// The hopper at `p` has its turn this game tick.
+    fn mark_hopper_ticked(&mut self, _p: BlockPos) {}
+
     /// Stores whether the command block at `p` is powered; returns whether
     /// it was before and whether it is always active (`None` without its
     /// block entity).

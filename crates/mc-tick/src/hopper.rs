@@ -4,7 +4,10 @@
 //! A hopper is locked (`enabled` false) while powered. Every game tick its
 //! cooldown runs down; with none left it first pushes one item into the
 //! container it faces, then pulls one from the container above (or picks up
-//! item entities there), and after any move waits 8 ticks.
+//! item entities there), and after any move waits 8 ticks. A hopper that
+//! was empty and is handed an item rests too: 8 ticks, or 7 when it already
+//! had its turn this tick (so that it always waits 7 turns; the wiki's
+//! "pushed into an empty hopper, the cooldown lasts 7 game ticks").
 //!
 //! Dispensers and droppers read power at their own block or the one above
 //! (like pistons, "quasi-connectivity"); a rising edge sets `triggered` and
@@ -98,6 +101,7 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
     if !is_hopper(ctx, state) {
         return;
     }
+    level.mark_hopper_ticked(p);
     let cooldown = level.hopper_cooldown(p);
     if cooldown > 0 {
         level.set_hopper_cooldown(p, cooldown - 1);
@@ -116,11 +120,16 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
     let mut moved = false;
     // Push into what it faces.
     let out = p.offset(facing);
+    let was_empty = empty_hopper(level, ctx, out);
     if level.container_transfer(p, facing, out, facing.opposite()) {
         moved = true;
         touched(level, ctx, p, out);
+        if was_empty {
+            let turn = i32::from(level.hopper_ticked(out));
+            level.set_hopper_cooldown(out, HOPPER_COOLDOWN - turn);
+        }
     }
-    // Pull from above.
+    // Pull from above (its own rest is set below).
     let above = p.offset(Dir::Up);
     if level.container_transfer(above, Dir::Down, p, Dir::Up) {
         moved = true;
@@ -134,13 +143,13 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
     }
 }
 
-/// Two containers changed: comparators look again, and a hopper that was
-/// handed something starts its rest.
+/// Whether `p` is a hopper with nothing in it.
+pub fn empty_hopper(level: &dyn Level, ctx: Ctx, p: BlockPos) -> bool {
+    is_hopper(ctx, level.block(p)) && level.container_signal(p) == Some(0)
+}
+
+/// Two containers changed: comparators look again.
 fn touched(level: &mut dyn Level, ctx: Ctx, from: BlockPos, to: BlockPos) {
     redstone::container_changed(level, ctx, from);
     redstone::container_changed(level, ctx, to);
-    let to_state = level.block(to);
-    if is_hopper(ctx, to_state) && level.hopper_cooldown(to) <= 0 {
-        level.set_hopper_cooldown(to, HOPPER_COOLDOWN);
-    }
 }

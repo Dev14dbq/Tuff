@@ -15,7 +15,31 @@ use crate::containers::{self, Kind};
 use crate::context::ServerContext;
 use crate::tick::lock;
 
-pub type Active = HashSet<(i32, i32, i32)>;
+/// The hoppers that tick, in the order they came (placed or loaded), which
+/// is the order they take their turns in, as vanilla's block entity list.
+#[derive(Debug, Default)]
+pub struct Active {
+    order: Vec<(i32, i32, i32)>,
+    known: HashSet<(i32, i32, i32)>,
+}
+
+impl Active {
+    pub fn insert(&mut self, key: (i32, i32, i32)) {
+        if self.known.insert(key) {
+            self.order.push(key);
+        }
+    }
+
+    pub fn remove(&mut self, key: &(i32, i32, i32)) {
+        if self.known.remove(key) {
+            self.order.retain(|k| k != key);
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &(i32, i32, i32)> {
+        self.order.iter()
+    }
+}
 
 fn kind_at(ctx: &ServerContext, p: Position) -> Option<(Kind, &str)> {
     let blocks = &ctx.data.blocks;
@@ -472,7 +496,14 @@ pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, 
     let (dx, dy, dz) = facing.offset();
     let front = Position::new(p.x + dx, p.y + dy, p.z + dz);
     if dropper && let Some(dst) = store_at(ctx, front) {
-        transfer_from_slot(ctx, p, kind, slot, dst, facing.opposite());
+        // An empty hopper handed an item rests 8 ticks.
+        let empty_hopper = dst.name == "minecraft:hopper"
+            && containers::slots(ctx, dst.at, dst.kind)
+                .iter()
+                .all(Option::is_none);
+        if transfer_from_slot(ctx, p, kind, slot, dst, facing.opposite()) && empty_hopper {
+            set_cooldown(ctx, front, mc_tick::hopper::HOPPER_COOLDOWN);
+        }
         return;
     }
     let action = if dropper {
@@ -962,5 +993,97 @@ mod tests {
             Some(stick)
         );
         assert!(containers::slots(&ctx, box_at, chest_block)[0].is_none());
+    }
+
+    /// Hoppers A → B → a chest, ticked in `order` (0 is A, 1 is B) each
+    /// game tick; the tick the chest gets its first item.
+    fn chain(ctx: &ServerContext, x: i32, order: [usize; 2]) -> Option<usize> {
+        let blocks = &ctx.data.blocks;
+        let east = ctx
+            .shapes
+            .with(blocks.default_state("minecraft:hopper").unwrap(), "facing", "east");
+        let (a, b, c) = (
+            Position::new(x, -60, 0),
+            Position::new(x + 1, -60, 0),
+            Position::new(x + 2, -60, 0),
+        );
+        WorldLevel::new(ctx).set_block(a, east);
+        WorldLevel::new(ctx).set_block(b, east);
+        WorldLevel::new(ctx).set_block(c, blocks.default_state("minecraft:chest").unwrap());
+        let stick = ctx.items.id("minecraft:stick").unwrap();
+        let hopper = containers::kind_of("minecraft:hopper").unwrap();
+        containers::put(ctx, a, hopper, &[(0, Some(ItemStack::new(stick, 2)))]);
+        let chest = containers::kind_of("minecraft:chest").unwrap();
+        for tick in 0..20 {
+            let mut level = WorldLevel::new(ctx);
+            let logic = level.logic();
+            for &i in &order {
+                mc_tick::hopper::tick(&mut level, logic, crate::level::to_pos([a, b][i]));
+            }
+            if containers::slots(ctx, c, chest)[0].is_some() {
+                return Some(tick);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn a_hopper_handed_its_first_item_waits_seven_turns() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        // Whether B had its turn before A filled it or not, it passes the
+        // item on 7 ticks later.
+        assert_eq!(chain(&ctx, 10, [0, 1]), Some(7));
+        assert_eq!(chain(&ctx, 20, [1, 0]), Some(7));
+    }
+
+    #[test]
+    fn hoppers_in_a_chunk_read_from_disk_tick() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        if mc_data::McData::load(&dir).is_err() {
+            eprintln!("skipped: no game data");
+            return;
+        }
+        let folder = std::env::temp_dir().join(format!("mc-hoppers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let open = || {
+            let mut config = crate::Config::new(dir.clone());
+            config.world = Some(folder.clone());
+            config.seed = Some(12345);
+            ServerContext::new(config, mc_data::McData::load(&dir).unwrap()).unwrap()
+        };
+        let (hopper, chest) = (Position::new(40, 200, 40), Position::new(40, 199, 40));
+        let stick = {
+            let ctx = open();
+            let blocks = &ctx.data.blocks;
+            // Locked by nothing, facing down into a chest.
+            WorldLevel::new(&ctx).set_block(chest, blocks.default_state("minecraft:chest").unwrap());
+            WorldLevel::new(&ctx).set_block(hopper, blocks.default_state("minecraft:hopper").unwrap());
+            let stick = ctx.items.id("minecraft:stick").unwrap();
+            containers::put(
+                &ctx,
+                hopper,
+                containers::kind_of("minecraft:hopper").unwrap(),
+                &[(0, Some(ItemStack::new(stick, 3)))],
+            );
+            lock(&ctx.hoppers).remove(&(hopper.x, hopper.y, hopper.z));
+            crate::save(&ctx);
+            stick
+        };
+        let ctx = open();
+        assert!(lock(&ctx.hoppers).iter().next().is_none());
+        // Reading the chunk wakes the hopper: it pushes on the next tick.
+        let _ = ctx.world.block(hopper, &ctx.data.blocks);
+        crate::tick::run_scheduled_ticks(&ctx);
+        let chest_kind = containers::kind_of("minecraft:chest").unwrap();
+        assert_eq!(
+            containers::slots(&ctx, chest, chest_kind)[0]
+                .as_ref()
+                .map(|s| (s.item, s.count)),
+            Some((stick, 1))
+        );
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }
