@@ -413,6 +413,9 @@ pub(crate) fn saved_of(ctx: &ServerContext, uuid: u128) -> Option<players::Saved
         vitals,
         extra: players::Extra {
             recipes: commands::known_recipes(ctx, uuid),
+            root_vehicle: ctx
+                .in_dimension(&player.dimension)
+                .and_then(|d| persist::root_vehicle(&d, player.entity_id)),
             ..player.extra.clone()
         },
     })

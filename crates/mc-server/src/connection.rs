@@ -64,6 +64,16 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
                 let ctx = ctx.clone();
                 tokio::task::spawn_blocking(move || crate::save_player(&ctx, uuid)).await?;
             }
+            // What they rode leaves with them (their file keeps it).
+            let dimension = ctx
+                .players
+                .lock()
+                .expect("players lock")
+                .get(&uuid)
+                .map(|p| p.dimension.clone());
+            if let Some(d) = dimension.and_then(|d| ctx.in_dimension(&d)) {
+                crate::persist::left_with(&d, player.player.entity_id);
+            }
             crate::containers::player_left(&ctx, uuid);
             ctx.players.lock().expect("players lock").remove(&uuid);
             ctx.inventories
@@ -675,6 +685,10 @@ async fn play(
     let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
     // Non-player entities this client has been told about.
     let mut seen_entities: HashSet<i32> = HashSet::new();
+    // Back on what they rode when they left.
+    if let Some(vehicle) = &me.extra.root_vehicle {
+        crate::persist::ride_again(&ctx, entity_id, vehicle);
+    }
     let existing: Vec<mc_entity::Entity> = ctx.entities.lock().expect("entities lock").clone();
     for entity in existing {
         let (x, _, z) = entity.block_pos();
@@ -1170,7 +1184,7 @@ async fn play(
                     }
                     Ok(Event::EntitySpawned(entity)) => {
                         let (x, _, z) = entity.block_pos();
-                        if view.has_block(Position::new(x, 0, z)) {
+                        if view.has_block(Position::new(x, 0, z)) && !seen_entities.contains(&entity.id) {
                             spawn_entity(writer, &ctx, &entity)?;
                             seen_entities.insert(entity.id);
                         }
@@ -1639,7 +1653,11 @@ async fn play(
                                 visible.insert(other.profile.uuid);
                             }
                         }
-                        let existing: Vec<mc_entity::Entity> = ctx.entities.lock().expect("entities lock").clone();
+                        // Back on what they rode when they left.
+    if let Some(vehicle) = &me.extra.root_vehicle {
+        crate::persist::ride_again(&ctx, entity_id, vehicle);
+    }
+    let existing: Vec<mc_entity::Entity> = ctx.entities.lock().expect("entities lock").clone();
                         for entity in existing {
                             let (x, _, z) = entity.block_pos();
                             if view.has_block(Position::new(x, 0, z)) {

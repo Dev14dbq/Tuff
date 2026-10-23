@@ -218,6 +218,11 @@ pub fn load_stored(ctx: &ServerContext) {
         }
         fresh.extend(loaded);
     }
+    spawn_loaded(ctx, fresh);
+}
+
+/// Puts entities read back into the world, with what lives beside them.
+fn spawn_loaded(ctx: &ServerContext, mut fresh: Vec<Loaded>) {
     let mut known: HashSet<u128> = lock(&ctx.entities).iter().map(|e| e.uuid).collect();
     // Knots by the fence they are on; a second knot on a fence is left out.
     let mut knots: HashMap<[i32; 3], i32> = lock(&ctx.entities)
@@ -386,6 +391,15 @@ pub fn unloaded(ctx: &ServerContext, chunks: &[(i32, i32)]) {
         }
         i += 1;
     }
+    lock(&ctx.entity_kept)
+        .raw
+        .retain(|key, _| !chunks.contains(key));
+    take_out(ctx, &mut entities, leaving);
+}
+
+/// Takes the entities `leaving` out of the world (they are kept elsewhere
+/// now), with what lives beside them.
+fn take_out(ctx: &ServerContext, entities: &mut Vec<Entity>, leaving: Vec<i32>) {
     let gone: HashSet<i32> = leaving.iter().copied().collect();
     let mut uuids = Vec::new();
     entities.retain(|e| {
@@ -395,13 +409,11 @@ pub fn unloaded(ctx: &ServerContext, chunks: &[(i32, i32)]) {
         }
         !leaves
     });
-    drop(entities);
     {
         let mut kept = lock(&ctx.entity_kept);
         for u in &uuids {
             kept.extra.remove(u);
         }
-        kept.raw.retain(|key, _| !chunks.contains(key));
     }
     lock(&ctx.entity_items).retain(|id, _| !gone.contains(id));
     lock(&ctx.cart_rests).retain(|id, _| !gone.contains(id));
@@ -412,6 +424,92 @@ pub fn unloaded(ctx: &ServerContext, chunks: &[(i32, i32)]) {
     if !leaving.is_empty() {
         let _ = ctx.events.send(Event::EntitiesRemoved(leaving));
     }
+}
+
+/// The vehicle `player` (an entity id) rides and those above it: the
+/// direct one and the root one.
+fn vehicles_of(all: &[Entity], player: i32) -> Option<(&Entity, &Entity)> {
+    let direct = all
+        .iter()
+        .find(|e| !e.removed && riders(e).contains(&player))?;
+    let mut root = direct;
+    while let Some(up) = all
+        .iter()
+        .find(|e| !e.removed && riders(e).contains(&root.id))
+    {
+        root = up;
+    }
+    Some((direct, root))
+}
+
+/// What a player rides, as their file keeps it (`RootVehicle`: the uuid of
+/// the vehicle they sit on, and the bottom one with all its riders).
+pub fn root_vehicle(ctx: &ServerContext, player: i32) -> Option<Compound> {
+    let all = lock(&ctx.entities).clone();
+    let (direct, root) = vehicles_of(&all, player)?;
+    let mut c = Compound::new();
+    c.insert("Attach", uuid_tag(direct.uuid));
+    c.insert("Entity", Tag::Compound(write(ctx, root, &all)?));
+    Some(c)
+}
+
+/// A player left: what they rode leaves with them, unless another player
+/// rides it too.
+pub fn left_with(ctx: &ServerContext, player: i32) {
+    let mut entities = lock(&ctx.entities);
+    let Some((_, root)) = vehicles_of(&entities, player) else {
+        return;
+    };
+    let mut tree = vec![root.id];
+    let mut players = 0;
+    let mut i = 0;
+    while i < tree.len() {
+        if let Some(e) = entities.iter().find(|e| e.id == tree[i]) {
+            for &r in riders(e) {
+                if entities.iter().any(|o| o.id == r) {
+                    tree.push(r);
+                } else {
+                    players += 1;
+                }
+            }
+        }
+        i += 1;
+    }
+    if players == 1 {
+        take_out(ctx, &mut entities, tree);
+    }
+}
+
+/// A player who rode something when they left gets back on: it comes back
+/// with them unless it is in the world already.
+pub fn ride_again(ctx: &ServerContext, player: i32, saved: &Compound) {
+    let Some(attach) = uuid_of(saved.get("Attach")) else {
+        return;
+    };
+    let present = lock(&ctx.entities).iter().any(|e| e.uuid == attach);
+    if !present && let Some(Tag::Compound(c)) = saved.get("Entity") {
+        spawn_loaded(ctx, read(ctx, c));
+    }
+    let mut entities = lock(&ctx.entities);
+    let Some(v) = entities.iter_mut().find(|e| e.uuid == attach && !e.removed) else {
+        return;
+    };
+    let id = v.id;
+    let Some(r) = riders_mut(v) else {
+        return;
+    };
+    if !r.contains(&player) {
+        r.push(player);
+    }
+    let passengers = r.clone();
+    drop(entities);
+    fx::emit(
+        ctx,
+        fx::Fx::Passengers(SetPassengers {
+            vehicle: id,
+            passengers,
+        }),
+    );
 }
 
 /// Keys of an entity that were read but not understood.

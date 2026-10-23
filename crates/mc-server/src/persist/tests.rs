@@ -747,3 +747,44 @@ fn an_entity_out_of_the_loaded_chunks_goes_to_its_chunk_file() {
     assert!(cows.contains(&uuid));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_players_boat_leaves_and_comes_back_with_them() {
+    if mc_data::McData::load(&data_dir()).is_err() {
+        eprintln!("skipped: no game data");
+        return;
+    }
+    let dir = folder("ride");
+    let ctx = open(&dir);
+    let at = Position::new(40, 100, 40);
+    let _ = ctx.world.block(at, &ctx.data.blocks);
+    load_stored(&ctx);
+    let player = 999_999;
+    let mut boat = summoned(&ctx, "minecraft:oak_chest_boat", "{}", [40.5, 100.0, 40.5]);
+    let cow = mob(&ctx, Species::Cow, boat.pos);
+    if let Kind::Vehicle(v) = &mut boat.kind {
+        v.riders = vec![player, cow.id];
+    }
+    let uuid = boat.uuid;
+    lock(&ctx.entities).extend([boat, cow]);
+    let saved = root_vehicle(&ctx, player).unwrap();
+    assert_eq!(saved.get("Attach"), Some(&uuid_tag(uuid)));
+    let Some(Tag::Compound(e)) = saved.get("Entity") else {
+        panic!()
+    };
+    assert!(matches!(e.get("Passengers"), Some(Tag::List(p)) if p.len() == 1));
+    left_with(&ctx, player);
+    assert!(lock(&ctx.entities).is_empty(), "the boat and the cow left");
+    ride_again(&ctx, player, &saved);
+    let entities = lock(&ctx.entities).clone();
+    assert_eq!(entities.len(), 2);
+    let boat = entities.iter().find(|e| e.uuid == uuid).unwrap();
+    let Kind::Vehicle(v) = &boat.kind else {
+        panic!()
+    };
+    assert!(v.riders.contains(&player) && v.riders.len() == 2, "{:?}", v.riders);
+    // Back again with the boat still there: it is not doubled.
+    ride_again(&ctx, player, &saved);
+    assert_eq!(lock(&ctx.entities).len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
