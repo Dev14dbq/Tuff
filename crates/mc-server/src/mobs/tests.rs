@@ -464,3 +464,65 @@ fn mobs_suffocate_inside_blocks() {
     run(&ctx, 30);
     assert!(with_mob(&ctx, id, |m| m.health) < 10.0);
 }
+
+fn block_name(ctx: &ServerContext, x: i32, y: i32, z: i32) -> String {
+    let p = mc_protocol::Position::new(x, y, z);
+    let s = ctx.world.block(p, &ctx.data.blocks).unwrap();
+    ctx.data.blocks.block_name(s).unwrap_or("").to_owned()
+}
+
+/// Farmland in place of the grass, a crop on it, and a mob dropped two
+/// blocks onto it. The mob does not wander.
+fn drop_on(ctx: &ServerContext, species: Species, x: i32, z: i32) -> i32 {
+    let farm = mc_protocol::Position::new(x, -61, z);
+    let crop = mc_protocol::Position::new(x, -60, z);
+    let farmland = ctx.data.blocks.default_state("minecraft:farmland").unwrap();
+    let wheat = ctx.data.blocks.default_state("minecraft:wheat").unwrap();
+    WorldLevel::new(ctx).set_block(farm, farmland);
+    WorldLevel::new(ctx).set_block(crop, wheat);
+    // Farmland stands 15/16 of a block; two blocks above that is the drop.
+    let y = -61.0 + 15.0 / 16.0 + 2.0;
+    let mut e = new_mob(ctx, species, [f64::from(x) + 0.5, y, f64::from(z) + 0.5]);
+    if let Kind::Mob(m) = &mut e.kind {
+        m.no_ai = true;
+    }
+    let id = e.id;
+    lock(&ctx.entities).push(e);
+    id
+}
+
+#[test]
+fn a_falling_mob_tramples_farmland() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    lock(&ctx.game_rules).set("spawn_mobs", crate::rules::Value::Bool(false));
+
+    let cow = drop_on(&ctx, Species::Cow, 4, 4);
+    run(&ctx, 40);
+    assert!(
+        mob_of(&ctx, cow).is_some_and(|e| e.on_ground),
+        "cow never landed"
+    );
+    assert_eq!(block_name(&ctx, 4, -61, 4), "minecraft:dirt");
+    assert_eq!(block_name(&ctx, 4, -60, 4), "minecraft:air");
+
+    let hen = drop_on(&ctx, Species::Chicken, 6, 4);
+    run(&ctx, 40);
+    assert!(
+        mob_of(&ctx, hen).is_some_and(|e| e.on_ground),
+        "chicken never landed"
+    );
+    assert_eq!(block_name(&ctx, 6, -61, 4), "minecraft:farmland");
+
+    lock(&ctx.game_rules).set("mob_griefing", crate::rules::Value::Bool(false));
+    let quiet = drop_on(&ctx, Species::Cow, 8, 4);
+    run(&ctx, 40);
+    assert!(
+        mob_of(&ctx, quiet).is_some_and(|e| e.on_ground),
+        "cow never landed"
+    );
+    assert_eq!(block_name(&ctx, 8, -61, 4), "minecraft:farmland");
+}

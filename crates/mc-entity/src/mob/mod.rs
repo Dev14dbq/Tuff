@@ -281,6 +281,8 @@ pub enum MobEvent {
     Status(u8),
     /// The mob took damage not from an entity (burning, falling).
     Hurt { amount: f32, kind: &'static str },
+    /// Landed a fall of this many blocks.
+    Landed { distance: f64 },
     /// Two in love made a baby; this mob found `partner`.
     Breed { partner: i32 },
     /// A sound of the mob (`entity.cow.ambient`, without `minecraft:`).

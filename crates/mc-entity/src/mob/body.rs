@@ -513,6 +513,7 @@ pub(super) fn physics(
     } else if blocked_h && s.world.climbable(cell[0], cell[1], cell[2]) {
         b.vel[1] = 0.2;
     }
+    let was_on_ground = b.on_ground;
     b.on_ground = ground;
     // Steps.
     if ground && !wet {
@@ -530,12 +531,22 @@ pub(super) fn physics(
     } else if !ground && b.pos[1] < before[1] {
         m.fall_distance += before[1] - b.pos[1];
     } else if ground {
-        let fell = m.fall_distance;
+        // The move that lands is part of the fall.
+        let drop = if was_on_ground {
+            0.0
+        } else {
+            (before[1] - b.pos[1]).max(0.0)
+        };
+        let gathered = m.fall_distance;
+        let fell = gathered + drop;
         m.fall_distance = 0.0;
+        if fell > 0.0 {
+            out.push(MobEvent::Landed { distance: fell });
+        }
         let safe = m.species.safe_fall();
-        if fell > safe && m.species.takes_fall_damage() {
+        if gathered > safe && m.species.takes_fall_damage() {
             out.push(MobEvent::Hurt {
-                amount: (fell - safe).ceil() as f32,
+                amount: (gathered - safe).ceil() as f32,
                 kind: "minecraft:fall",
             });
         }
