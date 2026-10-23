@@ -361,10 +361,11 @@ pub fn interact(
         return;
     };
     // Carts with a chest or hopper open their inventory; boats with a chest
-    // do when the player sneaks.
+    // do when the player sneaks or there is no seat left for them.
     let boat = matches!(v.craft, Craft::Boat { .. });
+    let seat = v.riders.len() < capacity(&v.craft) && !v.riders.contains(&actor.entity_id);
     if let Some(kind) = crate::containers::entity_kind(&item_of(&v.craft))
-        && (!boat || actor.sneaking)
+        && (!boat || actor.sneaking || !seat)
     {
         outcome.open = Some((crate::containers::entity_key(id), kind));
         outcome.events.push(Event::Swing {
@@ -422,6 +423,21 @@ pub fn interact(
             times: 1,
         });
     }
+}
+
+/// The inventory of the vehicle `rider` sits in (a boat with a chest), which
+/// the rider's inventory key opens.
+pub fn ridden_inventory(
+    ctx: &ServerContext,
+    rider: i32,
+) -> Option<(Position, crate::containers::Kind)> {
+    lock(&ctx.entities).iter().find_map(|e| match &e.kind {
+        Kind::Vehicle(v) if !e.removed && v.riders.contains(&rider) => Some((
+            crate::containers::entity_key(e.id),
+            crate::containers::entity_kind(&item_of(&v.craft))?,
+        )),
+        _ => None,
+    })
 }
 
 /// A rider's own word about their vehicle.
@@ -613,5 +629,139 @@ mod tests {
             chest: true,
         };
         assert_eq!(item_of(&c), "minecraft:cherry_chest_boat");
+    }
+
+    #[test]
+    fn a_chest_boat_seats_one_and_opens_when_full_or_sneaking() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let craft = Craft::Boat {
+            wood: "oak".into(),
+            chest: true,
+        };
+        let mut e = new(&ctx, craft, [0.5, -60.0, 0.5], 0.0);
+        let (mut outcome, mut fresh) = (Outcome::default(), Vec::new());
+        // Sneaking opens the chest.
+        let mut sneaker = actor(0);
+        sneaker.sneaking = true;
+        interact(&ctx, sneaker, &mut e, 0, false, &mut outcome, &mut fresh);
+        assert!(outcome.open.take().is_some());
+        // Otherwise the player gets in; there is one seat.
+        interact(&ctx, actor(0), &mut e, 0, false, &mut outcome, &mut fresh);
+        assert!(outcome.open.take().is_none());
+        let Kind::Vehicle(v) = &e.kind else { panic!() };
+        assert_eq!(v.riders, vec![4]);
+        // Full: the next one opens the chest instead.
+        let mut other = actor(0);
+        other.entity_id = 5;
+        interact(&ctx, other, &mut e, 0, false, &mut outcome, &mut fresh);
+        let (key, kind) = outcome.open.take().unwrap();
+        assert_eq!((key, kind.slots), (crate::containers::entity_key(e.id), 27));
+        // The rider's inventory key opens it too.
+        lock(&ctx.entities).push(e.clone());
+        assert!(ridden_inventory(&ctx, 4).is_some());
+        assert!(ridden_inventory(&ctx, 5).is_none());
+    }
+
+    #[test]
+    fn a_broken_chest_minecart_drops_itself_and_its_contents() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut e = new(&ctx, Craft::Minecart(Cart::Chest), [0.5, -60.0, 0.5], 0.0);
+        let kind = crate::containers::entity_kind("minecraft:chest_minecart").unwrap();
+        let stick = ctx.items.id("minecraft:stick").unwrap();
+        crate::containers::put(
+            &ctx,
+            crate::containers::entity_key(e.id),
+            kind,
+            &[(5, Some(mc_protocol::packets::play::ItemStack::new(stick, 9)))],
+        );
+        let mut fresh = Vec::new();
+        destroy(&ctx, &mut e, &mut fresh, true);
+        let mut names: Vec<(String, i32)> = fresh
+            .iter()
+            .filter_map(|f| match f.kind {
+                Kind::Item { item, count, .. } => Some((ctx.items.name(item)?.to_owned(), count)),
+                _ => None,
+            })
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                ("minecraft:chest_minecart".to_owned(), 1),
+                ("minecraft:stick".to_owned(), 9)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_powered_activator_rail_turns_a_hopper_minecart_off() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let blocks = &ctx.data.blocks;
+        let rail = |powered: &str| {
+            blocks
+                .state_id(
+                    "minecraft:activator_rail",
+                    &[("shape", "east_west"), ("powered", powered)],
+                )
+                .unwrap()
+        };
+        let cell = mc_protocol::Position::new(700, -60, 0);
+        ctx.world.set_block(cell, rail("true"), blocks, &ctx.rules);
+        let chest = mc_protocol::Position::new(700, -59, 0);
+        ctx.world.set_block(
+            chest,
+            blocks.default_state("minecraft:chest").unwrap(),
+            blocks,
+            &ctx.rules,
+        );
+        let stick = ctx.items.id("minecraft:stick").unwrap();
+        let chest_kind = crate::containers::kind_of("minecraft:chest").unwrap();
+        crate::containers::put(
+            &ctx,
+            chest,
+            chest_kind,
+            &[(0, Some(mc_protocol::packets::play::ItemStack::new(stick, 5)))],
+        );
+        let cart = new(&ctx, Craft::Minecart(Cart::Hopper), [700.5, -59.9375, 0.5], 0.0);
+        let id = cart.id;
+        lock(&ctx.entities).push(cart);
+        let step = |ctx: &ServerContext| {
+            let mut e = lock(&ctx.entities).iter().find(|e| e.id == id).cloned().unwrap();
+            let mut out = hits::Out::default();
+            let mut t = Tick {
+                ctx,
+                players: &[],
+                targets: &[],
+                out: &mut out,
+                shooter: None,
+            };
+            tick(&mut t, &mut e);
+            *lock(&ctx.entities).iter_mut().find(|x| x.id == id).unwrap() = e;
+            crate::hoppers::tick_carts(ctx);
+        };
+        let left = |ctx: &ServerContext| {
+            crate::containers::slots(ctx, chest, chest_kind)[0]
+                .as_ref()
+                .map_or(0, |s| s.count)
+        };
+        for _ in 0..10 {
+            step(&ctx);
+        }
+        assert_eq!(left(&ctx), 5, "off while the rail is powered");
+        ctx.world.set_block(cell, rail("false"), blocks, &ctx.rules);
+        step(&ctx);
+        assert_eq!(left(&ctx), 4, "back on: it pulls at once");
+        // And one more every tick: it does not rest like a hopper.
+        step(&ctx);
+        assert_eq!(left(&ctx), 3);
     }
 }

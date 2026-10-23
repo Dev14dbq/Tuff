@@ -831,6 +831,12 @@ async fn play(
                     play::Serverbound::PlayerCommand { action: action @ (1 | 2), .. } => {
                         crate::combat::set_sprinting(&ctx, uuid, action == 1);
                     }
+                    play::Serverbound::PlayerCommand { action: 5, .. } => {
+                        // The inventory key while riding a boat with a chest.
+                        if let Some((position, kind)) = crate::vehicles::ridden_inventory(&ctx, entity_id) {
+                            windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
+                        }
+                    }
                     play::Serverbound::PlayerAction { status: status @ (3 | 4), .. } => {
                         // Q: drop one (4) or the whole stack (3) from the main hand.
                         let mut thrown = None;

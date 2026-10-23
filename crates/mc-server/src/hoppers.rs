@@ -684,9 +684,10 @@ pub fn register(ctx: &ServerContext, p: Position) {
     lock(&ctx.hoppers).insert((p.x, p.y, p.z));
 }
 
-/// One game tick of every hopper minecart that is on: it pulls one item
-/// from the container above it, or else picks up an item entity around it,
-/// then rests 4 ticks.
+/// One game tick of every hopper minecart that is on (minecraft.wiki,
+/// "Minecart with Hopper"): it pulls one item from the container above it,
+/// or else picks up an item entity around it, every tick (it does not rest
+/// like a hopper).
 pub fn tick_carts(ctx: &ServerContext) {
     let carts: Vec<(i32, [f64; 3])> = lock(&ctx.entities)
         .iter()
@@ -700,44 +701,28 @@ pub fn tick_carts(ctx: &ServerContext) {
     let Some(kind) = containers::entity_kind("minecraft:hopper_minecart") else {
         return;
     };
-    let mut rests = lock(&ctx.cart_rests);
-    rests.retain(|id, _| carts.iter().any(|c| c.0 == *id));
-    let resting: Vec<i32> = rests
-        .iter_mut()
-        .filter_map(|(&id, left)| {
-            *left -= 1;
-            (*left > 0).then_some(id)
-        })
-        .collect();
-    rests.retain(|_, left| *left > 0);
-    drop(rests);
     for (id, pos) in carts {
-        if resting.contains(&id) {
-            continue;
-        }
         let dst = Store {
             at: containers::entity_key(id),
             kind,
             name: "",
         };
-        // The container above: the block over the cart's middle.
+        // The container above: its bottom 0.5 (exclusive) to 1.5 above
+        // the cart's bottom.
         let above = Position::new(
             pos[0].floor() as i32,
             (pos[1] + 0.5 + 1.0).floor() as i32,
             pos[2].floor() as i32,
         );
-        let pulled = match kind_at(ctx, above) {
-            Some((k, name)) => {
-                let src = Store {
-                    at: above,
-                    kind: k,
-                    name,
-                };
-                move_one(ctx, src, Dir::Down, dst, Dir::Up)
-            }
-            None => false,
-        };
-        let moved = pulled || {
+        // With a container there it only pulls; else it picks items up.
+        if let Some((k, name)) = kind_at(ctx, above) {
+            let src = Store {
+                at: above,
+                kind: k,
+                name,
+            };
+            move_one(ctx, src, Dir::Down, dst, Dir::Up);
+        } else {
             let (x, y, z) = (pos[0], pos[1] + 0.5, pos[2]);
             pickup_into(
                 ctx,
@@ -745,10 +730,7 @@ pub fn tick_carts(ctx: &ServerContext) {
                 kind,
                 [x - 0.5, y - 0.5, z - 0.5],
                 [x + 0.5, y + 1.0, z + 0.5],
-            )
-        };
-        if moved {
-            lock(&ctx.cart_rests).insert(id, 4);
+            );
         }
     }
 }
