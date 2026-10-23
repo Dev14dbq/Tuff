@@ -585,6 +585,11 @@ pub fn die(
     }
     m.dying = Some(20);
     m.health = 0.0;
+    // Its lead falls where it died.
+    crate::decor::leash::unleash(ctx, id, e.pos, true);
+    let Kind::Mob(m) = &mut e.kind else {
+        return;
+    };
     m.target = None;
     m.nav.stop();
     let by_player = m.hurt_by_player.map(|(p, _)| p);

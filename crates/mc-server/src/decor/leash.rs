@@ -1,8 +1,8 @@
 //! Leads. A lead ties an entity to a holder: a player, or a knot on a
-//! fence. The links live here; entities with minds of their own (mobs) ask
-//! for them with [`attach`] and follow the holder themselves. Leashed
-//! entities that have no mind are pulled along, and the lead snaps when they
-//! get more than 10 blocks from the holder (minecraft.wiki, "Lead").
+//! fence. The links live here; mobs learn where their holder is each tick
+//! ([`tell_mobs`]) and follow or are pulled themselves, and the lead snaps
+//! when they get more than 12 blocks from the holder (minecraft.wiki,
+//! "Lead").
 
 use std::collections::HashMap;
 
@@ -78,11 +78,14 @@ pub fn held_by(ctx: &ServerContext, holder: Holder) -> Vec<i32> {
         .collect()
 }
 
-/// A knot goes: what hung on it drops its leads.
-pub fn knot_gone(ctx: &ServerContext, knot: i32) {
-    for id in held_by(ctx, Holder::Knot(knot)) {
+/// A knot goes: what hung on it is let go. Returns how many leads were
+/// tied to it.
+pub fn knot_gone(ctx: &ServerContext, knot: i32) -> usize {
+    let tied = held_by(ctx, Holder::Knot(knot));
+    for &id in &tied {
         detach(ctx, id);
     }
+    tied.len()
 }
 
 /// Moves everything tied to a player to a knot.
@@ -197,6 +200,54 @@ pub fn untie_knot(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, knot
     let _ = outcome;
 }
 
+/// How far a lead stretches before it snaps (blocks).
+pub const SNAP: f64 = 12.0;
+
+/// Where `holder` holds its leads: a player's feet, or the knot.
+fn holder_pos(ctx: &ServerContext, entities: &[Entity], holder: Holder) -> Option<[f64; 3]> {
+    match holder {
+        Holder::Player(u) => lock(&ctx.players)
+            .get(&u)
+            .filter(|p| p.dimension == ctx.world.dimension)
+            .and_then(|p| p.pose)
+            .map(|p| [p.x, p.y, p.z]),
+        Holder::Knot(k) => entities
+            .iter()
+            .find(|e| e.id == k && !e.removed)
+            .map(|e| e.pos),
+    }
+}
+
+/// Tells each mob on a lead where its holder is (`None` for the others).
+pub fn tell_mobs(ctx: &ServerContext, entities: &mut [Entity]) {
+    let links: Vec<(i32, Holder)> = lock(&ctx.leashes)
+        .links
+        .iter()
+        .map(|(&a, &b)| (a, b))
+        .collect();
+    let at: Vec<(i32, Option<[f64; 3]>)> = links
+        .iter()
+        .map(|&(id, h)| (id, holder_pos(ctx, entities, h)))
+        .collect();
+    for e in entities.iter_mut() {
+        if let Kind::Mob(m) = &mut e.kind {
+            m.leash = at.iter().find(|(id, _)| *id == e.id).and_then(|(_, p)| *p);
+        }
+    }
+}
+
+/// Unties `entity` and drops the lead at `at` (not when a creative player
+/// does it); whether it was on one.
+pub fn unleash(ctx: &ServerContext, entity: i32, at: [f64; 3], drop: bool) -> bool {
+    if !detach(ctx, entity) {
+        return false;
+    }
+    if drop {
+        drop_lead(ctx, Some(at));
+    }
+    true
+}
+
 /// Once a tick: leads that stretch too far snap (and the lead item drops).
 pub fn tick(ctx: &ServerContext) {
     let links: Vec<(i32, Holder)> = lock(&ctx.leashes)
@@ -207,44 +258,32 @@ pub fn tick(ctx: &ServerContext) {
     if links.is_empty() {
         return;
     }
-    let entities = lock(&ctx.entities);
-    for (id, holder) in links {
-        let Some(me) = entities.iter().find(|e| e.id == id && !e.removed) else {
-            // The leashed one is gone (or is a player): the lead falls.
-            if !lock(&ctx.players).values().any(|p| p.entity_id == id) {
-                drop_lead(ctx, None);
-                lock(&ctx.leashes).links.remove(&id);
+    let mut snapped = Vec::new();
+    {
+        let entities = lock(&ctx.entities);
+        for (id, holder) in links {
+            let Some(me) = entities.iter().find(|e| e.id == id && !e.removed) else {
+                // The leashed one is gone (it took its lead with it).
+                if !lock(&ctx.players).values().any(|p| p.entity_id == id) {
+                    lock(&ctx.leashes).links.remove(&id);
+                }
+                continue;
+            };
+            let snap = match holder_pos(ctx, &entities, holder) {
+                None => true,
+                Some(f) => {
+                    (me.pos[0] - f[0]).powi(2) + (me.pos[1] - f[1]).powi(2) + (me.pos[2] - f[2]).powi(2)
+                        > SNAP * SNAP
+                }
+            };
+            if snap {
+                snapped.push((id, me.pos));
             }
-            continue;
-        };
-        let from = match holder {
-            Holder::Player(u) => lock(&ctx.players)
-                .get(&u)
-                .and_then(|p| p.pose)
-                .map(|p| [p.x, p.y + 1.0, p.z]),
-            Holder::Knot(k) => entities
-                .iter()
-                .find(|e| e.id == k && !e.removed)
-                .map(|e| e.pos),
-        };
-        let snap = match from {
-            None => true,
-            Some(f) => {
-                (me.pos[0] - f[0]).powi(2) + (me.pos[1] - f[1]).powi(2) + (me.pos[2] - f[2]).powi(2)
-                    > 100.0
-            }
-        };
-        if snap {
-            let at = me.pos;
-            lock(&ctx.leashes).links.remove(&id);
-            fx::emit(
-                ctx,
-                fx::Fx::Link(SetEntityLink {
-                    entity_id: id,
-                    holder: 0,
-                }),
-            );
-            drop_lead(ctx, Some(at));
+        }
+    }
+    for (id, at) in snapped {
+        if unleash(ctx, id, at, true) {
+            fx::sound(ctx, "item.lead.break", fx::category::NEUTRAL, at, 1.0, 1.0);
         }
     }
     let _ = held::enchant;
@@ -253,7 +292,7 @@ pub fn tick(ctx: &ServerContext) {
 
 fn drop_lead(ctx: &ServerContext, at: Option<[f64; 3]>) {
     if let Some(at) = at
-        && let Some(e) = super::dropped(ctx, at, "minecraft:lead", 1, 0)
+        && let Some(e) = super::dropped(ctx, [at[0], at[1] + 0.5, at[2]], "minecraft:lead", 1, 0)
     {
         super::spawn_all(ctx, vec![e]);
     }

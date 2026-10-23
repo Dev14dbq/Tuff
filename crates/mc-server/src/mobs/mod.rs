@@ -394,6 +394,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     let mut out = Outcome::default();
 
     apply_pending(ctx, &mut entities, pending, now);
+    crate::decor::leash::tell_mobs(ctx, &mut entities);
 
     let ground = Ground::new(ctx);
     let items = ItemSense {

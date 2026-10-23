@@ -620,3 +620,60 @@ fn a_carrot_on_a_stick_boosts_the_pig_and_wears_to_a_rod() {
     crate::interact::use_item(&ctx, actor, 0, 0.0, 0.0);
     assert_eq!(ctx.items.name(held(&ctx).item), Some("minecraft:fishing_rod"));
 }
+
+fn move_steve(ctx: &ServerContext, pos: [f64; 3]) {
+    if let Some(p) = lock(&ctx.players).get_mut(&STEVE)
+        && let Some(pose) = &mut p.pose
+    {
+        (pose.x, pose.y, pose.z) = (pos[0], pos[1], pos[2]);
+    }
+}
+
+#[test]
+fn a_lead_ties_leads_and_snaps() {
+    use crate::decor::leash::Holder;
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let cow = put(&ctx, Species::Cow, [2.5, -60.0, 0.5]);
+    hold(&ctx, "minecraft:lead", 2);
+    ctx.mobs.use_on(ctx.dim, cow, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert_eq!(lock(&ctx.leashes).links.get(&cow), Some(&Holder::Player(STEVE)));
+    assert_eq!(lock(&ctx.inventories)[&STEVE].slots[36].as_ref().map(|s| s.count), Some(1));
+    // A zombie takes no lead.
+    let z = put(&ctx, Species::Zombie, [0.5, -60.0, 2.5]);
+    ctx.mobs.use_on(ctx.dim, z, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert!(!lock(&ctx.leashes).links.contains_key(&z));
+    // Walking off, the player leads the cow along.
+    move_steve(&ctx, [9.5, -60.0, 0.5]);
+    run(&ctx, 200);
+    let x = mob_of(&ctx, cow).unwrap().pos[0];
+    assert!(x > 5.0, "cow at {x}");
+    assert!(lock(&ctx.leashes).links.contains_key(&cow));
+    // Far off at once, the lead snaps and falls.
+    move_steve(&ctx, [40.5, -60.0, 0.5]);
+    run(&ctx, 1);
+    crate::decor::leash::tick(&ctx);
+    assert!(!lock(&ctx.leashes).links.contains_key(&cow));
+    assert_eq!(items_of(&ctx, "minecraft:lead"), 1);
+}
+
+#[test]
+fn the_holder_takes_a_lead_off() {
+    use crate::decor::leash::Holder;
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let pig = put(&ctx, Species::Pig, [2.5, -60.0, 0.5]);
+    crate::decor::leash::attach(&ctx, pig, Holder::Player(STEVE));
+    ctx.mobs.use_on(ctx.dim, pig, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert!(!lock(&ctx.leashes).links.contains_key(&pig));
+    assert_eq!(items_of(&ctx, "minecraft:lead"), 1);
+}

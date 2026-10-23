@@ -331,7 +331,10 @@ pub fn break_hung(ctx: &ServerContext, e: &mut Entity, fresh: &mut Vec<Entity>, 
         fresh.extend(dropped(ctx, at, name, 1, 0));
     }
     if matches!(h.decor, Decor::LeashKnot) {
-        leash::knot_gone(ctx, e.id);
+        // Each lead tied to it falls.
+        for _ in 0..leash::knot_gone(ctx, e.id) {
+            fresh.extend(dropped(ctx, at, "minecraft:lead", 1, 0));
+        }
     }
     fx::sound(ctx, sound, fx::category::BLOCKS, at, 1.0, 1.0);
     e.removed = true;
