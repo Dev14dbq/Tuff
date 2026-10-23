@@ -369,8 +369,8 @@ fn tick_one(ctx: &ServerContext, p: Position, before: Progress) -> Option<Progre
     }
     // The bottles the stand shows.
     let mut shown = state;
-    for i in 0..3 {
-        let has = if slots[i].is_some() { "true" } else { "false" };
+    for (i, slot) in slots.iter().enumerate().take(3) {
+        let has = if slot.is_some() { "true" } else { "false" };
         if let Some(s) = blocks.with_property(shown, &format!("has_bottle_{i}"), has) {
             shown = s;
         }
@@ -388,14 +388,12 @@ fn tick_one(ctx: &ServerContext, p: Position, before: Progress) -> Option<Progre
             changed.into_iter().map(|i| (i, slots[i].clone())).collect();
         containers::put(ctx, p, kind, &changes);
     }
-    if progress != before {
-        if progress.brew != before.brew || progress.fuel != before.fuel {
-            store(ctx, p, &progress);
-            let _ = ctx.events.send(Event::FurnaceProgress {
-                position: p,
-                values: progress.values(),
-            });
-        }
+    if progress.brew != before.brew || progress.fuel != before.fuel {
+        store(ctx, p, &progress);
+        let _ = ctx.events.send(Event::FurnaceProgress {
+            position: p,
+            values: progress.values(),
+        });
     }
     let busy = progress.brew > 0 || (can_brew && (progress.fuel > 0 || slots[4].is_some()));
     busy.then_some(progress)

@@ -71,7 +71,7 @@ pub fn set_slot_enabled(ctx: &ServerContext, p: Position, slot: usize, enabled: 
         return false;
     }
     let mut off = disabled(ctx, p);
-    if off[slot] == !enabled {
+    if off[slot] != enabled {
         return false;
     }
     off[slot] = !enabled;
@@ -358,7 +358,7 @@ mod tests {
         let p = Position::new(0, -60, 0);
         place(&ctx, p, "north_up");
         assert!(set_slot_enabled(&ctx, p, 0, false));
-        assert_eq!(disabled(&ctx, p)[0], true);
+        assert!(disabled(&ctx, p)[0]);
         assert_eq!(signal(&ctx, p), 1);
         assert_eq!(values(&ctx, p)[0], 1);
         let slots = containers::slots(&ctx, p, kind());
