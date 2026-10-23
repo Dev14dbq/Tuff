@@ -321,12 +321,38 @@ fn bookshelf(c: &Click, outcome: &mut Outcome) -> bool {
     true
 }
 
+/// A signed book on a lectern gets the text it holds resolved for whoever
+/// opens it, as in hand.
+fn resolve_book(c: &Click) {
+    let ctx = c.ctx;
+    let blocks = &ctx.data.blocks;
+    let Some(mut be) = ctx.world.block_entity(c.at, blocks) else {
+        return;
+    };
+    let Some(Tag::Compound(book)) = be.data.get("Book") else {
+        return;
+    };
+    let Some(Tag::String(id)) = book.get("id") else {
+        return;
+    };
+    let Some(item) = ctx.items.id(id) else {
+        return;
+    };
+    let mut stack = mc_protocol::packets::play::ItemStack::from_nbt_with(book, item);
+    if crate::books::resolve(ctx, c.actor.uuid, &mut stack) {
+        let name = id.clone();
+        be.data.insert("Book", Tag::Compound(stack.to_nbt_with(&name)));
+        ctx.world.set_block_entity(be, blocks);
+    }
+}
+
 fn lectern(c: &Click, outcome: &mut Outcome) -> bool {
     let held = c.held_name();
     let book = matches!(held, "minecraft:written_book" | "minecraft:writable_book");
     if c.prop("has_book") == Some("true") {
         // Reading: the lectern's window, on the main hand's click.
         if c.hand == 0 {
+            resolve_book(c);
             outcome.open_menu = Some((c.at, crate::menus::Menu::Lectern));
         }
         return c.hand == 0;

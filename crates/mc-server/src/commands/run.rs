@@ -849,7 +849,7 @@ pub(super) fn style(t: &mut Tag, styles: &[(&str, &str)]) {
 }
 
 /// Fills in `selector` parts of a text component with who they find.
-pub(super) fn resolve_text(ctx: &ServerContext, src: &Src, t: &Tag) -> Tag {
+pub(crate) fn resolve_text(ctx: &ServerContext, src: &Src, t: &Tag) -> Tag {
     match t {
         Tag::Compound(c) => {
             if let Some(Tag::String(sel)) = c.get("selector") {
@@ -875,6 +875,34 @@ pub(super) fn resolve_text(ctx: &ServerContext, src: &Src, t: &Tag) -> Tag {
                         Tag::Compound(out)
                     }
                 };
+            }
+            // `{score: {name, objective}}` shows the score; `@s` is the source.
+            if let Some(Tag::Compound(score)) = c.get("score") {
+                let name = match score.get("name") {
+                    Some(Tag::String(n)) => n.clone(),
+                    _ => String::new(),
+                };
+                let objective = match score.get("objective") {
+                    Some(Tag::String(o)) => o.clone(),
+                    _ => String::new(),
+                };
+                let holders: Vec<String> = if name.starts_with('@') {
+                    let mut reader = mc_command::reader::Reader::new(&name);
+                    mc_command::args::read_selector(&mut reader, &ctx.commands.env)
+                        .map(|s| target::resolve(ctx, &s, src))
+                        .unwrap_or_default()
+                        .iter()
+                        .map(Target::holder)
+                        .collect()
+                } else {
+                    vec![name]
+                };
+                let value = holders.first().and_then(|h| {
+                    lock(&ctx.scoreboard)
+                        .score(h, &objective)
+                        .map(|s| s.value.to_string())
+                });
+                return Tag::from(value.unwrap_or_default().as_str());
             }
             let mut out = Compound::new();
             for (k, v) in c.iter() {

@@ -248,6 +248,7 @@ fn trapped_chest(level: &dyn Level, ctx: Ctx, at: BlockPos, state: u32) -> u8 {
 fn other_power(ctx: Ctx, state: u32) -> u8 {
     match ctx.shapes.block_name(state) {
         Some("minecraft:daylight_detector" | "minecraft:target") => level_of(ctx, state, "power"),
+        Some("minecraft:lectern") if is(ctx, state, "powered") => 15,
         _ => 0,
     }
 }
@@ -282,6 +283,12 @@ fn emitted_strong(
             && ctx.shapes.block_name(state) == Some("minecraft:trapped_chest") =>
         {
             trapped_chest(level, ctx, at, state)
+        }
+        _ if toward == Dir::Down
+            && ctx.shapes.block_name(state) == Some("minecraft:lectern")
+            && is(ctx, state, "powered") =>
+        {
+            15
         }
         _ => crate::rails::emits(ctx, state, toward, true)
             .max(crate::tripwire::emits(ctx, state, toward, true)),
@@ -849,9 +856,36 @@ pub fn touch_ore(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
 }
 
 /// A due block tick for a component.
+/// A lectern's page was turned: it gives a redstone signal for 2 ticks
+/// (minecraft.wiki, "Lectern").
+pub fn lectern_pulse(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+    let state = level.block(p);
+    if ctx.shapes.block_name(state) != Some("minecraft:lectern") {
+        return;
+    }
+    if !is(ctx, state, "powered") {
+        set_quietly(level, ctx, p, with_bool(ctx, state, "powered", true));
+        update_neighbors_at(level, ctx, p);
+        update_neighbors_at(level, ctx, p.offset(Dir::Down));
+    }
+    let kind = ctx.shapes.block_index(state);
+    level.schedule_block_tick(p, kind, LECTERN_PULSE, 0);
+}
+
+/// Ticks a lectern keeps giving power after a page turn.
+const LECTERN_PULSE: i64 = 2;
+
 pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     let state = level.block(p);
     if ctx.shapes.block_index(state) != kind {
+        return;
+    }
+    if ctx.shapes.block_name(state) == Some("minecraft:lectern") {
+        if is(ctx, state, "powered") {
+            set_quietly(level, ctx, p, with_bool(ctx, state, "powered", false));
+            update_neighbors_at(level, ctx, p);
+            update_neighbors_at(level, ctx, p.offset(Dir::Down));
+        }
         return;
     }
     match part(ctx, state) {

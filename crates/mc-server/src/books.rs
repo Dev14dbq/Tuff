@@ -11,6 +11,51 @@ fn raw(text: &str) -> Tag {
     Tag::Compound(c)
 }
 
+/// Resolves the text of a written book that has not been (selectors and
+/// scores), as it is for whoever opens it, and marks it resolved
+/// (minecraft.wiki, "Written Book"). Whether the stack changed.
+pub fn resolve(ctx: &ServerContext, uuid: u128, stack: &mut ItemStack) -> bool {
+    let Some(Tag::Compound(content)) = stack.components.get("written_book_content") else {
+        return false;
+    };
+    if matches!(content.get("resolved"), Some(Tag::Byte(1))) {
+        return false;
+    }
+    let Some((name, pose)) = crate::tick::lock(&ctx.players)
+        .get(&uuid)
+        .and_then(|p| Some((p.profile.name.clone(), p.pose?)))
+    else {
+        return false;
+    };
+    let src = crate::commands::Src::for_book(ctx, uuid, &name, pose);
+    let resolve_page = |page: &Tag| -> Tag {
+        match page {
+            Tag::Compound(p) if p.get("raw").is_some() => {
+                let mut out = Compound::new();
+                for (k, v) in p.iter() {
+                    let v = if k == "raw" || k == "filtered" {
+                        crate::commands::resolve_text(ctx, &src, v)
+                    } else {
+                        v.clone()
+                    };
+                    out.insert(k, v);
+                }
+                Tag::Compound(out)
+            }
+            other => crate::commands::resolve_text(ctx, &src, other),
+        }
+    };
+    let mut new = content.clone();
+    if let Some(Tag::List(pages)) = content.get("pages") {
+        new.insert("pages", Tag::List(pages.iter().map(&resolve_page).collect()));
+    }
+    new.insert("resolved", Tag::Byte(1));
+    stack
+        .components
+        .set("written_book_content", Tag::Compound(new));
+    true
+}
+
 /// Writes `pages` into a book and quill, or signs it as a written book
 /// when `title` is given (by `author`). Whether the stack changed.
 pub fn edit(

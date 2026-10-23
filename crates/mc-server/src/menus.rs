@@ -609,6 +609,12 @@ impl Machine {
         self.selected = page;
         be.data.insert("Page", Tag::Int(page));
         ctx.world.set_block_entity(be, blocks);
+        // Turning a page gives a redstone pulse.
+        let mut level = crate::level::WorldLevel::new(ctx);
+        let logic = level.logic();
+        mc_tick::redstone::lectern_pulse(&mut level, logic, crate::level::to_pos(self.at));
+        let changes = level.into_changes();
+        let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
         ctx.container_updates
             .lock()
             .expect("container updates lock")

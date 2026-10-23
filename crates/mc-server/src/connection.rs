@@ -990,6 +990,19 @@ async fn play(
                         let held = ctx.inventories.lock().expect("inventories lock")
                             .get(&uuid).and_then(|h| h.held(hand).map(|s| s.item));
                         if held.is_some_and(|i| ctx.items.name(i) == Some("minecraft:written_book")) {
+                            // Selectors and scores in the text are filled in for the reader.
+                            let mut resolved = None;
+                            change_hands(&ctx, uuid, entity_id, |hands| {
+                                let slot = hands.hand_slot(hand);
+                                if let Some(Some(stack)) = hands.slots.get_mut(slot)
+                                    && crate::books::resolve(&ctx, uuid, stack)
+                                {
+                                    resolved = Some((slot, stack.clone()));
+                                }
+                            });
+                            if let Some((slot, stack)) = resolved {
+                                windows.inventory_slot(writer, slot as i16, Some(stack))?;
+                            }
                             writer.queue(&play::OpenBook { hand })?;
                         }
                         crate::vitals::start_using(&ctx, uuid, entity_id, hand, game_mode);

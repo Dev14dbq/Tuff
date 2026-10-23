@@ -38,6 +38,7 @@ use tracing::{info, warn};
 use crate::context::{Event, Pose, ServerContext};
 use crate::tick::{TickControl, lock};
 pub(crate) use functions::tick as run_functions;
+pub(crate) use run::resolve_text;
 
 pub use progress::{known_recipes, load_progress, save_advancements};
 pub use suggest::suggest;
@@ -196,7 +197,22 @@ pub enum Who {
 }
 
 impl Src {
-    fn of(ctx: &ServerContext, source: &Source) -> Self {
+    /// A player's own source with the permission level 2 a book's text is
+    /// resolved with.
+    pub fn for_book(ctx: &ServerContext, uuid: u128, name: &str, pose: Pose) -> Self {
+        let mut src = Self::of(
+            ctx,
+            &Source::Player {
+                uuid,
+                name: name.to_owned(),
+                pose,
+            },
+        );
+        src.level = 2;
+        src
+    }
+
+    pub(crate) fn of(ctx: &ServerContext, source: &Source) -> Self {
         match source {
             Source::Console => {
                 let spawn = ctx.spawn.lock().expect("spawn lock").pos;
