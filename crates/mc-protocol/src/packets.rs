@@ -2375,6 +2375,23 @@ pub mod play {
         }
     }
 
+    /// Block Destruction: the cracks someone (`entity_id`) leaves in a block
+    /// they break; a stage outside 0..10 clears them.
+    #[derive(Clone, Debug)]
+    pub struct BlockDestruction {
+        pub entity_id: i32,
+        pub position: Position,
+        pub stage: i8,
+    }
+    packet!(BlockDestruction, Play, "minecraft:block_destruction");
+    impl Encode for BlockDestruction {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            out.put_position(self.position);
+            out.put_i8(self.stage);
+        }
+    }
+
     /// Set Passengers: everything riding `vehicle`.
     #[derive(Clone, Debug)]
     pub struct SetPassengers {

@@ -729,6 +729,10 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
     let world_age = lock(&ctx.time).age;
     let special = special_multiplier(regional_difficulty(difficulty, world_age, day_time));
     let species = m.species;
+    // Up to one zombie in ten may break doors, by regional difficulty.
+    if matches!(species, Zombie | Husk | ZombieVillager) {
+        m.breaks_doors = m.next_f64() < special * 0.1;
+    }
     match species {
         Sheep => {
             let roll = m.below(10_000);

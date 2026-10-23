@@ -38,6 +38,7 @@ pub(super) fn yaw_to(dx: f64, dz: f64) -> f32 {
 
 pub(super) fn params(m: &Mob) -> PathParams {
     let mut p = PathParams::walker(m.size().1.ceil() as i32);
+    p.doors = m.breaks_doors;
     if m.species.fire_immune() {
         p.water_cost = 8.0;
     }
@@ -127,6 +128,9 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
             amount: 4.0,
             kind: "minecraft:lava",
         });
+    }
+    if m.species == Species::Enderman {
+        super::chores::daylight_teleport(m, b, s, out);
     }
     // Endermen hate water.
     if m.species == Species::Enderman
@@ -437,7 +441,13 @@ pub(super) fn physics(
         let friction = if b.on_ground { 0.546 } else { 0.91 };
         match &input {
             Some(i) => {
-                let speed = m.speed_attr * i.speed;
+                // An enderman after someone is quicker (+0.15).
+                let bonus = if m.species == Species::Enderman && m.target.is_some() {
+                    0.15
+                } else {
+                    0.0
+                };
+                let speed = (m.speed_attr + bonus) * i.speed;
                 let want = speed * speed * GROUND;
                 let control = if b.on_ground || wet { 0.5 } else { 0.1 };
                 b.vel[0] += (i.dir[0] * want - b.vel[0]) * control;
@@ -498,6 +508,7 @@ pub(super) fn physics(
     }
     let climbs = matches!(m.species, Species::Spider | Species::CaveSpider);
     let was_climbing = m.climbing;
+    m.bumped = blocked_h;
     m.climbing = climbs && blocked_h;
     if m.climbing != was_climbing {
         m.dirty = true;

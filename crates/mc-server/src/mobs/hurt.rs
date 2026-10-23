@@ -114,6 +114,16 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     if !m.hurt(amount, h.by.or(h.player.map(|_| -1))) {
         return false;
     }
+    // Hurt by no one (water, a fall, a wall), an enderman mostly teleports.
+    if m.species == Species::Enderman && h.by.is_none() && h.player.is_none() && m.below(10) != 0 {
+        let ground = super::Ground::new(ctx);
+        if mc_entity::mob::random_teleport(e, &ground, 32) {
+            fx::sound(ctx, "entity.enderman.teleport", 5, e.pos, 1.0, 1.0);
+        }
+    }
+    let Kind::Mob(m) = &mut e.kind else {
+        return false;
+    };
     if let Some(p) = h.player {
         m.hurt_by_player = Some((p, 100));
     }
@@ -633,6 +643,18 @@ pub fn die(
     }
     for (item, count, damage) in gear_drops {
         spawn_stack(ctx, pos, item, count, damage);
+    }
+    // An enderman lets its block fall.
+    if let Kind::Mob(m) = &mut e.kind
+        && let Some(state) = m.carried.take()
+        && drops_on
+        && let Some(item) = ctx
+            .data
+            .blocks
+            .block_name(state)
+            .and_then(|n| ctx.items.id(n))
+    {
+        spawn_stack(ctx, pos, item, 1, 0);
     }
     // Big slimes split into smaller ones.
     let Kind::Mob(m) = &mut e.kind else {

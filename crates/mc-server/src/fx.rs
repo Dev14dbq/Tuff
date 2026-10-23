@@ -33,6 +33,7 @@ pub enum Fx {
     Damage(play::DamageEvent),
     Swing(play::SwingAnimation),
     Data(play::SetEntityData),
+    Cracks(play::BlockDestruction),
 }
 
 impl Fx {
@@ -61,6 +62,11 @@ impl Fx {
                 f64::from(p.position.z),
             ]),
             Fx::Particles(p) => Some(p.pos),
+            Fx::Cracks(p) => Some([
+                f64::from(p.position.x),
+                f64::from(p.position.y),
+                f64::from(p.position.z),
+            ]),
             _ => None,
         }
     }

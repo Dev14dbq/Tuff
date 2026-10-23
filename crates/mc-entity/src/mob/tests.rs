@@ -63,6 +63,8 @@ fn senses<'a>(players: &'a [Target], mobs: &'a [Other], tick: u64, sunny: bool) 
         sunny,
         raining: false,
         nether: false,
+        day: sunny,
+        griefing: true,
     }
 }
 

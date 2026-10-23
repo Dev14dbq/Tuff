@@ -14,6 +14,7 @@
 
 mod body;
 mod brains;
+mod chores;
 pub mod goals;
 pub mod species;
 
@@ -155,6 +156,11 @@ pub struct Senses<'a> {
     pub raining: bool,
     /// In the Nether (piglins and hoglins do not turn into zombies there).
     pub nether: bool,
+    /// Bright outside: day, and no thunderstorm (rain is no matter).
+    pub day: bool,
+    /// The `mob_griefing` game rule: zombies break doors, endermen move
+    /// blocks.
+    pub griefing: bool,
 }
 
 impl std::fmt::Debug for Senses<'_> {
@@ -295,8 +301,18 @@ pub enum MobEvent {
     Convert(Species),
     /// Calls the others of its kind nearby on its target.
     Alert { target: i32 },
-    /// A zombie broke this door.
+    /// A zombie broke this door (its top half).
     BreakDoor { cell: Cell },
+    /// A zombie bashes a door: the cracks (0..10, or -1 to clear them).
+    DoorCrack { cell: Cell, stage: i32 },
+    /// The door shakes under a zombie's blows.
+    DoorBash { cell: Cell },
+    /// A villager opens or closes a door.
+    OpenDoor { cell: Cell, open: bool },
+    /// An enderman takes the block at this cell.
+    TakeBlock { cell: Cell },
+    /// An enderman sets its block down here (if the spot takes it).
+    PlaceBlock { cell: Cell },
     /// Moved far at once: clients see a teleport.
     Teleported,
     /// Heals itself (a witch's potion).
@@ -393,8 +409,25 @@ pub struct Mob {
     pub carried: Option<u32>,
     /// Witch: ticks left of drinking.
     pub drinking: i32,
-    /// Pig: ticks of a carrot-on-a-stick boost.
+    /// Pig: ticks of a carrot-on-a-stick boost, and how long the boost
+    /// lasts in all (clients speed the pig up along it).
     pub boost: i32,
+    pub boost_total: i32,
+    /// Zombies: may break doors (`CanBreakDoors`), and walk to them.
+    pub breaks_doors: bool,
+    /// Where the lead it is on is held (set by the world every tick).
+    pub leash: Option<[f64; 3]>,
+    /// Donkeys and mules: the chest on its back and what is in it.
+    pub chest: Option<Vec<Option<mc_protocol::components::ItemStack>>>,
+    /// Enderman: a player looks it in the eyes.
+    pub stared: bool,
+    /// Cat: lying down (on a bed), or sitting on a block it chose.
+    pub lying: bool,
+    pub perched: bool,
+    /// When (its age) it last changed target.
+    pub target_since: u32,
+    /// Walked into something sideways last tick.
+    pub bumped: bool,
     /// A zombie villager's former self: type, profession and level.
     pub villager: Option<(String, Option<String>, i32)>,
     /// Players riding it (entity ids).
@@ -473,6 +506,15 @@ impl Mob {
             carried: None,
             drinking: 0,
             boost: 0,
+            boost_total: 0,
+            breaks_doors: false,
+            leash: None,
+            chest: None,
+            stared: false,
+            lying: false,
+            perched: false,
+            target_since: 0,
+            bumped: false,
             villager: None,
             riders: Vec::new(),
             speed_attr: species.speed(),
@@ -818,10 +860,21 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
     } else {
         // Goals.
         m.look = None;
+        let target = m.target;
         let mut brain = std::mem::take(&mut m.brain);
         goals::run(&mut brain.targets, m, &mut b, s, out);
         goals::run(&mut brain.goals, m, &mut b, s, out);
         m.brain = brain;
+        if m.target != target {
+            m.target_since = m.age;
+            if m.target.is_none() && m.stared {
+                m.stared = false;
+                m.dirty = true;
+            }
+        }
+        if let Some(holder) = m.leash {
+            chores::follow_lead(m, &mut b, holder);
+        }
         let aggressive = m.target.is_some();
         m.set_aggressive(aggressive);
         let input = body::drive(m, &mut b, s);
@@ -875,6 +928,8 @@ pub fn random_teleport(entity: &mut Entity, world: &dyn Terrain, range: i32) -> 
         sunny: false,
         raining: false,
         nether: false,
+        day: false,
+        griefing: false,
     };
     let at = b.pos;
     if goals::teleport_near(m, &mut b, &s, at, range) {
@@ -888,3 +943,6 @@ pub fn random_teleport(entity: &mut Entity, world: &dyn Terrain, range: i32) -> 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod chore_tests;

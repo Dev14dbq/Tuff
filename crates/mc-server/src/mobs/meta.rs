@@ -88,7 +88,7 @@ pub fn type_id(ctx: &ServerContext, species: Species) -> i32 {
 
 fn tame_flags(m: &Mob) -> MetadataValue {
     let mut f = 0;
-    if m.sitting {
+    if m.sitting || m.perched {
         f |= 1;
     }
     if m.is_tame() {
@@ -166,6 +166,7 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             v.push((a, tame_flags(m)));
             v.push((a + 1, MetadataValue::OptUuid(m.owner)));
             v.push((a + 2, MetadataValue::Holder(holder::CAT, m.variant)));
+            v.push((a + 3, MetadataValue::Boolean(m.lying)));
             v.push((a + 5, MetadataValue::VarInt(i32::from(m.collar))));
         }
         Parrot => {
@@ -211,10 +212,8 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
         Spider | CaveSpider => v.push((16, MetadataValue::Byte(i8::from(m.climbing)))),
         Enderman => {
             v.push((16, MetadataValue::OptBlockState(m.carried)));
-            v.push((
-                17,
-                MetadataValue::Boolean(m.anger > 0 && m.target.is_some()),
-            ));
+            v.push((17, MetadataValue::Boolean(m.target.is_some())));
+            v.push((18, MetadataValue::Boolean(m.stared)));
         }
         Witch => v.push((17, MetadataValue::Boolean(m.drinking > 0))),
         Slime | MagmaCube => v.push((18, MetadataValue::VarInt(m.size))),

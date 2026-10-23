@@ -1277,6 +1277,7 @@ async fn play(
                                 Fx::Status(p) => writer.queue(&p)?,
                                 Fx::Equip(p) => writer.queue(&p)?,
                                 Fx::Link(p) => writer.queue(&p)?,
+                                Fx::Cracks(p) => writer.queue(&p)?,
                                 Fx::Passengers(p) => writer.queue(&p)?,
                                 Fx::Motion(p) => writer.queue(&p)?,
                                 Fx::Damage(p) => writer.queue(&p)?,

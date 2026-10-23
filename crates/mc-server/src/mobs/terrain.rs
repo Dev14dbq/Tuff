@@ -4,24 +4,34 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use mc_entity::Collide;
-use mc_entity::nav::{Graze, Liquid, Terrain};
+use mc_entity::nav::{Door, Graze, Liquid, Perch, Terrain};
 use mc_protocol::Position;
 
 use crate::context::ServerContext;
 
-const WATER: u8 = 1;
-const LAVA: u8 = 2;
-const HAZARD: u8 = 4;
-const CLIMB: u8 = 8;
-const PLANT: u8 = 16;
-const GRASS_BLOCK: u8 = 32;
-const SOLID: u8 = 64;
+const WATER: u16 = 1;
+const LAVA: u16 = 2;
+const HAZARD: u16 = 4;
+const CLIMB: u16 = 8;
+const PLANT: u16 = 16;
+const GRASS_BLOCK: u16 = 32;
+const SOLID: u16 = 64;
+/// A door opened by hand (not iron), and whether it is open.
+const DOOR: u16 = 128;
+const DOOR_OPEN: u16 = 256;
+const IRON_DOOR: u16 = 512;
+/// In `#enderman_holdable`.
+const HOLDABLE: u16 = 1024;
+const CHEST: u16 = 2048;
+const LIT_FURNACE: u16 = 4096;
+const BED: u16 = 8192;
 
 /// What each block state is to a mob, worked out once from the block tables.
-fn flags(ctx: &ServerContext) -> &'static [u8] {
-    static TABLE: OnceLock<Vec<u8>> = OnceLock::new();
+fn flags(ctx: &ServerContext) -> &'static [u16] {
+    static TABLE: OnceLock<Vec<u16>> = OnceLock::new();
     TABLE.get_or_init(|| {
         let blocks = &ctx.data.blocks;
+        let holdable = ctx.commands.env.tag("minecraft:block", "minecraft:enderman_holdable");
         (0..blocks.state_count())
             .map(|state| {
                 let name = blocks.block_name(state).unwrap_or("");
@@ -60,6 +70,26 @@ fn flags(ctx: &ServerContext) -> &'static [u8] {
                 }
                 if name == "grass_block" {
                     f |= GRASS_BLOCK;
+                }
+                if name.ends_with("_door") {
+                    f |= if name == "iron_door" { IRON_DOOR } else { DOOR };
+                    if blocks.property(state, "open") == Some("true") {
+                        f |= DOOR_OPEN;
+                    }
+                }
+                if holdable.iter().any(|h| h.trim_start_matches("minecraft:") == name) {
+                    f |= HOLDABLE;
+                }
+                if name == "chest" || name == "trapped_chest" {
+                    f |= CHEST;
+                }
+                if matches!(name, "furnace" | "blast_furnace" | "smoker")
+                    && blocks.property(state, "lit") == Some("true")
+                {
+                    f |= LIT_FURNACE;
+                }
+                if name.ends_with("_bed") {
+                    f |= BED;
                 }
                 f
             })
@@ -102,6 +132,10 @@ fn spans(ctx: &ServerContext) -> &'static [(u8, u8)] {
                         _ => (0, 3),
                     };
                 }
+                // Mobs pass through open doors (vanilla's paths do).
+                if name.ends_with("_door") && prop("open") == Some("true") {
+                    return (0, 0);
+                }
                 if name.ends_with("carpet") {
                     return (0, 1);
                 }
@@ -136,9 +170,9 @@ type Span = (u8, u8);
 /// tick (paths ask about the same cells again and again).
 pub struct Ground<'a> {
     ctx: &'a ServerContext,
-    flags: &'static [u8],
+    flags: &'static [u16],
     spans: &'static [(u8, u8)],
-    cache: RefCell<mc_tick::fast::FastMap<(i32, i32, i32), u8>>,
+    cache: RefCell<mc_tick::fast::FastMap<(i32, i32, i32), u16>>,
     span_cache: RefCell<mc_tick::fast::FastMap<(i32, i32, i32), Span>>,
 }
 
@@ -153,7 +187,7 @@ impl<'a> Ground<'a> {
         }
     }
 
-    fn at(&self, x: i32, y: i32, z: i32) -> u8 {
+    fn at(&self, x: i32, y: i32, z: i32) -> u16 {
         if let Some(&f) = self.cache.borrow().get(&(x, y, z)) {
             return f;
         }
@@ -235,6 +269,31 @@ impl Terrain for Ground<'_> {
 
     fn climbable(&self, x: i32, y: i32, z: i32) -> bool {
         self.at(x, y, z) & CLIMB != 0
+    }
+
+    fn door(&self, x: i32, y: i32, z: i32) -> Option<Door> {
+        let f = self.at(x, y, z);
+        (f & (DOOR | IRON_DOOR) != 0).then_some(Door {
+            by_hand: f & DOOR != 0,
+            open: f & DOOR_OPEN != 0,
+        })
+    }
+
+    fn holdable(&self, x: i32, y: i32, z: i32) -> bool {
+        self.at(x, y, z) & HOLDABLE != 0
+    }
+
+    fn perch(&self, x: i32, y: i32, z: i32) -> Perch {
+        let f = self.at(x, y, z);
+        if f & CHEST != 0 {
+            Perch::Chest
+        } else if f & LIT_FURNACE != 0 {
+            Perch::Furnace
+        } else if f & BED != 0 {
+            Perch::Bed
+        } else {
+            Perch::None
+        }
     }
 
     fn grazing(&self, x: i32, y: i32, z: i32) -> Graze {

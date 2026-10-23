@@ -10,6 +10,7 @@
 //! - [`meta`]: metadata and equipment for clients;
 //! - [`nbt`]: mobs as `/summon` and `/data` see them.
 
+mod blocks;
 mod crowd;
 pub mod eggs;
 pub mod hurt;
@@ -386,6 +387,9 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     let overworld = ctx.world.dimension == "minecraft:overworld";
     let raining = overworld && lock(&ctx.weather).raining;
     let sunny = overworld && sky_darken(day) == 0 && !raining;
+    // Bright outside: rain dims the sky a little, a thunderstorm too much.
+    let bright = overworld && sky_darken(day) < 4 && !lock(&ctx.weather).thundering;
+    let griefing = ctx.game_rule_bool("minecraft:mob_griefing");
     let difficulty = ctx.difficulty();
     let mut out = Outcome::default();
 
@@ -442,6 +446,8 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             sunny,
             raining,
             nether: ctx.world.dimension == "minecraft:the_nether",
+            day: bright,
+            griefing,
         };
         events.clear();
         if ride::steered(e) {
@@ -653,13 +659,12 @@ fn handle(
                 }
             }
         }
-        MobEvent::BreakDoor { cell } => {
-            level.set_block(
-                mc_protocol::Position::new(cell[0], cell[1], cell[2]),
-                ctx.shapes.air(),
-            );
-            fx::sound(ctx, "entity.zombie.break_wooden_door", 5, pos, 1.0, 1.0);
-        }
+        MobEvent::BreakDoor { cell } => blocks::break_door(ctx, level, id, cell),
+        MobEvent::DoorCrack { cell, stage } => blocks::crack(ctx, id, cell, stage),
+        MobEvent::DoorBash { cell } => blocks::bash(ctx, cell),
+        MobEvent::OpenDoor { cell, open } => blocks::open_door(ctx, level, cell, open),
+        MobEvent::TakeBlock { cell } => blocks::take(ctx, level, &mut entities[i], cell),
+        MobEvent::PlaceBlock { cell } => blocks::place(ctx, level, entities, i, cell, targets),
         MobEvent::Teleported => {
             if species == Species::Enderman {
                 fx::sound(ctx, "entity.enderman.teleport", 5, pos, 1.0, 1.0);
