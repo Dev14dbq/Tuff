@@ -431,6 +431,11 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             m.head_yaw,
             m.burning > 0,
         );
+        // Flowing water and lava carry it (not what flies).
+        if !m.species.flies() && !ride::steered(e) {
+            let b = e.aabb();
+            crate::currents::push(ctx, b.min, b.max, &mut e.vel);
+        }
         // Ridden by a player: they steer, it only lives.
         let senses = Senses {
             world: &ground,
