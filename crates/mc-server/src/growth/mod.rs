@@ -432,4 +432,48 @@ mod tests {
         drop(level);
         assert_eq!(name(Position::new(0, -60, 40)).as_deref(), Some("minecraft:cherry_log"));
     }
+
+    #[test]
+    fn vines_creep_down_a_wall_unless_the_rule_is_off() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let wall = ctx.data.blocks.default_state("minecraft:stone").unwrap();
+        let vine = ctx
+            .data
+            .blocks
+            .state_id(
+                "minecraft:vine",
+                &[("north", "false"), ("east", "false"), ("south", "false"), ("west", "true"), ("up", "false")],
+            )
+            .unwrap();
+        let top = Position::new(0, -50, 0);
+        let run = |ticks: usize| {
+            let mut level = WorldLevel::new(&ctx);
+            // A stone wall to the west of a column, three high is enough room.
+            for y in -58..=-44 {
+                level.set_block(Position::new(-1, y, 0), wall);
+                level.set_block(Position::new(0, y, 0), ctx.shapes.air());
+            }
+            level.set_block(top, vine);
+            let logic = level.logic();
+            let mut rng = mc_tick::rng::Rng::new(5);
+            for _ in 0..ticks {
+                let state = mc_tick::Level::block(&level, mc_tick::BlockPos::new(0, -50, 0));
+                mc_tick::random::tick(&mut level, logic, mc_tick::BlockPos::new(0, -50, 0), state, &mut rng);
+                let below = mc_tick::Level::block(&level, mc_tick::BlockPos::new(0, -51, 0));
+                if ctx.data.blocks.block_name(below) == Some("minecraft:vine") {
+                    return true;
+                }
+            }
+            false
+        };
+        assert!(run(400), "the vine never reached the block below");
+        ctx.game_rules
+            .lock()
+            .expect("game rules lock")
+            .set("spread_vines", crate::rules::Value::Bool(false));
+        assert!(!run(400));
+    }
 }

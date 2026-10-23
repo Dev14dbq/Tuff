@@ -44,6 +44,11 @@ pub trait Level {
         fluid == crate::fluids::Fluid::Water
     }
 
+    /// Whether vines spread (game rule `spread_vines`).
+    fn spread_vines(&self) -> bool {
+        true
+    }
+
     /// Water cannot stay here (the Nether): wet sponges dry at once.
     fn ultrawarm(&self) -> bool {
         false

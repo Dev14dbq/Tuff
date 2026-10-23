@@ -502,6 +502,10 @@ impl Level for WorldLevel<'_> {
         })
     }
 
+    fn spread_vines(&self) -> bool {
+        self.ctx.game_rule_bool("minecraft:spread_vines")
+    }
+
     fn ultrawarm(&self) -> bool {
         self.ctx.world.dimension.contains("nether")
     }
