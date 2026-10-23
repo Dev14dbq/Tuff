@@ -222,7 +222,7 @@ fn pickup_into(ctx: &ServerContext, p: Position, kind: Kind, min: [f64; 3], max:
 }
 
 /// What a dispenser does with an item.
-enum Behavior {
+pub(crate) enum Behavior {
     /// It acted: one item is used up (or worn, for tools) and `leftover`
     /// (an empty bucket, a full bottle) comes back, with its components.
     Done {
@@ -235,7 +235,7 @@ enum Behavior {
     Default,
 }
 
-fn done(leftover: Option<i32>) -> Behavior {
+pub(crate) fn done(leftover: Option<i32>) -> Behavior {
     Behavior::Done {
         leftover: leftover.map(|i| ItemStack::new(i, 1)),
         wear: 0,
@@ -251,19 +251,36 @@ fn behavior(
     ctx: &ServerContext,
     level: &mut crate::level::WorldLevel,
     name: &str,
-    front: Position,
+    stack: &ItemStack,
+    p: Position,
+    facing: Dir,
 ) -> Behavior {
+    let (dx, dy, dz) = facing.offset();
+    let front = Position::new(p.x + dx, p.y + dy, p.z + dz);
     let blocks = &ctx.data.blocks;
     let state = ctx.world.block(front, blocks).unwrap_or(0);
     let block = blocks.block_name(state).unwrap_or("");
     let item = |n: &str| ctx.items.id(n);
     match name {
-        "minecraft:water_bucket" | "minecraft:lava_bucket" => {
-            let fluid = if name == "minecraft:water_bucket" {
-                "minecraft:water"
-            } else {
+        "minecraft:water_bucket"
+        | "minecraft:lava_bucket"
+        | "minecraft:cod_bucket"
+        | "minecraft:salmon_bucket"
+        | "minecraft:pufferfish_bucket"
+        | "minecraft:tropical_fish_bucket"
+        | "minecraft:axolotl_bucket"
+        | "minecraft:tadpole_bucket" => {
+            let fluid = if name == "minecraft:lava_bucket" {
                 "minecraft:lava"
+            } else {
+                "minecraft:water"
             };
+            let free = ctx.shapes.is_air(state) || ctx.rules.is_replaceable(state);
+            // In the Nether the water is gone at once; the bucket is empty.
+            if fluid == "minecraft:water" && free && mc_tick::Level::ultrawarm(level) {
+                mc_tick::Level::sponge_dried(level, crate::level::to_pos(front));
+                return done(item("minecraft:bucket"));
+            }
             let placed = if fluid == "minecraft:water"
                 && blocks.property(state, "waterlogged") == Some("false")
             {
@@ -282,7 +299,9 @@ fn behavior(
             }
         }
         "minecraft:bucket" => {
-            let (new, full) = if blocks.property(state, "waterlogged") == Some("true") {
+            let (new, full) = if block == "minecraft:powder_snow" {
+                (ctx.shapes.air(), "minecraft:powder_snow_bucket")
+            } else if blocks.property(state, "waterlogged") == Some("true") {
                 (
                     ctx.shapes.with(state, "waterlogged", "false"),
                     "minecraft:water_bucket",
@@ -301,7 +320,6 @@ fn behavior(
                 _ => Behavior::Default,
             }
         }
-        "minecraft:powder_snow_bucket" => Behavior::Default,
         "minecraft:bone_meal" => {
             if crate::growth::bone_meal(level, front) {
                 done(None)
@@ -310,16 +328,16 @@ fn behavior(
             }
         }
         "minecraft:tnt" => {
+            // It hops up, a little to one side, as lit TNT does.
             let mut tnt = crate::explosion::primed(ctx, front, crate::explosion::TNT_FUSE, None);
             tnt.pos = centre_of(front);
-            tnt.vel = [0.0; 3];
             let _ = ctx
                 .events
                 .send(crate::context::Event::EntitySpawned(tnt.clone()));
             lock(&ctx.entities).push(tnt);
             done(None)
         }
-        "minecraft:flint_and_steel" | "minecraft:fire_charge" => {
+        "minecraft:flint_and_steel" => {
             let lit = block.ends_with("campfire") || block.ends_with("candle");
             let ok = if block == "minecraft:tnt" {
                 crate::explosion::ignite(ctx, level, front, None)
@@ -337,8 +355,6 @@ fn behavior(
             };
             if !ok {
                 Behavior::Failed
-            } else if name == "minecraft:fire_charge" {
-                done(None)
             } else {
                 Behavior::Done {
                     leftover: None,
@@ -359,7 +375,8 @@ fn behavior(
                     wear: 1,
                 }
             } else {
-                Behavior::Default
+                // Else the sheep, mooshrooms and leads in front.
+                crate::dispense::behavior(level, name, stack, p, facing).unwrap_or(Behavior::Default)
             }
         }
         "minecraft:glass_bottle" => {
@@ -369,8 +386,9 @@ fn behavior(
                 level.set_block(front, ctx.shapes.with(state, "honey_level", "0"));
                 return done(item("minecraft:honey_bottle"));
             }
-            let water =
-                block == "minecraft:water" || blocks.property(state, "waterlogged") == Some("true");
+            // A water source (or a waterlogged block).
+            let water = (block == "minecraft:water" && blocks.property(state, "level") == Some("0"))
+                || blocks.property(state, "waterlogged") == Some("true");
             match item("minecraft:potion") {
                 Some(potion) if water => {
                     let mut contents = mc_nbt::Compound::new();
@@ -387,7 +405,7 @@ fn behavior(
                 _ => Behavior::Default,
             }
         }
-        _ => Behavior::Default,
+        _ => crate::dispense::behavior(level, name, stack, p, facing).unwrap_or(Behavior::Default),
     }
 }
 
@@ -475,10 +493,9 @@ fn give_back(ctx: &ServerContext, p: Position, kind: Kind, back: &ItemStack) -> 
 /// A dropper or dispenser fires: a random stocked slot gives one item,
 /// which goes into the container in front (droppers) or out onto the
 /// ground. A dispenser acts on the item first where it has a behaviour
-/// (buckets, bone meal, TNT, flint and steel, fire charges, shears, glass
-/// bottles, armour onto a player in front). Items that need entities the
-/// server does not have yet (boats, minecarts, arrows, eggs, spawn eggs)
-/// are dropped as by a dropper.
+/// (buckets, bone meal, TNT, flint and steel, shears, glass bottles,
+/// armour onto a player in front; the rest in `dispense`), with a click and
+/// smoke.
 pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, dropper: bool) {
     let ctx = level.context();
     let Some((kind, _)) = kind_at(ctx, p) else {
@@ -486,7 +503,10 @@ pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, 
     };
     let slots = containers::slots(ctx, p, kind);
     let filled: Vec<usize> = (0..slots.len()).filter(|&i| slots[i].is_some()).collect();
+    let at = [f64::from(p.x), f64::from(p.y), f64::from(p.z)];
     if filled.is_empty() {
+        // Empty: a higher click.
+        crate::fx::level_event(ctx, 1001, at, 0);
         return;
     }
     let slot = filled[(crate::util::random_u64() % filled.len() as u64) as usize];
@@ -506,16 +526,26 @@ pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, 
         }
         return;
     }
-    let action = if dropper {
+    let name = ctx.items.name(stack.item).unwrap_or("").to_owned();
+    let action = if dropper || name.is_empty() {
         Behavior::Default
-    } else if let Some(name) = ctx.items.name(stack.item).map(str::to_owned) {
-        match behavior(ctx, level, &name, front) {
-            Behavior::Default if dress_player(ctx, front, &stack) => done(None),
-            other => other,
-        }
+    } else if dress_player(ctx, front, &stack) {
+        // Armour goes on a player in front first.
+        done(None)
     } else {
-        Behavior::Default
+        behavior(ctx, level, &name, &stack, p, facing)
     };
+    // The click (a launch for projectiles, a failing click when it could
+    // not act) and smoke out of its face.
+    let sound = match action {
+        Behavior::Failed => Some(1001),
+        Behavior::Default => Some(1000),
+        Behavior::Done { .. } => crate::dispense::sound_of(&name),
+    };
+    if let Some(event) = sound {
+        crate::fx::level_event(ctx, event, at, 0);
+    }
+    crate::fx::level_event(ctx, 2000, at, facing as i32);
     match action {
         Behavior::Failed => {}
         Behavior::Done { leftover, wear } => {

@@ -144,9 +144,9 @@ pub fn survives(
     size: (i32, i32),
 ) -> bool {
     let (dx, dy, dz) = FACES[usize::from(facing)];
-    let ok = cells(cell, facing, size).into_iter().all(|c| {
-        hits::stops(ctx, [c[0] - dx, c[1] - dy, c[2] - dz]) && !hits::stops(ctx, c)
-    });
+    let ok = cells(cell, facing, size)
+        .into_iter()
+        .all(|c| hits::stops(ctx, [c[0] - dx, c[1] - dy, c[2] - dz]) && !hits::stops(ctx, c));
     if !ok {
         return false;
     }
@@ -168,7 +168,10 @@ pub fn survives(
     let mine = probe.aabb();
     !entities.iter().any(|e| {
         let Kind::Hung(h) = &e.kind else { return false };
-        if e.removed || Some(e.id) == me || !matches!(h.decor, Decor::Frame(_) | Decor::Painting { .. }) {
+        if e.removed
+            || Some(e.id) == me
+            || !matches!(h.decor, Decor::Frame(_) | Decor::Painting { .. })
+        {
             return false;
         }
         let b = e.aabb();
@@ -254,7 +257,10 @@ mod tests {
         assert!((c[2] - 0.03125).abs() < 1e-9);
         for facing in 2..6 {
             for size in [(1, 1), (2, 1), (4, 3), (3, 4)] {
-                assert_eq!(cell_of(centre([5, 6, 7], facing, size), facing, size), [5, 6, 7]);
+                assert_eq!(
+                    cell_of(centre([5, 6, 7], facing, size), facing, size),
+                    [5, 6, 7]
+                );
             }
         }
     }
@@ -287,9 +293,15 @@ mod tests {
         assert!(create(&ctx, [2, -60, 1], 3, None).is_none());
         // An item naming a variant puts that one up, if it fits.
         assert!(create(&ctx, [20, -60, 1], 3, Some("minecraft:kebab")).is_none());
-        ctx.world
-            .set_block(Position::new(20, -60, 0), stone, &ctx.data.blocks, &ctx.rules);
+        ctx.world.set_block(
+            Position::new(20, -60, 0),
+            stone,
+            &ctx.data.blocks,
+            &ctx.rules,
+        );
         let e = create(&ctx, [20, -60, 1], 3, Some("minecraft:kebab")).unwrap();
-        assert!(matches!(&e.kind, Kind::Hung(h) if matches!(&h.decor, Decor::Painting { variant, .. } if variant == "minecraft:kebab")));
+        assert!(
+            matches!(&e.kind, Kind::Hung(h) if matches!(&h.decor, Decor::Painting { variant, .. } if variant == "minecraft:kebab"))
+        );
     }
 }

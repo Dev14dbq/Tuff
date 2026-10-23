@@ -24,7 +24,7 @@ pub enum Act {
     Dismount,
 }
 
-fn craft_of(item: &str) -> Option<Craft> {
+pub(crate) fn craft_of(item: &str) -> Option<Craft> {
     let n = item.trim_start_matches("minecraft:");
     Some(if let Some(w) = n.strip_suffix("_chest_boat") {
         Craft::Boat {
