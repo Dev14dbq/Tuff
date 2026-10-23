@@ -109,6 +109,8 @@ pub struct Merchant {
     pub level_up_in: Option<i32>,
     /// Players trading now.
     pub trading: Vec<u128>,
+    /// Its walking about.
+    pub walk: crate::villager::Walk,
 }
 
 impl Merchant {
@@ -126,6 +128,7 @@ impl Merchant {
             restock_day: 0,
             level_up_in: None,
             trading: Vec::new(),
+            walk: Default::default(),
         }
     }
 

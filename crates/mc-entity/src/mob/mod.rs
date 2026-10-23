@@ -384,6 +384,8 @@ pub struct Mob {
     pub sitting: bool,
     /// A horse let a rider stay on (it may also have no owner).
     pub tame: bool,
+    /// Llamas: strength 1 to 5, three chest slots per point.
+    pub strength: i32,
     /// Horses: how close it is to letting the rider stay.
     pub temper: i32,
     /// A variant number as clients know it (cat, parrot, horse, rabbit,
@@ -495,6 +497,7 @@ impl Mob {
             sitting: false,
             tame: false,
             temper: 0,
+            strength: 0,
             variant: 0,
             collar: 14,
             gear: Default::default(),
@@ -551,6 +554,12 @@ impl Mob {
                     mob.set_max_health(hp);
                     mob.jump_strength = 0.5;
                 }
+            }
+            Species::Llama | Species::TraderLlama => {
+                let hp = 15.0 + mob.below(8) as f32 + mob.below(9) as f32;
+                mob.set_max_health(hp);
+                mob.strength = 1 + mob.below(5) as i32;
+                mob.variant = mob.below(4) as i32;
             }
             Species::Slime | Species::MagmaCube => {
                 let size = 1 << mob.below(3);

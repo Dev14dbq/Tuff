@@ -6,7 +6,7 @@
 //! its first two slots mirror what the animal wears.
 
 use mc_entity::mob::{Gear, slot};
-use mc_entity::{Entity, Kind, Species};
+use mc_entity::{Entity, Kind};
 use mc_protocol::packets::play::{ItemStack, SetEquipment};
 
 use crate::containers;
@@ -34,7 +34,13 @@ fn open(ctx: &ServerContext, e: &Entity, outcome: &mut Outcome) {
     let Kind::Mob(m) = &e.kind else {
         return;
     };
-    let columns = if m.chested { COLUMNS } else { 0 };
+    let columns = if !m.chested {
+        0
+    } else if m.species.llama() {
+        m.strength.clamp(1, 5)
+    } else {
+        COLUMNS
+    };
     // What it wears goes in the first two slots (an open window keeps its
     // own).
     if containers::peek_entity(ctx, e.id).is_none() {
@@ -67,13 +73,14 @@ pub fn use_on(
     let Kind::Mob(m) = &mut e.kind else {
         return false;
     };
-    if !m.species.horse() || m.dying.is_some() || m.is_baby() && !m.is_tame() {
+    if !(m.species.horse() || m.species.llama()) || m.dying.is_some() || m.is_baby() && !m.is_tame()
+    {
         return false;
     }
     let held = crate::held::held(ctx, actor.uuid, hand);
     if let Some(h) = &held
         && h.name == "minecraft:chest"
-        && matches!(m.species, Species::Donkey | Species::Mule)
+        && m.species.chested()
         && m.is_tame()
         && !m.chested
     {
@@ -82,7 +89,10 @@ pub fn use_on(
         if actor.game_mode != 1 {
             crate::held::consume(ctx, actor.uuid, h.slot, 1);
         }
-        let sound = format!("entity.{}.chest", m.species.path());
+        let sound = format!(
+            "entity.{}.chest",
+            if m.species.llama() { "llama" } else { m.species.path() }
+        );
         fx::sound(ctx, &sound, fx::category::NEUTRAL, pos, 1.0, 1.0);
         let _ = ctx.events.send(Event::Swing {
             uuid: actor.uuid,
@@ -102,7 +112,7 @@ pub fn use_on(
 pub fn open_riding(ctx: &ServerContext, actor: &Actor, outcome: &mut Outcome) {
     let entities = lock(&ctx.entities);
     if let Some(e) = entities.iter().find(|e| {
-        matches!(&e.kind, Kind::Mob(m) if m.species.horse() && m.riders.contains(&actor.entity_id))
+        matches!(&e.kind, Kind::Mob(m) if m.species.chested() && m.riders.contains(&actor.entity_id))
     }) {
         open(ctx, e, outcome);
     }
@@ -115,7 +125,7 @@ pub fn mirror(ctx: &ServerContext, entities: &mut [Entity]) {
         let Kind::Mob(m) = &mut e.kind else {
             continue;
         };
-        if !m.species.horse() {
+        if !(m.species.horse() || m.species.llama()) {
             continue;
         }
         let Some(slots) = containers::peek_entity(ctx, e.id) else {

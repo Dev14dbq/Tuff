@@ -750,6 +750,11 @@ pub fn breed(
     if let Kind::Mob(m) = &mut baby.kind {
         m.set_baby(true);
         m.variant = if m.below(2) == 0 { va } else { vb };
+        if kind.llama() {
+            // The mean of the parents' strengths, now and then one more.
+            let both = ma.strength + mb.strength;
+            m.strength = ((both + 1) / 2 + i32::from(m.below(10) == 0)).clamp(1, 5);
+        }
         if kind == Species::Sheep {
             let pick = m.below(2) == 0;
             m.set_color(mix_wool(ma.color, mb.color, pick));

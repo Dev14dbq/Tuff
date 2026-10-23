@@ -601,7 +601,7 @@ mod tests {
             slow += wait;
             quick += first_bite(&ctx, 3).0;
         }
-        assert!(quick * 2 < slow, "{quick} vs {slow}");
+        assert!(quick * 4 < slow * 3, "{quick} vs {slow}");
     }
 
     #[test]

@@ -154,6 +154,12 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
                 v.push((a + 1, MetadataValue::Boolean(m.chested)));
             }
         }
+        Llama | TraderLlama => {
+            v.push((a, MetadataValue::Byte(if m.is_tame() { 2 } else { 0 })));
+            v.push((a + 1, MetadataValue::Boolean(m.chested)));
+            v.push((a + 2, MetadataValue::VarInt(m.strength)));
+            v.push((a + 3, MetadataValue::VarInt(m.variant)));
+        }
         Wolf => {
             v.push((a, tame_flags(m)));
             v.push((a + 1, MetadataValue::OptUuid(m.owner)));

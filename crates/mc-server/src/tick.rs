@@ -830,9 +830,35 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                     fuses.push(crate::explosion::fuse_data(entity.id, fuse));
                 }
             }
-            mc_entity::Kind::Merchant(_) => {
-                mc_entity::fall(entity, &Solid(level));
-                entity.vel = [0.0; 3];
+            mc_entity::Kind::Merchant(m) => {
+                // They walk about where a player is near enough to see.
+                let near = players.iter().any(|&(_, _, _, p)| {
+                    (p.x - entity.pos[0]).powi(2) + (p.z - entity.pos[2]).powi(2) < 128.0 * 128.0
+                });
+                let mut ops = Vec::new();
+                if near {
+                    let ground = crate::mobs::Ground::new(ctx);
+                    mc_entity::villager::step(
+                        entity,
+                        &ground,
+                        now as u32,
+                        !m.trading.is_empty(),
+                        &mut ops,
+                    );
+                } else {
+                    mc_entity::fall(entity, &Solid(level));
+                    entity.vel = [0.0; 3];
+                }
+                for op in ops {
+                    match op {
+                        mc_entity::villager::DoorOp::Open(c) => {
+                            crate::mobs::blocks::open_door(ctx, level, c, true)
+                        }
+                        mc_entity::villager::DoorOp::Close(c) => {
+                            crate::mobs::blocks::open_door(ctx, level, c, false)
+                        }
+                    }
+                }
                 fuses.extend(crate::trading::tick(ctx, level, entity, &mut claimed, now));
             }
             // Mobs have their own tick.

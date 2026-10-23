@@ -227,7 +227,7 @@ pub(super) fn brain(species: Species) -> Brain {
             ],
             vec![],
         ),
-        Horse | Donkey | Mule => (
+        Horse | Donkey | Mule | Llama | TraderLlama => (
             vec![
                 float(),
                 panic(1, 1.2),

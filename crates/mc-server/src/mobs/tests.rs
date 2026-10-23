@@ -815,3 +815,74 @@ fn breeding_pays_one_to_seven() {
         lock(&ctx.entities).retain(|e| !matches!(e.kind, Kind::Mob(_)));
     }
 }
+
+#[test]
+fn villagers_open_and_close_wooden_doors_but_not_iron_ones() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let blocks = &ctx.data.blocks;
+    for (name, opens) in [("minecraft:oak_door", true), ("minecraft:iron_door", false)] {
+        let lower = blocks.default_state(name).unwrap();
+        let upper = blocks.with_property(lower, "half", "upper").unwrap();
+        set_state(&ctx, [5, -60, 5], lower);
+        set_state(&ctx, [5, -59, 5], upper);
+        let mut level = WorldLevel::new(&ctx);
+        self::blocks::open_door(&ctx, &mut level, [5, -60, 5], true);
+        drop(level);
+        let state = |y| {
+            let s = ctx
+                .world
+                .block(mc_protocol::Position::new(5, y, 5), &ctx.data.blocks)
+                .unwrap();
+            ctx.data.blocks.property(s, "open") == Some("true")
+        };
+        assert_eq!((state(-60), state(-59)), (opens, opens), "{name}");
+        if opens {
+            let mut level = WorldLevel::new(&ctx);
+            self::blocks::open_door(&ctx, &mut level, [5, -59, 5], false);
+            drop(level);
+            assert_eq!((state(-60), state(-59)), (false, false));
+        }
+    }
+}
+
+#[test]
+fn llamas_are_tamed_with_hay_and_carry_a_chest_and_a_carpet() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = put(&ctx, Species::Llama, [2.5, -60.0, 0.5]);
+    let (strength, health) = with_mob(&ctx, id, |m| (m.strength, m.max_health));
+    assert!((1..=5).contains(&strength) && (15.0..=30.0).contains(&health));
+    let mut actor = actor_at([0.5, -60.0, 0.5]);
+    // A chest does not go on a wild one.
+    hold(&ctx, "minecraft:chest", 1);
+    crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    assert!(!with_mob(&ctx, id, |m| m.chested));
+    // Hay bales tame it in the end (temper reaches 30 after five).
+    hold(&ctx, "minecraft:hay_block", 8);
+    for _ in 0..8 {
+        ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 0.5]), 0);
+        run(&ctx, 1);
+        if with_mob(&ctx, id, |m| m.is_tame()) {
+            break;
+        }
+    }
+    assert_eq!(with_mob(&ctx, id, |m| m.owner), Some(STEVE));
+    hold(&ctx, "minecraft:chest", 1);
+    crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    assert!(with_mob(&ctx, id, |m| m.chested));
+    hold(&ctx, "minecraft:red_carpet", 1);
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert!(with_mob(&ctx, id, |m| m.gear[mc_entity::mob::slot::BODY].is_some()));
+    // Its window has a column of three chest slots for each point of
+    // strength.
+    actor.sneaking = true;
+    let out = crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    assert_eq!(out.open_mount, Some((id, strength)));
+}

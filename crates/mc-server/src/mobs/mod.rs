@@ -10,7 +10,7 @@
 //! - [`meta`]: metadata and equipment for clients;
 //! - [`nbt`]: mobs as `/summon` and `/data` see them.
 
-mod blocks;
+pub(crate) mod blocks;
 pub mod chest;
 mod crowd;
 pub mod eggs;

@@ -346,6 +346,42 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
         send_now(ctx, e);
         return;
     }
+    // Llamas: wheat and hay bales heal and, with luck, tame; a tamed llama
+    // that is fed in love breeds.
+    if species.llama() && food {
+        let hay = name == "minecraft:hay_block";
+        let (heal, temper, grow) = if hay { (10.0, 6, 90) } else { (2.0, 3, 20) };
+        let mut used = false;
+        if m.health < m.max_health {
+            m.health = (m.health + heal).min(m.max_health);
+            used = true;
+        }
+        if m.is_baby() {
+            m.baby_age = (m.baby_age + grow * 20).min(0);
+            used = true;
+        } else if !m.is_tame() {
+            m.temper = (m.temper + temper).min(30);
+            used = true;
+            if (m.below(30) as i32) < m.temper {
+                tame(ctx, e, by);
+                if let Kind::Mob(m) = &mut e.kind {
+                    m.sitting = false;
+                }
+            } else {
+                fx::status(ctx, id, 6);
+            }
+        } else if m.baby_age == 0 && !m.in_love() && hay {
+            m.fall_in_love(Some(by.uuid));
+            used = true;
+        }
+        if used {
+            consume(ctx, by, hslot);
+            fx::sound(ctx, "entity.llama.eat", fx::category::NEUTRAL, pos, 1.0, 1.0);
+            send_now(ctx, e);
+            return;
+        }
+        return;
+    }
     // Horses: food heals and calms; golden food makes tamed ones breed.
     if species.horse() && food {
         let golden = matches!(
@@ -415,6 +451,21 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
             && super::ride::saddle(ctx, e, item)
         {
             consume(ctx, by, hslot);
+        }
+        return;
+    }
+    // A carpet on a tamed llama.
+    if name.ends_with("_carpet") && species.llama() && m.is_tame() && m.gear[slot::BODY].is_none()
+    {
+        if let Some(item) = item {
+            m.gear[slot::BODY] = Some(Gear {
+                item,
+                count: 1,
+                damage: 0,
+            });
+            consume(ctx, by, hslot);
+            fx::sound(ctx, "entity.llama.swag", fx::category::NEUTRAL, pos, 0.5, 1.0);
+            send_equipment(ctx, e);
         }
         return;
     }
