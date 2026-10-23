@@ -113,7 +113,7 @@ pub fn tick(ctx: &ServerContext, entities: &mut [Entity], targets: &[Target]) {
         e.vel[2] += pushes[k][1];
         // More than `limit - 1` others in its space: one tick in four it is
         // crushed.
-        if limit > 0 && crowd[k] > limit as usize - 1 && crate::util::random_u64() % 4 == 0 {
+        if limit > 0 && crowd[k] > limit as usize - 1 && crate::util::random_u64().is_multiple_of(4) {
             hurt::harm(ctx, e, &hurt::Harm::new(6.0, "minecraft:cramming"));
         }
     }

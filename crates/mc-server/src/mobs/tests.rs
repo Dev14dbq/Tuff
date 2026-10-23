@@ -737,3 +737,81 @@ fn a_chest_goes_on_a_tame_donkey_and_its_window_mirrors_the_saddle() {
     assert_eq!(items_of(&ctx, "minecraft:dirt"), 3);
     assert_eq!(items_of(&ctx, "minecraft:chest"), 1);
 }
+
+fn orb_points(ctx: &ServerContext) -> i32 {
+    lock(&ctx.entities)
+        .iter()
+        .map(|e| match e.kind {
+            Kind::ExperienceOrb { value, count } => value * count,
+            _ => 0,
+        })
+        .sum()
+}
+
+fn clear_orbs(ctx: &ServerContext) {
+    lock(&ctx.entities).retain(|e| !matches!(e.kind, Kind::ExperienceOrb { .. }));
+}
+
+/// The experience a mob's death gives when a player did it.
+fn kill_xp(ctx: &ServerContext, species: Species, baby: bool) -> i32 {
+    clear_orbs(ctx);
+    let id = put(ctx, species, [0.5, -60.0, 0.5]);
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.set_baby(baby);
+    }
+    ctx.mobs.hit(ctx.dim, id, steve([0.5, -60.0, 0.5]), blow(1000.0, [0.5, -60.0, 0.5]));
+    run(ctx, 1);
+    orb_points(ctx)
+}
+
+#[test]
+fn kills_pay_the_vanilla_experience() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    ctx.difficulty.store(2, std::sync::atomic::Ordering::Relaxed);
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    for _ in 0..5 {
+        assert!((1..=3).contains(&kill_xp(&ctx, Species::Cow, false)));
+        assert_eq!(kill_xp(&ctx, Species::Cow, true), 0, "calves pay nothing");
+        assert_eq!(kill_xp(&ctx, Species::Creeper, false), 5);
+        assert_eq!(kill_xp(&ctx, Species::Blaze, false), 10);
+        // A baby zombie pays 12 (2.5 times 5, rounded down).
+        assert_eq!(kill_xp(&ctx, Species::Zombie, true), 12);
+    }
+    // A slime pays its size.
+    clear_orbs(&ctx);
+    let id = put(&ctx, Species::Slime, [0.5, -60.0, 0.5]);
+    let size = with_mob(&ctx, id, |m| m.size);
+    ctx.mobs.hit(ctx.dim, id, steve([0.5, -60.0, 0.5]), blow(1000.0, [0.5, -60.0, 0.5]));
+    run(&ctx, 1);
+    assert_eq!(orb_points(&ctx), size);
+}
+
+#[test]
+fn breeding_pays_one_to_seven() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    for _ in 0..8 {
+        clear_orbs(&ctx);
+        let a = put(&ctx, Species::Cow, [0.5, -60.0, 0.5]);
+        let b = put(&ctx, Species::Cow, [1.0, -60.0, 0.5]);
+        for id in [a, b] {
+            if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+                && let Kind::Mob(m) = &mut e.kind
+            {
+                m.fall_in_love(Some(STEVE));
+            }
+        }
+        run(&ctx, 200);
+        let xp = orb_points(&ctx);
+        assert!((1..=7).contains(&xp), "bred for {xp}");
+        lock(&ctx.entities).retain(|e| !matches!(e.kind, Kind::Mob(_)));
+    }
+}

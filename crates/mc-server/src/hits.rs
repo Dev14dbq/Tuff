@@ -325,6 +325,8 @@ pub fn use_entity(
         if d2 > 36.0 {
             return outcome;
         }
+        let handled = matches!(e.kind, Kind::Mob(_))
+            && crate::mobs::chest::use_on(ctx, &actor, e, hand, attack, &mut outcome);
         match &e.kind {
             Kind::Hung(_) => {
                 crate::decor::interact(ctx, actor, e, hand, attack, at, &mut outcome, &mut fresh);
@@ -332,11 +334,7 @@ pub fn use_entity(
             Kind::Vehicle(_) => {
                 crate::vehicles::interact(ctx, actor, e, hand, attack, &mut outcome, &mut fresh);
             }
-            Kind::Mob(_) => {
-                if !crate::mobs::chest::use_on(ctx, &actor, e, hand, attack, &mut outcome) {
-                    crate::mobs::clicked(ctx, &actor, entity_id, hand, attack);
-                }
-            }
+            Kind::Mob(_) if !handled => crate::mobs::clicked(ctx, &actor, entity_id, hand, attack),
             _ => {}
         }
     }

@@ -430,3 +430,41 @@ fn tick_one(ctx: &ServerContext, p: Position, before: Progress) -> Option<Progre
     let busy = progress.lit > 0 || progress.cook > 0 || (can_cook && slots[1].is_some());
     busy.then_some(progress)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn taking_the_output_pays_the_smelts_once() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let Some(ctx) = mc_data::McData::load(&dir)
+            .ok()
+            .and_then(|data| ServerContext::new(crate::Config::new(dir), data).ok())
+        else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let recipe = ctx
+            .recipes
+            .cooking
+            .iter()
+            .find(|r| r.kind == "minecraft:smelting" && r.xp >= 1.0)
+            .expect("a smelting recipe worth a point");
+        let p = Position::new(3, -60, 3);
+        let furnace = ctx.data.blocks.default_state("minecraft:furnace").unwrap();
+        ctx.world
+            .set_block(p, furnace, &ctx.data.blocks, &ctx.rules)
+            .unwrap();
+        for _ in 0..10 {
+            used_recipe(&ctx, p, "minecraft:furnace", &recipe.name);
+        }
+        let points = collect_xp(&ctx, p);
+        let owed = recipe.xp * 10.0;
+        assert!(
+            points == owed.floor() as i32 || points == owed.ceil() as i32,
+            "{points} for {owed}"
+        );
+        assert_eq!(collect_xp(&ctx, p), 0, "paid twice");
+    }
+}
