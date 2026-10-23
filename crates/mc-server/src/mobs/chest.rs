@@ -128,6 +128,9 @@ pub fn mirror(ctx: &ServerContext, entities: &mut [Entity]) {
         if !(m.species.horse() || m.species.llama()) {
             continue;
         }
+        if m.chested {
+            sync_items(ctx, e.id, m);
+        }
         let Some(slots) = containers::peek_entity(ctx, e.id) else {
             continue;
         };
@@ -156,6 +159,48 @@ pub fn mirror(ctx: &ServerContext, entities: &mut [Entity]) {
                 }),
             );
         }
+    }
+}
+
+/// Keeps the chest's saved list and the server's container for it the
+/// same: a list read from NBT goes in once, afterwards the container is
+/// what counts. Saved slots count from the chest's first (the window has the
+/// saddle and armor ahead of it).
+fn sync_items(ctx: &ServerContext, id: i32, m: &mut mc_entity::Mob) {
+    let all = 2 + 3 * COLUMNS as usize;
+    if !m.chest_loaded {
+        m.chest_loaded = true;
+        if let Some(mc_nbt::Tag::List(list)) = &m.chest_items {
+            let mut data = mc_nbt::Compound::new();
+            let shifted = list
+                .iter()
+                .filter_map(|t| match t {
+                    mc_nbt::Tag::Compound(c) => {
+                        let mut c = c.clone();
+                        if let Some(mc_nbt::Tag::Byte(s)) = c.get("Slot") {
+                            let s = *s + 2;
+                            c.insert("Slot", mc_nbt::Tag::Byte(s));
+                        }
+                        Some(mc_nbt::Tag::Compound(c))
+                    }
+                    _ => None,
+                })
+                .collect();
+            data.insert("Items", mc_nbt::Tag::List(shifted));
+            lock(&ctx.entity_items).insert(id, data);
+        }
+    }
+    let slots = containers::peek_entity(ctx, id).or_else(|| {
+        let data = lock(&ctx.entity_items).get(&id).cloned()?;
+        Some(containers::read_items(ctx, &data, all))
+    });
+    if let Some(mut slots) = slots {
+        slots.drain(..2.min(slots.len()));
+        let mut chest = containers::write_items(ctx, &slots);
+        if let mc_nbt::Tag::List(list) = &mut chest {
+            list.retain(|t| matches!(t, mc_nbt::Tag::Compound(_)));
+        }
+        m.chest_items = Some(chest);
     }
 }
 

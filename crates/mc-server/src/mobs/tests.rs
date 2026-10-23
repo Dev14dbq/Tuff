@@ -886,3 +886,93 @@ fn llamas_are_tamed_with_hay_and_carry_a_chest_and_a_carpet() {
     let out = crate::hits::use_entity(&ctx, actor, id, 0, false, None);
     assert_eq!(out.open_mount, Some((id, strength)));
 }
+
+#[test]
+fn a_chest_and_its_items_round_trip_through_nbt() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let mut nbt = mc_nbt::Compound::new();
+    nbt.insert("ChestedHorse", mc_nbt::Tag::Byte(1));
+    let mut item = mc_nbt::Compound::new();
+    item.insert("Slot", mc_nbt::Tag::Byte(3));
+    item.insert("id", mc_nbt::Tag::String("minecraft:dirt".into()));
+    item.insert("count", mc_nbt::Tag::Int(5));
+    nbt.insert("Items", mc_nbt::Tag::List(vec![mc_nbt::Tag::Compound(item)]));
+    nbt.insert("CanBreakDoors", mc_nbt::Tag::Byte(1));
+    let mut e = new_mob(&ctx, Species::Donkey, [2.5, -60.0, 0.5]);
+    let Kind::Mob(m) = &mut e.kind else { panic!() };
+    nbt::apply(&ctx, m, &nbt);
+    assert!(m.chested && !m.breaks_doors, "doors are for zombies");
+    let id = e.id;
+    lock(&ctx.entities).push(e);
+    run(&ctx, 2);
+    // The saved slot 3 is window slot 5.
+    let key = crate::containers::entity_key(id);
+    let kind = crate::containers::Kind {
+        entity: "",
+        slots: 17,
+        menu: "",
+        title: "",
+    };
+    let slots = crate::containers::open(&ctx, STEVE, key, kind);
+    let dirt = ctx.items.id("minecraft:dirt").unwrap();
+    assert_eq!(slots[5].as_ref().map(|s| (s.item, s.count)), Some((dirt, 5)));
+    // And it is written out the same way.
+    run(&ctx, 1);
+    let mut c = mc_nbt::Compound::new();
+    let m = with_mob(&ctx, id, |m| m.clone());
+    nbt::write(&ctx, &m, &mut c);
+    let Some(mc_nbt::Tag::List(list)) = c.get("Items") else {
+        panic!("no Items")
+    };
+    assert_eq!(list.len(), 1);
+    let mc_nbt::Tag::Compound(first) = &list[0] else { panic!() };
+    assert_eq!(first.get("Slot"), Some(&mc_nbt::Tag::Byte(3)));
+    assert_eq!(c.get("ChestedHorse"), Some(&mc_nbt::Tag::Byte(1)));
+    // A zombie keeps its door breaking.
+    let mut z = new_mob(&ctx, Species::Zombie, [0.0; 3]);
+    let Kind::Mob(zm) = &mut z.kind else { panic!() };
+    nbt::apply(&ctx, zm, &nbt);
+    assert!(zm.breaks_doors);
+    let mut c = mc_nbt::Compound::new();
+    nbt::write(&ctx, zm, &mut c);
+    assert_eq!(c.get("CanBreakDoors"), Some(&mc_nbt::Tag::Byte(1)));
+}
+
+#[test]
+fn a_door_a_villager_left_open_shuts_once_nobody_is_near() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [20.5, -60.0, 20.5]);
+    let blocks = &ctx.data.blocks;
+    let lower = blocks.default_state("minecraft:oak_door").unwrap();
+    let upper = blocks.with_property(lower, "half", "upper").unwrap();
+    set_state(&ctx, [5, -60, 5], lower);
+    set_state(&ctx, [5, -59, 5], upper);
+    let mut level = WorldLevel::new(&ctx);
+    self::blocks::open_door(&ctx, &mut level, [5, -60, 5], true);
+    drop(level);
+    let open = |ctx: &ServerContext| {
+        let s = ctx
+            .world
+            .block(mc_protocol::Position::new(5, -60, 5), &ctx.data.blocks)
+            .unwrap();
+        ctx.data.blocks.property(s, "open") == Some("true")
+    };
+    // Someone standing in the doorway keeps it open.
+    let pig = put(&ctx, Species::Pig, [5.5, -60.0, 5.5]);
+    if let Some(Kind::Mob(m)) = lock(&ctx.entities).iter_mut().find(|e| e.id == pig).map(|e| &mut e.kind) {
+        m.no_ai = true;
+    }
+    run(&ctx, 60);
+    assert!(open(&ctx));
+    lock(&ctx.entities).retain(|e| e.id != pig);
+    run(&ctx, 40);
+    assert!(!open(&ctx));
+    assert!(lock(&ctx.door_watch).is_empty());
+}

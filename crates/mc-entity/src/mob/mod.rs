@@ -422,6 +422,11 @@ pub struct Mob {
     /// Donkeys and mules: a chest on the back (its items are a container
     /// of the server's, keyed by the entity).
     pub chested: bool,
+    /// The chest's `Items` as saved (slots counted from the chest's first),
+    /// kept up to date from the window's container; set from NBT before it
+    /// is first loaded into one.
+    pub chest_items: Option<mc_nbt::Tag>,
+    pub chest_loaded: bool,
     /// Enderman: a player looks it in the eyes.
     pub stared: bool,
     /// Cat: lying down (on a bed), or sitting on a block it chose.
@@ -514,6 +519,8 @@ impl Mob {
             breaks_doors: false,
             leash: None,
             chested: false,
+            chest_items: None,
+            chest_loaded: false,
             stared: false,
             lying: false,
             perched: false,

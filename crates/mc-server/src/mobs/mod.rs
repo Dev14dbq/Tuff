@@ -396,6 +396,9 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
 
     apply_pending(ctx, &mut entities, pending, now);
     crate::decor::leash::tell_mobs(ctx, &mut entities);
+    if now % 20 == 0 {
+        blocks::close_idle(ctx, level, &entities, &targets);
+    }
     chest::mirror(ctx, &mut entities);
 
     let ground = Ground::new(ctx);

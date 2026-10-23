@@ -198,6 +198,24 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
     if let Some(v) = int(nbt, "Temper") {
         m.temper = v;
     }
+    if let Some(v) = flag(nbt, "ChestedHorse") {
+        m.chested = v && s.chested();
+    }
+    if let Some(items @ Tag::List(_)) = nbt.get("Items") {
+        m.chest_items = Some(items.clone());
+        m.chest_loaded = false;
+    }
+    if s.llama() {
+        if let Some(v) = int(nbt, "Strength") {
+            m.strength = v.clamp(1, 5);
+        }
+        if let Some(v) = int(nbt, "Variant") {
+            m.variant = v.clamp(0, 3);
+        }
+    }
+    if let Some(v) = flag(nbt, "CanBreakDoors") {
+        m.breaks_doors = v && s.zombie();
+    }
     if let Some(v) = int(nbt, "AngerTime") {
         m.anger = v.max(0);
     }
@@ -354,9 +372,25 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
         }
         _ => {}
     }
-    if s.horse() {
+    if s.horse() || s.llama() {
         c.insert("Tame", Tag::Byte(i8::from(m.is_tame())));
         c.insert("Temper", Tag::Int(m.temper));
+    }
+    if s.chested() {
+        c.insert("ChestedHorse", Tag::Byte(i8::from(m.chested)));
+        if m.chested {
+            c.insert(
+                "Items",
+                m.chest_items.clone().unwrap_or_else(|| Tag::List(Vec::new())),
+            );
+        }
+    }
+    if s.llama() {
+        c.insert("Strength", Tag::Int(m.strength));
+        c.insert("Variant", Tag::Int(m.variant));
+    }
+    if s.zombie() {
+        c.insert("CanBreakDoors", Tag::Byte(i8::from(m.breaks_doors)));
     }
     if m.anger > 0 {
         c.insert("AngerTime", Tag::Int(m.anger));

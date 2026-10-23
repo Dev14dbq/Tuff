@@ -110,6 +110,13 @@ pub fn open_door(ctx: &ServerContext, level: &mut WorldLevel, cell: Cell, open: 
     };
     let logic = level.logic();
     mc_tick::updates::set_block(level, logic, to_pos(pos(cell)), to, mc_tick::updates::Flags::ALL);
+    {
+        let mut watch = crate::tick::lock(&ctx.door_watch);
+        watch.retain(|c| *c != cell);
+        if open {
+            watch.push(cell);
+        }
+    }
     let sound = format!(
         "block.{}.{}",
         door_sounds(&name),
@@ -117,6 +124,38 @@ pub fn open_door(ctx: &ServerContext, level: &mut WorldLevel, cell: Cell, open: 
     );
     let pitch = crate::hits::rnd() as f32 * 0.1 + 0.9;
     fx::sound(ctx, &sound, fx::category::BLOCKS, centre(cell), 1.0, pitch);
+}
+
+/// Once a second: doors a villager opened shut again when nothing stands
+/// by them (the villager may be gone, or far off by now).
+pub fn close_idle(
+    ctx: &ServerContext,
+    level: &mut WorldLevel,
+    entities: &[Entity],
+    players: &[mc_entity::mob::Target],
+) {
+    let watched: Vec<Cell> = crate::tick::lock(&ctx.door_watch).clone();
+    for cell in watched {
+        let near = |p: [f64; 3]| {
+            (p[0] - f64::from(cell[0]) - 0.5).abs() < 1.6
+                && (p[2] - f64::from(cell[2]) - 0.5).abs() < 1.6
+                && p[1] > f64::from(cell[1]) - 2.0
+                && p[1] < f64::from(cell[1]) + 2.0
+        };
+        let busy = entities
+            .iter()
+            .any(|e| !e.removed && matches!(e.kind, Kind::Mob(_) | Kind::Merchant(_)) && near(e.pos))
+            || players.iter().any(|p| p.present && near(p.pos));
+        let is_open = ctx
+            .world
+            .block(pos(cell), &ctx.data.blocks)
+            .is_some_and(|s| ctx.data.blocks.property(s, "open") == Some("true"));
+        if !is_open {
+            crate::tick::lock(&ctx.door_watch).retain(|c| *c != cell);
+        } else if !busy {
+            open_door(ctx, level, cell, false);
+        }
+    }
 }
 
 /// An enderman takes the block at `cell` into its hands (as the block's
