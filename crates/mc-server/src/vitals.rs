@@ -59,6 +59,12 @@ pub struct Vitals {
     /// Ticks since a player hit them (for "doomed to fall by").
     pub since_attacked: i32,
     pub last_attacker: Option<String>,
+    /// Ticks left burning (`Fire`), below 0 the time fire takes to catch.
+    pub fire: i32,
+    /// Gliding with an elytra.
+    pub gliding: bool,
+    /// What the enchantments of the gear do over time.
+    pub worn: crate::worn::Worn,
 }
 
 /// Points from one experience level to the next (wiki, "Experience").
@@ -136,6 +142,9 @@ impl Default for Vitals {
             air: crate::damage::MAX_AIR,
             since_attacked: i32::MAX,
             last_attacker: None,
+            fire: -20,
+            gliding: false,
+            worn: crate::worn::Worn::default(),
         }
     }
 }
@@ -450,6 +459,9 @@ pub fn try_hurt_by_entity(
         if v.dead || crate::effects::fire_proof(&v.effects, damage_type) {
             return None;
         }
+        if crate::enchant_effects::immune(ctx, uuid, damage_type) {
+            return None;
+        }
         // While immune only a harder hit gets through, by what it adds.
         let amount = if v.immune > 0 && !bypass {
             if amount <= v.last_hurt {
@@ -674,6 +686,11 @@ pub fn tick(ctx: &ServerContext) {
             .block(eye, &ctx.data.blocks)
             .and_then(|s| ctx.data.blocks.block_name(s))
             == Some("minecraft:water");
+        if block == Some("minecraft:lava") && game_mode != 3 {
+            crate::worn::ignite(ctx, uuid, 300);
+        } else if matches!(block, Some("minecraft:fire" | "minecraft:soul_fire")) && game_mode != 3 {
+            crate::worn::in_fire(ctx, uuid);
+        }
         let mut drowns = false;
         let mut air_change = None;
         // Respiration: each tick under water keeps the air with a chance of

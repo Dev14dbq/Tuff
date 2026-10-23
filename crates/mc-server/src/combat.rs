@@ -395,6 +395,9 @@ pub fn hurt_player(ctx: &ServerContext, uuid: u128, hit: &Hit) -> Option<bool> {
         hit.attacker,
         hit.by,
     )?;
+    if let Some(by) = hit.by {
+        thorns(ctx, uuid, by, mode);
+    }
     if !crate::damage::bypasses_armor(hit.kind) && mode != 1 {
         let wear = ((hit.amount / 4.0).floor() as i32).max(1);
         let worn: Vec<usize> = {
@@ -433,6 +436,42 @@ pub fn hurt_player(ctx: &ServerContext, uuid: u128, hit: &Hit) -> Option<bool> {
     Some(died)
 }
 
+/// Hurts the entity with this id, a player or a mob, by `amount` of
+/// `kind`; `by` is the player behind it.
+pub fn hurt_entity(ctx: &ServerContext, entity_id: i32, amount: f32, kind: &str, by: Option<u128>) {
+    let player = lock(&ctx.players)
+        .values()
+        .find(|p| p.entity_id == entity_id && p.dimension == ctx.world.dimension)
+        .map(|p| p.profile.uuid);
+    match player {
+        Some(uuid) => {
+            let (name, direct) = by
+                .and_then(|b| lock(&ctx.players).get(&b).map(|p| (p.profile.name.clone(), p.entity_id)))
+                .unzip();
+            let key = format!("death.attack.{}", kind.trim_start_matches("minecraft:"));
+            crate::vitals::try_hurt_by_entity(ctx, uuid, amount, kind, &key, name.as_deref(), direct);
+        }
+        None => ctx.mobs.harm(ctx.dim, entity_id, amount, kind, by),
+    }
+}
+
+/// Thorns: the victim's armor hurts whoever hit them, and wears for it.
+fn thorns(ctx: &ServerContext, victim: u128, attacker: i32, mode: i32) {
+    let gear = crate::enchant_effects::gear(ctx, victim);
+    let s = crate::enchant_effects::Situation {
+        this: Some("minecraft:player"),
+        ..Default::default()
+    };
+    for p in crate::enchant_effects::post_attack(ctx, &gear, "victim", "attacker", &s) {
+        if let Some((kind, amount)) = &p.damage {
+            hurt_entity(ctx, attacker, *amount, kind, Some(victim));
+        }
+        if p.wear > 0 && mode != 1 {
+            crate::held::wear(ctx, victim, p.slot, p.wear);
+        }
+    }
+}
+
 /// A player hits another player in melee.
 pub fn player_hits_player(
     ctx: &ServerContext,
@@ -458,6 +497,9 @@ pub fn player_hits_player(
     let landed = hurt_player(ctx, victim, &hit).is_some();
     blow_sound(ctx, &blow, [at.x, at.y, at.z], landed);
     if landed {
+        if blow.fire > 0 {
+            crate::worn::ignite(ctx, victim, blow.fire * 20);
+        }
         note_hit(ctx, attacker.uuid, victim_id);
         wear_weapon(ctx, attacker.uuid, attacker.game_mode);
     }

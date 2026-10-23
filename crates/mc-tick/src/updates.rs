@@ -196,7 +196,7 @@ fn powered_tnt(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
 
 /// A neighbour-changed update to the block at `p` from `from`: fluids and
 /// redstone components react.
-pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: BlockPos) {
+pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, from: BlockPos) {
     if crate::support::neighbor_changed(level, ctx, p) {
         return;
     }
@@ -208,6 +208,7 @@ pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos, _from: Blo
     crate::hopper::neighbor_changed(level, ctx, p);
     crate::pistons::check(level, ctx, p);
     crate::command_block::neighbor_changed(level, ctx, p);
+    crate::frosted_ice::neighbor_changed(level, ctx, p, from);
     let state = level.block(p);
     gravity::wake(level, ctx, p, state);
 }
@@ -224,6 +225,7 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     crate::composter::block_tick(level, ctx, p, kind);
     crate::tripwire::block_tick(level, ctx, p, kind);
     crate::command_block::block_tick(level, ctx, p, kind);
+    crate::frosted_ice::block_tick(level, ctx, p, kind);
     let state = level.block(p);
     if ctx.shapes.block_index(state) == kind
         && crate::support::check(ctx, state) == crate::support::Check::Tick

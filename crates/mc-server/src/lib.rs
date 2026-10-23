@@ -64,7 +64,10 @@ mod util;
 mod vehicles;
 mod vitals;
 mod weather;
+#[cfg(test)]
+mod testkit;
 mod world;
+mod worn;
 mod xp;
 
 use std::future::Future;

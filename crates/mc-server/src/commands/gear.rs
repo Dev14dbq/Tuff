@@ -8,7 +8,7 @@ use mc_protocol::text::translate;
 use super::item::entity_place;
 use super::run::err;
 use super::{Result, Run};
-use crate::context::Event;
+use crate::context::{Event, ServerContext};
 use crate::tick::lock;
 
 pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
@@ -228,10 +228,20 @@ const OPERATIONS: [&str; 3] = ["add_value", "add_multiplied_base", "add_multipli
 
 /// All modifiers on an attribute of a player: effects', creative mode's
 /// and those `/attribute` added.
-fn all_modifiers(r: &Run, uuid: u128, name: &str, game_mode: i32) -> Vec<AttributeModifier> {
-    let mut mods = lock(&r.ctx.vitals)
+pub fn all_modifiers(
+    ctx: &ServerContext,
+    uuid: u128,
+    name: &str,
+    game_mode: i32,
+) -> Vec<AttributeModifier> {
+    let full = format!("minecraft:{name}");
+    let mut mods = lock(&ctx.vitals)
         .get(&uuid)
-        .map(|v| v.effects.modifiers_named(&format!("minecraft:{name}")))
+        .map(|v| {
+            let mut m = v.effects.modifiers_named(&full);
+            m.extend(v.worn.modifiers(&full).iter().cloned());
+            m
+        })
         .unwrap_or_default();
     if game_mode == 1 {
         let creative = match name {
@@ -247,11 +257,7 @@ fn all_modifiers(r: &Run, uuid: u128, name: &str, game_mode: i32) -> Vec<Attribu
             });
         }
     }
-    if let Some(state) = lock(&r.ctx.rare)
-        .attributes
-        .get(&uuid)
-        .and_then(|a| a.get(name))
-    {
+    if let Some(state) = lock(&ctx.rare).attributes.get(&uuid).and_then(|a| a.get(name)) {
         mods.extend(
             state
                 .modifiers
@@ -264,6 +270,37 @@ fn all_modifiers(r: &Run, uuid: u128, name: &str, game_mode: i32) -> Vec<Attribu
         );
     }
     mods
+}
+
+/// A player's attribute (`sneaking_speed`) as clients get it: its base and
+/// every modifier on it.
+pub fn snapshot(ctx: &ServerContext, uuid: u128, name: &str) -> Option<AttributeSnapshot> {
+    let name = name.trim_start_matches("minecraft:");
+    let &(_, default, _, _) = ATTRIBUTES.iter().find(|a| a.0 == name)?;
+    let mode = lock(&ctx.players).get(&uuid).map_or(0, |p| p.game_mode);
+    let base = lock(&ctx.rare)
+        .attributes
+        .get(&uuid)
+        .and_then(|a| a.get(name))
+        .and_then(|s| s.base)
+        .unwrap_or(default);
+    Some(AttributeSnapshot {
+        attribute: ctx
+            .data
+            .builtin
+            .id("minecraft:attribute", &format!("minecraft:{name}"))?,
+        base,
+        modifiers: all_modifiers(ctx, uuid, name, mode),
+    })
+}
+
+/// A player's attribute value with every modifier.
+pub fn value(ctx: &ServerContext, uuid: u128, name: &str) -> f64 {
+    let short = name.trim_start_matches("minecraft:");
+    let Some(&(_, _, max, min)) = ATTRIBUTES.iter().find(|a| a.0 == short) else {
+        return 0.0;
+    };
+    snapshot(ctx, uuid, short).map_or(0.0, |s| compute(s.base, &s.modifiers, max, min))
 }
 
 fn compute(base: f64, mods: &[AttributeModifier], max: f64, min: f64) -> f64 {
@@ -322,7 +359,7 @@ fn attribute(r: &mut Run, path: &[&str]) -> Result<i32> {
     let rest = &path[3..];
     let result = match rest {
         ["get", ..] => {
-            let v = compute(base(r), &all_modifiers(r, uuid, &name, mode), max, min);
+            let v = compute(base(r), &all_modifiers(r.ctx, uuid, &name, mode), max, min);
             r.success(
                 translate(
                     "commands.attribute.value.get.success",
@@ -391,7 +428,7 @@ fn attribute(r: &mut Run, path: &[&str]) -> Result<i32> {
                 .iter()
                 .position(|o| path.last() == Some(o))
                 .unwrap_or(0) as i32;
-            let have = all_modifiers(r, uuid, &name, mode)
+            let have = all_modifiers(r.ctx, uuid, &name, mode)
                 .iter()
                 .any(|m| m.id == id);
             if have {
@@ -447,7 +484,7 @@ fn attribute(r: &mut Run, path: &[&str]) -> Result<i32> {
         }
         ["modifier", "value", "get", ..] => {
             let id = full_id(&r.string("id").unwrap_or_default());
-            let Some(m) = all_modifiers(r, uuid, &name, mode)
+            let Some(m) = all_modifiers(r.ctx, uuid, &name, mode)
                 .into_iter()
                 .find(|m| m.id == id)
             else {
@@ -493,7 +530,7 @@ fn send_attribute(r: &mut Run, uuid: u128, name: &str, default: f64, mode: i32) 
         .builtin
         .id("minecraft:attribute", &format!("minecraft:{name}"))
         .unwrap_or(0);
-    let modifiers = all_modifiers(r, uuid, name, mode);
+    let modifiers = all_modifiers(r.ctx, uuid, name, mode);
     r.out.events.push(Event::Attributes {
         uuid,
         packet: UpdateAttributes {

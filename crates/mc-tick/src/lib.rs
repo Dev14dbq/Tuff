@@ -9,6 +9,7 @@ pub mod facts;
 pub mod fast;
 pub mod fire;
 pub mod fluids;
+pub mod frosted_ice;
 pub mod gravity;
 pub mod hopper;
 pub mod leaves;

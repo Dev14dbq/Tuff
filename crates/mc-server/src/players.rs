@@ -244,6 +244,9 @@ impl Store {
         if let Some(Tag::Float(a)) = root.get("AbsorptionAmount") {
             vitals.absorption = *a;
         }
+        if let Some(Tag::Short(f)) = root.get("Fire") {
+            vitals.fire = i32::from(*f);
+        }
         vitals.dead = vitals.health <= 0.0;
         let mut ender = vec![None; 27];
         if let Some(Tag::List(items)) = root.get("EnderItems") {
@@ -359,6 +362,7 @@ impl Store {
         root.insert("XpP", Tag::Float(saved.vitals.xp_progress));
         root.insert("XpTotal", Tag::Int(saved.vitals.xp_total));
         root.insert("AbsorptionAmount", Tag::Float(saved.vitals.absorption));
+        root.insert("Fire", Tag::Short(saved.vitals.fire.clamp(-32768, 32767) as i16));
         match &saved.extra.respawn {
             Some(r) => {
                 root.insert("respawn", Tag::Compound(r.to_nbt(true)));

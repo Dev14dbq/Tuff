@@ -77,6 +77,13 @@ pub struct Actor {
 enum Pending {
     Hit { target: i32, by: Actor, blow: Blow },
     Use { target: i32, by: Actor, hand: i32 },
+    /// Damage from something other than a blow (Thorns).
+    Harm {
+        target: i32,
+        amount: f32,
+        kind: String,
+        player: Option<u128>,
+    },
 }
 
 /// Mob state shared with connections: what players did to mobs, waiting for
@@ -102,6 +109,17 @@ impl MobState {
             .entry(dim)
             .or_default()
             .push(Pending::Hit { target, by, blow });
+    }
+
+    /// The mob with this id takes `amount` of `kind` (Thorns); `player` is
+    /// who did it.
+    pub fn harm(&self, dim: usize, target: i32, amount: f32, kind: &str, player: Option<u128>) {
+        lock(&self.pending).entry(dim).or_default().push(Pending::Harm {
+            target,
+            amount,
+            kind: kind.to_owned(),
+            player,
+        });
     }
 
     /// A player used an item on the entity with this id.
@@ -346,6 +364,23 @@ fn apply_pending(ctx: &ServerContext, entities: &mut [Entity], pending: Vec<Pend
                     continue;
                 }
                 hurt::player_blow(ctx, entities, i, &by, &blow, now);
+            }
+            Pending::Harm {
+                target,
+                amount,
+                kind,
+                player,
+            } => {
+                let Some(e) = entities.iter_mut().find(|e| e.id == target) else {
+                    continue;
+                };
+                let mut h = hurt::Harm::new(amount, &kind);
+                h.player = player;
+                h.by = player.and_then(|p| lock(&ctx.players).get(&p).map(|p| p.entity_id));
+                if player.is_some() {
+                    h.killer = Some("minecraft:player".into());
+                }
+                hurt::harm(ctx, e, &h);
             }
             Pending::Use { target, by, hand } => {
                 let Some(e) = entities.iter_mut().find(|e| e.id == target) else {

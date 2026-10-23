@@ -50,7 +50,10 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
     match strike {
         Strike::Player(i) => {
             let victim = t.players[i];
-            super::hurt_player(t, &victim, damage, kind, key, owner, e.id);
+            let hurt = super::hurt_player(t, &victim, damage, kind, key, owner, e.id);
+            if small && hurt {
+                crate::worn::ignite(t.ctx, victim.uuid, 100);
+            }
         }
         Strike::Target(i) => {
             t.out.hits.push(hits::Hit {

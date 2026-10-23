@@ -1120,7 +1120,10 @@ fn explode_one(
             attacker.as_deref(),
             Some(blast.source),
         );
-        knockback.push((uuid, [dir[0] * impact, dir[1] * impact, dir[2] * impact]));
+        // Blast Protection: `explosion_knockback_resistance`.
+        let push = impact
+            * (1.0 - crate::commands::gear::value(ctx, uuid, "explosion_knockback_resistance"));
+        knockback.push((uuid, [dir[0] * push, dir[1] * push, dir[2] * push]));
     }
     let _ = ctx.events.send(Event::Explosion {
         center: c,

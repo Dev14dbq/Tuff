@@ -328,8 +328,8 @@ pub fn mob_attacks(
         if crate::combat::hurt_player(ctx, t.uuid, &hit).is_some() {
             poison(ctx, t.uuid, species, difficulty);
             if burning && crate::hits::rnd() < f64::from(difficulty) * 0.3 {
-                // Burning zombies set what they hit alight; players do not
-                // burn yet.
+                // Burning zombies set what they hit alight.
+                crate::worn::ignite(ctx, t.uuid, 40 * difficulty);
             }
         }
         return;

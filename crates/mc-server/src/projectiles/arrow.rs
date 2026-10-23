@@ -175,6 +175,9 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                         owner,
                         e.id,
                     );
+                    if hurt && a.flame {
+                        crate::worn::ignite(ctx, victim.uuid, 100);
+                    }
                     if hurt {
                         let strength = if a.punch > 0 {
                             0.4 + f64::from(a.punch) * 0.6
