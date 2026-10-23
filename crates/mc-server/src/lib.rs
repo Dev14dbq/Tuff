@@ -20,6 +20,7 @@ mod commands;
 mod connection;
 mod containers;
 mod context;
+mod crafter;
 mod crafting;
 mod damage;
 mod daylight;

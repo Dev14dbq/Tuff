@@ -570,6 +570,10 @@ impl Level for WorldLevel<'_> {
         crate::hoppers::dispense(self, to_position(p), facing, dropper);
     }
 
+    fn craft(&mut self, p: BlockPos) {
+        crate::crafter::craft(self, to_position(p));
+    }
+
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32) {
         let entity = mc_entity::Entity {
             id: self.ctx.next_entity_id(),

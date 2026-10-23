@@ -215,4 +215,7 @@ pub trait Level {
 
     /// A dispenser or dropper at `p` facing `facing` fires.
     fn dispense(&mut self, _p: BlockPos, _facing: Dir, _dropper: bool) {}
+
+    /// A crafter at `p` was triggered: it crafts what its grid holds.
+    fn craft(&mut self, _p: BlockPos) {}
 }

@@ -782,6 +782,9 @@ async fn play(
                     play::Serverbound::ContainerButtonClick { window, button } => {
                         windows.button(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, button)?;
                     }
+                    play::Serverbound::ContainerSlotStateChanged { slot, window, enabled } => {
+                        windows.slot_state(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, slot, enabled)?;
+                    }
                     play::Serverbound::EditBook { slot, pages, title } => {
                         let index = match slot {
                             0..=8 => 36 + slot as usize,

@@ -214,6 +214,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
                 crate::furnaces::tick(d);
                 crate::brewing::tick(d);
                 crate::campfires::tick(d);
+                crate::crafter::tick(d);
                 crate::beacons::tick(d, count as i64);
                 lock(&d.border).tick();
             }
@@ -396,6 +397,7 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
             "minecraft:daylight_detector" => crate::daylight::register(ctx, p),
             "minecraft:brewing_stand" => crate::brewing::wake(ctx, p),
             "minecraft:campfire" => crate::campfires::wake(ctx, p),
+            "minecraft:crafter" => crate::crafter::wake(ctx, p),
             _ => crate::furnaces::wake(ctx, p),
         }
     }

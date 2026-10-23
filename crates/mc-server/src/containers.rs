@@ -72,6 +72,7 @@ pub fn kind_of(block: &str) -> Option<Kind> {
             "Brewing Stand",
         )),
         "minecraft:hopper" => Some(other("minecraft:hopper", 5, "minecraft:hopper", "Hopper")),
+        "minecraft:crafter" => Some(crate::crafter::kind()),
         b if b.ends_with("shulker_box") => Some(other(
             "minecraft:shulker_box",
             27,
@@ -251,7 +252,11 @@ fn store(ctx: &ServerContext, p: Position, open: &Open) {
 /// the slots), rounded down. `None` if there is no container there.
 pub fn signal(ctx: &ServerContext, p: Position) -> Option<u8> {
     let state = ctx.world.block(p, &ctx.data.blocks)?;
-    let kind = kind_of(ctx.data.blocks.block_name(state)?)?;
+    let name = ctx.data.blocks.block_name(state)?;
+    if name == crate::crafter::ID {
+        return Some(crate::crafter::signal(ctx, p));
+    }
+    let kind = kind_of(name)?;
     let mut slots = self::slots(ctx, p, kind);
     // Both halves of a large chest count.
     if let Some(d) = ctx.shapes.chest_partner(state) {
@@ -380,6 +385,13 @@ pub fn change(
     let mut done = Vec::new();
     for (slot, stack) in changed {
         if *slot >= open.slots.len() {
+            continue;
+        }
+        // A crafter's result slot is only shown; a switched-off slot takes
+        // nothing.
+        if open.kind.entity == crate::crafter::ID
+            && (*slot >= 9 || stack.is_some() && crate::crafter::disabled(ctx, p)[*slot])
+        {
             continue;
         }
         let new = stack.as_ref().map(|h| h.resolve(&before));

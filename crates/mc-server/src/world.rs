@@ -622,6 +622,7 @@ impl World {
                     | "minecraft:smoker"
                     | "minecraft:brewing_stand"
                     | "minecraft:campfire"
+                    | "minecraft:crafter"
                     | "minecraft:daylight_detector"
             )
         });

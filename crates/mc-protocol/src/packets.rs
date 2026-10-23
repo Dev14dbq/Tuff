@@ -635,6 +635,12 @@ pub mod play {
             window: i32,
             button: i32,
         },
+        /// A crafter slot clicked on or off.
+        ContainerSlotStateChanged {
+            slot: i32,
+            window: i32,
+            enabled: bool,
+        },
         /// The text typed into an anvil's name field.
         RenameItem {
             name: String,
@@ -819,6 +825,13 @@ pub mod play {
                     window: r.varint()?,
                     button: r.varint()?,
                 },
+                "minecraft:container_slot_state_changed" => {
+                    Serverbound::ContainerSlotStateChanged {
+                        slot: r.varint()?,
+                        window: r.varint()?,
+                        enabled: r.bool()?,
+                    }
+                }
                 "minecraft:rename_item" => Serverbound::RenameItem {
                     name: r.string(32767)?,
                 },

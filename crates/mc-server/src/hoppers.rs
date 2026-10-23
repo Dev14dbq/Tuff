@@ -74,7 +74,10 @@ fn store_at(ctx: &ServerContext, p: Position) -> Option<Store<'_>> {
 /// container (in the order they are tried), or pull out of.
 fn sided_slots(name: &str, size: usize, side: Dir, inserting: bool) -> Vec<usize> {
     match name {
-        "minecraft:crafter" | "minecraft:ender_chest" => Vec::new(),
+        "minecraft:ender_chest" => Vec::new(),
+        // Nothing comes out of a crafter, and the tenth slot is only shown.
+        "minecraft:crafter" if !inserting => Vec::new(),
+        "minecraft:crafter" => (0..9).collect(),
         // The ingredient through the top, bottles and fuel through the
         // sides, bottles and the ingredient through the bottom.
         "minecraft:brewing_stand" => match side {
@@ -574,6 +577,12 @@ fn transfer_from_slot(
     true
 }
 
+/// Puts one of `stack` into whatever holds items at `p`, through its face
+/// `side`. `false` if there is nothing there or no room.
+pub fn insert_at(ctx: &ServerContext, p: Position, side: Dir, stack: &ItemStack) -> bool {
+    store_at(ctx, p).is_some_and(|dst| insert_one(ctx, dst, side, stack))
+}
+
 /// Puts one of `stack` into `dst` through its face `side`,
 /// onto a matching stack first. `false` if there is no room.
 fn insert_one(ctx: &ServerContext, dst: Store, side: Dir, stack: &ItemStack) -> bool {
@@ -584,6 +593,18 @@ fn insert_one(ctx: &ServerContext, dst: Store, side: Dir, stack: &ItemStack) -> 
         into.retain(|&i| crate::brewing::accepts(ctx, &dst, i, stack));
     }
     let max = ctx.items.max_stack(stack.item);
+    // A crafter takes it in the first slot that may have it.
+    if to_name == crate::crafter::ID {
+        let Some(t) = into
+            .into_iter()
+            .find(|&i| crate::crafter::accepts(ctx, to, &dst, i, stack))
+        else {
+            return false;
+        };
+        let moved = stack.with_count(dst[t].as_ref().map_or(0, |d| d.count) + 1);
+        containers::put(ctx, to, to_kind, &[(t, Some(moved))]);
+        return true;
+    }
     let merge = into.iter().copied().find(|&i| {
         dst[i]
             .as_ref()
