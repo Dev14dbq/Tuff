@@ -656,6 +656,15 @@ impl World {
             .extend(list);
     }
 
+    /// Queues entities as if a chunk read had found them.
+    #[cfg(test)]
+    pub fn loaded_entities_for_test(&self, list: Vec<Tag>) {
+        self.loaded_entities
+            .lock()
+            .expect("loaded entities lock")
+            .extend(list);
+    }
+
     /// Entities stored with chunks read since the last call, as NBT.
     pub fn take_loaded_entities(&self) -> Vec<Tag> {
         std::mem::take(&mut *self.loaded_entities.lock().expect("loaded entities lock"))

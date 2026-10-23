@@ -46,6 +46,7 @@ mod maps;
 mod menus;
 mod mobs;
 mod packs;
+mod persist;
 mod pipeline;
 mod players;
 mod portals;
@@ -354,12 +355,12 @@ fn save(ctx: &ServerContext) {
     }
     tracing::debug!("Saving worlds");
     ctx.world.set_ticks_to_save(tick::ticks_by_chunk(ctx));
-    dropped::save(ctx);
+    persist::save(ctx);
     let mut saved = ctx.world.save(&ctx.data.blocks);
     for other in ctx.open_dimensions().iter().filter(|d| d.dim != ctx.dim) {
         other.border.lock().expect("border lock").save();
         other.world.set_ticks_to_save(tick::ticks_by_chunk(other));
-        dropped::save(other);
+        persist::save(other);
         let more = other.world.save(&other.data.blocks);
         saved.chunks += more.chunks;
         saved.failed += more.failed;

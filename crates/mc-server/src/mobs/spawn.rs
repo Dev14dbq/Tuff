@@ -886,6 +886,7 @@ pub fn despawn(entities: &mut [Entity], targets: &[Target], difficulty: i32) -> 
         if m.species.category() != Category::Monster
             || m.persistent
             || m.custom_name.is_some()
+            || m.owner.is_some()
             || !m.riders.is_empty()
             || e.removed
         {

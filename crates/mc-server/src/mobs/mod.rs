@@ -17,8 +17,8 @@ mod interact;
 pub mod meta;
 pub mod nbt;
 pub mod ride;
-mod spawner;
 mod spawn;
+mod spawner;
 mod terrain;
 
 use std::collections::HashMap;
@@ -110,6 +110,24 @@ impl MobState {
             .entry(dim)
             .or_default()
             .push(Pending::Use { target, by, hand });
+    }
+
+    /// Health of the villager or wandering trader with this id.
+    pub fn villager_health(&self, id: i32) -> f32 {
+        lock(&self.villagers).get(&id).copied().unwrap_or(20.0)
+    }
+
+    /// Sets it (`None`: forgets it, the villager left the world).
+    pub fn set_villager_health(&self, id: i32, health: Option<f32>) {
+        let mut all = lock(&self.villagers);
+        match health {
+            Some(h) if h < 20.0 => {
+                all.insert(id, h);
+            }
+            _ => {
+                all.remove(&id);
+            }
+        }
     }
 }
 

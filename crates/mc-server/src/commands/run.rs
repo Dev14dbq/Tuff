@@ -1950,13 +1950,47 @@ fn give(r: &mut Run) -> Result<i32> {
             ItemStack::new(id, count),
             &super::item::item_components(item.components.as_deref()),
         );
-        let (_, changed) = hands.insert_stack(&stack, max);
+        let (taken, changed) = hands.insert_stack(&stack, max);
         for slot in changed {
             r.out.events.push(Event::InventorySlot {
                 uuid,
                 slot: slot as i16,
                 item: hands.slots[slot].clone(),
             });
+        }
+        drop(inventories);
+        // What does not fit drops at the player's feet, theirs alone and
+        // free to pick up at once.
+        let pose = lock(&r.ctx.players).get(&uuid).and_then(|p| p.pose);
+        let mut left = count - taken;
+        while left > 0
+            && let Some(pose) = pose
+        {
+            let n = left.min(max);
+            left -= n;
+            let mut kind = mc_entity::Kind::stack(
+                &ItemStack {
+                    count: n,
+                    ..stack.clone()
+                },
+                0,
+            );
+            if let mc_entity::Kind::Item { owner, .. } = &mut kind {
+                *owner = Some(uuid);
+            }
+            let e = mc_entity::Entity {
+                id: r.ctx.next_entity_id(),
+                uuid: crate::util::random_uuid(),
+                kind,
+                pos: [pose.x, pose.y, pose.z],
+                vel: [0.0; 3],
+                on_ground: false,
+                age: 0,
+                removed: false,
+                tags: Vec::new(),
+            };
+            r.out.events.push(Event::EntitySpawned(e.clone()));
+            lock(&r.ctx.entities).push(e);
         }
     }
     let shown = item_display(r.ctx, &item.id);
@@ -2162,10 +2196,22 @@ fn summon(r: &mut Run) -> Result<i32> {
                 .items
                 .id(&mc_command::args::full_id(id))
                 .ok_or_else(|| err("commands.summon.failed", Vec::new()))?;
-            mc_entity::Kind::stack(
+            let mut kind = mc_entity::Kind::stack(
                 &mc_protocol::packets::play::ItemStack::from_nbt_with(item, item_id),
                 tag_i32(nbt.get("PickupDelay")).unwrap_or(0),
-            )
+            );
+            if let mc_entity::Kind::Item {
+                owner,
+                thrower,
+                ageless,
+                ..
+            } = &mut kind
+            {
+                *owner = crate::persist::uuid_of(nbt.get("Owner"));
+                *thrower = crate::persist::uuid_of(nbt.get("Thrower"));
+                *ageless = tag_i32(nbt.get("Age")) == Some(i32::from(i16::MIN));
+            }
+            kind
         }
         "minecraft:tnt" => mc_entity::Kind::Tnt {
             fuse: tag_i32(nbt.get("fuse")).unwrap_or(crate::explosion::TNT_FUSE),
@@ -2227,11 +2273,14 @@ fn summon(r: &mut Run) -> Result<i32> {
     let entity = mc_entity::Entity {
         id: r.ctx.next_entity_id(),
         uuid: crate::util::random_uuid(),
-        kind: entity_kind,
         pos: at,
         vel,
         on_ground: false,
-        age: 0,
+        age: match &entity_kind {
+            mc_entity::Kind::Item { .. } => tag_i32(nbt.get("Age")).unwrap_or(0).max(0) as u32,
+            _ => 0,
+        },
+        kind: entity_kind,
         removed: false,
         tags: Vec::new(),
     };

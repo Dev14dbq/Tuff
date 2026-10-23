@@ -483,6 +483,9 @@ pub struct ServerContext {
     /// Contents (`Items`) of entities that hold items (minecarts and boats
     /// with a chest, hopper minecarts), by entity id.
     pub entity_items: Mutex<HashMap<i32, mc_nbt::Compound>>,
+    /// What of the stored entities nothing here understands, kept to be
+    /// written back as it was.
+    pub entity_kept: Mutex<crate::persist::Kept>,
     /// Hopper minecarts resting after taking an item: ticks left, by id.
     pub cart_rests: Mutex<HashMap<i32, i32>>,
     /// Daylight detectors in loaded chunks.
@@ -745,6 +748,7 @@ impl ServerContext {
             entities: Mutex::new(Vec::new()),
             containers: Mutex::new(HashMap::new()),
             entity_items: Mutex::new(HashMap::new()),
+            entity_kept: Mutex::default(),
             cart_rests: Mutex::new(HashMap::new()),
             daylight: Mutex::new(Default::default()),
             block_events: Mutex::new(Vec::new()),
@@ -1052,6 +1056,7 @@ impl ServerContext {
             entities: Mutex::new(Vec::new()),
             containers: Mutex::new(HashMap::new()),
             entity_items: Mutex::new(HashMap::new()),
+            entity_kept: Mutex::default(),
             cart_rests: Mutex::new(HashMap::new()),
             daylight: Mutex::new(Default::default()),
             container_updates: Mutex::new(Vec::new()),
