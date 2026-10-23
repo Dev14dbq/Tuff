@@ -401,7 +401,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         tags: Default::default(),
     };
     let mut events = Vec::new();
-    crowd::tick(ctx, &mut entities, &targets, now);
+    crowd::tick(ctx, &mut entities, &targets);
     let mut seen = others(&entities);
     for i in 0..entities.len() {
         let e = &mut entities[i];

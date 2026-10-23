@@ -75,6 +75,11 @@ pub trait Terrain: Collide {
     fn door(&self, _x: i32, _y: i32, _z: i32) -> Option<Door> {
         None
     }
+    /// Whether a mob with its eyes in this block suffocates (a full cube,
+    /// not glass or leaves).
+    fn smothers(&self, x: i32, y: i32, z: i32) -> bool {
+        self.span(x, y, z) == Some((0.0, 1.0))
+    }
     /// What a cat could sit on here.
     fn perch(&self, _x: i32, _y: i32, _z: i32) -> Perch {
         Perch::None

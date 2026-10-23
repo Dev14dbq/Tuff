@@ -258,13 +258,7 @@ pub(super) fn in_wall(m: &Mob, b: &Body, s: &Senses) -> bool {
     let zs = [(b.pos[2] - half).floor() as i32, (b.pos[2] + half).floor() as i32];
     xs.iter().any(|&x| {
         zs.iter().any(|&z| {
-            [y, y - 1].into_iter().any(|cy| {
-                s.world.span(x, cy, z).is_some_and(|(bottom, top)| {
-                    let (lo, hi) = (f64::from(cy) + bottom, f64::from(cy) + top);
-                    // Fences and the like do not smother.
-                    top - bottom >= 1.0 && top <= 1.0 && lo < eye && eye < hi
-                })
-            })
+            s.world.smothers(x, y, z)
         })
     })
 }

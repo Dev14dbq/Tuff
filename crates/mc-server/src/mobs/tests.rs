@@ -445,3 +445,138 @@ fn mobs_suffocate_inside_blocks() {
     run(&ctx, 30);
     assert!(with_mob(&ctx, id, |m| m.health) < 10.0);
 }
+
+/// Sets blocks by name.
+fn set(ctx: &ServerContext, at: [i32; 3], name: &str) {
+    let state = ctx.data.blocks.default_state(name).unwrap();
+    set_state(ctx, at, state);
+}
+
+fn set_state(ctx: &ServerContext, at: [i32; 3], state: u32) {
+    ctx.world
+        .set_block(
+            mc_protocol::Position::new(at[0], at[1], at[2]),
+            state,
+            &ctx.data.blocks,
+            &ctx.rules,
+        )
+        .unwrap();
+}
+
+fn block(ctx: &ServerContext, at: [i32; 3]) -> String {
+    let s = ctx
+        .world
+        .block(mc_protocol::Position::new(at[0], at[1], at[2]), &ctx.data.blocks)
+        .unwrap();
+    ctx.data.blocks.block_name(s).unwrap().to_owned()
+}
+
+/// How many of `n` pigs penned in one block get hurt.
+fn crushed(n: usize) -> usize {
+    let ctx = flat().unwrap();
+    let _ = join(&ctx, [20.5, -60.0, 20.5]);
+    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+        for y in -60..=-59 {
+            set(&ctx, [dx, y, dz], "minecraft:stone");
+        }
+    }
+    for _ in 0..n {
+        put(&ctx, Species::Pig, [0.5, -60.0, 0.5]);
+    }
+    run(&ctx, 60);
+    mobs_of(&ctx, Species::Pig)
+        .iter()
+        .filter(|e| matches!(&e.kind, Kind::Mob(m) if m.health < m.max_health))
+        .count()
+}
+
+#[test]
+fn cramming_starts_past_the_game_rule() {
+    if flat().is_none() {
+        eprintln!("skipped: no game data");
+        return;
+    }
+    // max_entity_cramming 24: 23 others in the space are fine, 24 crush.
+    assert_eq!(crushed(24), 0);
+    assert!(crushed(26) > 0);
+}
+
+#[test]
+fn glass_and_leaves_do_not_smother() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [10.5, -60.0, 10.5]);
+    for y in -60..=-58 {
+        set(&ctx, [0, y, 0], "minecraft:glass");
+        set(&ctx, [3, y, 0], "minecraft:oak_leaves");
+    }
+    let a = put(&ctx, Species::Cow, [0.5, -60.0, 0.5]);
+    let b = put(&ctx, Species::Cow, [3.5, -60.0, 0.5]);
+    run(&ctx, 30);
+    assert_eq!(with_mob(&ctx, a, |m| m.health), 10.0);
+    assert_eq!(with_mob(&ctx, b, |m| m.health), 10.0);
+}
+
+#[test]
+fn a_zombie_breaks_a_door_in_the_world() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    ctx.difficulty.store(3, std::sync::atomic::Ordering::Relaxed);
+    let _ = join(&ctx, [8.5, -60.0, 0.5]);
+    for z in -8..=8 {
+        for y in -60..=-58 {
+            if z != 0 || y == -58 {
+                set(&ctx, [3, y, z], "minecraft:stone");
+            }
+        }
+    }
+    let lower = ctx.data.blocks.default_state("minecraft:oak_door").unwrap();
+    let upper = ctx.data.blocks.with_property(lower, "half", "upper").unwrap();
+    set_state(&ctx, [3, -60, 0], lower);
+    set_state(&ctx, [3, -59, 0], upper);
+    let id = put(&ctx, Species::Zombie, [0.5, -60.0, 0.5]);
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.breaks_doors = true;
+        m.target = Some(7000);
+    }
+    run(&ctx, 400);
+    assert_eq!(block(&ctx, [3, -59, 0]), "minecraft:air");
+    assert_eq!(block(&ctx, [3, -60, 0]), "minecraft:air");
+}
+
+#[test]
+fn an_enderman_puts_its_block_on_firm_ground_only() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [10.5, -60.0, 10.5]);
+    let id = put(&ctx, Species::Enderman, [0.5, -60.0, 0.5]);
+    let dirt = ctx.data.blocks.default_state("minecraft:dirt").unwrap();
+    let mut entities = std::mem::take(&mut *lock(&ctx.entities));
+    let i = entities.iter().position(|e| e.id == id).unwrap();
+    if let Kind::Mob(m) = &mut entities[i].kind {
+        m.carried = Some(dirt);
+    }
+    let mut level = WorldLevel::new(&ctx);
+    // Not in the air, and not where it stands.
+    blocks::place(&ctx, &mut level, &mut entities, i, [5, -58, 0], &[]);
+    blocks::place(&ctx, &mut level, &mut entities, i, [0, -60, 0], &[]);
+    assert_eq!(block(&ctx, [5, -58, 0]), "minecraft:air");
+    assert_eq!(block(&ctx, [0, -60, 0]), "minecraft:air");
+    blocks::place(&ctx, &mut level, &mut entities, i, [5, -60, 0], &[]);
+    assert_eq!(block(&ctx, [5, -60, 0]), "minecraft:dirt");
+    let Kind::Mob(m) = &mut entities[i].kind else { panic!() };
+    assert_eq!(m.carried, None);
+    // And it takes a block back up.
+    blocks::take(&ctx, &mut level, &mut entities[i], [5, -60, 0]);
+    assert_eq!(block(&ctx, [5, -60, 0]), "minecraft:air");
+    let Kind::Mob(m) = &entities[i].kind else { panic!() };
+    assert_eq!(m.carried, Some(dirt));
+}

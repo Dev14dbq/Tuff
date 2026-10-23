@@ -46,7 +46,7 @@ fn push_from(me: [f64; 3], other: [f64; 3]) -> Option<[f64; 2]> {
 
 /// Pushes overlapping mobs apart and crushes crowds. Ridden mobs and their
 /// riders are left alone.
-pub fn tick(ctx: &ServerContext, entities: &mut [Entity], targets: &[Target], now: i64) {
+pub fn tick(ctx: &ServerContext, entities: &mut [Entity], targets: &[Target]) {
     let mut bodies = Vec::new();
     for (i, e) in entities.iter().enumerate() {
         if let Kind::Mob(m) = &e.kind
@@ -111,7 +111,9 @@ pub fn tick(ctx: &ServerContext, entities: &mut [Entity], targets: &[Target], no
         let e = &mut entities[b.i];
         e.vel[0] += pushes[k][0];
         e.vel[2] += pushes[k][1];
-        if limit > 0 && crowd[k] >= limit as usize - 1 && (now + b.i as i64) % 4 == 0 {
+        // More than `limit - 1` others in its space: one tick in four it is
+        // crushed.
+        if limit > 0 && crowd[k] > limit as usize - 1 && crate::util::random_u64() % 4 == 0 {
             hurt::harm(ctx, e, &hurt::Harm::new(6.0, "minecraft:cramming"));
         }
     }

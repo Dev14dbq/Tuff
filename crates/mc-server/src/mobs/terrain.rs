@@ -25,6 +25,8 @@ const HOLDABLE: u16 = 1024;
 const CHEST: u16 = 2048;
 const LIT_FURNACE: u16 = 4096;
 const BED: u16 = 8192;
+/// A full cube that suffocates (not glass, not leaves).
+const SMOTHER: u16 = 16384;
 
 /// What each block state is to a mob, worked out once from the block tables.
 fn flags(ctx: &ServerContext) -> &'static [u16] {
@@ -90,6 +92,16 @@ fn flags(ctx: &ServerContext) -> &'static [u16] {
                 }
                 if name.ends_with("_bed") {
                     f |= BED;
+                }
+                use mc_tick::support::{BOTTOM_FULL, TOP_FULL};
+                let full = ctx.shapes.support(state) & (TOP_FULL | BOTTOM_FULL) == TOP_FULL | BOTTOM_FULL;
+                if f & SOLID != 0
+                    && full
+                    && !name.contains("glass")
+                    && !name.ends_with("_leaves")
+                    && !name.ends_with("_door")
+                {
+                    f |= SMOTHER;
                 }
                 f
             })
@@ -277,6 +289,10 @@ impl Terrain for Ground<'_> {
             by_hand: f & DOOR != 0,
             open: f & DOOR_OPEN != 0,
         })
+    }
+
+    fn smothers(&self, x: i32, y: i32, z: i32) -> bool {
+        self.at(x, y, z) & SMOTHER != 0
     }
 
     fn holdable(&self, x: i32, y: i32, z: i32) -> bool {
