@@ -92,6 +92,9 @@ pub struct Config {
     pub max_players: usize,
     /// Server view distance in chunks; players get min(this, their own setting).
     pub view_distance: u8,
+    /// Chunks around a player where entities, redstone and plants tick
+    /// (`simulation-distance`).
+    pub simulation_distance: u8,
     /// Packets of at least this many bytes are compressed; `None` disables compression.
     pub compression_threshold: Option<usize>,
     /// Verify accounts with the session server and encrypt connections.
@@ -134,6 +137,7 @@ impl Config {
             motd: "minecraft-rewrite".to_owned(),
             max_players: 20,
             view_distance: 10,
+            simulation_distance: 10,
             compression_threshold: Some(256),
             online_mode: true,
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),

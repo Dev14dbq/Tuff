@@ -488,7 +488,7 @@ async fn play(
             .collect(),
         max_players: ctx.config.max_players as i32,
         view_distance: i32::from(ctx.config.view_distance),
-        simulation_distance: i32::from(ctx.config.view_distance),
+        simulation_distance: i32::from(ctx.config.simulation_distance),
         reduced_debug_info: ctx.game_rule_bool("reduced_debug_info"),
         enable_respawn_screen: !ctx.game_rule_bool("immediate_respawn"),
         do_limited_crafting: ctx.game_rule_bool("limited_crafting"),

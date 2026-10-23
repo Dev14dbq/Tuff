@@ -164,6 +164,7 @@ async fn run() -> Result<()> {
     config.motd = props.get("motd").to_owned();
     config.max_players = props.int("max-players").unwrap_or(20).max(1) as usize;
     config.view_distance = props.int("view-distance").unwrap_or(10).clamp(2, 32) as u8;
+    config.simulation_distance = props.int("simulation-distance").unwrap_or(10).clamp(2, 32) as u8;
     config.compression_threshold = match props.int("network-compression-threshold") {
         Some(t) if t >= 0 => Some(t as usize),
         Some(_) => None,

@@ -728,6 +728,21 @@ pub(crate) fn picks_up(pose: &crate::context::Pose, item: &mc_entity::Entity) ->
         && pose.z + 1.3 > b.min[2]
 }
 
+/// Whether `pos` is in a chunk within the simulation distance of a player
+/// (a square of chunks around them).
+pub(crate) fn simulated_at(
+    ctx: &ServerContext,
+    players: &[(u128, i32, i32, crate::context::Pose)],
+    pos: [f64; 3],
+) -> bool {
+    let d = i32::from(ctx.config.simulation_distance);
+    let (cx, cz) = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
+    players.iter().any(|(.., pose)| {
+        let (px, pz) = ((pose.x.floor() as i32) >> 4, (pose.z.floor() as i32) >> 4);
+        (cx - px).abs() <= d && (cz - pz).abs() <= d
+    })
+}
+
 /// Falling blocks fall and land; items fall, slide, despawn and are picked up.
 fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     let mut entities = std::mem::take(&mut *lock(&ctx.entities));
@@ -820,6 +835,11 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                 }
             }
             mc_entity::Kind::Tnt { fuse, owner } => {
+                // Far from every player it does not tick, so it never goes
+                // off (entities tick only within the simulation distance).
+                if !simulated_at(ctx, &players, entity.pos) {
+                    continue;
+                }
                 mc_entity::fall(entity, &Solid(level));
                 if entity.on_ground {
                     entity.vel[0] *= 0.7;
