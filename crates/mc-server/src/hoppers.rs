@@ -256,7 +256,7 @@ fn behavior(
             let placed = if fluid == "minecraft:water"
                 && blocks.property(state, "waterlogged") == Some("false")
             {
-                level.set_block(front, ctx.shapes.with(state, "waterlogged", "true"))
+                level.set_block(front, crate::campfires::waterlogged(ctx, front, state))
             } else if ctx.shapes.is_air(state) || ctx.rules.is_replaceable(state) {
                 let source = ctx.shapes.default_state(fluid).unwrap_or(0);
                 let same = block == fluid && blocks.property(state, "level") == Some("0");

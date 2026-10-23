@@ -662,6 +662,13 @@ pub fn tick(ctx: &ServerContext) {
             hurt_by = Some((4.0, "minecraft:lava", "death.attack.lava"));
         } else if matches!(block, Some("minecraft:fire" | "minecraft:soul_fire")) {
             hurt_by = Some((1.0, "minecraft:in_fire", "death.attack.inFire"));
+        } else if let Some(amount) = ctx
+            .world
+            .block(feet, &ctx.data.blocks)
+            .and_then(|s| crate::campfires::damage(ctx, s))
+            && !frost_walking(ctx, uuid)
+        {
+            hurt_by = Some((amount, "minecraft:campfire", "death.attack.inFire"));
         }
         // Breathing: the head under water runs the air down.
         let eye = mc_protocol::Position::new(
@@ -721,6 +728,17 @@ pub fn tick(ctx: &ServerContext) {
             hurt(ctx, uuid, amount, kind, key);
         }
     }
+}
+
+/// Frost walker boots keep off the damage of stepping on hot blocks
+/// (`burn_from_stepping`).
+fn frost_walking(ctx: &ServerContext, uuid: u128) -> bool {
+    let boots = lock(&ctx.inventories)
+        .get(&uuid)
+        .and_then(|h| h.slots[8].clone());
+    boots.is_some_and(|b| {
+        crate::enchant_effects::has_effect(ctx, &b, "minecraft:damage_immunity")
+    })
 }
 
 /// Kills a player whatever their game mode or immunity (`/kill`).

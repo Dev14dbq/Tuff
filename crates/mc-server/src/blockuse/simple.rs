@@ -2,7 +2,8 @@
 //! each): cakes are eaten and take a candle, candles go out, flower pots
 //! take and give back a plant, chiseled bookshelves and lecterns hold
 //! books, shears carve pumpkins and take honeycomb, signs are dyed, waxed
-//! and edited, redstone ore glows, the dragon egg flees.
+//! and edited, redstone ore glows, the dragon egg flees, campfires take
+//! food.
 
 use mc_nbt::{Compound, Tag};
 use mc_protocol::Position;
@@ -25,6 +26,17 @@ pub fn use_on(c: &Click, outcome: &mut Outcome) -> bool {
             } else {
                 false
             }
+        }
+        "campfire" | "soul_campfire" => {
+            // Food goes on, one at a time.
+            let Some(h) = &c.held else {
+                return false;
+            };
+            if !crate::campfires::place(c.ctx, c.at, &h.stack) {
+                return false;
+            }
+            use_up(c, 1);
+            true
         }
         "flower_pot" => pot(c, outcome, true),
         _ if n.starts_with("potted_") => pot(c, outcome, false),

@@ -13,6 +13,7 @@ mod books;
 mod border;
 mod bossbars;
 mod brewing;
+mod campfires;
 mod combat;
 mod command_blocks;
 mod commands;

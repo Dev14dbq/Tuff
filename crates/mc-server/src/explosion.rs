@@ -980,6 +980,11 @@ fn explode_one(
             }
             let _ = ctx.events.send(Event::ContainerGone { position: p });
         }
+        if crate::campfires::is_campfire(name) {
+            for stack in crate::campfires::broken(ctx, p) {
+                drops.push((p, crate::loot::Drop::of(&stack)));
+            }
+        }
         let props = |k: &str| blocks.property(state, k).map(str::to_owned);
         if block_drops {
             drops.extend(

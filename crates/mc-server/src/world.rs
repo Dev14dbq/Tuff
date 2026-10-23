@@ -621,6 +621,7 @@ impl World {
                     | "minecraft:blast_furnace"
                     | "minecraft:smoker"
                     | "minecraft:brewing_stand"
+                    | "minecraft:campfire"
                     | "minecraft:daylight_detector"
             )
         });
@@ -1838,6 +1839,14 @@ pub(crate) fn client_data(id: &str, data: &mc_nbt::Compound) -> Option<mc_nbt::C
     ];
     if CONTAINERS.contains(&id) {
         return None;
+    }
+    // A campfire shows the food on it, and only that.
+    if id == "minecraft:campfire" {
+        let mut out = mc_nbt::Compound::new();
+        if let Some(items) = data.get("Items") {
+            out.insert("Items", items.clone());
+        }
+        return Some(out);
     }
     let mut data = data.clone();
     for key in [
