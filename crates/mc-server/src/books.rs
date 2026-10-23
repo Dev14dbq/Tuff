@@ -100,3 +100,35 @@ pub fn edit(
     }
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::{Source, Src};
+
+    fn context() -> Option<std::sync::Arc<ServerContext>> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let data = mc_data::McData::load(&dir).ok()?;
+        ServerContext::new(crate::Config::new(dir), data).ok()
+    }
+
+    #[test]
+    fn scores_in_a_page_are_filled_in() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        crate::tick::lock(&ctx.scoreboard).score_mut("Steve", "kills").value = 7;
+        let mut page = Compound::new();
+        let mut score = Compound::new();
+        score.insert("name", Tag::from("Steve"));
+        score.insert("objective", Tag::from("kills"));
+        page.insert("score", Tag::Compound(score));
+        let src = Src::of(&ctx, &Source::Console);
+        let out = crate::commands::resolve_text(&ctx, &src, &Tag::Compound(page));
+        assert_eq!(out, Tag::from("7"));
+        // Plain text is left alone.
+        let plain = Tag::from("hello");
+        assert_eq!(crate::commands::resolve_text(&ctx, &src, &plain), plain);
+    }
+}
