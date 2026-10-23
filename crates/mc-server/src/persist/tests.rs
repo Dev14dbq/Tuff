@@ -704,3 +704,46 @@ fn unknown_entities_and_keys_are_written_back() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_entity_out_of_the_loaded_chunks_goes_to_its_chunk_file() {
+    if mc_data::McData::load(&data_dir()).is_err() {
+        eprintln!("skipped: no game data");
+        return;
+    }
+    let dir = folder("stray");
+    let uuid = {
+        let ctx = open(&dir);
+        let at = Position::new(40, 100, 40);
+        let _ = ctx.world.block(at, &ctx.data.blocks);
+        load_stored(&ctx);
+        // A cow already in the far chunk's file, and one that walked there.
+        let mut far = vec![Tag::Compound(nbt(
+            r#"{id:"minecraft:cow",Pos:[1000.5d,70d,1000.5d],UUID:[I;9,9,9,9]}"#,
+        ))];
+        let cow = mob(&ctx, Species::Cow, [1001.5, 70.0, 1000.5]);
+        let uuid = cow.uuid;
+        let mut root = Compound::new();
+        root.insert("DataVersion", Tag::Int(ctx.data.version.world_version));
+        root.insert("Position", Tag::IntArray(vec![62, 62]));
+        root.insert("Entities", Tag::List(std::mem::take(&mut far)));
+        let mut bytes = Vec::new();
+        mc_nbt::write_named("", &Tag::Compound(root), &mut bytes).unwrap();
+        let entities = dir.join("dimensions/minecraft/overworld/entities");
+        std::fs::create_dir_all(&entities).unwrap();
+        mc_storage::RegionStorage::new(entities)
+            .write_chunk(62, 62, &bytes, 0)
+            .unwrap();
+        lock(&ctx.entities).push(cow);
+        unloaded(&ctx, &[]);
+        assert!(lock(&ctx.entities).iter().all(|e| e.uuid != uuid));
+        uuid
+    };
+    let ctx = open(&dir);
+    let _ = ctx.world.block(Position::new(1000, 70, 1000), &ctx.data.blocks);
+    load_stored(&ctx);
+    let cows: Vec<u128> = lock(&ctx.entities).iter().map(|e| e.uuid).collect();
+    assert_eq!(cows.len(), 2, "{cows:?}");
+    assert!(cows.contains(&uuid));
+    let _ = std::fs::remove_dir_all(&dir);
+}

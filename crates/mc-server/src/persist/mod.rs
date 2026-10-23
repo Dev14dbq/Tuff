@@ -347,11 +347,24 @@ pub fn save(ctx: &ServerContext) {
 /// Chunks were unloaded: their entities are written and leave the world,
 /// passengers with their vehicles.
 pub fn unloaded(ctx: &ServerContext, chunks: &[(i32, i32)]) {
-    if chunks.is_empty() || !ctx.world.is_saved() {
+    if !ctx.world.is_saved() {
         return;
     }
     load_stored(ctx);
     let mut entities = lock(&ctx.entities);
+    // Entities that wandered out of the loaded chunks go too, to the file of
+    // the chunk they are in.
+    let mut chunks = chunks.to_vec();
+    for e in entities.iter() {
+        let key = chunk_of(e);
+        if !chunks.contains(&key) && !ctx.world.chunk_loaded(key.0, key.1) {
+            chunks.push(key);
+        }
+    }
+    if chunks.is_empty() {
+        return;
+    }
+    let chunks = &chunks[..];
     let stored = by_chunk(ctx, &entities, Some(chunks));
     ctx.world.save_entities(stored, Some(chunks));
     let riding = passengers(&entities);
