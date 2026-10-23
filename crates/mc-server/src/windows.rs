@@ -244,6 +244,9 @@ impl Windows {
             slots,
             Kind::Machine(Box::new(machine)),
         )?;
+        if menu == Menu::EnderChest {
+            containers::ender_open(who.ctx, who.uuid, at);
+        }
         self.send_values(writer, &values)
     }
 
@@ -911,6 +914,9 @@ impl Windows {
                 self.give_back(writer, who, left)?;
             }
             Kind::Machine(mut m) => {
+                if m.menu == Menu::EnderChest {
+                    containers::ender_close(ctx, uuid, m.at);
+                }
                 let left = m.leftovers();
                 self.give_back(writer, who, left)?;
             }

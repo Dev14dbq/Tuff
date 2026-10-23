@@ -168,7 +168,15 @@ impl Level for WorldLevel<'_> {
         else {
             return false;
         };
-        if ctx.data.blocks.block_name(state) == Some("minecraft:hopper") {
+        let blocks = &ctx.data.blocks;
+        // An ender chest that is no longer there shuts its lid. A property
+        // change (waterlogged) is still the same chest.
+        if blocks.block_name(old) == Some("minecraft:ender_chest")
+            && blocks.block_name(state) != Some("minecraft:ender_chest")
+        {
+            crate::containers::ender_broken(ctx, to_position(p));
+        }
+        if blocks.block_name(state) == Some("minecraft:hopper") {
             crate::hoppers::register(ctx, to_position(p));
         }
         if ctx.data.blocks.block_name(state) == Some("minecraft:beacon") {
