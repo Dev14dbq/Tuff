@@ -811,6 +811,7 @@ pub fn use_item_on(
     for &(p, state) in &placed.blocks {
         crate::containers::placed(ctx, p, state);
         crate::command_blocks::placed(ctx, p, state);
+        crate::structure_blocks::placed(ctx, p, state);
         if let Some(id) = ctx.data.blocks.block_name(state).and_then(sign_entity) {
             ctx.world.set_block_entity(
                 mc_world::BlockEntity {

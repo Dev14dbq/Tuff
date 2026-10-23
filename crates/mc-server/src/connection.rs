@@ -1121,6 +1121,21 @@ async fn play(
                         let action = Action::CommandBlock { position, command, mode, flags };
                         let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                     }
+                    play::Serverbound::SetJigsawBlock { position, name, target, pool, final_state, joint, selection_priority, placement_priority } => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::SetJigsaw { position, name, target, pool, final_state, joint, selection_priority, placement_priority };
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                    }
+                    play::Serverbound::JigsawGenerate { position, levels, .. } => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::GenerateJigsaw { position, levels };
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                    }
+                    play::Serverbound::SetStructureBlock { position, action, mode, name, offset, size, mirror, rotation, metadata, integrity, seed, flags } => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::SetStructure { position, action, mode, name, offset, size, mirror, rotation, metadata, integrity, seed, flags };
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                    }
                     play::Serverbound::SetCommandMinecart { entity_id: cart, command, track_output } => {
                         let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                         let action = Action::CommandMinecart { entity_id: cart, command, track_output };

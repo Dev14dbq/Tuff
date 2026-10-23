@@ -31,6 +31,11 @@ pub fn mode(ctx: Ctx, state: u32) -> Option<Mode> {
 /// comes.
 pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
     let state = level.block(p);
+    if ctx.shapes.block_name(state) == Some("minecraft:structure_block") {
+        let powered = redstone::received(level, ctx, p, true) > 0;
+        level.structure_block_power(p, powered);
+        return;
+    }
     let Some(mode) = mode(ctx, state) else {
         return;
     };

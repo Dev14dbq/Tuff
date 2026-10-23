@@ -151,6 +151,37 @@ pub enum Action {
         mode: i32,
         flags: u8,
     },
+    /// A jigsaw block's window was done.
+    SetJigsaw {
+        position: Position,
+        name: String,
+        target: String,
+        pool: String,
+        final_state: String,
+        joint: String,
+        selection_priority: i32,
+        placement_priority: i32,
+    },
+    /// Generate in a jigsaw block's window.
+    GenerateJigsaw {
+        position: Position,
+        levels: i32,
+    },
+    /// A structure block's window was done.
+    SetStructure {
+        position: Position,
+        action: i32,
+        mode: i32,
+        name: String,
+        offset: [i8; 3],
+        size: [u8; 3],
+        mirror: i32,
+        rotation: i32,
+        metadata: String,
+        integrity: f32,
+        seed: i64,
+        flags: u8,
+    },
     /// A command block minecart's window was done.
     CommandMinecart {
         entity_id: i32,
@@ -1064,6 +1095,74 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             )
             .into_iter()
             .collect(),
+            ..Outcome::default()
+        },
+        Action::SetJigsaw {
+            position,
+            name,
+            target,
+            pool,
+            final_state,
+            joint,
+            selection_priority,
+            placement_priority,
+        } => {
+            crate::structure_blocks::set_jigsaw(
+                ctx,
+                actor.uuid,
+                actor.game_mode,
+                position,
+                &name,
+                &target,
+                &pool,
+                &final_state,
+                &joint,
+                selection_priority,
+                placement_priority,
+            );
+            Outcome::default()
+        }
+        Action::GenerateJigsaw { position, levels } => Outcome {
+            messages: crate::structure_blocks::generate_jigsaw(
+                ctx,
+                actor.uuid,
+                actor.game_mode,
+                position,
+                levels,
+            ),
+            ..Outcome::default()
+        },
+        Action::SetStructure {
+            position,
+            action,
+            mode,
+            name,
+            offset,
+            size,
+            mirror,
+            rotation,
+            metadata,
+            integrity,
+            seed,
+            flags,
+        } => Outcome {
+            messages: crate::structure_blocks::set_structure(
+                ctx,
+                actor.uuid,
+                actor.game_mode,
+                position,
+                action,
+                mode,
+                &name,
+                offset,
+                size,
+                mirror,
+                rotation,
+                &metadata,
+                integrity,
+                seed,
+                flags,
+            ),
             ..Outcome::default()
         },
         Action::CommandMinecart {

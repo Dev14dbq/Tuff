@@ -60,6 +60,7 @@ mod random_ticks;
 pub mod rules;
 mod scoreboard;
 mod storage;
+mod structure_blocks;
 mod summon;
 mod tick;
 mod trading;

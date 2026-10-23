@@ -573,6 +573,43 @@ pub mod play {
             mode: i32,
             flags: u8,
         },
+        /// A jigsaw block's window was done.
+        SetJigsawBlock {
+            position: Position,
+            name: String,
+            target: String,
+            pool: String,
+            final_state: String,
+            /// `rollable` or `aligned`.
+            joint: String,
+            selection_priority: i32,
+            placement_priority: i32,
+        },
+        /// "Generate" in a jigsaw block's window.
+        JigsawGenerate {
+            position: Position,
+            levels: i32,
+            keep_jigsaws: bool,
+        },
+        /// A structure block's window. `action`: 0 update, 1 save, 2 load,
+        /// 3 detect size; `mode`: 0 save, 1 load, 2 corner, 3 data;
+        /// `mirror`: 0 none, 1 left-right, 2 front-back; `rotation`: 0, 1
+        /// 90°, 2 180°, 3 270°; `flags`: 1 ignore entities, 2 show air, 4
+        /// show bounding box, 8 strict.
+        SetStructureBlock {
+            position: Position,
+            action: i32,
+            mode: i32,
+            name: String,
+            offset: [i8; 3],
+            size: [u8; 3],
+            mirror: i32,
+            rotation: i32,
+            metadata: String,
+            integrity: f32,
+            seed: i64,
+            flags: u8,
+        },
         /// A command block minecart's settings from its window.
         SetCommandMinecart {
             entity_id: i32,
@@ -916,6 +953,35 @@ pub mod play {
                     position: r.position()?,
                     command: r.string(32767)?,
                     mode: r.varint()?,
+                    flags: r.u8()?,
+                },
+                "minecraft:set_jigsaw_block" => Serverbound::SetJigsawBlock {
+                    position: r.position()?,
+                    name: r.string(32767)?,
+                    target: r.string(32767)?,
+                    pool: r.string(32767)?,
+                    final_state: r.string(32767)?,
+                    joint: r.string(32767)?,
+                    selection_priority: r.varint()?,
+                    placement_priority: r.varint()?,
+                },
+                "minecraft:jigsaw_generate" => Serverbound::JigsawGenerate {
+                    position: r.position()?,
+                    levels: r.varint()?,
+                    keep_jigsaws: r.bool()?,
+                },
+                "minecraft:set_structure_block" => Serverbound::SetStructureBlock {
+                    position: r.position()?,
+                    action: r.varint()?,
+                    mode: r.varint()?,
+                    name: r.string(32767)?,
+                    offset: [r.i8()?, r.i8()?, r.i8()?],
+                    size: [r.u8()?, r.u8()?, r.u8()?],
+                    mirror: r.varint()?,
+                    rotation: r.varint()?,
+                    metadata: r.string(128)?,
+                    integrity: r.f32()?,
+                    seed: r.varlong()?,
                     flags: r.u8()?,
                 },
                 "minecraft:set_command_minecart" => Serverbound::SetCommandMinecart {
