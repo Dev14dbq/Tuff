@@ -2344,16 +2344,21 @@ impl PacketReader {
                     .with_context(|| format!("unknown {state:?} packet id {id}"))?;
                 let packet = match state {
                     State::Handshake => {
-                        Packet::Handshake(handshake::Serverbound::decode(name, &mut r)?)
+                        handshake::Serverbound::decode(name, &mut r).map(Packet::Handshake)
                     }
-                    State::Status => Packet::Status(status::Serverbound::decode(name, &mut r)?),
-                    State::Login => Packet::Login(login::Serverbound::decode(name, &mut r)?),
+                    State::Status => status::Serverbound::decode(name, &mut r).map(Packet::Status),
+                    State::Login => login::Serverbound::decode(name, &mut r).map(Packet::Login),
                     State::Configuration => {
-                        Packet::Configuration(configuration::Serverbound::decode(name, &mut r)?)
+                        configuration::Serverbound::decode(name, &mut r).map(Packet::Configuration)
                     }
-                    State::Play => Packet::Play(play::Serverbound::decode(name, &mut r)?),
+                    State::Play => play::Serverbound::decode(name, &mut r).map(Packet::Play),
                 };
-                return Ok(packet);
+                // Which packet a client sent that we could not read, and its
+                // bytes, so the layout can be fixed.
+                return packet.with_context(|| {
+                    let hex: String = body.iter().take(512).map(|b| format!("{b:02x}")).collect();
+                    format!("{name} ({} bytes: {hex})", body.len())
+                });
             }
             self.fill().await?;
         }
