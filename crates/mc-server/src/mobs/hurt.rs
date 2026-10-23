@@ -486,6 +486,7 @@ fn ent_of(ctx: &ServerContext, m: &Mob) -> crate::loot::Ent {
                 item: n.to_owned(),
                 enchants: Vec::new(),
             }),
+        open_water: None,
     }
 }
 

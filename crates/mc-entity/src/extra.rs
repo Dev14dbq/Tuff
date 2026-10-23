@@ -95,9 +95,14 @@ pub enum Shot {
     /// A fishing bobber; `hooked` is the entity it pulls.
     Bobber {
         hooked: Option<i32>,
-        /// Ticks until a fish bites, then the ticks it stays bitten.
+        /// Ticks until a fish notices the bait (-1: not started), then the
+        /// ticks it swims over, then the ticks it stays on the hook.
         wait: i32,
+        approach: i32,
         bite: i32,
+        /// Lure and Luck of the Sea of the rod it was cast with.
+        lure: i32,
+        luck: i32,
     },
 }
 
