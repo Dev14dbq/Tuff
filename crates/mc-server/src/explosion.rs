@@ -433,9 +433,33 @@ pub struct Blast {
     /// A mob's (a creeper's): `mob_griefing` and
     /// `mob_explosion_drop_decay` rule it, not the TNT rules.
     pub mob: bool,
+    /// Sets fire on air above solid ground, a third of the blown spots.
+    pub fire: bool,
+    /// A bed or respawn anchor used where it does not work: block
+    /// interaction rules (`block_explosion_drop_decay`), and the damage
+    /// is `bad_respawn_point`. `Some(true)` when water was next to the
+    /// anchor, which shields the blocks.
+    pub respawn: Option<bool>,
 }
 
 impl Blast {
+    /// A bed or respawn anchor going off at the centre of `at`.
+    pub fn respawn_point(at: Position, shielded: bool) -> Self {
+        Self {
+            center: [
+                f64::from(at.x) + 0.5,
+                f64::from(at.y) + 0.5,
+                f64::from(at.z) + 0.5,
+            ],
+            power: 5.0,
+            source: -1,
+            owner: None,
+            mob: false,
+            fire: true,
+            respawn: Some(shielded),
+        }
+    }
+
     pub fn tnt(entity: &Entity, owner: Option<u128>) -> Self {
         // Vanilla's height is a float.
         let y = entity.pos[1] + f64::from(0.98_f32 / 16.0);
@@ -445,6 +469,8 @@ impl Blast {
             source: entity.id,
             owner,
             mob: false,
+            fire: false,
+            respawn: None,
         }
     }
 }
@@ -935,10 +961,12 @@ fn explode_one(
     blown_positions(ctx, level, blast, rng, sc);
     let decay = if blast.mob {
         ctx.game_rule_bool("mob_explosion_drop_decay")
+    } else if blast.respawn.is_some() {
+        ctx.game_rule_bool("block_explosion_drop_decay")
     } else {
         decay
     };
-    if blast.mob && !ctx.game_rule_bool("mob_griefing") {
+    if blast.mob && !ctx.game_rule_bool("mob_griefing") || blast.respawn == Some(true) {
         sc.positions.clear();
     }
     let block_drops = ctx.game_rule_bool("block_drops");
@@ -997,6 +1025,26 @@ fn explode_one(
         level.set_block(p, ctx.shapes.air());
     }
     merge_and_drop(ctx, drops);
+    if blast.fire {
+        // A third of the blown spots that are now air over solid ground burn.
+        if let Some(fire) = blocks.default_state("minecraft:fire") {
+            for &p in &sc.positions {
+                if rng.below(3) != 0 {
+                    continue;
+                }
+                let below = Position::new(p.x, p.y - 1, p.z);
+                let here = ctx.world.block(p, blocks);
+                if here.is_some_and(|s| ctx.shapes.is_air(s))
+                    && ctx
+                        .world
+                        .block(below, blocks)
+                        .is_some_and(|s| ctx.shapes.conducts(s))
+                {
+                    level.set_block(p, fire);
+                }
+            }
+        }
+    }
     // The blocks are gone: what entities see is read afresh.
     sc.begin(ctx, blast.center);
     sc.index_solids(ctx);
@@ -1054,11 +1102,14 @@ fn explode_one(
                     "minecraft:explosion"
                 },
             );
+            if blast.respawn.is_some() {
+                h.kind = "minecraft:bad_respawn_point";
+            }
             h.player = blast.owner;
             h.by = blast
                 .owner
                 .and_then(|o| lock(&ctx.players).get(&o).map(|p| p.entity_id));
-            h.direct = Some(blast.source);
+            h.direct = (blast.source >= 0).then_some(blast.source);
             crate::mobs::hurt::harm(ctx, e, &h);
         }
         for (v, d) in e.vel.iter_mut().zip(dir) {
@@ -1075,9 +1126,14 @@ fn explode_one(
     }
 
     // Players.
-    let attacker = blast
-        .owner
-        .and_then(|o| lock(&ctx.players).get(&o).map(|p| p.profile.name.clone()));
+    let attacker = if blast.respawn.is_some() {
+        // The second name of "was killed by [Intentional Game Design]".
+        Some("Intentional Game Design".to_owned())
+    } else {
+        blast
+            .owner
+            .and_then(|o| lock(&ctx.players).get(&o).map(|p| p.profile.name.clone()))
+    };
     for &Victim {
         uuid,
         mode,
@@ -1108,7 +1164,9 @@ fn explode_one(
             *v /= len;
         }
         let impact = (1.0 - dist) * exposure(ctx, level, sc, c, min, max);
-        let (kind, key) = if attacker.is_some() {
+        let (kind, key) = if blast.respawn.is_some() {
+            ("minecraft:bad_respawn_point", "death.attack.badRespawnPoint.message")
+        } else if attacker.is_some() {
             (
                 "minecraft:player_explosion",
                 "death.attack.explosion.player",
@@ -1123,7 +1181,7 @@ fn explode_one(
             kind,
             key,
             attacker.as_deref(),
-            Some(blast.source),
+            (blast.source >= 0).then_some(blast.source),
         );
         knockback.push((uuid, [dir[0] * impact, dir[1] * impact, dir[2] * impact]));
     }
@@ -1278,6 +1336,8 @@ mod tests {
             source: 0,
             owner: None,
             mob: false,
+            fire: false,
+            respawn: None,
         };
         let gone = explode(&ctx, &mut level, &mut entities, &blast);
         let changes = level.into_changes();
@@ -1308,6 +1368,8 @@ mod tests {
             source: 0,
             owner: None,
             mob: false,
+            fire: false,
+            respawn: None,
         };
         explode(&ctx, &mut level, &mut entities, &blast);
         drop(level);
@@ -1382,5 +1444,29 @@ mod tests {
         for _ in 0..100 {
             assert!((10..30).contains(&chained_fuse(&mut rng)));
         }
+    }
+
+    #[test]
+    fn a_bad_respawn_point_burns_and_water_shields() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let at = |x, y, z| ctx.world.block(Position::new(x, y, z), &ctx.data.blocks);
+        let origin = Position::new(0, -60, 0);
+        // Shielded by water: nothing is dug, nothing burns.
+        let mut level = WorldLevel::new(&ctx);
+        let mut entities = Vec::new();
+        explode(&ctx, &mut level, &mut entities, &Blast::respawn_point(origin, true));
+        assert!(level.into_changes().is_empty());
+        // Otherwise a crater, and fire on a third of the air above ground.
+        let mut level = WorldLevel::new(&ctx);
+        explode(&ctx, &mut level, &mut entities, &Blast::respawn_point(origin, false));
+        let changes = level.into_changes();
+        assert!(changes.len() > 20, "{} blocks", changes.len());
+        assert!(ctx.data.blocks.is_air(at(0, -61, 0).unwrap()));
+        let fire = ctx.data.blocks.default_state("minecraft:fire").unwrap();
+        let fires = changes.iter().filter(|(_, s)| *s == fire).count();
+        assert!(fires > 0, "some blown spots burn");
     }
 }

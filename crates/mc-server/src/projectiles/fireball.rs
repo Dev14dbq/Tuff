@@ -83,6 +83,8 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             owner,
             // A ghast's: the mob rules apply.
             mob: true,
+            fire: t.ctx.game_rule_bool("mob_griefing"),
+            respawn: None,
         });
     }
 }

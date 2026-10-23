@@ -502,6 +502,9 @@ pub struct ServerContext {
     pub campfires: Mutex<crate::campfires::Active>,
     /// Crafters showing `crafting` (tick thread).
     pub crafters: Mutex<crate::crafter::Active>,
+    /// Explosions waiting for the next tick (beds and anchors used where
+    /// they do not work).
+    pub pending_blasts: Mutex<Vec<crate::explosion::Blast>>,
     /// Hoppers that tick (tick thread).
     pub hoppers: Mutex<crate::hoppers::Active>,
     /// Recent redstone torch toggles by position (burnout).
@@ -762,6 +765,7 @@ impl ServerContext {
             brewers: Mutex::new(HashMap::new()),
             campfires: Mutex::new(Default::default()),
             crafters: Mutex::new(HashMap::new()),
+            pending_blasts: Mutex::new(Vec::new()),
             hoppers: Mutex::new(Default::default()),
             torch_toggles: Mutex::new(HashMap::new()),
             container_updates: Mutex::new(Vec::new()),
@@ -1075,6 +1079,7 @@ impl ServerContext {
             brewers: Mutex::new(HashMap::new()),
             campfires: Mutex::new(Default::default()),
             crafters: Mutex::new(HashMap::new()),
+            pending_blasts: Mutex::new(Vec::new()),
             block_events: Mutex::new(Vec::new()),
             moving: Mutex::new(Vec::new()),
             // Every movement is an event; leave room for many moving players.

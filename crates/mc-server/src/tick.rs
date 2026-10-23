@@ -771,7 +771,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     let mut gone = Vec::new();
     // Items that moved into another block look for stacks to join sooner.
     let mut crossed = Vec::new();
-    let (mut blasts, mut fuses) = (Vec::new(), Vec::new());
+    let (mut blasts, mut fuses) = (std::mem::take(&mut *lock(&ctx.pending_blasts)), Vec::new());
     let now = lock(&ctx.time).age;
     let mut claimed = crate::trading::claimed_sites(&entities);
     // Plates see entities where they are at that moment of the tick.

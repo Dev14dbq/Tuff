@@ -158,6 +158,8 @@ fn step(t: &mut Tick, e: &mut Entity, v: &mut Vehicle) {
                 source: e.id,
                 owner: None,
                 mob: false,
+                fire: false,
+                respawn: None,
             });
             return;
         }

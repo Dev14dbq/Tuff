@@ -10,6 +10,7 @@ use crate::context::{Event, ServerContext};
 use crate::fx;
 use crate::interact::{Actor, Outcome};
 use crate::level::{WorldLevel, to_pos};
+use crate::tick::lock;
 
 const CREATIVE: i32 = 1;
 
@@ -364,8 +365,28 @@ fn jukebox(
     true
 }
 
-fn bed(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, p: Position, _state: u32) -> bool {
+fn bed(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, p: Position, state: u32) -> bool {
     if ctx.world.dimension != "minecraft:overworld" {
+        // Beds only work in the Overworld: both halves go and the bed
+        // explodes (minecraft.wiki, "Bed").
+        let blocks = &ctx.data.blocks;
+        let head = blocks.property(state, "part") == Some("head");
+        let facing = blocks.property(state, "facing").and_then(mc_tick::Dir::from_name);
+        if let Some(f) = facing {
+            let (dx, dy, dz) = f.offset();
+            let sign = if head { -1 } else { 1 };
+            let other = Position::new(p.x + sign * dx, p.y + sign * dy, p.z + sign * dz);
+            if ctx
+                .world
+                .block(other, blocks)
+                .and_then(|s| blocks.block_name(s))
+                == blocks.block_name(state)
+            {
+                set(ctx, outcome, other, ctx.shapes.air());
+            }
+        }
+        set(ctx, outcome, p, ctx.shapes.air());
+        lock(&ctx.pending_blasts).push(crate::explosion::Blast::respawn_point(p, false));
         return true;
     }
     let respawn = crate::players::Respawn {
@@ -442,6 +463,20 @@ fn anchor(
         return false;
     }
     if !ctx.world.dimension.contains("nether") {
+        // A charged anchor outside the Nether blows up; water beside it
+        // spares the blocks around.
+        let blocks = &ctx.data.blocks;
+        let wet = |q: Position| {
+            ctx.world.block(q, blocks).is_some_and(|s| {
+                blocks.block_name(s) == Some("minecraft:water")
+                    || blocks.property(s, "waterlogged") == Some("true")
+            })
+        };
+        let shielded = [(0, 1, 0), (1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1)]
+            .iter()
+            .any(|&(dx, dy, dz)| wet(Position::new(p.x + dx, p.y + dy, p.z + dz)));
+        set(ctx, outcome, p, ctx.shapes.air());
+        lock(&ctx.pending_blasts).push(crate::explosion::Blast::respawn_point(p, shielded));
         return true;
     }
     let respawn = crate::players::Respawn {
@@ -518,4 +553,62 @@ pub fn tick(ctx: &ServerContext) {
         time.packet(true)
     };
     let _ = ctx.events.send(Event::Time(packet));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::Pose;
+
+    #[test]
+    fn a_charged_anchor_outside_the_nether_explodes() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let Some(ctx) = mc_data::McData::load(&dir)
+            .ok()
+            .and_then(|data| ServerContext::new(crate::Config::new(dir), data).ok())
+        else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let actor = Actor {
+            uuid: 9,
+            entity_id: 9,
+            game_mode: 0,
+            pose: Pose {
+                x: 0.5,
+                y: -60.0,
+                z: 0.5,
+                yaw: 0.0,
+                pitch: 0.0,
+                on_ground: true,
+            },
+            sneaking: false,
+        };
+        let p = Position::new(5, -60, 5);
+        let state = ctx
+            .data
+            .blocks
+            .state_id("minecraft:respawn_anchor", &[("charges", "2")])
+            .unwrap();
+        WorldLevel::new(&ctx).set_block(p, state);
+        let mut outcome = Outcome::default();
+        assert!(anchor(&ctx, &mut outcome, actor, 0, p, state, None));
+        // The anchor is gone and a blast with fire waits for the tick.
+        let now = ctx.world.block(p, &ctx.data.blocks).unwrap();
+        assert!(ctx.data.blocks.is_air(now));
+        let blasts = lock(&ctx.pending_blasts);
+        assert_eq!(blasts.len(), 1);
+        assert!(blasts[0].fire && blasts[0].respawn == Some(false));
+        assert_eq!(blasts[0].power, 5.0);
+        drop(blasts);
+        // An uncharged one is left alone.
+        let empty = ctx
+            .data
+            .blocks
+            .state_id("minecraft:respawn_anchor", &[("charges", "0")])
+            .unwrap();
+        WorldLevel::new(&ctx).set_block(p, empty);
+        assert!(!anchor(&ctx, &mut outcome, actor, 0, p, empty, None));
+        assert_eq!(lock(&ctx.pending_blasts).len(), 1);
+    }
 }

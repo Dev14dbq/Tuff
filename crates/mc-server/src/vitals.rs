@@ -360,8 +360,22 @@ fn takes_damage(game_mode: i32) -> bool {
 fn death_message(key: &str, names: &[&str]) -> Tag {
     let with = names
         .iter()
-        .map(|n| {
+        .enumerate()
+        .map(|(i, n)| {
             let mut c = Compound::new();
+            if i == 1 && key == "death.attack.badRespawnPoint.message" {
+                // A link to the bug report, as the game shows it.
+                c.insert("translate", Tag::String("death.attack.badRespawnPoint.link".into()));
+                let mut click = Compound::new();
+                click.insert("action", Tag::String("open_url".into()));
+                click.insert("url", Tag::String("https://bugs.mojang.com/browse/MCPE-28723".into()));
+                c.insert("click_event", Tag::Compound(click));
+                let mut hover = Compound::new();
+                hover.insert("action", Tag::String("show_text".into()));
+                hover.insert("value", Tag::String("MCPE-28723".into()));
+                c.insert("hover_event", Tag::Compound(hover));
+                return Tag::Compound(c);
+            }
             c.insert("text", Tag::String((*n).to_owned()));
             Tag::Compound(c)
         })
