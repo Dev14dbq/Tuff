@@ -564,6 +564,21 @@ pub mod play {
         TeleportToEntity {
             target: u128,
         },
+        /// A command block's settings from its window. `mode`: 0 chain,
+        /// 1 repeating, 2 impulse; `flags`: 1 track output, 2 conditional,
+        /// 4 always active.
+        SetCommandBlock {
+            position: Position,
+            command: String,
+            mode: i32,
+            flags: u8,
+        },
+        /// A command block minecart's settings from its window.
+        SetCommandMinecart {
+            entity_id: i32,
+            command: String,
+            track_output: bool,
+        },
         /// The text written on a sign.
         SignUpdate {
             position: Position,
@@ -884,6 +899,17 @@ pub mod play {
                 "minecraft:teleport_to_entity" => {
                     Serverbound::TeleportToEntity { target: r.uuid()? }
                 }
+                "minecraft:set_command_block" => Serverbound::SetCommandBlock {
+                    position: r.position()?,
+                    command: r.string(32767)?,
+                    mode: r.varint()?,
+                    flags: r.u8()?,
+                },
+                "minecraft:set_command_minecart" => Serverbound::SetCommandMinecart {
+                    entity_id: r.varint()?,
+                    command: r.string(32767)?,
+                    track_output: r.bool()?,
+                },
                 "minecraft:sign_update" => Serverbound::SignUpdate {
                     position: r.position()?,
                     front: r.bool()?,
@@ -1832,6 +1858,10 @@ pub mod play {
         pub const RAIN_LEVEL: u8 = 7;
         /// Value: thunder level 0–1.
         pub const THUNDER_LEVEL: u8 = 8;
+        /// Value: 1 skips the death screen (`immediate_respawn`).
+        pub const IMMEDIATE_RESPAWN: u8 = 11;
+        /// Value: 1 limits crafting to known recipes (`limited_crafting`).
+        pub const LIMITED_CRAFTING: u8 = 12;
         pub const START_WAITING_FOR_CHUNKS: u8 = 13;
     }
 
@@ -2135,6 +2165,9 @@ pub mod play {
         VarLong(i64),
         /// A custom name (a text component), or none.
         OptComponent(Option<mc_nbt::Tag>),
+        String(String),
+        /// A text component.
+        Component(mc_nbt::Tag),
         /// A living entity by UUID (a pet's owner), or none.
         OptUuid(Option<u128>),
         /// A block state (an enderman's), or none.
@@ -2160,6 +2193,14 @@ pub mod play {
                 MetadataValue::VarLong(v) => {
                     out.put_varint(2);
                     out.put_varlong(*v);
+                }
+                MetadataValue::String(s) => {
+                    out.put_varint(4);
+                    out.put_string(s);
+                }
+                MetadataValue::Component(tag) => {
+                    out.put_varint(5);
+                    crate::codec::put_nbt(out, tag);
                 }
                 MetadataValue::OptComponent(tag) => {
                     out.put_varint(6);

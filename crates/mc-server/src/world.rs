@@ -1823,6 +1823,8 @@ pub(crate) fn client_data(id: &str, data: &mc_nbt::Compound) -> Option<mc_nbt::C
         "minecraft:blast_furnace",
         "minecraft:brewing_stand",
         "minecraft:chest",
+        // Only an operator who opens it sees its command.
+        "minecraft:command_block",
         "minecraft:crafter",
         "minecraft:dispenser",
         "minecraft:dropper",

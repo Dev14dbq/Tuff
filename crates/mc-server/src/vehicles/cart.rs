@@ -131,6 +131,11 @@ fn step(t: &mut Tick, e: &mut Entity, v: &mut Vehicle) {
         && r.powered
     {
         super::eject(ctx, e.id, v);
+        // A command block minecart runs at most every 4 ticks.
+        if cart == Cart::Command && i64::from(e.age) - v.command.activated_at >= 4 {
+            v.command.activated_at = i64::from(e.age);
+            t.out.carts.push(e.id);
+        }
         if cart == Cart::Tnt && v.fuse < 0 {
             v.fuse = 80;
             fx::sound(
@@ -152,6 +157,7 @@ fn step(t: &mut Tick, e: &mut Entity, v: &mut Vehicle) {
                 power: 4.0,
                 source: e.id,
                 owner: None,
+                mob: false,
             });
             return;
         }

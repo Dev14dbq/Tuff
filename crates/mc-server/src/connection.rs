@@ -472,10 +472,11 @@ async fn play(
     let mut ctx = writer.ctx.of_player(uuid);
     // Subscribe before reading the player list, so nobody slips through.
     let mut events = ctx.events.subscribe();
+    crate::commands::load_progress(&ctx, uuid, &me.extra.recipes);
     let mut pose = session
         .saved
         .as_ref()
-        .map_or_else(|| world_spawn_pose(&ctx), |s| s.pose);
+        .map_or_else(|| world_spawn_pose(&ctx, me.game_mode), |s| s.pose);
     let (x, y, z) = (pose.x, pose.y, pose.z);
 
     writer.queue(&play::Login {
@@ -488,9 +489,9 @@ async fn play(
         max_players: ctx.config.max_players as i32,
         view_distance: i32::from(ctx.config.view_distance),
         simulation_distance: i32::from(ctx.config.view_distance),
-        reduced_debug_info: false,
-        enable_respawn_screen: true,
-        do_limited_crafting: false,
+        reduced_debug_info: ctx.game_rule_bool("reduced_debug_info"),
+        enable_respawn_screen: !ctx.game_rule_bool("immediate_respawn"),
+        do_limited_crafting: ctx.game_rule_bool("limited_crafting"),
         dimension_type: ctx.world.dimension_type_id,
         dimension: ctx.world.dimension.clone(),
         hashed_seed: 0,
@@ -885,6 +886,9 @@ async fn play(
                             update_player(&ctx, uuid, |p| p.flying = flying);
                             writer.queue(&abilities(game_mode, flying))?;
                             writer.queue(&health)?;
+                            if let Some(xp) = ctx.vitals.lock().expect("vitals lock").get(&uuid).map(crate::vitals::Vitals::experience_packet) {
+                                writer.queue(&xp)?;
+                            }
                             pose = target;
                             next_teleport += 1;
                             awaiting_teleport = Some(next_teleport);
@@ -1095,6 +1099,16 @@ async fn play(
                         if let Some(to) = to {
                             let _ = ctx.events.send(Event::Teleport { uuid, pose: to });
                         }
+                    }
+                    play::Serverbound::SetCommandBlock { position, command, mode, flags } => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::CommandBlock { position, command, mode, flags };
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                    }
+                    play::Serverbound::SetCommandMinecart { entity_id: cart, command, track_output } => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::CommandMinecart { entity_id: cart, command, track_output };
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::SignUpdate { position, front, lines } => {
                         let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
@@ -1338,9 +1352,12 @@ async fn play(
                     }
                     Ok(Event::Died { uuid: who, entity_id: dead, message }) => {
                         if who == uuid {
-                            writer.queue(&play::PlayerCombatKill { player: entity_id, message: message.clone() })?;
+                            let shown = ctx.game_rule_bool("show_death_messages");
+                            let screen = if shown { message.clone() } else { mc_nbt::Tag::String(String::new()) };
+                            writer.queue(&play::PlayerCombatKill { player: entity_id, message: screen })?;
                             // Everything carried falls out where the player died.
-                            let lost: Vec<play::ItemStack> = {
+                            let keep = ctx.game_rule_bool("keep_inventory");
+                            let lost: Vec<play::ItemStack> = if keep { Vec::new() } else {
                                 let mut inventories = ctx.inventories.lock().expect("inventories lock");
                                 inventories.get_mut(&uuid).map_or_else(Vec::new, |hands| {
                                     let mut all: Vec<play::ItemStack> = hands.slots.iter_mut().filter_map(Option::take).collect();
@@ -1354,8 +1371,14 @@ async fn play(
                             for stack in lost {
                                 crate::tick::scatter_item(&ctx, pose, stack);
                             }
-                            update_player(&ctx, uuid, |p| p.main_hand = None);
-                            let _ = ctx.events.send(Event::Chat(message));
+                            if !keep {
+                                update_player(&ctx, uuid, |p| p.main_hand = None);
+                                crate::vitals::drop_death_xp(&ctx, uuid, game_mode, [pose.x, pose.y, pose.z]);
+                            }
+                            if shown {
+                                crate::vitals::announce_death(&ctx, uuid, message);
+                            }
+                            crate::vitals::drop_pearls(&ctx, uuid);
                         } else if visible.remove(&who) {
                             writer.queue(&play::RemoveEntities { entity_ids: vec![dead] })?;
                         }
@@ -1463,6 +1486,9 @@ async fn play(
                             Direct::ShowDialog(p) => writer.queue(&p)?,
                             Direct::ClearDialog(p) => writer.queue(&p)?,
                             Direct::PostEffects(p) => writer.queue(&p)?,
+                            Direct::GameEvent(p) => writer.queue(&p)?,
+                            Direct::BlockEntityData(p) => writer.queue(&p)?,
+                            Direct::EntityEvent(p) => writer.queue(&p)?,
                             Direct::Motion(p) => writer.queue(&p)?,
                         }
                     }
@@ -2388,17 +2414,59 @@ impl PacketWriter {
     }
 }
 
-/// Where new players appear: the middle of the world spawn's block.
-fn world_spawn_pose(ctx: &ServerContext) -> Pose {
+/// Where new players appear: the middle of the world spawn's block, or,
+/// except in adventure mode, the top of a random column within
+/// `respawn_radius` of it, as vanilla picks one.
+fn world_spawn_pose(ctx: &ServerContext, game_mode: i32) -> Pose {
     let spawn = ctx.spawn.lock().expect("spawn lock").clone();
-    Pose {
+    let mut pose = Pose {
         x: f64::from(spawn.pos.0) + 0.5,
         y: f64::from(spawn.pos.1),
         z: f64::from(spawn.pos.2) + 0.5,
         yaw: spawn.yaw,
         pitch: spawn.pitch,
         on_ground: true,
+    };
+    if game_mode == 2 || spawn.dimension != "minecraft:overworld" {
+        return pose;
     }
+    let radius = ctx.game_rules.lock().expect("rules lock").int("respawn_radius").max(0);
+    let side = i64::from(radius) * 2 + 1;
+    let count = (side * side).min(i64::from(i32::MAX));
+    // Every column once, in a random order: a fixed step coprime to the count.
+    let step = (count / 2 + 1..=count).chain(1..=count / 2).find(|&n| gcd(n, count) == 1).unwrap_or(1);
+    let start = (crate::util::random_u64() % count as u64) as i64;
+    for i in 0..count {
+        let q = (start + step * i) % count;
+        let (x, z) = (spawn.pos.0 + (q % side) as i32 - radius, spawn.pos.2 + (q / side) as i32 - radius);
+        if let Some(y) = respawn_surface(ctx, x, z) {
+            (pose.x, pose.y, pose.z) = (f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
+            break;
+        }
+    }
+    pose
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+/// The height a player can stand at on top of column x, z: above its
+/// highest block, which is not a fluid, with room for the player.
+fn respawn_surface(ctx: &ServerContext, x: i32, z: i32) -> Option<i32> {
+    let blocks = &ctx.data.blocks;
+    let world = &ctx.world;
+    let top = world.min_y + world.height as i32 - 1;
+    let state = |y: i32| world.block(Position::new(x, y, z), blocks);
+    let mut y = top;
+    while y >= world.min_y && blocks.is_air(state(y)?) {
+        y -= 1;
+    }
+    if y < world.min_y || blocks.is_fluid(state(y)?) {
+        return None;
+    }
+    let clear = |y: i32| state(y).is_none_or(|s| blocks.is_air(s));
+    (clear(y + 1) && clear(y + 2)).then_some(y + 1)
 }
 
 /// Where a player respawns and in which dimension: their own point if
@@ -2444,17 +2512,18 @@ fn respawn_target(ctx: &ServerContext, uuid: u128) -> (String, Pose) {
                     },
                 )
             } else {
-                spawn_target(ctx)
+                spawn_target(ctx, uuid)
             }
         }
-        None => spawn_target(ctx),
+        None => spawn_target(ctx, uuid),
     }
 }
 
-fn spawn_target(ctx: &ServerContext) -> (String, Pose) {
+fn spawn_target(ctx: &ServerContext, uuid: u128) -> (String, Pose) {
+    let game_mode = ctx.players.lock().expect("players lock").get(&uuid).map_or(0, |p| p.game_mode);
     // The lock is let go before `world_spawn_pose` takes it again.
     let dimension = ctx.spawn.lock().expect("spawn lock").dimension.clone();
-    (dimension, world_spawn_pose(ctx))
+    (dimension, world_spawn_pose(ctx, game_mode))
 }
 
 /// Tells a client where the world spawn is (the compass points there).

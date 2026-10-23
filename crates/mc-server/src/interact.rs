@@ -448,6 +448,7 @@ pub fn dig(
         crate::fx::level_event(ctx, 1011, centre(position), 0);
     }
     if actor.game_mode != CREATIVE
+        && ctx.game_rule_bool("block_drops")
         && let Some(name) = blocks.block_name(state)
     {
         let props = |k: &str| blocks.property(state, k).map(str::to_owned);
@@ -731,6 +732,22 @@ pub fn use_item_on(
     let Some(block) = held.and_then(|item| ctx.rules.block_for_item(item.item)) else {
         return refuse(outcome);
     };
+    // Game master blocks: only operators in creative place them.
+    let game_master = matches!(
+        held_name,
+        Some(
+            "minecraft:command_block"
+                | "minecraft:chain_command_block"
+                | "minecraft:repeating_command_block"
+                | "minecraft:structure_block"
+                | "minecraft:jigsaw"
+                | "minecraft:test_block"
+                | "minecraft:test_instance_block"
+        )
+    );
+    if game_master && !crate::command_blocks::may_use(ctx, actor.uuid, actor.game_mode) {
+        return refuse(outcome);
+    }
     let placement = Placement {
         clicked,
         face,
@@ -786,6 +803,7 @@ pub fn use_item_on(
     // Containers get their (empty) block entity.
     for &(p, state) in &placed.blocks {
         crate::containers::placed(ctx, p, state);
+        crate::command_blocks::placed(ctx, p, state);
         if let Some(id) = ctx.data.blocks.block_name(state).and_then(sign_entity) {
             ctx.world.set_block_entity(
                 mc_world::BlockEntity {

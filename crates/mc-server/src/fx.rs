@@ -317,10 +317,24 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
         }
         Kind::Vehicle(v) => {
             s.yaw = v.yaw;
+            if v.craft == mc_entity::extra::Craft::Minecart(Cart::Command) {
+                s.meta.extend(command_cart_meta(&v.command));
+            }
         }
         _ => return None,
     }
     Some(s)
+}
+
+/// A command block minecart's command and last output, as its window
+/// shows them.
+pub fn command_cart_meta(c: &mc_entity::extra::CommandCart) -> Vec<(u8, MetadataValue)> {
+    let mut output = mc_nbt::Compound::new();
+    output.insert("text", mc_nbt::Tag::String(c.last_output.clone().unwrap_or_default()));
+    vec![
+        (13, MetadataValue::String(c.command.clone())),
+        (14, MetadataValue::Component(mc_nbt::Tag::Compound(output))),
+    ]
 }
 
 /// `minecraft:entity_type` id of a name from [`Spawn::kind`].
@@ -373,6 +387,7 @@ pub fn type_name(kind: &Kind) -> Option<String> {
                 Cart::Furnace => "furnace_minecart",
                 Cart::Hopper => "hopper_minecart",
                 Cart::Tnt => "tnt_minecart",
+                Cart::Command => "command_block_minecart",
             }
             .into(),
         },

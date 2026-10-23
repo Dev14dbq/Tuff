@@ -34,6 +34,9 @@ pub struct WorldLevel<'a> {
     /// Minecarts and where they are so far this tick (detector rails look).
     /// Minecarts: id, box, and what a minecart holding items opens.
     pub minecarts: Vec<(i32, mc_entity::Aabb, Option<crate::containers::Kind>)>,
+    /// The tick's state, for the commands command blocks run (a fresh one
+    /// when the level was made outside the tick).
+    pub control: Option<&'a mut crate::tick::TickControl>,
 }
 
 impl<'a> WorldLevel<'a> {
@@ -48,6 +51,7 @@ impl<'a> WorldLevel<'a> {
             unlit: Vec::new(),
             entity_boxes: None,
             minecarts: Vec::new(),
+            control: None,
         }
     }
 
@@ -299,7 +303,9 @@ impl Level for WorldLevel<'_> {
         let ctx = self.ctx;
         let blocks = &ctx.data.blocks;
         let at = to_position(p);
-        if let Some(name) = blocks.block_name(state) {
+        if let Some(name) = blocks.block_name(state)
+            && ctx.game_rule_bool("block_drops")
+        {
             let props = |k: &str| blocks.property(state, k).map(str::to_owned);
             for drop in ctx.loot.drops(name, &props) {
                 crate::tick::drop_item(ctx, at, drop);
@@ -362,7 +368,16 @@ impl Level for WorldLevel<'_> {
     }
 
     fn block_entity_signal(&self, p: BlockPos) -> Option<u8> {
-        crate::blockuse::comparator_signal(self.ctx, to_position(p))
+        crate::command_blocks::signal(self.ctx, to_position(p))
+            .or_else(|| crate::blockuse::comparator_signal(self.ctx, to_position(p)))
+    }
+
+    fn command_block_power(&mut self, p: BlockPos, powered: bool) -> Option<(bool, bool)> {
+        crate::command_blocks::power(self.ctx, to_position(p), powered)
+    }
+
+    fn command_block_tick(&mut self, p: BlockPos) {
+        crate::command_blocks::tick(self, to_position(p));
     }
 
     fn viewers(&self, p: BlockPos) -> u8 {

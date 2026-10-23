@@ -1429,6 +1429,7 @@ fn gamerule_set(r: &mut Run, name: &str) -> Result<i32> {
         }
         r.out.events.push(Event::Time(time.packet(true)));
     }
+    rule_changed(r, name, value);
     r.success(
         translate(
             "commands.gamerule.set",
@@ -1440,6 +1441,37 @@ fn gamerule_set(r: &mut Run, name: &str) -> Result<i32> {
         rules::Value::Bool(b) => i32::from(b),
         rules::Value::Int(n) => n,
     })
+}
+
+/// What players see change with a rule: the death screen, limited
+/// crafting and the debug screen.
+fn rule_changed(r: &mut Run, name: &str, value: rules::Value) {
+    use crate::context::Direct;
+    use mc_protocol::packets::play::{EntityEvent, GameEvent, game_event};
+    let on = value == rules::Value::Bool(true);
+    let players: Vec<(u128, i32)> = lock(&r.ctx.players)
+        .values()
+        .map(|p| (p.profile.uuid, p.entity_id))
+        .collect();
+    for (uuid, entity_id) in players {
+        let packet = match name {
+            "immediate_respawn" | "limited_crafting" => Direct::GameEvent(GameEvent {
+                event: if name == "immediate_respawn" {
+                    game_event::IMMEDIATE_RESPAWN
+                } else {
+                    game_event::LIMITED_CRAFTING
+                },
+                value: f32::from(u8::from(on)),
+            }),
+            // Statuses 22 and 23 turn the reduced debug screen on and off.
+            "reduced_debug_info" => Direct::EntityEvent(EntityEvent {
+                entity_id,
+                status: if on { 22 } else { 23 },
+            }),
+            _ => return,
+        };
+        r.out.events.push(Event::Direct { uuid, packet });
+    }
 }
 
 /// A timeline's definition (`data/minecraft/timeline/<name>.json`).

@@ -14,8 +14,10 @@ use crate::context::{Event, Pose, ServerContext};
 use crate::level::{WorldLevel, to_pos};
 use crate::tick::lock;
 
-/// Ticks a survival player waits in a nether portal.
-pub const WAIT: u32 = 80;
+/// Ticks a survival player waits in a nether portal by default
+/// (`players_nether_portal_default_delay`).
+#[cfg(test)]
+const WAIT: u32 = 80;
 /// Ticks a player must be out of every portal before one works again (also
 /// after coming through one; 300 for mobs).
 pub const COOLDOWN: u32 = 10;
@@ -68,6 +70,14 @@ pub fn tick(ctx: &ServerContext) {
         .values()
         .filter_map(|p| Some((p.profile.uuid, p.game_mode, p.pose?, p.dimension.clone())))
         .collect();
+    let (creative_wait, survival_wait, to_nether) = {
+        let rules = lock(&ctx.game_rules);
+        (
+            rules.int("players_nether_portal_creative_delay").max(0) as u32,
+            rules.int("players_nether_portal_default_delay").max(0) as u32,
+            rules.bool("allow_entering_nether_using_portals"),
+        )
+    };
     let mut jobs = Vec::new();
     {
         let mut waiting = lock(&ctx.portals);
@@ -88,9 +98,13 @@ pub fn tick(ctx: &ServerContext) {
                 // once they have left it.
                 Some(_) if wait.cooldown > 0 => wait.cooldown = COOLDOWN,
                 Some(Kind::End) => jobs.push((uuid, here, Kind::End, pose)),
+                // `allow_entering_nether_using_portals` off: no way in,
+                // but the way back still works.
+                Some(Kind::Nether)
+                    if !to_nether && dimension != "minecraft:the_nether" => {}
                 Some(Kind::Nether) => {
                     wait.ticks += 1;
-                    let need = if matches!(game_mode, 1 | 3) { 1 } else { WAIT };
+                    let need = if matches!(game_mode, 1 | 3) { creative_wait } else { survival_wait }.max(1);
                     if wait.ticks >= need {
                         jobs.push((uuid, here, Kind::Nether, pose));
                     }

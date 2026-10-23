@@ -297,6 +297,13 @@ pub fn break_hung(ctx: &ServerContext, e: &mut Entity, fresh: &mut Vec<Entity>, 
         return;
     };
     let at = e.pos;
+    // With `entity_drops` off nothing falls out.
+    let mut kept = Vec::new();
+    let fresh = if crate::tick::lock(&ctx.game_rules).bool("entity_drops") {
+        fresh
+    } else {
+        &mut kept
+    };
     let (self_item, sound): (Option<&str>, &str) = match &h.decor {
         Decor::Frame(f) => {
             if let Some((item, damage)) = f.item {

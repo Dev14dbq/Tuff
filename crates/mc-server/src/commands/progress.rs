@@ -168,6 +168,132 @@ impl Adv {
     }
 }
 
+/// A player's known recipes, sorted, for their file.
+pub fn known_recipes(ctx: &ServerContext, uuid: u128) -> Vec<String> {
+    lock(&ctx.rare)
+        .progress
+        .known
+        .get(&uuid)
+        .map(|k| k.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// The advancements file of a player: `players/advancements/<uuid>.json`.
+fn advancements_file(ctx: &ServerContext, uuid: u128) -> Option<std::path::PathBuf> {
+    let world = ctx.config.world.as_ref()?;
+    Some(
+        world
+            .join("players/advancements")
+            .join(format!("{}.json", crate::util::uuid_string(uuid))),
+    )
+}
+
+/// What a joining player had done and knew, from their files.
+pub fn load_progress(ctx: &ServerContext, uuid: u128, recipes: &[String]) {
+    let mut done: HashMap<String, BTreeSet<String>> = HashMap::new();
+    if let Some(file) = advancements_file(ctx, uuid)
+        && let Ok(text) = std::fs::read_to_string(&file)
+        && let Ok(serde_json::Value::Object(all)) = serde_json::from_str(&text)
+    {
+        for (id, entry) in all {
+            if let Some(criteria) = entry["criteria"].as_object() {
+                done.insert(id, criteria.keys().cloned().collect());
+            }
+        }
+    }
+    let mut state = lock(&ctx.rare);
+    state.progress.done.insert(uuid, done);
+    state
+        .progress
+        .known
+        .insert(uuid, recipes.iter().cloned().collect());
+}
+
+/// `yyyy-MM-dd HH:mm:ss +0000` for now, as vanilla dates criteria.
+fn now_stamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let (days, rest) = (secs.div_euclid(86400), secs.rem_euclid(86400));
+    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} +0000",
+        rest / 3600,
+        rest / 60 % 60,
+        rest % 60
+    )
+}
+
+/// Writes a player's advancements file: each advancement with criteria
+/// done, when they were done (kept from the file for the old ones) and
+/// whether it is complete.
+pub fn save_advancements(ctx: &ServerContext, uuid: u128) {
+    let Some(file) = advancements_file(ctx, uuid) else {
+        return;
+    };
+    let Some(done) = lock(&ctx.rare).progress.done.get(&uuid).cloned() else {
+        return;
+    };
+    let old: serde_json::Value = std::fs::read_to_string(&file)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let b = book(ctx);
+    let now = now_stamp();
+    let mut out = serde_json::Map::new();
+    let sorted: BTreeMap<&String, &BTreeSet<String>> = done.iter().collect();
+    for (id, criteria) in sorted {
+        if criteria.is_empty() {
+            continue;
+        }
+        let mut c = serde_json::Map::new();
+        for name in criteria {
+            let when = old[id.as_str()]["criteria"][name.as_str()]
+                .as_str()
+                .map_or_else(|| now.clone(), str::to_owned);
+            c.insert(name.clone(), serde_json::Value::String(when));
+        }
+        let complete = b.advs.get(id).is_some_and(|a| a.complete(Some(criteria)));
+        out.insert(
+            id.clone(),
+            serde_json::json!({ "criteria": c, "done": complete }),
+        );
+    }
+    out.insert(
+        "DataVersion".into(),
+        serde_json::Value::from(ctx.data.version.world_version),
+    );
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let text = serde_json::to_string_pretty(&serde_json::Value::Object(out)).unwrap_or_default();
+    if let Err(e) = std::fs::write(&file, text) {
+        tracing::warn!("saving advancements: {e:#}");
+    }
+}
+
+/// For the `advancements` selector option: whether a player has the
+/// advancement `id` (`criterion` `None`), or its criterion, done.
+pub fn has_done(ctx: &ServerContext, uuid: u128, id: &str, criterion: Option<&str>) -> bool {
+    let b = book(ctx);
+    let id = full_id(id);
+    let state = lock(&ctx.rare);
+    let have = state.progress.done.get(&uuid).and_then(|m| m.get(&id));
+    match criterion {
+        Some(c) => have.is_some_and(|h| h.contains(c)),
+        None => b.advs.get(&id).is_some_and(|a| a.complete(have)),
+    }
+}
+
 /// How an advancement is named in messages.
 fn name(id: &str, adv: &Adv) -> Tag {
     let (Some(title), Some(description)) = (&adv.title, &adv.description) else {

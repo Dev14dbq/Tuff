@@ -150,7 +150,7 @@ fn item_entry(ctx: &ServerContext, stack: &mc_protocol::packets::play::ItemStack
 }
 
 /// An entity's data as vanilla shows it.
-fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
+pub fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
     let uuid = Tag::IntArray(target::uuid_ints(t.uuid()));
     if t.is_player() {
         let mut root = player_defaults();

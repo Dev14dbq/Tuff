@@ -222,6 +222,26 @@ const OPTIONS: [&str; 21] = [
     "z",
 ];
 
+/// Whether option `name` may still follow the options `before` of the
+/// selector `typed` (as the parser decides; see `args::applicable`).
+fn usable(typed: &str, before: &str, name: &str) -> bool {
+    let kind = typed.chars().nth(1);
+    let done: Vec<(&str, bool)> = before
+        .split(',')
+        .filter_map(|p| p.split_once('='))
+        .map(|(k, v)| (k.trim(), v.trim_start().starts_with('!')))
+        .collect();
+    let seen = done.iter().any(|(k, _)| *k == name);
+    let required = done.iter().any(|(k, neg)| *k == name && !neg);
+    match name {
+        "name" | "gamemode" | "team" => !required,
+        "type" => !matches!(kind, Some('p' | 'a' | 'r')) && !required,
+        "limit" | "sort" => kind != Some('s') && !seen,
+        "tag" | "nbt" | "predicate" => true,
+        _ => !seen,
+    }
+}
+
 fn tip(key: &str) -> Option<Tag> {
     Some(translate(key, Vec::new()))
 }
@@ -283,6 +303,7 @@ fn selector(
             None => OPTIONS
                 .iter()
                 .filter(|o| o.starts_with(part))
+                .filter(|o| usable(typed, &inside[..part_start], o))
                 .map(|o| {
                     let key = format!("argument.entity.options.{o}.description");
                     (base, format!("{o}="), tip(&key))

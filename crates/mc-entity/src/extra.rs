@@ -193,6 +193,35 @@ pub enum Cart {
     Furnace,
     Hopper,
     Tnt,
+    /// `command_block_minecart`.
+    Command,
+}
+
+/// What a command block minecart runs and what came of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommandCart {
+    pub command: String,
+    pub track_output: bool,
+    /// The last message, as players see it (`[HH:mm:ss] ...`).
+    pub last_output: Option<String>,
+    pub success_count: i32,
+    /// World age it last ran at (`-1`: never).
+    pub last_execution: i64,
+    /// Its age when an activator rail last set it off.
+    pub activated_at: i64,
+}
+
+impl Default for CommandCart {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            track_output: true,
+            last_output: None,
+            success_count: 0,
+            last_execution: -1,
+            activated_at: i64::MIN / 2,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -224,6 +253,8 @@ pub struct Vehicle {
     /// A hopper minecart takes items in (an activator rail with power turns
     /// it off, one without turns it on again).
     pub enabled: bool,
+    /// A command block minecart's command and output.
+    pub command: Box<CommandCart>,
 }
 
 impl Vehicle {
@@ -238,6 +269,7 @@ impl Vehicle {
             fuse: -1,
             on_rail: false,
             enabled: true,
+            command: Box::default(),
         }
     }
 }

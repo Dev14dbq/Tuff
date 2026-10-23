@@ -92,6 +92,8 @@ pub struct Extra {
     pub enchantment_seed: i32,
     /// The ender chest (`EnderItems`): 27 slots.
     pub ender: Vec<Option<ItemStack>>,
+    /// Known recipes (`recipeBook.recipes`).
+    pub recipes: Vec<String>,
 }
 
 /// Container slot of each equipment key.
@@ -262,6 +264,19 @@ impl Store {
                 Some(Tag::Int(s)) => *s,
                 _ => crate::util::random_u64() as i32,
             },
+            recipes: match root.get("recipeBook") {
+                Some(Tag::Compound(book)) => match book.get("recipes") {
+                    Some(Tag::List(l)) => l
+                        .iter()
+                        .filter_map(|t| match t {
+                            Tag::String(s) => Some(s.clone()),
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                },
+                _ => Vec::new(),
+            },
             respawn: match root.get("respawn") {
                 Some(Tag::Compound(c)) => Respawn::from_nbt(c),
                 _ => None,
@@ -353,6 +368,18 @@ impl Store {
             }
         }
         root.insert("XpSeed", Tag::Int(saved.extra.enchantment_seed));
+        let mut book = match root.get("recipeBook") {
+            Some(Tag::Compound(b)) => b.clone(),
+            _ => Compound::new(),
+        };
+        book.insert(
+            "recipes",
+            Tag::List(saved.extra.recipes.iter().map(|r| Tag::String(r.clone())).collect()),
+        );
+        if book.get("toBeDisplayed").is_none() {
+            book.insert("toBeDisplayed", Tag::List(Vec::new()));
+        }
+        root.insert("recipeBook", Tag::Compound(book));
         if saved.extra.tags.is_empty() {
             root.remove("Tags");
         } else {

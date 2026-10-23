@@ -362,9 +362,10 @@ pub fn resolve(ctx: &ServerContext, s: &Selector, src: &Src) -> Vec<Target> {
         })
         .filter(|t| {
             s.names.iter().all(|(neg, want)| {
+                // An entity is named by its type until it has a name.
                 let name = match t {
                     Target::Player { name, .. } => name.as_str(),
-                    Target::Entity { .. } => "",
+                    Target::Entity { name_key, .. } => ctx.commands.lang.get(name_key),
                 };
                 (name == want) != *neg
             })
@@ -408,21 +409,51 @@ pub fn resolve(ctx: &ServerContext, s: &Selector, src: &Src) -> Vec<Target> {
             let p = t.pos();
             in_range(&s.distance, dist2(p, base).sqrt())
                 && (s.dx.is_none() && s.dy.is_none() && s.dz.is_none() || {
+                    // The volume touches the target's box, as in vanilla.
                     let d = [
                         s.dx.unwrap_or(0.0),
                         s.dy.unwrap_or(0.0),
                         s.dz.unwrap_or(0.0),
                     ];
+                    let (lo, hi) = bounds(ctx, t);
                     (0..3).all(|i| {
-                        let (lo, hi) = (
-                            base[i].min(base[i] + d[i]),
-                            base[i].max(base[i] + d[i]) + 1.0,
-                        );
-                        p[i] >= lo && p[i] < hi
+                        let (min, max) = (base[i] + d[i].min(0.0), base[i] + d[i].max(0.0) + 1.0);
+                        lo[i] < max && hi[i] > min
                     })
                 })
-                && in_range(&s.x_rotation, f64::from(t.rot()[1]))
-                && in_range(&s.y_rotation, f64::from(t.rot()[0]))
+                && rotation_in(&s.x_rotation, rotation(ctx, t)[1])
+                && rotation_in(&s.y_rotation, rotation(ctx, t)[0])
+        })
+        .filter(|t| {
+            let Some(range) = &s.level else {
+                return true;
+            };
+            t.is_player()
+                && lock(&ctx.vitals)
+                    .get(&t.uuid())
+                    .is_some_and(|v| range.contains(f64::from(v.xp_level)))
+        })
+        .filter(|t| {
+            s.nbt.is_empty() || {
+                let data = Tag::Compound(super::data::entity_nbt(ctx, t));
+                s.nbt
+                    .iter()
+                    .all(|(neg, want)| mc_command::nbtpath::matches(want, &data) != *neg)
+            }
+        })
+        .filter(|t| {
+            let Some(text) = &s.advancements else {
+                return true;
+            };
+            t.is_player()
+                && advancement_tests(text).iter().all(|(id, criterion, want)| {
+                    super::progress::has_done(ctx, t.uuid(), id, criterion.as_deref()) == *want
+                })
+        })
+        .filter(|_| {
+            s.predicates
+                .iter()
+                .all(|(neg, id)| super::execute::predicate_holds(ctx, id) != *neg)
         })
         .collect();
     let sort = s.sort.as_deref().unwrap_or(match kind {
@@ -445,6 +476,83 @@ pub fn resolve(ctx: &ServerContext, s: &Selector, src: &Src) -> Vec<Target> {
         found.truncate(limit.max(0) as usize);
     }
     found
+}
+
+/// The corners of a target's collision box.
+fn bounds(ctx: &ServerContext, t: &Target) -> ([f64; 3], [f64; 3]) {
+    let p = t.pos();
+    if let Target::Entity { uuid, .. } = t
+        && let Some(e) = lock(&ctx.entities).iter().find(|e| e.uuid == *uuid)
+    {
+        let b = e.aabb();
+        return (b.min, b.max);
+    }
+    ([p[0] - 0.3, p[1], p[2] - 0.3], [p[0] + 0.3, p[1] + 1.8, p[2] + 0.3])
+}
+
+/// A target's [yaw, pitch].
+fn rotation(ctx: &ServerContext, t: &Target) -> [f32; 2] {
+    if let Target::Entity { uuid, .. } = t
+        && let Some(e) = lock(&ctx.entities).iter().find(|e| e.uuid == *uuid)
+        && let mc_entity::Kind::Mob(m) = &e.kind
+    {
+        return [m.yaw, m.pitch];
+    }
+    t.rot()
+}
+
+fn wrap_degrees(v: f64) -> f64 {
+    let v = v % 360.0;
+    if v >= 180.0 {
+        v - 360.0
+    } else if v < -180.0 {
+        v + 360.0
+    } else {
+        v
+    }
+}
+
+/// A rotation range test: both ends and the angle are wrapped to
+/// [-180, 180), and a range whose start is past its end goes round.
+fn rotation_in(r: &Option<Range>, angle: f32) -> bool {
+    let Some(r) = r else {
+        return true;
+    };
+    let min = wrap_degrees(r.min.unwrap_or(0.0));
+    let max = wrap_degrees(r.max.unwrap_or(359.0));
+    let a = wrap_degrees(f64::from(angle));
+    if min > max {
+        a >= min || a <= max
+    } else {
+        a >= min && a <= max
+    }
+}
+
+/// The tests of an `advancements={...}` option: (advancement, criterion,
+/// whether it must be done).
+fn advancement_tests(text: &str) -> Vec<(String, Option<String>, bool)> {
+    let mut out = Vec::new();
+    let inner = text.trim().trim_start_matches('{');
+    let inner = inner.strip_suffix('}').unwrap_or(inner);
+    let mut rest = inner;
+    while let Some(eq) = rest.find('=') {
+        let id = rest[..eq].trim().trim_start_matches(',').trim().to_owned();
+        let after = rest[eq + 1..].trim_start();
+        if let Some(body) = after.strip_prefix('{') {
+            let end = body.find('}').unwrap_or(body.len());
+            for part in body[..end].split(',') {
+                if let Some((c, v)) = part.split_once('=') {
+                    out.push((id.clone(), Some(c.trim().to_owned()), v.trim() == "true"));
+                }
+            }
+            rest = body.get(end + 1..).unwrap_or("");
+        } else {
+            let end = after.find(',').unwrap_or(after.len());
+            out.push((id, None, after[..end].trim() == "true"));
+            rest = &after[end..];
+        }
+    }
+    out
 }
 
 /// Entities (or players) for an argument, failing as vanilla does when

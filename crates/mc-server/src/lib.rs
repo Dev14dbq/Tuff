@@ -13,6 +13,7 @@ mod books;
 mod border;
 mod bossbars;
 mod combat;
+mod command_blocks;
 mod commands;
 mod connection;
 mod containers;
@@ -52,7 +53,7 @@ mod precipitation;
 mod projectiles;
 pub mod properties;
 mod random_ticks;
-mod rules;
+pub mod rules;
 mod scoreboard;
 mod storage;
 mod summon;
@@ -295,6 +296,7 @@ pub(crate) fn save_player(ctx: &ServerContext, uuid: u128) {
     if let Err(err) = store.save(uuid, &saved, ctx.data.version.world_version) {
         tracing::warn!("saving {}: {err:#}", crate::util::uuid_string(uuid));
     }
+    commands::save_advancements(ctx, uuid);
 }
 
 /// Reads commands from standard input until it closes; each runs on the
@@ -408,6 +410,9 @@ pub(crate) fn saved_of(ctx: &ServerContext, uuid: u128) -> Option<players::Saved
         flying: player.flying,
         hands,
         vitals,
-        extra: player.extra.clone(),
+        extra: players::Extra {
+            recipes: commands::known_recipes(ctx, uuid),
+            ..player.extra.clone()
+        },
     })
 }

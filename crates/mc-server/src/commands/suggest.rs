@@ -152,6 +152,7 @@ pub fn suggest(
     let level = match source {
         Source::Console => 4,
         Source::Player { uuid, name, .. } => super::level(ctx, *uuid, name),
+        Source::Block { .. } | Source::Cart { .. } => 2,
     };
     let (start, mut matches) = mc_command::suggest::complete(
         &commands.tree,

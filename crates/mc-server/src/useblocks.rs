@@ -174,6 +174,20 @@ pub fn try_use(
         }
         n if n.ends_with("_bed") => bed(ctx, outcome, actor, clicked, state),
         "minecraft:respawn_anchor" => anchor(ctx, outcome, actor, hand, clicked, state, held_name),
+        "minecraft:command_block"
+        | "minecraft:chain_command_block"
+        | "minecraft:repeating_command_block" => {
+            match crate::command_blocks::open(ctx, actor.uuid, actor.game_mode, clicked) {
+                Some(packet) => {
+                    outcome.events.push(Event::Direct {
+                        uuid: actor.uuid,
+                        packet: crate::context::Direct::BlockEntityData(packet),
+                    });
+                    true
+                }
+                None => false,
+            }
+        }
         _ => false,
     };
     if reacted {
@@ -461,7 +475,8 @@ fn anchor(
 /// of the players have, the night passes.
 pub type Sleepers = std::collections::HashMap<u128, i64>;
 
-/// One game tick: if every player is in bed, morning comes after 100 ticks.
+/// One game tick: once enough players have been in bed 100 ticks, morning
+/// comes.
 pub fn tick(ctx: &ServerContext) {
     let age = ctx.time.lock().expect("time lock").age;
     let mut sleepers = ctx.sleepers.lock().expect("sleepers lock");
@@ -477,10 +492,15 @@ pub fn tick(ctx: &ServerContext) {
         .filter(|p| p.game_mode != 3)
         .map(|p| p.profile.uuid)
         .collect();
-    if online.is_empty()
-        || !online.iter().all(|u| sleepers.contains_key(u))
-        || sleepers.values().any(|&since| age - since < 100)
-    {
+    // `players_sleeping_percentage` of the players (at least one) must
+    // have slept 100 ticks.
+    let percentage = ctx.game_rules.lock().expect("rules lock").int("players_sleeping_percentage");
+    let required = ((online.len() as f64 * f64::from(percentage) / 100.0).ceil() as usize).max(1);
+    let slept = online
+        .iter()
+        .filter(|u| sleepers.get(u).is_some_and(|&since| age - since >= 100))
+        .count();
+    if online.is_empty() || slept < required {
         return;
     }
     sleepers.clear();

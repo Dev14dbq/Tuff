@@ -68,6 +68,10 @@ pub enum Direct {
     ShowDialog(mc_protocol::packets::play::ShowDialog),
     ClearDialog(mc_protocol::packets::play::ClearDialog),
     PostEffects(mc_protocol::packets::play::PostEffects),
+    GameEvent(mc_protocol::packets::play::GameEvent),
+    /// A command block's data, which opens its window.
+    BlockEntityData(mc_protocol::packets::play::BlockEntityData),
+    EntityEvent(mc_protocol::packets::play::EntityEvent),
     /// A push (knockback): the player's own velocity.
     Motion(mc_protocol::packets::play::SetEntityMotion),
 }

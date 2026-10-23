@@ -81,6 +81,8 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             power: 1.0,
             source: e.id,
             owner,
+            // A ghast's: the mob rules apply.
+            mob: true,
         });
     }
 }

@@ -438,6 +438,12 @@ pub fn try_hurt_by_entity(
     if !(takes_damage(game_mode) || bypass && game_mode == 1) || amount <= 0.0 {
         return None;
     }
+    if crate::damage::ruled_out(ctx, damage_type) {
+        return None;
+    }
+    if attacker.is_some_and(|by| !may_harm(ctx, by, &name)) {
+        return None;
+    }
     let (packet, died) = {
         let mut all = lock(&ctx.vitals);
         let v = all.get_mut(&uuid)?;
@@ -610,6 +616,7 @@ pub fn tick(ctx: &ServerContext) {
             let full = v.food >= 20 && v.saturation > 0.0;
             let max_health = v.max_health();
             if v.health < max_health
+                && ctx.game_rule_bool("natural_health_regeneration")
                 && (full && v.food_timer >= 10 || v.food >= 18 && v.food_timer >= 80)
             {
                 v.health = (v.health + 1.0).min(max_health);
@@ -732,10 +739,104 @@ pub fn kill(ctx: &ServerContext, uuid: u128, damage_type: &str, death_key: &str)
     }
 }
 
-/// A dead player respawns with full health.
+/// Whether player `by` may hurt player `victim`: always when `by` is not
+/// a player or is the victim; else only with `pvp` on and, when they are
+/// teammates, friendly fire allowed.
+fn may_harm(ctx: &ServerContext, by: &str, victim: &str) -> bool {
+    if by == victim || !lock(&ctx.players).values().any(|p| p.profile.name == by) {
+        return true;
+    }
+    if !ctx.game_rule_bool("pvp") {
+        return false;
+    }
+    let board = lock(&ctx.scoreboard);
+    match (board.team_of(by), board.team_of(victim)) {
+        (Some(a), Some(b)) if a.name == b.name => a.friendly_fire,
+        _ => true,
+    }
+}
+
+/// A dead player respawns with full health; with `keep_inventory` they
+/// keep their experience.
 pub fn respawn(ctx: &ServerContext, uuid: u128) -> SetHealth {
+    let keep = ctx.game_rule_bool("keep_inventory");
     let mut all = lock(&ctx.vitals);
     let v = all.entry(uuid).or_default();
-    *v = Vitals::default();
+    let old = std::mem::take(v);
+    if keep {
+        (v.xp_level, v.xp_progress, v.xp_total) = (old.xp_level, old.xp_progress, old.xp_total);
+    }
     v.packet()
+}
+
+/// The experience a dying player drops (seven points a level, at most
+/// 100), unless they are a spectator or `mob_drops` is off.
+pub fn drop_death_xp(ctx: &ServerContext, uuid: u128, game_mode: i32, pos: [f64; 3]) {
+    if game_mode == 3 || !ctx.game_rule_bool("mob_drops") {
+        return;
+    }
+    let level = lock(&ctx.vitals).get(&uuid).map_or(0, |v| v.xp_level);
+    let amount = (level * 7).min(100);
+    if amount > 0 {
+        crate::xp::spawn(ctx, pos, amount);
+    }
+}
+
+/// With `ender_pearls_vanish_on_death` on, the ender pearls a dying
+/// player threw are gone.
+pub fn drop_pearls(ctx: &ServerContext, uuid: u128) {
+    if !ctx.game_rule_bool("ender_pearls_vanish_on_death") {
+        return;
+    }
+    let mut removed = Vec::new();
+    for e in lock(&ctx.entities).iter_mut() {
+        if let mc_entity::Kind::Projectile(p) = &e.kind
+            && matches!(p.shot, mc_entity::extra::Shot::Pearl)
+            && p.owner == Some(uuid)
+            && !e.removed
+        {
+            e.removed = true;
+            removed.push(e.id);
+        }
+    }
+    if !removed.is_empty() {
+        let _ = ctx.events.send(Event::EntitiesRemoved(removed));
+    }
+}
+
+/// Tells the players a death message, as the dead player's team allows:
+/// everyone, only their team, everyone else, or no one.
+pub fn announce_death(ctx: &ServerContext, uuid: u128, message: Tag) {
+    let name = lock(&ctx.players).get(&uuid).map(|p| p.profile.name.clone());
+    let (visibility, team) = {
+        let board = lock(&ctx.scoreboard);
+        match name.as_deref().and_then(|n| board.team_of(n)) {
+            Some(t) => (t.death_messages, Some(t.name.clone())),
+            None => (0, None),
+        }
+    };
+    if visibility == 0 {
+        let _ = ctx.events.send(Event::Chat(message));
+        return;
+    }
+    let players: Vec<(u128, String)> = lock(&ctx.players)
+        .values()
+        .map(|p| (p.profile.uuid, p.profile.name.clone()))
+        .collect();
+    let board = lock(&ctx.scoreboard);
+    for (to, n) in players {
+        let same = board.team_of(&n).map(|t| &t.name) == team.as_ref();
+        let sees = match visibility {
+            2 => same,
+            3 => !same,
+            _ => false,
+        };
+        if sees {
+            let _ = ctx.events.send(Event::Message {
+                uuid: to,
+                line: message.clone(),
+                overlay: false,
+            });
+        }
+    }
 }

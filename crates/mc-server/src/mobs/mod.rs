@@ -594,6 +594,7 @@ fn handle(
                 power,
                 source: id,
                 owner: None,
+                mob: true,
             });
         }
         MobEvent::Lay { item } => hurt::lay(ctx, &entities[i], item),

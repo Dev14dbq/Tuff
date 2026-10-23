@@ -266,6 +266,12 @@ pub fn check_line(ctx: &ServerContext, chain: &[Context], line: &str) -> Option<
     })
 }
 
+/// For the `predicate` selector option: whether the data-pack predicate
+/// `id` holds (a missing one never does).
+pub fn predicate_holds(ctx: &ServerContext, id: &str) -> bool {
+    predicate_file(ctx, id).is_some_and(|p| test(ctx, &p, 0))
+}
+
 fn predicate_arg(ctx: &ServerContext, c: &Context) -> Result<bool> {
     let value = match c.arg("predicate") {
         Some(Arg::Id(id)) => predicate_file(ctx, id).ok_or_else(|| no_predicate(id))?,

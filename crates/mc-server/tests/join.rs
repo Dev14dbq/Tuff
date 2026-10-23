@@ -132,6 +132,8 @@ async fn ping_login_spawn_and_chat() {
     config.view_distance = 3;
     config.online_mode = false;
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ids = server.context().ids.clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -325,6 +327,8 @@ async fn client_without_known_packs_gets_registry_data_as_nbt() {
     config.view_distance = 2;
     config.online_mode = false;
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ids = server.context().ids.clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -419,6 +423,8 @@ async fn players_see_each_other_spawn_move_and_leave() {
     config.view_distance = 2;
     config.online_mode = false;
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ids = server.context().ids.clone();
     let player_type = server.context().player_entity_type;
@@ -522,6 +528,8 @@ async fn placed_and_broken_blocks_are_seen_by_everyone() {
     config.view_distance = 2;
     config.online_mode = false;
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let ids = ctx.ids.clone();
@@ -732,6 +740,8 @@ async fn chunks_nobody_has_are_unloaded() {
     config.view_distance = 2;
     config.online_mode = false;
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -775,6 +785,8 @@ async fn operators_run_commands_from_chat() {
     config.online_mode = false;
     config.ops = vec!["Admin".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -852,6 +864,8 @@ async fn survival_breaking_drops_items_that_get_picked_up() {
     config.online_mode = false;
     config.ops = vec!["Miner".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -980,6 +994,8 @@ async fn players_come_back_where_they_left_with_their_items() {
         config.world = Some(world);
         config.ops = vec!["Walker".into()];
         let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
         let addr = server.local_addr();
         let ctx = server.context().clone();
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -1100,6 +1116,8 @@ async fn chests_keep_what_players_put_in() {
     config.online_mode = false;
     config.ops = vec!["Keeper".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -1225,6 +1243,8 @@ async fn the_inventory_grid_crafts() {
     config.view_distance = 2;
     config.online_mode = false;
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -1325,6 +1345,8 @@ async fn falls_hurt_and_kill_and_players_respawn() {
     config.online_mode = false;
     config.ops = vec!["Jumper".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -1400,6 +1422,8 @@ async fn players_hurt_each_other_and_give_works() {
     config.online_mode = false;
     config.ops = vec!["Hitter".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -1466,6 +1490,8 @@ async fn serves_a_world_saved_by_vanilla() {
     config.online_mode = false;
     config.world = Some(world.clone());
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ids = server.context().ids.clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -1546,6 +1572,8 @@ async fn changes_to_a_vanilla_world_are_saved_on_shutdown() {
     config.online_mode = false;
     config.world = Some(world.clone());
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -1694,6 +1722,8 @@ async fn online_bot(
     config.online_mode = true;
     config.session_server = session_server;
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ids = server.context().ids.clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -1893,6 +1923,8 @@ async fn light_sources_light_up_around_them() {
     config.online_mode = false;
     config.ops = vec!["Admin".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -1955,6 +1987,8 @@ async fn hungry_players_eat_food() {
     config.online_mode = false;
     config.ops = vec!["Eater".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -2024,6 +2058,8 @@ async fn furnaces_smelt_with_fuel() {
     config.online_mode = false;
     config.ops = vec!["Cook".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -2079,6 +2115,8 @@ async fn two_chests_open_as_a_large_chest() {
     config.online_mode = false;
     config.ops = vec!["Hoarder".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -2169,6 +2207,8 @@ async fn a_new_world_is_generated_served_and_saved() {
     config.world = Some(dir.clone());
     config.seed = Some(12345);
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     assert!(dir.join("level.dat").is_file(), "the new world is written");
@@ -2278,6 +2318,8 @@ async fn whitelist_and_bans_keep_players_out_as_vanilla() {
     config.white_list = true;
     config.ops = vec!["Boss".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ids = server.context().ids.clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -2351,6 +2393,8 @@ async fn game_mode_switcher_pick_block_and_signs() {
     config.online_mode = false;
     config.ops = vec!["Admin".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -2431,6 +2475,8 @@ async fn running(
     tokio::sync::oneshot::Sender<()>,
 ) {
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -3088,6 +3134,8 @@ async fn players_change_dimension_and_others_stop_seeing_them() {
     config.online_mode = false;
     config.ops = vec!["Traveller".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -3214,6 +3262,8 @@ async fn standing_in_a_lit_frame_takes_a_survival_player_to_the_nether() {
     config.online_mode = false;
     config.ops = vec!["Builder".into()];
     let server = Server::bind(config).await.unwrap();
+    // Join at the spawn itself, not anywhere within `respawn_radius`.
+    server.context().game_rules.lock().unwrap().set("respawn_radius", mc_server::rules::Value::Int(0));
     let addr = server.local_addr();
     let ctx = server.context().clone();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
