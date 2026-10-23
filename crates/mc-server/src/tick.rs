@@ -748,6 +748,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     for (i, entity) in entities.iter_mut().enumerate() {
         let before = (entity.pos, entity.on_ground);
         let block_before = entity.block_pos();
+        let before_vel = entity.vel;
         let extra = matches!(
             entity.kind,
             mc_entity::Kind::Projectile(_) | mc_entity::Kind::Hung(_) | mc_entity::Kind::Vehicle(_)
@@ -860,7 +861,26 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                 crossed.push(entity.id);
             }
         } else if !extra && (entity.pos, entity.on_ground) != before {
-            moved.push((entity.id, entity.pos, entity.on_ground));
+            // Clients move items and orbs themselves: as vanilla's tracker,
+            // they hear where these are only once a second (and when they
+            // come to rest), or the two simulations fight and they shake.
+            let simulated = matches!(
+                entity.kind,
+                mc_entity::Kind::Item { .. } | mc_entity::Kind::ExperienceOrb { .. }
+            );
+            let rests = entity.vel == [0.0; 3] && before_vel != [0.0; 3];
+            if !simulated || entity.age % 20 == 0 || rests {
+                moved.push((entity.id, entity.pos, entity.on_ground));
+                if simulated {
+                    crate::fx::emit(
+                        ctx,
+                        crate::fx::Fx::Motion(mc_protocol::packets::play::SetEntityMotion {
+                            entity_id: entity.id,
+                            velocity: entity.vel,
+                        }),
+                    );
+                }
+            }
         }
     }
     level.entity_boxes = None;

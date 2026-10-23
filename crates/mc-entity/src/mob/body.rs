@@ -4,11 +4,18 @@
 
 use super::{Body, Mob, MobEvent, Senses, Sound, Species, cell_of, slot};
 use crate::nav::{Liquid, PathParams};
-use crate::physics::{Aabb, move_entity};
+use crate::physics::{Aabb, move_stepping};
 
 pub(super) const GRAVITY: f64 = 0.08;
-/// Blocks a tick per point of the speed attribute.
+/// Blocks a tick per point of the speed attribute, for fliers.
 const SPEED_SCALE: f64 = 0.9;
+/// A walker's ground speed in blocks a tick is this times the square of
+/// its speed (the attribute times the goal's modifier): vanilla feeds the
+/// speed in both as the input and as the acceleration. A zombie (0.23)
+/// walks 0.116 blocks a tick, 2.3 m/s; a cow (0.2) 0.088.
+const GROUND: f64 = 2.2;
+/// What a walker steps up onto without jumping (slabs, paths, carpets).
+const STEP: f64 = 0.6;
 
 pub(super) fn wrap_degrees(a: f32) -> f32 {
     let a = a % 360.0;
@@ -229,6 +236,33 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
     if m.boost > 0 {
         m.boost -= 1;
     }
+    if in_wall(m, b, s) {
+        out.push(MobEvent::Hurt {
+            amount: 1.0,
+            kind: "minecraft:in_wall",
+        });
+    }
+}
+
+/// Whether the mob's eyes are inside a block (it suffocates): a box a
+/// little narrower than its body at eye height, as vanilla's.
+pub(super) fn in_wall(m: &Mob, b: &Body, s: &Senses) -> bool {
+    let half = m.size().0 * 0.4;
+    let eye = b.pos[1] + m.eye_height();
+    let y = eye.floor() as i32;
+    let xs = [(b.pos[0] - half).floor() as i32, (b.pos[0] + half).floor() as i32];
+    let zs = [(b.pos[2] - half).floor() as i32, (b.pos[2] + half).floor() as i32];
+    xs.iter().any(|&x| {
+        zs.iter().any(|&z| {
+            [y, y - 1].into_iter().any(|cy| {
+                s.world.span(x, cy, z).is_some_and(|(bottom, top)| {
+                    let (lo, hi) = (f64::from(cy) + bottom, f64::from(cy) + top);
+                    // Fences and the like do not smother.
+                    top - bottom >= 1.0 && top <= 1.0 && lo < eye && eye < hi
+                })
+            })
+        })
+    })
 }
 
 fn sky_above(m: &Mob, b: &Body, s: &Senses) -> bool {
@@ -311,14 +345,25 @@ pub(super) fn drive(m: &mut Mob, b: &mut Body, s: &Senses) -> Option<Input> {
         });
     }
     let cell = cell_of(point);
-    let from = cell_of(b.pos);
+    // Standing on a slab or a path is standing in the cell above the block.
+    let from = if b.on_ground {
+        cell_of([b.pos[0], b.pos[1] + 0.5, b.pos[2]])
+    } else {
+        cell_of(b.pos)
+    };
+    // Stuck against something for two seconds: give the walk up.
+    if m.nav.stuck >= 2 {
+        m.nav.stop();
+        m.nav.stuck = 0;
+        return None;
+    }
     let p = params(m);
     m.nav.go_to(s.world, from, cell, &p);
     let reached = (m.size().0 / 2.0 + 0.2).max(0.4);
     let (tx, ty, tz) = match m.nav.waypoint(b.pos, reached) {
         Some(c) => (
             f64::from(c[0]) + 0.5,
-            f64::from(c[1]),
+            crate::nav::floor(s.world, c),
             f64::from(c[2]) + 0.5,
         ),
         None => {
@@ -334,7 +379,8 @@ pub(super) fn drive(m: &mut Mob, b: &mut Body, s: &Senses) -> Option<Input> {
     if len < 0.05 {
         return None;
     }
-    if ty > b.pos[1] + 0.1 && b.on_ground {
+    // Jump only for what is too high to step onto, once close to it.
+    if ty > b.pos[1] + STEP && b.on_ground && len < 1.0_f64.max(m.size().0) {
         m.jump = true;
     }
     Some(Input {
@@ -391,7 +437,8 @@ pub(super) fn physics(
         let friction = if b.on_ground { 0.546 } else { 0.91 };
         match &input {
             Some(i) => {
-                let want = speed_attr * i.speed;
+                let speed = m.speed_attr * i.speed;
+                let want = speed * speed * GROUND;
                 let control = if b.on_ground || wet { 0.5 } else { 0.1 };
                 b.vel[0] += (i.dir[0] * want - b.vel[0]) * control;
                 b.vel[2] += (i.dir[2] * want - b.vel[2]) * control;
@@ -423,20 +470,18 @@ pub(super) fn physics(
             if m.jump && b.on_ground {
                 b.vel[1] = 0.42;
             }
-            b.vel[1] = (b.vel[1] - GRAVITY) * 0.98;
-            // A chicken flaps: it falls slowly.
-            if m.species == Species::Chicken && b.vel[1] < -0.1 {
-                b.vel[1] = -0.1;
-            }
         }
     }
+    // Gravity pulls after the move, as in vanilla (a jump rises 1.25).
+    let falls = !flies && !wet;
     m.jump = false;
     let before = b.pos;
     let aabb = Aabb {
         min: [b.pos[0] - w / 2.0, b.pos[1], b.pos[2] - w / 2.0],
         max: [b.pos[0] + w / 2.0, b.pos[1] + h, b.pos[2] + w / 2.0],
     };
-    let (moved, ground) = move_entity(aabb, b.vel, s.world);
+    let step = if flies { 0.0 } else { STEP };
+    let (moved, ground) = move_stepping(aabb, b.vel, s.world, step, b.on_ground);
     let blocked_h = (moved[0] - b.vel[0]).abs() > 1e-9 || (moved[2] - b.vel[2]).abs() > 1e-9;
     for (axis, &d) in moved.iter().enumerate() {
         b.pos[axis] += d;
@@ -444,11 +489,14 @@ pub(super) fn physics(
             b.vel[axis] = 0.0;
         }
     }
-    let climbs = matches!(m.species, Species::Spider | Species::CaveSpider);
-    // Walking into a block with somewhere to go: hop over it.
-    if blocked_h && (b.on_ground || ground) && input.is_some() && !climbs && !flies {
-        m.jump = true;
+    if falls {
+        b.vel[1] = (b.vel[1] - GRAVITY) * 0.98;
+        // A chicken flaps: it falls slowly.
+        if m.species == Species::Chicken && b.vel[1] < -0.1 {
+            b.vel[1] = -0.1;
+        }
     }
+    let climbs = matches!(m.species, Species::Spider | Species::CaveSpider);
     let was_climbing = m.climbing;
     m.climbing = climbs && blocked_h;
     if m.climbing != was_climbing {

@@ -10,11 +10,14 @@
 //! - [`meta`]: metadata and equipment for clients;
 //! - [`nbt`]: mobs as `/summon` and `/data` see them.
 
+mod crowd;
+pub mod eggs;
 pub mod hurt;
 mod interact;
 pub mod meta;
 pub mod nbt;
 pub mod ride;
+mod spawner;
 mod spawn;
 mod terrain;
 
@@ -85,6 +88,8 @@ pub struct MobState {
     spawner: Mutex<HashMap<usize, spawn::Spawner>>,
     /// Players' fighting state (see [`crate::combat`]).
     pub fighters: Mutex<crate::combat::Fighters>,
+    /// Ticks until each spawner (dimension, x, y, z) tries again.
+    pub spawner_delays: Mutex<HashMap<(usize, i32, i32, i32), i32>>,
     /// Health of villagers, which zombies hurt (20 when not listed).
     villagers: Mutex<HashMap<i32, f32>>,
 }
@@ -392,6 +397,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         tags: Default::default(),
     };
     let mut events = Vec::new();
+    crowd::tick(ctx, &mut entities, &targets, now);
     let mut seen = others(&entities);
     for i in 0..entities.len() {
         let e = &mut entities[i];
@@ -521,6 +527,8 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
 
     let spawned = spawn::tick(ctx, &ground, &mut entities, &targets, now, day, difficulty);
     out.fresh.extend(spawned);
+    let made = spawner::tick(ctx, &ground, &entities, &targets, difficulty);
+    out.fresh.extend(made);
     out.removed
         .extend(spawn::despawn(&mut entities, &targets, difficulty));
     drop(ground);

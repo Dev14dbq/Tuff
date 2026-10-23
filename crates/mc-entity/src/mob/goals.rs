@@ -1360,8 +1360,12 @@ pub fn run(list: &mut [Slot], m: &mut Mob, b: &mut Body, s: &Senses, out: &mut V
             stop(&mut slot.goal, m);
         }
     }
-    // Start those that can, by priority.
+    // Start those that can, by priority: every other tick, as vanilla's
+    // selector looks for new goals (a stroll starts once in 240 ticks).
     let mut order: Vec<usize> = (0..list.len()).collect();
+    if m.age % 2 == 1 && m.age > 1 {
+        order.clear();
+    }
     order.sort_by_key(|&i| list[i].priority);
     for i in order {
         if list[i].running {

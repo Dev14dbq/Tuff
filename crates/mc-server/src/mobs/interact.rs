@@ -93,6 +93,10 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
     let name = held.as_ref().map_or("", |h| h.name.as_str()).to_owned();
     let hslot = held.as_ref().map_or(0, |h| h.slot);
     let item = held.as_ref().map(|h| h.stack.item);
+    if name.ends_with("_spawn_egg") && super::eggs::breed_with_egg(ctx, e, by, &name, hslot) {
+        swing(ctx, by);
+        return;
+    }
     let Kind::Mob(m) = &mut e.kind else {
         return;
     };
