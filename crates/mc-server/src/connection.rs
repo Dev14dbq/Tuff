@@ -937,6 +937,11 @@ async fn play(
                             let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
                     }
+                    play::Serverbound::PaddleBoat { left, right } if riding.is_some() => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::Vehicle(crate::vehicles::Act::Paddle { left, right });
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                    }
                     play::Serverbound::MoveVehicle { x, y, z, yaw, pitch } if riding.is_some() && awaiting_teleport.is_none() => {
                         if [x, y, z].iter().all(|c| c.is_finite()) {
                             pose = Pose { x, y, z, yaw, pitch, on_ground: false };

@@ -243,7 +243,11 @@ pub struct Vehicle {
     pub riders: Vec<i32>,
     /// Hurt wobble: ticks left and its strength.
     pub wobble: i32,
+    /// Which way it shakes when hit (1 or -1, turned at each hit).
+    pub hurt_dir: i32,
     pub damage: f32,
+    /// A boat's left and right paddles turning (its driver says so).
+    pub paddles: [bool; 2],
     /// Fuel left in a furnace minecart.
     pub fuel: i32,
     /// Fuse of a TNT minecart that was lit (-1: not lit).
@@ -264,7 +268,9 @@ impl Vehicle {
             yaw,
             riders: Vec::new(),
             wobble: 0,
+            hurt_dir: 1,
             damage: 0.0,
+            paddles: [false; 2],
             fuel: 0,
             fuse: -1,
             on_rail: false,

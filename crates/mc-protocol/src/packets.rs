@@ -677,6 +677,11 @@ pub mod play {
         ClientCommand {
             action: i32,
         },
+        /// Which of a boat's paddles the driver turns.
+        PaddleBoat {
+            left: bool,
+            right: bool,
+        },
         /// Where the vehicle the player drives is (boats are steered by the
         /// client).
         MoveVehicle {
@@ -850,6 +855,10 @@ pub mod play {
                     entity_id: r.varint()?,
                     action: r.varint()?,
                     data: r.varint()?,
+                },
+                "minecraft:paddle_boat" => Serverbound::PaddleBoat {
+                    left: r.bool()?,
+                    right: r.bool()?,
                 },
                 "minecraft:move_vehicle" => {
                     let packet = Serverbound::MoveVehicle {

@@ -335,6 +335,7 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
         }
         Kind::Vehicle(v) => {
             s.yaw = v.yaw;
+            s.meta.extend(crate::vehicles::meta(v));
             if v.craft == mc_entity::extra::Craft::Minecart(Cart::Command) {
                 s.meta.extend(command_cart_meta(&v.command));
             }

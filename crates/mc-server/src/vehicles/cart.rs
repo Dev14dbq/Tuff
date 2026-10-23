@@ -138,6 +138,8 @@ fn step(t: &mut Tick, e: &mut Entity, v: &mut Vehicle) {
         }
         if cart == Cart::Tnt && v.fuse < 0 {
             v.fuse = 80;
+            // It flashes as it burns.
+            fx::status(ctx, e.id, 10);
             fx::sound(
                 ctx,
                 "entity.tnt.primed",

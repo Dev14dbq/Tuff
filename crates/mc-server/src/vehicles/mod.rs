@@ -7,7 +7,7 @@ pub mod cart;
 use mc_entity::extra::{Cart, Craft, Vehicle};
 use mc_entity::{Entity, Kind};
 use mc_protocol::Position;
-use mc_protocol::packets::play::SetPassengers;
+use mc_protocol::packets::play::{MetadataValue, SetEntityData, SetPassengers};
 
 use crate::context::{Event, ServerContext};
 use crate::fx;
@@ -22,6 +22,55 @@ pub enum Act {
     Move { pos: [f64; 3], yaw: f32 },
     /// The player asks to get off.
     Dismount,
+    /// The driver turns a boat's paddles.
+    Paddle { left: bool, right: bool },
+}
+
+/// The shaking of a vehicle that was hit, as clients draw it: strength
+/// (ticks left), direction and damage.
+pub fn shake_meta(v: &Vehicle) -> Vec<(u8, MetadataValue)> {
+    vec![
+        (8, MetadataValue::VarInt(v.wobble)),
+        (9, MetadataValue::VarInt(v.hurt_dir)),
+        (10, MetadataValue::Float(v.damage)),
+    ]
+}
+
+/// The fields of a vehicle clients need besides its kind: its shaking, a
+/// boat's paddles, whether a furnace minecart burns.
+pub fn meta(v: &Vehicle) -> Vec<(u8, MetadataValue)> {
+    let mut out = Vec::new();
+    if v.wobble > 0 || v.damage > 0.0 {
+        out.extend(shake_meta(v));
+    }
+    match v.craft {
+        Craft::Boat { .. } => {
+            if v.paddles != [false; 2] {
+                out.push((11, MetadataValue::Boolean(v.paddles[0])));
+                out.push((12, MetadataValue::Boolean(v.paddles[1])));
+            }
+        }
+        Craft::Minecart(Cart::Furnace) if v.fuel > 0 => {
+            out.push((13, MetadataValue::Boolean(true)));
+        }
+        _ => {}
+    }
+    out
+}
+
+fn send_meta(ctx: &ServerContext, id: i32, entries: Vec<(u8, MetadataValue)>) {
+    let _ = ctx.events.send(Event::EntitiesData(vec![SetEntityData {
+        entity_id: id,
+        entries,
+    }]));
+}
+
+/// A hit: it shakes the other way, and the damage builds up.
+fn hit(ctx: &ServerContext, id: i32, v: &mut Vehicle, amount: f32) {
+    v.hurt_dir = -v.hurt_dir;
+    v.wobble = 10;
+    v.damage += amount * 10.0;
+    send_meta(ctx, id, shake_meta(v));
 }
 
 pub(crate) fn craft_of(item: &str) -> Option<Craft> {
@@ -247,24 +296,42 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             passengers(ctx, e.id, &v.riders.clone());
         }
     }
-    let craft = match &e.kind {
-        Kind::Vehicle(v) => v.craft.clone(),
+    let (craft, before) = match &e.kind {
+        Kind::Vehicle(v) => (v.craft.clone(), (v.wobble, v.damage, v.fuel > 0)),
         _ => return,
     };
     match craft {
         Craft::Boat { .. } => boat::tick(t, e),
         Craft::Minecart(_) => cart::tick(t, e),
     }
-    // A cart carries its rider along (boats are told by the rider).
-    if let Kind::Vehicle(v) = &e.kind
-        && matches!(v.craft, Craft::Minecart(_))
-    {
-        for &r in &v.riders {
+    if let Kind::Vehicle(v) = &e.kind {
+        // The shaking dies down, the damage heals: clients see it.
+        if (v.wobble, v.damage) != (before.0, before.1) {
+            send_meta(ctx, e.id, shake_meta(v));
+        }
+        if matches!(v.craft, Craft::Minecart(Cart::Furnace)) && (v.fuel > 0) != before.2 {
+            send_meta(ctx, e.id, vec![(13, MetadataValue::Boolean(v.fuel > 0))]);
+        }
+    }
+    // A vehicle carries its riders along (a boat's driver also says where
+    // it is).
+    if let Kind::Vehicle(v) = &e.kind {
+        let seat = |i: usize| match v.craft {
+            // Two in a boat sit one behind the other.
+            Craft::Boat { .. } if v.riders.len() > 1 => {
+                let back = if i == 0 { 0.2 } else { -0.6 };
+                let yaw = f64::from(v.yaw).to_radians();
+                [-yaw.sin() * back, yaw.cos() * back]
+            }
+            _ => [0.0, 0.0],
+        };
+        for (i, &r) in v.riders.iter().enumerate() {
+            let off = seat(i);
             if let Some(uuid) = rider_uuid(ctx, r)
                 && let Some(p) = lock(&ctx.players).get_mut(&uuid)
                 && let Some(pose) = &mut p.pose
             {
-                (pose.x, pose.y, pose.z) = (e.pos[0], e.pos[1], e.pos[2]);
+                (pose.x, pose.y, pose.z) = (e.pos[0] + off[0], e.pos[1], e.pos[2] + off[1]);
             }
         }
     }
@@ -315,11 +382,11 @@ pub fn destroy(ctx: &ServerContext, e: &mut Entity, fresh: &mut Vec<Entity>, dro
 /// Hurt by a projectile or a punch: the damage builds up, and past 40 the
 /// vehicle breaks.
 pub fn hurt(ctx: &ServerContext, e: &mut Entity, hit: &Hit, fresh: &mut Vec<Entity>) -> Vec<Event> {
+    let id = e.id;
     let Kind::Vehicle(v) = &mut e.kind else {
         return Vec::new();
     };
-    v.damage += hit.amount * 10.0;
-    v.wobble = 10;
+    self::hit(ctx, id, v, hit.amount);
     if v.damage > 40.0 {
         destroy(ctx, e, fresh, true);
     }
@@ -349,8 +416,7 @@ pub fn interact(
         if actor.game_mode == 1 {
             destroy(ctx, e, fresh, false);
         } else {
-            v.damage += amount * 10.0;
-            v.wobble = 10;
+            hit(ctx, id, v, amount);
             if v.damage > 40.0 {
                 destroy(ctx, e, fresh, true);
             }
@@ -396,6 +462,7 @@ pub fn interact(
             .is_some_and(|h| h.name == "minecraft:flint_and_steel")
     {
         v.fuse = 80;
+        fx::status(ctx, id, 10);
         fx::sound(
             ctx,
             "entity.tnt.primed",
@@ -440,6 +507,44 @@ pub fn ridden_inventory(
     })
 }
 
+/// Where a rider getting off is put (minecraft.wiki, "Boat" and
+/// "Minecart"): beside the vehicle, the way they look for a boat, else to
+/// its right, left, behind or in front (a minecart starts from its right),
+/// standing on something solid with room; on top of the vehicle when there
+/// is no such place.
+fn dismount_spot(ctx: &ServerContext, craft: &Craft, pos: [f64; 3], yaw: f32) -> [f64; 3] {
+    let width = match craft {
+        Craft::Boat { .. } => 1.375,
+        Craft::Minecart(_) => 0.98,
+    };
+    // A box corner to corner, plus the player's: diagonal distance.
+    let reach = (width * std::f64::consts::SQRT_2 + 0.6 * std::f64::consts::SQRT_2) / 2.0;
+    let look = f64::from(yaw).to_radians();
+    let (fx, fz) = (-look.sin(), look.cos());
+    let (rx, rz) = (-fz, fx);
+    let tries: Vec<(f64, f64)> = match craft {
+        Craft::Boat { .. } => vec![(fx, fz), (rx, rz), (-rx, -rz), (-fx, -fz)],
+        Craft::Minecart(_) => vec![(rx, rz), (-rx, -rz), (-fx, -fz), (fx, fz)],
+    };
+    for (dx, dz) in tries {
+        let x = pos[0] + dx * reach;
+        let z = pos[2] + dz * reach;
+        for dy in [0, 1, -1] {
+            let cell = [
+                x.floor() as i32,
+                pos[1].floor() as i32 + dy,
+                z.floor() as i32,
+            ];
+            let free =
+                !hits::stops(ctx, cell) && !hits::stops(ctx, [cell[0], cell[1] + 1, cell[2]]);
+            if free && hits::stops(ctx, [cell[0], cell[1] - 1, cell[2]]) {
+                return [x, f64::from(cell[1]), z];
+            }
+        }
+    }
+    [pos[0], pos[1] + 0.2, pos[2]]
+}
+
 /// A rider's own word about their vehicle.
 pub fn act(ctx: &ServerContext, actor: Actor, act: Act) -> Outcome {
     let mut entities = lock(&ctx.entities);
@@ -474,13 +579,30 @@ pub fn act(ctx: &ServerContext, actor: Actor, act: Act) -> Outcome {
                 let _ = ctx.events.send(Event::EntitySync(vec![sync]));
             }
         }
+        Act::Paddle { left, right } => {
+            if matches!(v.craft, Craft::Boat { .. }) && v.paddles != [left, right] {
+                v.paddles = [left, right];
+                send_meta(
+                    ctx,
+                    id,
+                    vec![
+                        (11, MetadataValue::Boolean(left)),
+                        (12, MetadataValue::Boolean(right)),
+                    ],
+                );
+            }
+        }
         Act::Dismount => {
             v.riders.retain(|&r| r != actor.entity_id);
+            if v.paddles != [false; 2] && v.riders.is_empty() {
+                v.paddles = [false; 2];
+            }
             passengers(ctx, id, &v.riders.clone());
+            let at = dismount_spot(ctx, &v.craft, pos, actor.pose.yaw);
             let pose = crate::context::Pose {
-                x: pos[0],
-                y: pos[1] + 0.2,
-                z: pos[2],
+                x: at[0],
+                y: at[1],
+                z: at[2],
                 on_ground: true,
                 ..actor.pose
             };
@@ -678,7 +800,10 @@ mod tests {
             &ctx,
             crate::containers::entity_key(e.id),
             kind,
-            &[(5, Some(mc_protocol::packets::play::ItemStack::new(stick, 9)))],
+            &[(
+                5,
+                Some(mc_protocol::packets::play::ItemStack::new(stick, 9)),
+            )],
         );
         let mut fresh = Vec::new();
         destroy(&ctx, &mut e, &mut fresh, true);
@@ -729,13 +854,25 @@ mod tests {
             &ctx,
             chest,
             chest_kind,
-            &[(0, Some(mc_protocol::packets::play::ItemStack::new(stick, 5)))],
+            &[(
+                0,
+                Some(mc_protocol::packets::play::ItemStack::new(stick, 5)),
+            )],
         );
-        let cart = new(&ctx, Craft::Minecart(Cart::Hopper), [700.5, -59.9375, 0.5], 0.0);
+        let cart = new(
+            &ctx,
+            Craft::Minecart(Cart::Hopper),
+            [700.5, -59.9375, 0.5],
+            0.0,
+        );
         let id = cart.id;
         lock(&ctx.entities).push(cart);
         let step = |ctx: &ServerContext| {
-            let mut e = lock(&ctx.entities).iter().find(|e| e.id == id).cloned().unwrap();
+            let mut e = lock(&ctx.entities)
+                .iter()
+                .find(|e| e.id == id)
+                .cloned()
+                .unwrap();
             let mut out = hits::Out::default();
             let mut t = Tick {
                 ctx,
