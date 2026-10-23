@@ -212,6 +212,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
                 crate::random_ticks::tick(d);
                 crate::daylight::tick(d, lock(&d.time).age);
                 crate::furnaces::tick(d);
+                crate::brewing::tick(d);
                 crate::beacons::tick(d, count as i64);
                 lock(&d.border).tick();
             }
@@ -392,6 +393,7 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
         match id.as_str() {
             "minecraft:hopper" => crate::hoppers::register(ctx, p),
             "minecraft:daylight_detector" => crate::daylight::register(ctx, p),
+            "minecraft:brewing_stand" => crate::brewing::wake(ctx, p),
             _ => crate::furnaces::wake(ctx, p),
         }
     }
@@ -507,6 +509,7 @@ pub(crate) fn containers_changed(ctx: &ServerContext) {
     }
     for &p in &changed {
         crate::furnaces::wake(ctx, p);
+        crate::brewing::wake(ctx, p);
     }
     let mut level = crate::level::WorldLevel::new(ctx);
     let logic = level.logic();

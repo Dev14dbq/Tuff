@@ -620,6 +620,7 @@ impl World {
                     | "minecraft:furnace"
                     | "minecraft:blast_furnace"
                     | "minecraft:smoker"
+                    | "minecraft:brewing_stand"
                     | "minecraft:daylight_detector"
             )
         });

@@ -74,8 +74,14 @@ fn store_at(ctx: &ServerContext, p: Position) -> Option<Store<'_>> {
 /// container (in the order they are tried), or pull out of.
 fn sided_slots(name: &str, size: usize, side: Dir, inserting: bool) -> Vec<usize> {
     match name {
-        // Brewing and autocrafting are not hopper-fed yet.
-        "minecraft:brewing_stand" | "minecraft:crafter" | "minecraft:ender_chest" => Vec::new(),
+        "minecraft:crafter" | "minecraft:ender_chest" => Vec::new(),
+        // The ingredient through the top, bottles and fuel through the
+        // sides, bottles and the ingredient through the bottom.
+        "minecraft:brewing_stand" => match side {
+            Dir::Up => vec![3],
+            Dir::Down => vec![0, 1, 2, 3],
+            _ => vec![0, 1, 2, 4],
+        },
         "minecraft:furnace" | "minecraft:blast_furnace" | "minecraft:smoker" => {
             if inserting {
                 match side {
@@ -114,6 +120,13 @@ fn move_one(ctx: &ServerContext, src: Store, from_side: Dir, dst: Store, to_side
     sided_slots(src.name, slots.len(), from_side, false)
         .into_iter()
         .filter(|&slot| slots[slot].is_some())
+        // Only an empty bottle comes out of a brewing stand's ingredient slot.
+        .filter(|&slot| {
+            src.name != "minecraft:brewing_stand"
+                || slot != 3
+                || slots[3].as_ref().map(|s| ctx.items.name(s.item))
+                    == Some(Some("minecraft:glass_bottle"))
+        })
         .any(|slot| transfer_from_slot(ctx, src.at, src.kind, slot, dst, to_side))
 }
 
@@ -566,7 +579,10 @@ fn transfer_from_slot(
 fn insert_one(ctx: &ServerContext, dst: Store, side: Dir, stack: &ItemStack) -> bool {
     let (to, to_kind, to_name) = (dst.at, dst.kind, dst.name);
     let mut dst = containers::slots(ctx, to, to_kind);
-    let into = sided_slots(to_name, dst.len(), side, true);
+    let mut into = sided_slots(to_name, dst.len(), side, true);
+    if to_name == "minecraft:brewing_stand" {
+        into.retain(|&i| crate::brewing::accepts(ctx, &dst, i, stack));
+    }
     let max = ctx.items.max_stack(stack.item);
     let merge = into.iter().copied().find(|&i| {
         dst[i]

@@ -221,6 +221,10 @@ impl Windows {
             let values = crate::furnaces::progress(ctx, position).values();
             self.container_data(writer, position, &values)?;
         }
+        if kind.entity == "minecraft:brewing_stand" {
+            let values = crate::brewing::progress(ctx, position).values();
+            self.container_data(writer, position, &values)?;
+        }
         Ok(())
     }
 

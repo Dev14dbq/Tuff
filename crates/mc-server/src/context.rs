@@ -186,10 +186,11 @@ pub enum Event {
         /// `minecraft:block` registry id.
         block: i32,
     },
-    /// A furnace's progress changed (its window's four properties).
+    /// A furnace's or brewing stand's progress changed (its window's
+    /// properties).
     FurnaceProgress {
         position: mc_protocol::Position,
-        values: [i16; 4],
+        values: Vec<i16>,
     },
     /// A player finished eating or drinking.
     UsedItem {
@@ -405,6 +406,8 @@ pub struct Shared {
     pub items: crate::items::Items,
     /// Burn times of fuels.
     pub fuels: crate::furnaces::Fuels,
+    /// Brewing recipes and fuels.
+    pub brewing: crate::brewing::Mixes,
     /// Players in bed at night, since when.
     pub sleepers: Mutex<crate::useblocks::Sleepers>,
     /// Players eating or drinking (tick thread counts down).
@@ -493,6 +496,8 @@ pub struct ServerContext {
     pub moving: Mutex<Vec<(mc_tick::BlockPos, mc_tick::pistons::Moving)>>,
     /// Furnaces burning or cooking (tick thread).
     pub furnaces: Mutex<crate::furnaces::Active>,
+    /// Brewing stands brewing (tick thread).
+    pub brewers: Mutex<crate::brewing::Active>,
     /// Hoppers that tick (tick thread).
     pub hoppers: Mutex<crate::hoppers::Active>,
     /// Recent redstone torch toggles by position (burnout).
@@ -750,6 +755,7 @@ impl ServerContext {
             block_events: Mutex::new(Vec::new()),
             moving: Mutex::new(Vec::new()),
             furnaces: Mutex::new(HashMap::new()),
+            brewers: Mutex::new(HashMap::new()),
             hoppers: Mutex::new(Default::default()),
             torch_toggles: Mutex::new(HashMap::new()),
             container_updates: Mutex::new(Vec::new()),
@@ -846,6 +852,7 @@ impl ServerContext {
             Some(ids) => crate::furnaces::Fuels::load(&data, &items, ids),
             None => crate::furnaces::Fuels::default(),
         };
+        let brewing = crate::brewing::Mixes::load(&data, &items);
         let warned_observed = std::cell::Cell::new(false);
         let observed = |file: &str| {
             let path = config.data_dir.join("observed").join(file);
@@ -989,6 +996,7 @@ impl ServerContext {
             vitals: Mutex::new(HashMap::new()),
             items,
             using: Mutex::new(HashMap::new()),
+            brewing,
             fuels,
             sleepers: Mutex::new(HashMap::new()),
             difficulty: AtomicI32::new(difficulty),
@@ -1058,6 +1066,7 @@ impl ServerContext {
             hoppers: Mutex::new(Default::default()),
             torch_toggles: Mutex::new(HashMap::new()),
             furnaces: Mutex::new(HashMap::new()),
+            brewers: Mutex::new(HashMap::new()),
             block_events: Mutex::new(Vec::new()),
             moving: Mutex::new(Vec::new()),
             // Every movement is an event; leave room for many moving players.
