@@ -244,6 +244,16 @@ pub fn bone_meal(level: &mut WorldLevel, p: Position) -> bool {
     true
 }
 
+/// Bone meal on the `face` (if any) of a solid block under water: the
+/// water in front of it grows seagrass and, in warm oceans, corals.
+pub fn bone_meal_water(
+    level: &mut WorldLevel,
+    clicked: Position,
+    face: Option<mc_tick::Dir>,
+) -> bool {
+    more::water_plants(level, clicked, face)
+}
+
 /// A roll as a number in 0..1.
 fn unit(roll: u64) -> f64 {
     (roll >> 11) as f64 / (1u64 << 53) as f64
@@ -476,5 +486,141 @@ mod tests {
             random_tick(&mut dry, [20, -49, 0], &mut rng);
         }
         assert!(look(&dry, [20, -50, 0]).ends_with("air"));
+    }
+
+    /// Water over `x0..=x1`, `y0..=y1`, `z0..=z1`.
+    fn flood(level: &mut WorldLevel, x: (i32, i32), y: (i32, i32), z: (i32, i32)) {
+        for x in x.0..=x.1 {
+            for y in y.0..=y.1 {
+                for z in z.0..=z.1 {
+                    put(level, [x, y, z], "minecraft:water", &[("level", "0")]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bone_meal_spreads_sea_pickles_over_coral_blocks() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut level = WorldLevel::new(&ctx);
+        flood(&mut level, (-6, 6), (-60, -58), (-6, 6));
+        for x in -6..=6 {
+            for z in -6..=6 {
+                put(&mut level, [x, -61, z], "minecraft:tube_coral_block", &[]);
+            }
+        }
+        let pickle = |pickles: &str, wet: &str| {
+            [
+                ("pickles", pickles.to_owned()),
+                ("waterlogged", wet.to_owned()),
+            ]
+        };
+        let set_pickle = |level: &mut WorldLevel, pickles: &str, wet: &str| {
+            let props = pickle(pickles, wet);
+            let props: Vec<(&str, &str)> = props.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            put(level, [0, -60, 0], "minecraft:sea_pickle", &props);
+        };
+        // A dead one (out of the water) does not take the meal.
+        set_pickle(&mut level, "1", "false");
+        assert!(!bone_meal(&mut level, Position::new(0, -60, 0)));
+        set_pickle(&mut level, "1", "true");
+        for _ in 0..20 {
+            assert!(bone_meal(&mut level, Position::new(0, -60, 0)));
+        }
+        assert!(look(&level, [0, -60, 0]).contains("pickles=4"));
+        let mut near = 0;
+        for x in -6..=6 {
+            for z in -6..=6 {
+                for y in [-60, -59, -58] {
+                    if look(&level, [x, y, z]).contains("sea_pickle") && (x, y, z) != (0, -60, 0) {
+                        near += 1;
+                        // Within 2 blocks along x, 3 along z, on the layer
+                        // of the pickle (and the one under it, coral).
+                        assert!(
+                            x.abs() <= 2 && (-2..=3).contains(&z) && y == -60,
+                            "{x} {y} {z}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(near >= 3, "{near}");
+        // Over a plain floor there is nothing to grow on.
+        let mut bare = WorldLevel::new(&ctx);
+        flood(&mut bare, (20, 26), (-60, -58), (-3, 3));
+        put(
+            &mut bare,
+            [23, -60, 0],
+            "minecraft:sea_pickle",
+            &[("pickles", "1"), ("waterlogged", "true")],
+        );
+        assert!(bone_meal(&mut bare, Position::new(23, -60, 0)));
+        assert!(!look(&bare, [22, -60, 0]).contains("sea_pickle"));
+    }
+
+    #[test]
+    fn bone_meal_on_a_floor_under_water_plants_seagrass_and_in_warm_oceans_coral() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut level = WorldLevel::new(&ctx);
+        flood(&mut level, (-4, 4), (-60, -57), (-4, 4));
+        // The first try plants right in front of the face clicked.
+        assert!(bone_meal_water(
+            &mut level,
+            Position::new(0, -61, 0),
+            Some(mc_tick::Dir::Up)
+        ));
+        assert!(look(&level, [0, -60, 0]).contains("seagrass"));
+        let count = |level: &WorldLevel, what: &str| {
+            let mut n = 0;
+            for x in -4..=4 {
+                for z in -4..=4 {
+                    for y in -60..=-57 {
+                        if look(level, [x, y, z]).contains(what) {
+                            n += 1;
+                        }
+                    }
+                }
+            }
+            n
+        };
+        assert!(count(&level, "seagrass") >= 2);
+        assert_eq!(count(&level, "coral"), 0);
+        // Not into plain air or a block without water in front.
+        assert!(!bone_meal_water(
+            &mut level,
+            Position::new(30, -61, 0),
+            Some(mc_tick::Dir::Up)
+        ));
+        // Warm ocean: corals too.
+        let Some(warm) = ctx.world.biome_id("minecraft:warm_ocean") else {
+            eprintln!("no warm ocean in this world");
+            return;
+        };
+        ctx.world.fill_biome(
+            (-1, -1),
+            [-4, -16, -4],
+            [-1, 8, -1],
+            warm,
+            &|_| true,
+            &ctx.data.blocks,
+        );
+        ctx.world.fill_biome(
+            (0, 0),
+            [0, -16, 0],
+            [3, 8, 3],
+            warm,
+            &|_| true,
+            &ctx.data.blocks,
+        );
+        for x in 1..=3 {
+            bone_meal_water(&mut level, Position::new(x, -61, 1), Some(mc_tick::Dir::Up));
+        }
+        assert!(count(&level, "coral") > 0);
     }
 }

@@ -62,7 +62,17 @@ pub fn item_on(c: &Click, outcome: &mut Outcome) -> bool {
     }
     let mut level = WorldLevel::new(c.ctx);
     if !crate::growth::bone_meal(&mut level, c.at) {
-        return false;
+        // Else on a solid face under water, the water plants.
+        let face = mc_tick::Dir::ALL.get(c.face).copied();
+        let state = mc_tick::Level::block(&level, crate::level::to_pos(c.at));
+        let solid = face.is_some_and(|f| match f {
+            mc_tick::Dir::Up => c.ctx.shapes.support(state) & mc_tick::support::TOP_FULL != 0,
+            mc_tick::Dir::Down => c.ctx.shapes.support(state) & mc_tick::support::BOTTOM_FULL != 0,
+            _ => c.ctx.shapes.face_attaches(state, f.opposite()),
+        });
+        if !solid || !crate::growth::bone_meal_water(&mut level, c.at, face) {
+            return false;
+        }
     }
     let changes = level.into_changes();
     outcome.updates.extend(changes.iter().copied());

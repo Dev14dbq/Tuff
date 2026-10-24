@@ -321,7 +321,9 @@ fn behavior(
             }
         }
         "minecraft:bone_meal" => {
-            if crate::growth::bone_meal(level, front) {
+            if crate::growth::bone_meal(level, front)
+                || crate::growth::bone_meal_water(level, front, None)
+            {
                 done(None)
             } else {
                 Behavior::Failed
