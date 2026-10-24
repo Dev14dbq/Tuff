@@ -137,6 +137,7 @@ fn land(
                 on_ground: false,
                 ..me.pose
             };
+            crate::mobs::endermite::from_pearl(ctx, [me.pose.x, me.pose.y, me.pose.z]);
             let _ = ctx.events.send(Event::Teleport { uuid: o, pose });
             // Landing hurts: 5 points, as a fall.
             crate::vitals::hurt(ctx, o, 5.0, "minecraft:ender_pearl", "death.attack.fall");

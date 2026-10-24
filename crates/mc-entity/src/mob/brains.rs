@@ -202,6 +202,7 @@ const WOLVES: &[Species] = &[Species::Wolf];
 const LLAMAS: &[Species] = &[Species::Llama, Species::TraderLlama];
 const FOX_PREY: &[Species] = &[Species::Chicken, Species::Rabbit];
 const RABBITS: &[Species] = &[Species::Rabbit];
+const ENDERMITES: &[Species] = &[Species::Endermite];
 const NONE: &[Species] = &[];
 
 pub(super) fn brain(species: Species) -> Brain {
@@ -453,6 +454,8 @@ pub(super) fn brain(species: Species) -> Brain {
                     },
                 ),
                 hurt_by(2, false),
+                // Whatever the distance, in sight: endermites.
+                prey(3, ENDERMITES, false, false),
             ],
         ),
         Witch => (
@@ -557,6 +560,16 @@ pub(super) fn brain(species: Species) -> Brain {
                         walk: None,
                     },
                 ),
+            ],
+            vec![hurt_by(1, true), nearest(2, species.follow_range(), false)],
+        ),
+        Endermite => (
+            vec![
+                float(),
+                melee(2, 1.0, false),
+                stroll(3, 1.0),
+                look(7, 8.0),
+                random_look(8),
             ],
             vec![hurt_by(1, true), nearest(2, species.follow_range(), false)],
         ),

@@ -16,6 +16,8 @@ const SPEED_SCALE: f64 = 0.9;
 const GROUND: f64 = 2.2;
 /// What a walker steps up onto without jumping (slabs, paths, carpets).
 const STEP: f64 = 0.6;
+/// Ticks an endermite lives.
+pub const ENDERMITE_LIFE: i32 = 2400;
 
 pub(super) fn wrap_degrees(a: f32) -> f32 {
     let a = a % 360.0;
@@ -140,6 +142,13 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
         if m.cold == lava {
             m.cold = !lava;
             m.dirty = true;
+        }
+    }
+    // Endermites last two minutes unless named or kept.
+    if m.species == Species::Endermite && !m.persistent && m.custom_name.is_none() {
+        m.quirks.lifetime += 1;
+        if m.quirks.lifetime >= ENDERMITE_LIFE {
+            out.push(MobEvent::Vanish);
         }
     }
     // Endermen hate water.

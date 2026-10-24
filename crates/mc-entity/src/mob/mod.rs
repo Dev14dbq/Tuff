@@ -13,6 +13,7 @@
 //! - [`body`]: steering, walking, swimming and flying.
 
 mod body;
+pub use body::ENDERMITE_LIFE;
 mod brains;
 mod chores;
 pub mod goals;
@@ -366,6 +367,8 @@ pub enum MobEvent {
     },
     /// A silverfish calls the others out of the infested blocks around it.
     WakeFriends,
+    /// Goes away without a trace (an endermite at the end of its life).
+    Vanish,
     /// Moved far at once: clients see a teleport.
     Teleported,
     /// Heals itself (a witch's potion).
@@ -394,6 +397,9 @@ pub enum MobEvent {
 pub struct Quirks {
     /// Silverfish: ticks until it calls the others (0: not calling).
     pub call_friends: i32,
+    /// Endermite: ticks lived without a name or persistence (vanilla's
+    /// `Lifetime`); it goes at 2400.
+    pub lifetime: i32,
 }
 
 #[derive(Clone, Debug, PartialEq)]

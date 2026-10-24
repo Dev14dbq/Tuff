@@ -78,11 +78,46 @@ fn run(
     ticks: u64,
     griefing: bool,
 ) -> Vec<MobEvent> {
+    run_among(e, world, players, &[], ticks, griefing)
+}
+
+/// [`run`] with other mobs about.
+fn run_among(
+    e: &mut Entity,
+    world: &Den,
+    players: &[Target],
+    mobs: &[Other],
+    ticks: u64,
+    griefing: bool,
+) -> Vec<MobEvent> {
     let mut out = Vec::new();
     for t in 0..ticks {
-        tick(e, &senses(world, players, t, griefing), &mut out);
+        let s = Senses {
+            mobs,
+            ..senses(world, players, t, griefing)
+        };
+        tick(e, &s, &mut out);
     }
     out
+}
+
+fn other(id: i32, species: Species, pos: [f64; 3]) -> Other {
+    let (width, height) = species.size();
+    Other {
+        id,
+        species: Some(species),
+        pos,
+        width,
+        height,
+        baby: false,
+        in_love: false,
+        owner: None,
+        alive: true,
+        leashed: false,
+        in_caravan: false,
+        has_tail: false,
+        chain_held: false,
+    }
 }
 
 #[test]
@@ -138,4 +173,66 @@ fn a_hurt_silverfish_calls_its_friends_after_a_second() {
         1
     );
     assert_eq!(m(&mut e).quirks.call_friends, 0);
+}
+
+#[test]
+fn an_endermite_bites_for_two_and_is_gone_after_two_minutes() {
+    let mut e = mob(Species::Endermite, [0.5, 0.0, 0.5]);
+    let p = Target::at(100, 100, [5.5, 0.0, 0.5]);
+    let out = run(&mut e, &Den::default(), &[p], 120, true);
+    assert!(
+        out.iter().any(|ev| matches!(
+            ev,
+            MobEvent::Attack { target: 100, damage } if (*damage - 2.0).abs() < 1e-6
+        )),
+        "{out:?}"
+    );
+    let mut e = mob(Species::Endermite, [0.5, 0.0, 0.5]);
+    let out = run(
+        &mut e,
+        &Den::default(),
+        &[],
+        ENDERMITE_LIFE as u64 - 1,
+        true,
+    );
+    assert!(!out.iter().any(|ev| matches!(ev, MobEvent::Vanish)));
+    let out = run(&mut e, &Den::default(), &[], 1, true);
+    assert!(out.iter().any(|ev| matches!(ev, MobEvent::Vanish)));
+}
+
+#[test]
+fn a_named_or_kept_endermite_does_not_go() {
+    for named in [true, false] {
+        let mut e = mob(Species::Endermite, [0.5, 0.0, 0.5]);
+        if named {
+            m(&mut e).custom_name = Some("Mite".into());
+        } else {
+            m(&mut e).persistent = true;
+        }
+        let out = run(&mut e, &Den::default(), &[], 2500, true);
+        assert!(!out.iter().any(|ev| matches!(ev, MobEvent::Vanish)));
+        assert_eq!(m(&mut e).quirks.lifetime, 0);
+    }
+}
+
+#[test]
+fn endermen_go_for_endermites_in_sight() {
+    let mut e = mob(Species::Enderman, [0.5, 0.0, 0.5]);
+    let mite = other(9, Species::Endermite, [30.5, 0.0, 0.5]);
+    run_among(&mut e, &Den::default(), &[], &[mite], 100, true);
+    assert_eq!(m(&mut e).target, Some(9));
+    assert!(e.pos[0] > 3.0, "{:?}", e.pos);
+}
+
+#[test]
+fn an_endermite_turns_on_whoever_hurt_it() {
+    let mut e = mob(Species::Endermite, [0.5, 0.0, 0.5]);
+    let foe = other(9, Species::Enderman, [4.5, 0.0, 0.5]);
+    assert!(m(&mut e).hurt(1.0, Some(9)));
+    let out = run_among(&mut e, &Den::default(), &[], &[foe], 20, true);
+    assert_eq!(m(&mut e).target, Some(9));
+    assert!(
+        out.iter()
+            .any(|ev| matches!(ev, MobEvent::Alert { target: 9 }))
+    );
 }

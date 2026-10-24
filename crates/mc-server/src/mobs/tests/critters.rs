@@ -189,3 +189,46 @@ fn a_spawner_with_silverfish_makes_them() {
     run(&ctx, 10);
     assert!(count_of(&ctx, Species::Silverfish) >= 1, "none made");
 }
+
+// ---- endermites ----
+
+#[test]
+fn an_endermite_vanishes_at_the_end_of_its_life_unless_named() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    normal(&ctx);
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let old = put(&ctx, Species::Endermite, [20.5, -60.0, 0.5]);
+    let named = put(&ctx, Species::Endermite, [21.5, -60.0, 0.5]);
+    for e in lock(&ctx.entities).iter_mut() {
+        if let Kind::Mob(m) = &mut e.kind {
+            m.quirks.lifetime = 2395;
+            if e.id == named {
+                m.custom_name = Some("Pearl".into());
+                m.persistent = true;
+            }
+        }
+    }
+    run(&ctx, 10);
+    assert!(mob_of(&ctx, old).is_none(), "still there");
+    assert!(mob_of(&ctx, named).is_some());
+}
+
+#[test]
+fn an_endermite_lifetime_is_saved_as_vanilla_does() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let mut e = crate::mobs::new_mob(&ctx, Species::Endermite, [0.5, -60.0, 0.5]);
+    let Kind::Mob(m) = &mut e.kind else { panic!() };
+    m.quirks.lifetime = 77;
+    let mut c = mc_nbt::Compound::new();
+    crate::mobs::nbt::write(&ctx, m, &mut c);
+    assert_eq!(c.get("Lifetime"), Some(&mc_nbt::Tag::Int(77)));
+    let mut again = Mob::new(Species::Endermite, 3);
+    crate::mobs::nbt::apply(&ctx, &mut again, &c);
+    assert_eq!(again.quirks.lifetime, 77);
+}
