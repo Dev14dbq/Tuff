@@ -11,7 +11,7 @@ mod data;
 mod devtools;
 mod execute;
 mod functions;
-mod gear;
+pub(crate) mod gear;
 mod item;
 mod living;
 pub(crate) mod loot;

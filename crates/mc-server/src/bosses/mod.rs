@@ -121,6 +121,7 @@ pub fn part_targets(entities: &[Entity]) -> Vec<crate::hits::Target> {
             out.push(crate::hits::Target {
                 id: d.part_base + p as i32,
                 aabb: d.part_box(p),
+                kind: Some("minecraft:ender_dragon"),
             });
         }
     }

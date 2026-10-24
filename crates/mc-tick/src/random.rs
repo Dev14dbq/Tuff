@@ -47,6 +47,7 @@ pub enum Behaviour {
     /// Saplings: stage 0 → 1, then a tree.
     Sapling,
     Ice,
+    FrostedIce,
     SnowLayer,
     Farmland,
     Lava,
@@ -75,6 +76,7 @@ impl Behaviour {
             "kelp" | "weeping_vines" | "twisting_vines" | "cave_vines" => Self::GrowingTip,
             "grass_block" | "mycelium" => Self::Spreading,
             "ice" => Self::Ice,
+            "frosted_ice" => Self::FrostedIce,
             "snow" => Self::SnowLayer,
             "farmland" => Self::Farmland,
             "lava" => Self::Lava,
@@ -198,6 +200,7 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut 
                 );
             }
         }
+        Behaviour::FrostedIce => crate::frosted_ice::tick(level, ctx, p, rng),
         Behaviour::SnowLayer => {
             if level.block_light(p) > 11 {
                 level.destroyed(p, state);

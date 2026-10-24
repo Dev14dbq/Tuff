@@ -376,7 +376,8 @@ fn behavior(
                 }
             } else {
                 // Else the sheep, mooshrooms and leads in front.
-                crate::dispense::behavior(level, name, stack, p, facing).unwrap_or(Behavior::Default)
+                crate::dispense::behavior(level, name, stack, p, facing)
+                    .unwrap_or(Behavior::Default)
             }
         }
         "minecraft:glass_bottle" => {
@@ -387,7 +388,8 @@ fn behavior(
                 return done(item("minecraft:honey_bottle"));
             }
             // A water source (or a waterlogged block).
-            let water = (block == "minecraft:water" && blocks.property(state, "level") == Some("0"))
+            let water = (block == "minecraft:water"
+                && blocks.property(state, "level") == Some("0"))
                 || blocks.property(state, "waterlogged") == Some("true");
             match item("minecraft:potion") {
                 Some(potion) if water => {
@@ -1011,9 +1013,11 @@ mod tests {
     /// game tick; the tick the chest gets its first item.
     fn chain(ctx: &ServerContext, x: i32, order: [usize; 2]) -> Option<usize> {
         let blocks = &ctx.data.blocks;
-        let east = ctx
-            .shapes
-            .with(blocks.default_state("minecraft:hopper").unwrap(), "facing", "east");
+        let east = ctx.shapes.with(
+            blocks.default_state("minecraft:hopper").unwrap(),
+            "facing",
+            "east",
+        );
         let (a, b, c) = (
             Position::new(x, -60, 0),
             Position::new(x + 1, -60, 0),
@@ -1071,8 +1075,10 @@ mod tests {
             let ctx = open();
             let blocks = &ctx.data.blocks;
             // Locked by nothing, facing down into a chest.
-            WorldLevel::new(&ctx).set_block(chest, blocks.default_state("minecraft:chest").unwrap());
-            WorldLevel::new(&ctx).set_block(hopper, blocks.default_state("minecraft:hopper").unwrap());
+            WorldLevel::new(&ctx)
+                .set_block(chest, blocks.default_state("minecraft:chest").unwrap());
+            WorldLevel::new(&ctx)
+                .set_block(hopper, blocks.default_state("minecraft:hopper").unwrap());
             let stick = ctx.items.id("minecraft:stick").unwrap();
             containers::put(
                 &ctx,

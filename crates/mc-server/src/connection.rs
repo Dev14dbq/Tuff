@@ -837,6 +837,9 @@ async fn play(
                             windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
                         }
                     }
+                    play::Serverbound::PlayerCommand { action: 6, .. } => {
+                        crate::worn::start_gliding(&ctx, uuid);
+                    }
                     play::Serverbound::PlayerAction { status: status @ (3 | 4), .. } => {
                         // Q: drop one (4) or the whole stack (3) from the main hand.
                         let mut thrown = None;
@@ -1741,12 +1744,12 @@ async fn play(
                             duration,
                         })?;
                     }
-                    Ok(Event::Equipment { uuid: other, entity_id: other_entity, main_hand })
+                    Ok(Event::Equipment { uuid: other, entity_id: other_entity, slots })
                         if other != uuid && visible.contains(&other) =>
                     {
                         writer.queue(&play::SetEquipment {
                             entity_id: other_entity,
-                            slots: vec![(0, main_hand)],
+                            slots,
                         })?;
                     }
                     Ok(Event::PlayerLeft { uuid: other, entity_id: other_entity }) if other != uuid => {
@@ -1929,7 +1932,7 @@ fn change_hands(ctx: &ServerContext, uuid: u128, entity_id: i32, change: impl Fn
         let _ = ctx.events.send(Event::Equipment {
             uuid,
             entity_id,
-            main_hand: now,
+            slots: vec![(0, now)],
         });
     }
 }
@@ -1966,10 +1969,17 @@ fn spawn_player(
         entity_id: player.entity_id,
         head_yaw: pose.yaw,
     })?;
-    if player.main_hand.is_some() {
+    let slots: Vec<(u8, Option<play::ItemStack>)> =
+        crate::worn::equipment(ctx, player.profile.uuid)
+            .into_iter()
+            .enumerate()
+            .filter(|(_, s)| s.is_some())
+            .map(|(i, s)| (i as u8, s))
+            .collect();
+    if !slots.is_empty() {
         writer.queue(&play::SetEquipment {
             entity_id: player.entity_id,
-            slots: vec![(0, player.main_hand.clone())],
+            slots,
         })?;
     }
     Ok(())

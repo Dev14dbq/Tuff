@@ -32,8 +32,17 @@ pub struct Arrow {
     pub stuck: i32,
     /// Entities it went through already.
     pub hit: Vec<i32>,
-    /// A thrown trident (a drowned's) rather than an arrow.
+    /// A thrown trident rather than an arrow.
     pub trident: bool,
+    /// The stack it gives back when picked up (a trident with its
+    /// enchantments and wear, a tipped arrow with its potion).
+    pub stack: Option<mc_protocol::packets::play::ItemStack>,
+    /// A trident that hit an entity: it falls and hurts nothing more.
+    pub dealt: bool,
+    /// A Loyalty trident flying back to its owner through blocks.
+    pub returning: bool,
+    /// Shot from a crossbow (it sounds so when it hits).
+    pub crossbow: bool,
 }
 
 impl Arrow {
@@ -51,6 +60,10 @@ impl Arrow {
             stuck: 0,
             hit: Vec::new(),
             trident: false,
+            stack: None,
+            dealt: false,
+            returning: false,
+            crossbow: false,
         }
     }
 }
@@ -64,6 +77,9 @@ pub struct Firework {
     /// Stars: colours of each (RGB), whether the shot shows a trail.
     pub stars: Vec<Vec<i32>>,
     pub shot_at_angle: bool,
+    /// The rocket item, with its `fireworks` component (clients draw the
+    /// burst from it).
+    pub stack: Option<mc_protocol::packets::play::ItemStack>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -111,6 +127,19 @@ pub enum Shot {
         /// Players it hurt and the age it may hurt them again.
         hit: Vec<(u128, u32)>,
     },
+    /// A lightning bolt: ticks of its flash left, flashes left after it,
+    /// and the entities it struck already.
+    Lightning {
+        life: i32,
+        flashes: i32,
+        struck: Vec<i32>,
+        /// Only seen: no fire, no damage.
+        visual: bool,
+    },
+    /// A wind charge: a player's (thrown) or a breeze's.
+    WindCharge {
+        breeze: bool,
+    },
     /// A fishing bobber; `hooked` is the entity it pulls.
     Bobber {
         hooked: Option<i32>,
@@ -134,8 +163,8 @@ pub struct Projectile {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
     pub glow: bool,
-    /// Item shown: id, damage.
-    pub item: Option<(i32, i32)>,
+    /// Item shown, with its components.
+    pub item: Option<mc_protocol::packets::play::ItemStack>,
     /// Quarter turns... eighths of a turn, 0..8.
     pub rotation: u8,
     pub invisible: bool,
@@ -151,8 +180,8 @@ pub struct Stand {
     pub invisible: bool,
     /// Head, body, left arm, right arm, left leg, right leg (degrees).
     pub pose: [[f32; 3]; 6],
-    /// Main hand, off hand, feet, legs, chest, head: (item, damage).
-    pub gear: [Option<(i32, i32)>; 6],
+    /// Main hand, off hand, feet, legs, chest, head.
+    pub gear: Box<[Option<mc_protocol::packets::play::ItemStack>; 6]>,
     pub health: f32,
     /// World age of the last punch, for the second one that breaks it.
     pub last_hit: i64,
@@ -174,7 +203,7 @@ impl Default for Stand {
                 [-1.0, 0.0, -1.0],
                 [1.0, 0.0, 1.0],
             ],
-            gear: [None; 6],
+            gear: Default::default(),
             health: 20.0,
             last_hit: -100,
         }

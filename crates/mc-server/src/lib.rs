@@ -59,6 +59,8 @@ pub mod rules;
 mod scoreboard;
 mod storage;
 mod summon;
+#[cfg(test)]
+mod testkit;
 mod tick;
 mod trading;
 mod useblocks;
@@ -67,6 +69,7 @@ mod vehicles;
 mod vitals;
 mod weather;
 mod world;
+mod worn;
 mod xp;
 
 use std::future::Future;

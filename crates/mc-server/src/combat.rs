@@ -111,16 +111,64 @@ pub struct Blow {
     /// Where the attacker stands and which way they face.
     pub from: [f64; 3],
     pub yaw: f32,
+    /// Extra damage against aquatic mobs (Impaling).
+    pub impaling: f32,
+    /// A mace's smash attack: the fall it ends (blocks).
+    pub smash: Option<f64>,
+    /// How much the target's armor counts for less (Breach: -0.15 a
+    /// level).
+    pub breach: f32,
+    /// The attacker's weapon, for the effects after the hit.
+    pub weapon: Option<mc_protocol::packets::play::ItemStack>,
+}
+
+impl Blow {
+    /// The damage type: a smash is `mace_smash`.
+    pub fn kind(&self) -> &'static str {
+        if self.smash.is_some() {
+            "minecraft:mace_smash"
+        } else {
+            "minecraft:player_attack"
+        }
+    }
+
+    pub fn death_key(&self) -> &'static str {
+        if self.smash.is_some() {
+            "death.attack.mace_smash.player"
+        } else {
+            "death.attack.player"
+        }
+    }
+}
+
+/// A mace's extra damage for a fall of `fall` blocks (minecraft.wiki,
+/// "Mace"): 4 a block for the first 3, 2 for the next 5, 1 after that;
+/// Density adds its `smash_damage_per_fallen_block` for each.
+pub fn smash_damage(fall: f64, per_block: f32) -> f32 {
+    let base = if fall <= 3.0 {
+        4.0 * fall
+    } else if fall <= 8.0 {
+        12.0 + 2.0 * (fall - 3.0)
+    } else {
+        22.0 + fall - 8.0
+    };
+    (base + f64::from(per_block) * fall) as f32
 }
 
 /// The blow a player swings now; resets the charge and stops a sprint
 /// blow's sprint. Sounds come with the hit ([`blow_sound`]).
 pub fn swing(ctx: &ServerContext, uuid: u128, pose: Pose) -> Blow {
+    swing_with(ctx, uuid, pose, None)
+}
+
+/// [`swing`] with the base damage set (a riptide spin hits for 8 instead
+/// of the attack damage).
+pub fn swing_with(ctx: &ServerContext, uuid: u128, pose: Pose, base: Option<f32>) -> Blow {
     let held = crate::held::held(ctx, uuid, 0);
     let info = held.as_ref().and_then(|h| ctx.items.get(h.stack.item));
     let comps = held.as_ref().and_then(|h| h.comps.as_ref());
     let level = |name: &str| crate::held::enchant(comps, name);
-    let base = 1.0 + info.map_or(0.0, |i| i.attack_damage);
+    let base = base.unwrap_or(1.0 + info.map_or(0.0, |i| i.attack_damage));
     let speed = (4.0 + info.map_or(0.0, |i| i.attack_speed)).max(0.1);
     let period = 20.0 / speed;
     let t = now(ctx);
@@ -134,22 +182,43 @@ pub fn swing(ctx: &ServerContext, uuid: u128, pose: Pose) -> Blow {
     let mut damage = base * (0.2 + strength * strength * 0.8);
     let sharp = level("sharpness");
     let bonus = |x: f32| x * strength;
-    damage += bonus(if sharp > 0 {
+    let enchanted = bonus(if sharp > 0 {
         0.5 * sharp as f32 + 0.5
     } else {
         0.0
     });
-    let (fall, in_water) = {
+    let (fall, in_water, gliding) = {
         let v = lock(&ctx.vitals);
         let fall = v.get(&uuid).map_or(0.0, |v| v.fall_distance);
+        let gliding = v.get(&uuid).is_some_and(|v| v.gliding);
         let wet = crate::hits::in_water(ctx, [pose.x, pose.y, pose.z]);
-        (fall, wet)
+        (fall, wet, gliding)
     };
+    // A mace falling more than 1.5 blocks smashes.
+    let mace = held.as_ref().is_some_and(|h| h.name == "minecraft:mace");
+    let smash = (mace && fall > 1.5 && !gliding).then_some(fall);
+    let weapon = held.as_ref().map(|h| h.stack.clone());
+    let none = crate::enchant_effects::Situation::default();
+    if let (Some(fall), Some(w)) = (smash, &weapon) {
+        let per = crate::enchant_effects::modify(
+            ctx,
+            "minecraft:smash_damage_per_fallen_block",
+            w,
+            &none,
+            0.0,
+        );
+        damage += smash_damage(fall, per);
+    }
+    let breach = weapon.as_ref().map_or(0.0, |w| {
+        crate::enchant_effects::modify(ctx, "minecraft:armor_effectiveness", w, &none, 0.0)
+    });
     let sprint_blow = sprinting && full;
     let crit = full && fall > 0.0 && !pose.on_ground && !in_water && !sprinting;
     if crit {
         damage *= 1.5;
     }
+    // Enchantment damage is not made critical.
+    damage += enchanted;
     let sword = held.as_ref().is_some_and(|h| {
         ctx.commands
             .env
@@ -181,6 +250,10 @@ pub fn swing(ctx: &ServerContext, uuid: u128, pose: Pose) -> Blow {
         disables_shield: info.and_then(|i| i.weapon).map_or(0.0, |w| w.1),
         from: [pose.x, pose.y, pose.z],
         yaw: pose.yaw,
+        impaling: bonus(2.5 * level("impaling") as f32),
+        smash,
+        breach,
+        weapon,
     }
 }
 
@@ -395,6 +468,9 @@ pub fn hurt_player(ctx: &ServerContext, uuid: u128, hit: &Hit) -> Option<bool> {
         hit.attacker,
         hit.by,
     )?;
+    if let Some(by) = hit.by {
+        thorns(ctx, uuid, by, mode);
+    }
     if !crate::damage::bypasses_armor(hit.kind) && mode != 1 {
         let wear = ((hit.amount / 4.0).floor() as i32).max(1);
         let worn: Vec<usize> = {
@@ -433,6 +509,190 @@ pub fn hurt_player(ctx: &ServerContext, uuid: u128, hit: &Hit) -> Option<bool> {
     Some(died)
 }
 
+/// Hurts the entity with this id, a player or a mob, by `amount` of
+/// `kind`; `by` is the player behind it.
+pub fn hurt_entity(ctx: &ServerContext, entity_id: i32, amount: f32, kind: &str, by: Option<u128>) {
+    let player = lock(&ctx.players)
+        .values()
+        .find(|p| p.entity_id == entity_id && p.dimension == ctx.world.dimension)
+        .map(|p| p.profile.uuid);
+    match player {
+        Some(uuid) => {
+            let (name, direct) = by
+                .and_then(|b| {
+                    lock(&ctx.players)
+                        .get(&b)
+                        .map(|p| (p.profile.name.clone(), p.entity_id))
+                })
+                .unzip();
+            let key = format!("death.attack.{}", kind.trim_start_matches("minecraft:"));
+            crate::vitals::try_hurt_by_entity(
+                ctx,
+                uuid,
+                amount,
+                kind,
+                &key,
+                name.as_deref(),
+                direct,
+            );
+        }
+        None => ctx.mobs.harm(ctx.dim, entity_id, amount, kind, by),
+    }
+}
+
+/// What follows a blow that landed: a mace's smash stops the attacker in
+/// the air (they fall only below it), sounds and pushes everything within
+/// 3.5 blocks of the target up and away (twice as hard after 5 blocks);
+/// then the weapon's `post_attack` effects on the attacker (Wind Burst).
+/// `entities` are the world's other entities.
+#[allow(clippy::too_many_arguments)]
+pub fn after_blow(
+    ctx: &ServerContext,
+    attacker: u128,
+    blow: &Blow,
+    target: i32,
+    target_pos: [f64; 3],
+    target_on_ground: bool,
+    entities: &mut [mc_entity::Entity],
+) {
+    let Some((entity_id, flying)) = lock(&ctx.players)
+        .get(&attacker)
+        .map(|p| (p.entity_id, p.flying))
+    else {
+        return;
+    };
+    let fall = blow.smash.unwrap_or_else(|| {
+        lock(&ctx.vitals)
+            .get(&attacker)
+            .map_or(0.0, |v| v.fall_distance)
+    });
+    // The weapon's effects on its wielder, while the fall still counts.
+    if let Some(w) = &blow.weapon {
+        let mover = crate::enchant_effects::Mover {
+            fall_distance: fall,
+            flying,
+            ..Default::default()
+        };
+        let s = crate::enchant_effects::Situation {
+            this: Some("minecraft:player"),
+            attacker: Some("minecraft:player"),
+            direct_attacker: Some("minecraft:player"),
+            mover: Some(&mover),
+            ..Default::default()
+        };
+        let gear = [(0usize, "mainhand", w.clone())];
+        for p in crate::enchant_effects::post_attack(ctx, &gear, "attacker", "attacker", &s) {
+            if let Some(e) = &p.explode {
+                let value = |k: &str| crate::enchant_effects::value(&e[k], p.level);
+                let sound = e["sound"]
+                    .as_str()
+                    .unwrap_or("minecraft:entity.wind_charge.wind_burst");
+                let gust = crate::projectiles::wind::Gust {
+                    center: blow.from,
+                    radius: value("radius"),
+                    knockback: value("knockback_multiplier"),
+                    sound: if sound.ends_with("wind_burst") && sound.contains("breeze") {
+                        "entity.breeze.wind_burst"
+                    } else {
+                        "entity.wind_charge.wind_burst"
+                    },
+                    triggers: e["block_interaction"] == "trigger",
+                };
+                crate::projectiles::wind::burst(ctx, entities, &gust);
+            }
+        }
+    }
+    let Some(fall) = blow.smash else {
+        return;
+    };
+    push_player(ctx, attacker, entity_id, [0.0, 0.01, 0.0]);
+    if let Some(v) = lock(&ctx.vitals).get_mut(&attacker) {
+        v.impulse_y = Some(blow.from[1]);
+        v.fall_distance = 0.0;
+    }
+    let sound = if !target_on_ground {
+        "item.mace.smash_air"
+    } else if fall > 5.0 {
+        "item.mace.smash_ground_heavy"
+    } else {
+        "item.mace.smash_ground"
+    };
+    fx::sound(ctx, sound, fx::category::PLAYERS, blow.from, 1.0, 1.0);
+    fx::level_event(
+        ctx,
+        2013,
+        [target_pos[0], target_pos[1] - 0.2, target_pos[2]],
+        750,
+    );
+    let heavy = if fall > 5.0 { 2.0 } else { 1.0 };
+    let power = |at: [f64; 3], resist: f64| -> Option<[f64; 3]> {
+        let d = [
+            at[0] - target_pos[0],
+            at[1] - target_pos[1],
+            at[2] - target_pos[2],
+        ];
+        let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        if !(1e-9..=3.5).contains(&dist) {
+            return None;
+        }
+        let k = (3.5 - dist) * 0.7 * heavy * (1.0 - resist);
+        Some([d[0] / dist * k, 0.7, d[2] / dist * k])
+    };
+    for e in entities.iter_mut() {
+        if e.id == target || e.removed {
+            continue;
+        }
+        let mc_entity::Kind::Mob(m) = &e.kind else {
+            continue;
+        };
+        if m.dying.is_some() {
+            continue;
+        }
+        let resist = m
+            .gear
+            .iter()
+            .flatten()
+            .filter_map(|g| ctx.items.get(g.item))
+            .map(|i| f64::from(i.knockback_resistance))
+            .sum::<f64>()
+            .min(1.0);
+        if let Some(v) = power(e.pos, resist) {
+            for (a, b) in e.vel.iter_mut().zip(v) {
+                *a += b;
+            }
+            e.on_ground = false;
+        }
+    }
+    let players: Vec<(u128, i32, Pose)> = lock(&ctx.players)
+        .values()
+        .filter(|p| p.game_mode != 3 && p.dimension == ctx.world.dimension)
+        .filter(|p| p.profile.uuid != attacker && p.entity_id != target)
+        .filter_map(|p| Some((p.profile.uuid, p.entity_id, p.pose?)))
+        .collect();
+    for (uuid, id, pose) in players {
+        if let Some(v) = power([pose.x, pose.y, pose.z], worn_resistance(ctx, uuid)) {
+            push_player(ctx, uuid, id, v);
+        }
+    }
+}
+
+/// Thorns: the victim's armor hurts whoever hit them, and wears for it.
+fn thorns(ctx: &ServerContext, victim: u128, attacker: i32, mode: i32) {
+    let gear = crate::enchant_effects::gear(ctx, victim);
+    let s = crate::enchant_effects::Situation {
+        this: Some("minecraft:player"),
+        ..Default::default()
+    };
+    for p in crate::enchant_effects::post_attack(ctx, &gear, "victim", "attacker", &s) {
+        if let Some((kind, amount)) = &p.damage {
+            hurt_entity(ctx, attacker, *amount, kind, Some(victim));
+        }
+        if p.wear > 0 && mode != 1 {
+            crate::held::wear(ctx, victim, p.slot, p.wear);
+        }
+    }
+}
+
 /// A player hits another player in melee.
 pub fn player_hits_player(
     ctx: &ServerContext,
@@ -440,24 +700,51 @@ pub fn player_hits_player(
     name: &str,
     victim: u128,
 ) {
-    let blow = swing(ctx, attacker.uuid, attacker.pose);
+    player_hits_player_with(ctx, attacker, name, victim, None);
+}
+
+/// [`player_hits_player`] with the blow's base damage set (riptide).
+pub fn player_hits_player_with(
+    ctx: &ServerContext,
+    attacker: &crate::interact::Actor,
+    name: &str,
+    victim: u128,
+    base: Option<f32>,
+) {
+    let blow = swing_with(ctx, attacker.uuid, attacker.pose, base);
     let Some(at) = lock(&ctx.players).get(&victim).and_then(|p| p.pose) else {
         return;
     };
     let victim_id = lock(&ctx.players).get(&victim).map_or(0, |p| p.entity_id);
     let hit = Hit {
         amount: blow.damage,
-        kind: "minecraft:player_attack",
-        death_key: "death.attack.player",
+        kind: blow.kind(),
+        death_key: blow.death_key(),
         attacker: Some(name),
         by: Some(attacker.entity_id),
         from: Some(blow.from),
         knockback: blow.knockback,
         disables_shield: blow.disables_shield,
     };
-    let landed = hurt_player(ctx, victim, &hit).is_some();
+    let landed =
+        crate::damage::with_breach(blow.breach, || hurt_player(ctx, victim, &hit)).is_some();
     blow_sound(ctx, &blow, [at.x, at.y, at.z], landed);
     if landed {
+        let mut entities = lock(&ctx.entities);
+        after_blow(
+            ctx,
+            attacker.uuid,
+            &blow,
+            victim_id,
+            [at.x, at.y, at.z],
+            at.on_ground,
+            &mut entities,
+        );
+    }
+    if landed {
+        if blow.fire > 0 {
+            crate::worn::ignite(ctx, victim, blow.fire * 20);
+        }
         note_hit(ctx, attacker.uuid, victim_id);
         wear_weapon(ctx, attacker.uuid, attacker.game_mode);
     }
@@ -474,5 +761,95 @@ mod tests {
         let air = knockback([0.0, -0.3, 0.0], [0.0; 3], [0.0, 0.0, 1.0], 0.4, false);
         assert_eq!(air[1], -0.3);
         assert!(air[2] < 0.0);
+    }
+
+    #[test]
+    fn mace_smash_grows_with_the_fall() {
+        assert_eq!(smash_damage(1.5, 0.0), 6.0);
+        assert_eq!(smash_damage(3.0, 0.0), 12.0);
+        assert_eq!(smash_damage(8.0, 0.0), 22.0);
+        assert_eq!(smash_damage(10.0, 0.0), 24.0);
+        // Density V: 2.5 more a block.
+        assert_eq!(smash_damage(10.0, 2.5), 49.0);
+    }
+
+    #[test]
+    fn breach_lets_more_through_armor() {
+        let plain = crate::damage::armor_reduce(10.0, 20.0, 0.0, "minecraft:mace_smash");
+        let breached = crate::damage::with_breach(-0.6, || {
+            crate::damage::armor_reduce(10.0, 20.0, 0.0, "minecraft:mace_smash")
+        });
+        // 15 points stop 60%; Breach IV takes all of that away.
+        assert!((plain - 4.0).abs() < 1e-5, "{plain}");
+        assert!((breached - 10.0).abs() < 1e-5, "{breached}");
+        // Back to normal afterwards.
+        assert_eq!(
+            crate::damage::armor_reduce(10.0, 20.0, 0.0, "minecraft:mace_smash"),
+            plain
+        );
+    }
+
+    #[test]
+    fn a_falling_mace_smashes_and_pushes_those_around() {
+        use crate::testkit::{flat, join, stack, wear};
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let u = 0xa001;
+        join(&ctx, u, 9301, [0.5, -60.0, 0.5], 0);
+        wear(
+            &ctx,
+            u,
+            36,
+            stack(
+                &ctx,
+                "mace",
+                &[("density", 2), ("breach", 4), ("wind_burst", 1)],
+            ),
+        );
+        lock(&ctx.time).age = 1000;
+        lock(&ctx.vitals).get_mut(&u).unwrap().fall_distance = 5.0;
+        let pose = lock(&ctx.players).get(&u).unwrap().pose.unwrap();
+        let blow = swing(&ctx, u, pose);
+        assert_eq!(blow.smash, Some(5.0));
+        assert_eq!(blow.kind(), "minecraft:mace_smash");
+        assert!((blow.breach + 0.6).abs() < 1e-6);
+        // 1 + 5, 12 + 4 for 5 blocks, Density II 1 a block.
+        assert!((blow.damage - 27.0).abs() < 1e-4, "{}", blow.damage);
+        // Not falling: no smash.
+        lock(&ctx.vitals).get_mut(&u).unwrap().fall_distance = 1.0;
+        assert_eq!(swing(&ctx, u, pose).smash, None);
+
+        let mut near =
+            crate::mobs::new_mob(&ctx, mc_entity::mob::Species::Zombie, [3.5, -60.0, 0.5]);
+        near.on_ground = true;
+        let mut far =
+            crate::mobs::new_mob(&ctx, mc_entity::mob::Species::Zombie, [9.5, -60.0, 0.5]);
+        far.on_ground = true;
+        let mut entities = vec![near, far];
+        let mut events = ctx.events.subscribe();
+        after_blow(&ctx, u, &blow, -5, [1.5, -60.0, 0.5], true, &mut entities);
+        assert!(
+            entities[0].vel[1] >= 0.7 && entities[0].vel[0] > 0.0,
+            "{:?}",
+            entities[0].vel
+        );
+        assert_eq!(entities[1].vel, [0.0; 3]);
+        let v = lock(&ctx.vitals).get(&u).cloned().unwrap();
+        assert_eq!((v.fall_distance, v.impulse_y), (0.0, Some(-60.0)));
+        // Wind Burst I throws the wielder up 1.2 times an explosion's push.
+        let mut up = None;
+        while let Some(e) = events.try_changed() {
+            if let crate::context::Event::Explosion {
+                knockback, radius, ..
+            } = e
+            {
+                assert_eq!(radius, 3.5);
+                up = knockback.iter().find(|k| k.0 == u).map(|k| k.1);
+            }
+        }
+        let up = up.expect("a wind burst");
+        assert!((up[1] - 1.2).abs() < 1e-6 && up[0].abs() < 1e-9, "{up:?}");
     }
 }

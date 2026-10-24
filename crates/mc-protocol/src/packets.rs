@@ -2193,6 +2193,8 @@ pub mod play {
         Particle(Vec<u8>),
         /// A block position, or none (an end crystal's beam target).
         OptBlockPos(Option<crate::Position>),
+        /// An entity id or none (a firework's rocketeer).
+        OptVarInt(Option<i32>),
         /// A registry id under its own serializer type (cat, cow, wolf, pig
         /// and chicken variants): (type id, value).
         Holder(i32, i32),
@@ -2251,6 +2253,10 @@ pub mod play {
                 MetadataValue::OptBlockState(state) => {
                     out.put_varint(15);
                     out.put_varint(state.map_or(0, |s| s as i32));
+                }
+                MetadataValue::OptVarInt(v) => {
+                    out.put_varint(19);
+                    out.put_varint(v.map_or(0, |v| v + 1));
                 }
                 MetadataValue::Holder(kind, value) => {
                     out.put_varint(*kind);

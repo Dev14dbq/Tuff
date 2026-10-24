@@ -9,11 +9,15 @@
 //! [`shoot`].
 
 pub mod arrow;
+pub mod crossbow;
 pub mod fireball;
 pub mod firework;
 pub mod fishing;
+pub mod lightning;
 pub mod potions;
 pub mod thrown;
+pub mod trident;
+pub mod wind;
 
 use std::collections::HashMap;
 
@@ -33,6 +37,13 @@ pub struct State {
     pub draws: HashMap<u128, (i64, i32)>,
     /// A cast fishing bobber, by its owner.
     pub bobbers: HashMap<u128, i32>,
+    /// Riptide spins, by player.
+    pub spins: HashMap<u128, trident::Spin>,
+    /// Crossbows being charged: the player's entity id and whether the
+    /// start and middle sounds played.
+    pub charging: HashMap<u128, (i32, bool, bool)>,
+    /// Items a player may not use again before this world age.
+    pub cooldowns: HashMap<(u128, &'static str), i64>,
 }
 
 /// The direction a player looks along.
@@ -134,6 +145,9 @@ pub fn muzzle(actor: &Actor) -> [f64; 3] {
 
 enum Class {
     Arrow,
+    Trident,
+    Lightning,
+    Wind,
     Fireball,
     Thrown,
     Firework,
@@ -147,8 +161,11 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
     let Kind::Projectile(p) = &e.kind else {
         return;
     };
-    let class = match p.shot {
+    let class = match &p.shot {
+        Shot::Arrow(a) if a.trident => Class::Trident,
         Shot::Arrow(_) => Class::Arrow,
+        Shot::Lightning { .. } => Class::Lightning,
+        Shot::WindCharge { .. } => Class::Wind,
         Shot::Fireball { .. } => Class::Fireball,
         Shot::Firework(_) => Class::Firework,
         Shot::Bobber { .. } => Class::Bobber,
@@ -158,6 +175,9 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
     };
     match class {
         Class::Arrow => arrow::tick(t, e),
+        Class::Trident => trident::tick(t, e),
+        Class::Lightning => lightning::tick(t, e),
+        Class::Wind => wind::tick(t, e),
         Class::Fireball => fireball::tick(t, e),
         Class::Thrown => thrown::tick(t, e),
         Class::Firework => firework::tick(t, e),
@@ -255,6 +275,29 @@ pub fn use_item(
             });
             return Some(outcome);
         }
+        "minecraft:trident" => {
+            if !trident::usable(ctx, &actor, &held.stack) {
+                return Some(outcome);
+            }
+            let now = lock(&ctx.time).age;
+            lock(&ctx.shooting).draws.insert(actor.uuid, (now, hand));
+            let _ = ctx.events.send(Event::UsingItem {
+                uuid: actor.uuid,
+                entity_id: actor.entity_id,
+                hand: Some(hand),
+            });
+            return Some(outcome);
+        }
+        "minecraft:wind_charge" => {
+            if wind::throw(ctx, &actor, held.slot) {
+                outcome.events.push(Event::Swing {
+                    uuid: actor.uuid,
+                    entity_id: actor.entity_id,
+                    times: 1,
+                });
+            }
+            return Some(outcome);
+        }
         "minecraft:snowball" => (Shot::Snowball, 1.5, 0.0, "entity.snowball.throw"),
         "minecraft:egg" => (Shot::Egg, 1.5, 0.0, "entity.egg.throw"),
         "minecraft:ender_pearl" => (Shot::Pearl, 1.5, 0.0, "entity.ender_pearl.throw"),
@@ -279,13 +322,14 @@ pub fn use_item(
         }
         "minecraft:fishing_rod" => return Some(fishing::use_rod(ctx, actor, hand, yaw, pitch)),
         "minecraft:firework_rocket" => {
-            firework::launch(
-                ctx,
-                actor,
-                &held,
-                [actor.pose.x, actor.pose.y + 1.5, actor.pose.z],
-                false,
-            );
+            // In the air a rocket does something only for a gliding player.
+            let gliding = lock(&ctx.vitals)
+                .get(&actor.uuid)
+                .is_some_and(|v| v.gliding);
+            if !gliding {
+                return Some(outcome);
+            }
+            firework::boost(ctx, actor, &held);
             if consumes {
                 crate::held::consume(ctx, actor.uuid, held.slot, 1);
             }
@@ -294,6 +338,10 @@ pub fn use_item(
                 entity_id: actor.entity_id,
                 times: 1,
             });
+            return Some(outcome);
+        }
+        "minecraft:crossbow" => {
+            crossbow::use_crossbow(ctx, actor, hand, &held);
             return Some(outcome);
         }
         _ => return None,
@@ -370,7 +418,12 @@ pub fn release(ctx: &ServerContext, actor: Actor) {
         hand: None,
     });
     let now = lock(&ctx.time).age;
-    arrow::fire_bow(ctx, actor, hand, (now - start).max(0) as i32);
+    let ticks = (now - start).max(0) as i32;
+    match crate::held::held(ctx, actor.uuid, hand).map(|h| h.name) {
+        Some(n) if n == "minecraft:trident" => trident::release(ctx, actor, hand, ticks),
+        Some(n) if n == "minecraft:crossbow" => crossbow::release(ctx, actor, hand, ticks),
+        _ => arrow::fire_bow(ctx, actor, hand, ticks),
+    }
 }
 
 #[cfg(test)]

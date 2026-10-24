@@ -40,6 +40,7 @@ pub fn fire_bow(ctx: &crate::context::ServerContext, actor: Actor, hand: i32, ti
         ),
     };
     let mut arrow = Arrow::new(item);
+    arrow.stack = ammo.as_ref().map(|a| a.stack.with_count(1));
     arrow.spectral = name == "minecraft:spectral_arrow";
     if name == "minecraft:tipped_arrow" {
         arrow.effects = super::potions::contents(comps);
@@ -95,7 +96,7 @@ fn add(a: [f64; 3], b: [f64; 3], k: f64) -> [f64; 3] {
 
 /// Whether a block is still holding a stuck arrow: the one it is in or one
 /// beside it.
-fn held_by_block(ctx: &crate::context::ServerContext, pos: [f64; 3]) -> bool {
+pub(super) fn held_by_block(ctx: &crate::context::ServerContext, pos: [f64; 3]) -> bool {
     let c = pos.map(|v| v.floor() as i32);
     [
         [0, 0, 0],
@@ -151,7 +152,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 Strike::Block => {
                     fx::sound(
                         ctx,
-                        "entity.arrow.hit",
+                        hit_sound(a),
                         fx::category::NEUTRAL,
                         e.pos,
                         1.0,
@@ -164,6 +165,14 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 }
                 Strike::Player(i) => {
                     let victim = t.players[i];
+                    fx::sound(
+                        ctx,
+                        hit_sound(a),
+                        fx::category::NEUTRAL,
+                        e.pos,
+                        1.0,
+                        1.2 / (hits::rnd() as f32 * 0.2 + 0.9),
+                    );
                     let speed = e.vel.iter().map(|c| c * c).sum::<f64>().sqrt();
                     let amount = damage(a, speed);
                     let hurt = hurt_player(
@@ -175,6 +184,9 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                         owner,
                         e.id,
                     );
+                    if hurt && a.flame {
+                        crate::worn::ignite(ctx, victim.uuid, 100);
+                    }
                     if hurt {
                         let strength = if a.punch > 0 {
                             0.4 + f64::from(a.punch) * 0.6
@@ -213,6 +225,14 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 }
                 Strike::Target(i) => {
                     let target = t.targets[i];
+                    fx::sound(
+                        ctx,
+                        hit_sound(a),
+                        fx::category::NEUTRAL,
+                        e.pos,
+                        1.0,
+                        1.2 / (hits::rnd() as f32 * 0.2 + 0.9),
+                    );
                     let speed = e.vel.iter().map(|c| c * c).sum::<f64>().sqrt();
                     t.out.hits.push(Hit {
                         target: target.id,
@@ -241,6 +261,15 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
     };
     e.vel = e.vel.map(|c| c * drag);
     e.vel[1] -= GRAVITY;
+}
+
+/// What an arrow sounds like when it hits: a crossbow's own sound.
+fn hit_sound(a: &Arrow) -> &'static str {
+    if a.crossbow {
+        "item.crossbow.hit"
+    } else {
+        "entity.arrow.hit"
+    }
 }
 
 /// Damage of a hit at `speed`: the speed times the base damage, rounded up,
@@ -281,7 +310,8 @@ fn pick_up(t: &mut Tick, e: &mut Entity) {
             continue;
         }
         if a.pickup == Pickup::Yes || creative {
-            let left = held::give(t.ctx, who.uuid, &ItemStack::new(a.item, 1));
+            let stack = a.stack.clone().unwrap_or_else(|| ItemStack::new(a.item, 1));
+            let left = held::give(t.ctx, who.uuid, &stack);
             if left > 0 && a.pickup == Pickup::Yes && !creative {
                 continue;
             }

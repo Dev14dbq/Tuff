@@ -129,13 +129,14 @@ pub fn behavior(
             Some(done(None))
         }
         "firework_rocket" => {
-            let (flight, stars) = projectiles::firework::read(comps(stack).as_ref());
+            let (flight, stars) = projectiles::firework::read(stack);
             let life = 10 * (flight + 1) + (hits::rnd() * 5.0) as i32 + (hits::rnd() * 6.0) as i32;
             let shot = Shot::Firework(Firework {
                 life,
                 boosts: None,
                 stars: vec![Vec::new(); stars],
                 shot_at_angle: true,
+                stack: Some(stack.with_count(1)),
             });
             let d = step(facing);
             let at = [
@@ -662,7 +663,7 @@ fn equip(ctx: &ServerContext, name: &str, stack: &ItemStack, front: Position) ->
         if s.marker || s.gear[gear_slot].is_some() {
             continue;
         }
-        s.gear[gear_slot] = Some((stack.item, stack.damage));
+        s.gear[gear_slot] = Some(stack.with_count(1));
         fx::emit(
             ctx,
             fx::Fx::Equip(mc_protocol::packets::play::SetEquipment {

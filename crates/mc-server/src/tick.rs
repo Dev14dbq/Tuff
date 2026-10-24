@@ -217,6 +217,9 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             }
             crate::effects::tick(&ctx, count as i64);
             crate::vitals::tick(&ctx);
+            crate::worn::tick(&ctx);
+            crate::projectiles::trident::tick_spins(&ctx);
+            crate::projectiles::crossbow::tick_charging(&ctx);
             crate::vitals::tick_using(&ctx);
             crate::portals::tick(&ctx);
             crate::useblocks::tick(&ctx);
@@ -759,6 +762,10 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         .map(|e| crate::hits::Target {
             id: e.id,
             aabb: e.aabb(),
+            kind: match &e.kind {
+                mc_entity::Kind::Mob(m) => Some(m.species.id()),
+                _ => None,
+            },
         })
         .collect();
     targets.extend(crate::bosses::part_targets(&entities));
@@ -964,6 +971,9 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         let _ = ctx
             .events
             .send(Event::EntitySync(std::mem::take(&mut out.sync)));
+    }
+    for g in std::mem::take(&mut out.gusts) {
+        crate::projectiles::wind::burst(ctx, &mut entities, &g);
     }
     for hit in std::mem::take(&mut out.hits) {
         crate::hits::apply(ctx, &mut entities, &mut removed, &mut gone, hit);
@@ -1184,7 +1194,10 @@ mod tests {
             &ctx,
             crate::containers::entity_key(id),
             kind,
-            &[(0, Some(mc_protocol::packets::play::ItemStack::new(stone, 64)))],
+            &[(
+                0,
+                Some(mc_protocol::packets::play::ItemStack::new(stone, 64)),
+            )],
         );
         lock(&ctx.entities).push(cart);
         run_scheduled_ticks(&ctx);
@@ -1201,7 +1214,12 @@ mod tests {
             crate::containers::entity_key(id),
             kind,
             &(1..14)
-                .map(|i| (i, Some(mc_protocol::packets::play::ItemStack::new(stone, 64))))
+                .map(|i| {
+                    (
+                        i,
+                        Some(mc_protocol::packets::play::ItemStack::new(stone, 64)),
+                    )
+                })
                 .collect::<Vec<_>>(),
         );
         assert_eq!(

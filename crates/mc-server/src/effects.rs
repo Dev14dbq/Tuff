@@ -485,7 +485,9 @@ fn seen(ctx: &ServerContext, v: &Vitals) -> Seen {
     Seen {
         particles,
         ambient,
-        flags: flags(&v.effects),
+        flags: flags(&v.effects)
+            | if v.fire > 0 { 0x01 } else { 0 }
+            | if v.gliding { -0x80 } else { 0 },
         attributes: Attr::ALL
             .iter()
             .filter(|a| a.synced())
@@ -496,7 +498,12 @@ fn seen(ctx: &ServerContext, v: &Vitals) -> Seen {
                     .id("minecraft:attribute", a.name())
                     .unwrap_or(0),
                 base: a.base(),
-                modifiers: v.effects.modifiers(a),
+                modifiers: v
+                    .effects
+                    .modifiers(a)
+                    .into_iter()
+                    .chain(v.worn.modifiers(a.name()).iter().cloned())
+                    .collect(),
             })
             .collect(),
         health: v.health,
@@ -647,6 +654,19 @@ fn removed(ctx: &ServerContext, uuid: u128, entity_id: i32, kind: &Kind) {
             effect: effect_id(ctx, kind),
         }),
     });
+}
+
+/// Changes a player's vitals with `f` and tells clients what they see
+/// change of it (flags, attributes, health).
+pub fn change<R>(ctx: &ServerContext, uuid: u128, f: impl FnOnce(&mut Vitals) -> R) -> Option<R> {
+    let entity_id = entity_id(ctx, uuid)?;
+    let mut all = lock(&ctx.vitals);
+    let v = all.get_mut(&uuid)?;
+    let before = seen(ctx, v);
+    let r = f(v);
+    let after = seen(ctx, v);
+    send_changes(ctx, uuid, entity_id, &before, &after, v, None);
+    Some(r)
 }
 
 /// Takes effects from a player: one, or all with `None`; whether any went.
@@ -918,6 +938,9 @@ pub fn join_packets(
     let mut empty = v.clone();
     empty.effects = Effects::default();
     empty.absorption = 0.0;
+    empty.fire = 0;
+    empty.gliding = false;
+    empty.worn = crate::worn::Worn::default();
     let before = seen(ctx, &empty);
     let after = seen(ctx, v);
     let mut entries = Vec::new();
