@@ -802,6 +802,13 @@ mod tests {
             }
             n
         };
+        // The rest is random: more uses spread it further.
+        for _ in 0..20 {
+            if count(&level, "seagrass") >= 2 {
+                break;
+            }
+            bone_meal_water(&mut level, Position::new(0, -61, 0), Some(mc_tick::Dir::Up));
+        }
         assert!(count(&level, "seagrass") >= 2);
         assert_eq!(count(&level, "coral"), 0);
         // Not into plain air or a block without water in front.
@@ -831,8 +838,15 @@ mod tests {
             &|_| true,
             &ctx.data.blocks,
         );
-        for x in 1..=3 {
-            bone_meal_water(&mut level, Position::new(x, -61, 1), Some(mc_tick::Dir::Up));
+        // Each try on a clear floor again, the seagrass gone.
+        for _ in 0..30 {
+            if count(&level, "coral") > 0 {
+                break;
+            }
+            flood(&mut level, (-4, 4), (-60, -57), (-4, 4));
+            for x in 1..=3 {
+                bone_meal_water(&mut level, Position::new(x, -61, 1), Some(mc_tick::Dir::Up));
+            }
         }
         assert!(count(&level, "coral") > 0);
     }
