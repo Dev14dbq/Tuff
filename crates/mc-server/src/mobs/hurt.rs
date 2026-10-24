@@ -71,15 +71,15 @@ const FIRE: [&str; 5] = [
     "minecraft:campfire",
 ];
 
-/// Armor points and toughness a mob has: its own and what it wears.
+/// Armor points and toughness a mob has: its own and what it wears (the
+/// items' `attribute_modifiers` in the slots they are for).
 fn armor_of(ctx: &ServerContext, m: &Mob) -> (f32, f32) {
-    m.gear
-        .iter()
-        .flatten()
-        .filter_map(|g| ctx.items.get(g.item))
-        .fold((m.species.armor(), 0.0), |a, i| {
-            (a.0 + i.armor, a.1 + i.toughness)
-        })
+    let armor = crate::mob_effects::attribute(ctx, m, "armor", f64::from(m.species.armor()));
+    let toughness = crate::mob_effects::attribute(ctx, m, "armor_toughness", 0.0);
+    (
+        armor.clamp(0.0, 30.0) as f32,
+        toughness.clamp(0.0, 20.0) as f32,
+    )
 }
 
 /// Hurts a mob; whether the hit counted. A death starts [`die`].
@@ -196,14 +196,8 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     true
 }
 
-fn armor_resistance(ctx: &ServerContext, m: &Mob) -> f64 {
-    m.gear
-        .iter()
-        .flatten()
-        .filter_map(|g| ctx.items.get(g.item))
-        .map(|i| f64::from(i.knockback_resistance))
-        .sum::<f64>()
-        .min(1.0)
+pub(crate) fn armor_resistance(ctx: &ServerContext, m: &Mob) -> f64 {
+    crate::mob_effects::attribute(ctx, m, "knockback_resistance", 0.0).clamp(-2.0, 1.0)
 }
 
 /// A player's melee blow lands on the mob at `i` (and sweeps those near).
@@ -340,14 +334,9 @@ pub fn mob_attacks(
     };
     let species = m.species;
     let weapon = m.gear_item(slot::MAINHAND).and_then(|w| ctx.items.get(w));
-    // Strength and weakness change the blow.
-    let damage = m
-        .effects
-        .value_from(
-            crate::effects::Attr::AttackDamage,
-            f64::from(damage + weapon.map_or(0.0, |w| w.attack_damage)),
-        )
-        .max(0.0) as f32;
+    // The weapon's modifiers, strength and weakness change the blow.
+    let damage = crate::mob_effects::attribute(ctx, m, "attack_damage", f64::from(damage))
+        .clamp(0.0, 2048.0) as f32;
     let disables = weapon.and_then(|w| w.weapon).map_or(0.0, |w| w.1);
     let burning = m.burning > 0;
     if let Some(t) = targets.iter().find(|t| t.id == target) {

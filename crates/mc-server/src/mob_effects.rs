@@ -311,6 +311,48 @@ pub fn with_mob<R>(ctx: &ServerContext, uuid: u128, f: impl FnOnce(&mut Entity) 
     r
 }
 
+/// The names of a mob's equipment slots, by index.
+const SLOTS: [&str; 8] = [
+    "mainhand", "offhand", "feet", "legs", "chest", "head", "body", "saddle",
+];
+
+/// An attribute of a mob (`armor`) from its own `base`, with the
+/// modifiers of what it wears and holds (each item in the slot it is for)
+/// and of its effects.
+pub fn attribute(ctx: &ServerContext, m: &Mob, name: &str, base: f64) -> f64 {
+    let full = format!("minecraft:{}", name.trim_start_matches("minecraft:"));
+    let mut mods = m.effects.modifiers_named(&full);
+    for (s, g) in m.gear.iter().enumerate() {
+        let Some(g) = g else { continue };
+        let stack = mc_protocol::packets::play::ItemStack {
+            damage: g.damage,
+            components: g.components.clone(),
+            ..mc_protocol::packets::play::ItemStack::new(g.item, g.count)
+        };
+        mods.extend(
+            ctx.items
+                .slot_modifiers(&stack, SLOTS[s])
+                .into_iter()
+                .filter(|(a, _)| *a == full)
+                .map(|(_, m)| m),
+        );
+    }
+    let add: f64 = mods
+        .iter()
+        .filter(|m| m.operation == 0)
+        .map(|m| m.amount)
+        .sum();
+    let v = base + add;
+    let mut x = v;
+    for m in mods.iter().filter(|m| m.operation == 1) {
+        x += v * m.amount;
+    }
+    for m in mods.iter().filter(|m| m.operation == 2) {
+        x *= 1.0 + m.amount;
+    }
+    x
+}
+
 /// The `active_effects` a mob is saved with.
 pub fn to_nbt(m: &Mob) -> Option<mc_nbt::Tag> {
     (!m.effects.is_empty()).then(|| m.effects.to_nbt())

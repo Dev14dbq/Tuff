@@ -2,9 +2,11 @@
 //! (minecraft.wiki, "Soul Speed", "Frost Walker", "Swift Sneak", "Depth
 //! Strider", "Efficiency", "Aqua Affinity", "Fire Protection", "Fire" →
 //! "Burning"):
-//! - the `attributes` of the enchantments in the slots they act from are
-//!   modifiers on the player's attributes, which clients move and dig by;
-//!   they are sent again whenever the gear changes;
+//! - the `attributes` of the enchantments in the slots they act from, and
+//!   the `attribute_modifiers` of the items in the slots they are for
+//!   (armor, toughness, attack speed...), are modifiers on the player's
+//!   attributes, which clients move, dig and show armor by; they are sent
+//!   again whenever the gear changes;
 //! - `location_changed` effects run when the player steps into another
 //!   block (or the item arrives): Soul Speed's speed while on soul blocks
 //!   (and its wear), Frost Walker's disk of frosted ice;
@@ -38,6 +40,8 @@ type SlotSig = (&'static str, i32, Vec<(String, i32)>);
 pub struct Worn {
     /// Modifiers enchantments put on now, by attribute (`minecraft:...`).
     mods: BTreeMap<String, Vec<AttributeModifier>>,
+    /// Modifiers the items worn and held put on, as clients were told.
+    items: BTreeMap<String, Vec<AttributeModifier>>,
     /// Location effects that are on: (equipment slot, enchantment, index of
     /// the effect) and the modifiers they put on.
     active: Vec<Active>,
@@ -53,8 +57,16 @@ pub struct Worn {
 }
 
 impl Worn {
-    /// The modifiers enchantments put on an attribute (`minecraft:...`).
-    pub fn modifiers(&self, attribute: &str) -> &[AttributeModifier] {
+    /// The modifiers enchantments and the items put on an attribute
+    /// (`minecraft:...`), as of the last tick.
+    pub fn modifiers(&self, attribute: &str) -> Vec<AttributeModifier> {
+        let mut m = self.enchanted(attribute).to_vec();
+        m.extend(self.items.get(attribute).into_iter().flatten().cloned());
+        m
+    }
+
+    /// The modifiers enchantments put on an attribute.
+    pub fn enchanted(&self, attribute: &str) -> &[AttributeModifier] {
         self.mods.get(attribute).map_or(&[], Vec::as_slice)
     }
 }
@@ -472,13 +484,24 @@ fn gear_tick(
     {
         mods.entry(attribute).or_default().push(m);
     }
+    let mut items: BTreeMap<String, Vec<AttributeModifier>> = BTreeMap::new();
+    for (attribute, m) in gear_modifiers(ctx, &gear) {
+        items.entry(attribute).or_default().push(m);
+    }
     let names: Vec<String> = mods
         .keys()
         .chain(worn.mods.keys())
         .filter(|k| mods.get(*k) != worn.mods.get(*k))
+        .chain(
+            items
+                .keys()
+                .chain(worn.items.keys())
+                .filter(|k| items.get(*k) != worn.items.get(*k)),
+        )
         .cloned()
         .collect();
     worn.mods = mods;
+    worn.items = items;
     if let Some(v) = lock(&ctx.vitals).get_mut(&uuid) {
         v.worn = worn;
     }
@@ -487,6 +510,7 @@ fn gear_tick(
     names.dedup();
     let attributes: Vec<_> = names
         .iter()
+        .filter(|n| crate::commands::gear::synced(n))
         .filter_map(|n| crate::commands::gear::snapshot(ctx, uuid, n))
         .collect();
     if !attributes.is_empty() {
@@ -506,6 +530,16 @@ fn gear_tick(
     for (disk, level) in disks {
         replace_disk(ctx, &disk, level, pos);
     }
+}
+
+/// The attribute modifiers of the items in the slots they are for.
+pub fn gear_modifiers(
+    ctx: &ServerContext,
+    gear: &[(usize, &'static str, ItemStack)],
+) -> Vec<(String, AttributeModifier)> {
+    gear.iter()
+        .flat_map(|(_, slot, stack)| ctx.items.slot_modifiers(stack, slot))
+        .collect()
 }
 
 /// What a location effect asks the world for.
@@ -1046,5 +1080,63 @@ mod tests {
         assert!(seen.contains(&(5, Some(helmet))));
         assert!(seen.iter().any(|(i, s)| *i == 1 && s.is_some()));
         assert_eq!(seen.len(), 2);
+    }
+
+    #[test]
+    fn worn_and_held_items_modify_attributes_by_slot() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        join(&ctx, U, 907, [0.5, -60.0, 0.5], 0);
+        tick(&ctx);
+        let mut events = ctx.events.subscribe();
+        wear(&ctx, U, 6, stack(&ctx, "diamond_chestplate", &[]));
+        wear(&ctx, U, 8, stack(&ctx, "netherite_boots", &[]));
+        wear(&ctx, U, 36, stack(&ctx, "diamond_sword", &[]));
+        // A chestplate held does nothing.
+        wear(&ctx, U, 45, stack(&ctx, "iron_chestplate", &[]));
+        tick(&ctx);
+        let armor = mods(&ctx, "minecraft:armor");
+        assert_eq!(armor.len(), 2);
+        assert!(armor.iter().any(|m| m.id == "minecraft:armor.chestplate"));
+        assert_eq!(crate::damage::worn_armor(&ctx, U), (11.0, 5.0));
+        let value = |n| crate::commands::gear::value(&ctx, U, n);
+        assert!((value("attack_speed") - 1.6).abs() < 1e-6);
+        assert_eq!(value("attack_damage"), 7.0);
+        assert!((value("knockback_resistance") - 0.1).abs() < 1e-6);
+        // Clients hear of armor and attack speed, not of what only the
+        // server uses.
+        let mut sent = Vec::new();
+        while let Some(e) = events.try_changed() {
+            if let Event::Attributes { uuid: U, packet } = e {
+                sent.extend(packet.attributes.iter().map(|a| a.attribute));
+            }
+        }
+        let id = |n: &str| ctx.data.builtin.id("minecraft:attribute", n).unwrap();
+        assert!(sent.contains(&id("minecraft:armor")));
+        assert!(sent.contains(&id("minecraft:armor_toughness")));
+        assert!(sent.contains(&id("minecraft:attack_speed")));
+        assert!(!sent.contains(&id("minecraft:attack_damage")));
+        assert!(!sent.contains(&id("minecraft:knockback_resistance")));
+        // Taken off, they go.
+        if let Some(h) = lock(&ctx.inventories).get_mut(&U) {
+            h.slots[6] = None;
+        }
+        tick(&ctx);
+        assert_eq!(crate::damage::worn_armor(&ctx, U).0, 3.0);
+        assert_eq!(mods(&ctx, "minecraft:armor").len(), 1);
+        // A mob's armor counts as well: a zombie's 2 and an iron
+        // chestplate's 6.
+        let mut z = crate::mobs::new_mob(&ctx, mc_entity::Species::Zombie, [3.5, -60.0, 0.5]);
+        if let mc_entity::Kind::Mob(m) = &mut z.kind {
+            m.gear[mc_entity::mob::slot::CHEST] = Some(mc_entity::mob::Gear {
+                item: ctx.items.id("minecraft:iron_chestplate").unwrap(),
+                count: 1,
+                damage: 0,
+                components: Default::default(),
+            });
+            assert_eq!(crate::mob_effects::attribute(&ctx, m, "armor", 2.0), 8.0);
+        }
     }
 }

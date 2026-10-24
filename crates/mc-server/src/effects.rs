@@ -85,7 +85,7 @@ fn seen(ctx: &ServerContext, v: &Vitals) -> Seen {
                     .effects
                     .modifiers(a)
                     .into_iter()
-                    .chain(v.worn.modifiers(a.name()).iter().cloned())
+                    .chain(v.worn.modifiers(a.name()))
                     .collect(),
             })
             .collect(),

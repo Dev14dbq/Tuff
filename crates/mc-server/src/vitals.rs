@@ -483,6 +483,8 @@ pub fn try_hurt_by_entity(
     if attacker.is_some_and(|by| !may_harm(ctx, by, &name)) {
         return None;
     }
+    // Before the vitals are locked: the attributes read them.
+    let (armor, toughness) = crate::damage::worn_armor(ctx, uuid);
     let (packet, died) = {
         let mut all = lock(&ctx.vitals);
         let v = all.get_mut(&uuid)?;
@@ -510,7 +512,6 @@ pub fn try_hurt_by_entity(
         } else {
             amount
         };
-        let (armor, toughness) = crate::damage::worn_armor(ctx, uuid);
         let amount = crate::damage::armor_reduce(amount, armor, toughness, damage_type);
         let amount = crate::effects::reduce_damage(&v.effects, amount, damage_type);
         let amount = if amount > 0.0 {

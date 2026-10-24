@@ -132,9 +132,62 @@ impl Items {
         self.default_component(stack.item, name).cloned()
     }
 
+    /// The attribute modifiers a stack gives worn or held in `slot`
+    /// (`mainhand`, `head`, `body`...): those of its `attribute_modifiers`
+    /// whose slot group takes in that slot, as (attribute, modifier).
+    pub fn slot_modifiers(
+        &self,
+        stack: &mc_protocol::packets::play::ItemStack,
+        slot: &str,
+    ) -> Vec<(String, mc_protocol::packets::play::AttributeModifier)> {
+        let Some(v) = self.component(stack, "attribute_modifiers") else {
+            return Vec::new();
+        };
+        // A list, or (as once written) `{modifiers: [...]}`.
+        let list = match &v {
+            Value::Array(l) => l.as_slice(),
+            other => other["modifiers"].as_array().map_or(&[][..], Vec::as_slice),
+        };
+        let full = |s: &str| {
+            if s.contains(':') {
+                s.to_owned()
+            } else {
+                format!("minecraft:{s}")
+            }
+        };
+        list.iter()
+            .filter(|m| in_group(m["slot"].as_str().unwrap_or("any"), slot))
+            .filter_map(|m| {
+                Some((
+                    full(m["type"].as_str()?),
+                    mc_protocol::packets::play::AttributeModifier {
+                        id: full(m["id"].as_str()?),
+                        amount: m["amount"].as_f64().unwrap_or(0.0),
+                        operation: match m["operation"].as_str().unwrap_or("") {
+                            "add_multiplied_base" => 1,
+                            "add_multiplied_total" => 2,
+                            _ => 0,
+                        },
+                    },
+                ))
+            })
+            .collect()
+    }
+
     /// How well it takes enchantments; 0 if not at all.
     pub fn enchantable(&self, id: i32) -> i32 {
         self.get(id).and_then(|i| i.enchantable).unwrap_or(0)
+    }
+}
+
+/// Whether an equipment slot group (`any`, `hand`, `armor`, or one slot)
+/// takes in the slot.
+pub fn in_group(group: &str, slot: &str) -> bool {
+    match group {
+        "any" => true,
+        "hand" => matches!(slot, "mainhand" | "offhand"),
+        "armor" => matches!(slot, "head" | "chest" | "legs" | "feet" | "body"),
+        g => g == slot,
     }
 }
 
