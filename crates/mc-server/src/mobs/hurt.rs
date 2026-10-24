@@ -133,6 +133,12 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     {
         super::infest::notify_hurt(m);
     }
+    // Flying mobs (flying-mobs): a snowball takes a tenth off the time a
+    // ghastling has left to grow.
+    if m.species == Species::HappyGhast && m.is_baby() && h.kind == "minecraft:thrown" {
+        m.baby_age -= m.baby_age / 10;
+        m.dirty = true;
+    }
     let (armor, toughness) = armor_of(ctx, m);
     let amount = crate::damage::armor_reduce(h.amount, armor, toughness, h.kind);
     // Land animals (Cursor): a curled armadillo takes what is left after

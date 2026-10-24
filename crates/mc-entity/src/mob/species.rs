@@ -559,7 +559,6 @@ impl Species {
             Sniffer => "minecraft:sniffer_food",
             // Flying mobs (flying-mobs)
             Bee => "minecraft:bee_food",
-            HappyGhast => "minecraft:happy_ghast_food",
             SulfurCube => "minecraft:sulfur_cube_food",
             _ => return None,
         })

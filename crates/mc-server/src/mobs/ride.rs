@@ -42,6 +42,8 @@ pub fn steered_by(ctx: &ServerContext, e: &Entity) -> bool {
         Species::Horse | Species::Donkey | Species::Mule => m.saddled() && m.is_tame(),
         // Land animals (Cursor): camels need no taming.
         Species::Camel | Species::CamelHusk => m.saddled(),
+        // Flying mobs (flying-mobs): the first rider flies a harnessed ghast.
+        Species::HappyGhast => m.gear[slot::BODY].is_some(),
         Species::Pig | Species::Strider => {
             let stick = stick_of(m.species);
             m.saddled()
@@ -73,6 +75,7 @@ fn stick_of(species: Species) -> &'static str {
 pub fn steered(e: &Entity) -> bool {
     matches!(&e.kind, Kind::Mob(m) if !m.riders.is_empty() && m.saddled()
         && (m.species.horse() && m.is_tame()
+            || m.species == Species::HappyGhast && m.gear[slot::BODY].is_some()
             || matches!(m.species, Species::Pig | Species::Strider | Species::Camel | Species::CamelHusk)))
 }
 
@@ -93,10 +96,11 @@ pub fn mount(ctx: &ServerContext, e: &mut Entity, rider: i32) -> bool {
         return false;
     };
     // A camel carries two.
-    let seats = if matches!(m.species, Species::Camel | Species::CamelHusk) {
-        2
-    } else {
-        1
+    let seats = match m.species {
+        Species::Camel | Species::CamelHusk => 2,
+        // Flying mobs (flying-mobs): four ride a happy ghast.
+        Species::HappyGhast => 4,
+        _ => 1,
     };
     if m.riders.len() >= seats || m.riders.contains(&rider) || m.is_baby() {
         return false;

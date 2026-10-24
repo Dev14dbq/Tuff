@@ -599,3 +599,91 @@ fn a_copper_golem_weathers_and_wax_stops_it() {
     run(&ctx, 5);
     assert_eq!(with_mob(&ctx, id, |m| m.quirks.air.weather), 1);
 }
+
+#[test]
+fn a_happy_ghast_takes_a_harness_carries_four_and_gives_it_back_to_shears() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let uuid = join(&ctx, [0.5, -60.0, 8.5]);
+    let _ = uuid;
+    let id = put(&ctx, Species::HappyGhast, [0.5, -60.0, 0.5]);
+    set_mob(&ctx, id, |m| m.no_ai = true);
+    // No harness, no ride.
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 4.5]), 0);
+    run(&ctx, 2);
+    assert!(with_mob(&ctx, id, |m| m.riders.is_empty()));
+    hold(&ctx, "minecraft:white_harness", 1);
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 4.5]), 0);
+    run(&ctx, 2);
+    assert!(with_mob(&ctx, id, |m| m.gear[mc_entity::mob::slot::BODY].is_some()));
+    hold(&ctx, "minecraft:air", 0);
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 4.5]), 0);
+    run(&ctx, 2);
+    assert_eq!(with_mob(&ctx, id, |m| m.riders.len()), 1);
+    // Shears take the harness off.
+    hold(&ctx, "minecraft:shears", 1);
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 4.5]), 0);
+    run(&ctx, 2);
+    assert!(with_mob(&ctx, id, |m| m.gear[mc_entity::mob::slot::BODY].is_none()));
+    assert_eq!(items_of(&ctx, "minecraft:white_harness"), 1);
+}
+
+#[test]
+fn a_snowball_shortens_a_ghastlings_growing_up() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 8.5]);
+    let id = put(&ctx, Species::HappyGhast, [0.5, -60.0, 0.5]);
+    set_mob(&ctx, id, |m| {
+        m.no_ai = true;
+        m.set_baby(true);
+    });
+    assert_eq!(with_mob(&ctx, id, |m| m.size()), (0.95, 0.95));
+    ctx.mobs.harm(ctx.dim, id, 0.0, "minecraft:thrown", None);
+    run(&ctx, 2);
+    let left = with_mob(&ctx, id, |m| m.baby_age);
+    assert!((-21600..=-21500).contains(&left), "baby_age {left}");
+}
+
+#[test]
+fn a_bat_hangs_from_the_ceiling_until_a_player_comes_near() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [30.5, -60.0, 30.5]);
+    set(&ctx, [0, -59, 0], "minecraft:stone");
+    let id = put(&ctx, Species::Bat, [0.5, -60.0, 0.5]);
+    let mut hung = false;
+    for _ in 0..600 {
+        run(&ctx, 1);
+        if with_mob(&ctx, id, |m| m.quirks.air.hanging) {
+            hung = true;
+            break;
+        }
+    }
+    assert!(hung, "never hung");
+    let meta = crate::mobs::metadata_packet(&ctx, &mob_of(&ctx, id).unwrap()).unwrap();
+    assert!(
+        meta.entries
+            .contains(&(16, mc_protocol::packets::play::MetadataValue::Byte(1)))
+    );
+    // A player three blocks off wakes it.
+    move_steve(&ctx, [0.5, -60.0, 3.5]);
+    run(&ctx, 5);
+    assert!(
+        !with_mob(&ctx, id, |m| m.quirks.air.hanging),
+        "still hanging"
+    );
+}
+
+#[test]
+fn bats_spawn_in_the_dark_as_ambient_mobs() {
+    assert_eq!(category(Species::Bat), crate::fx::category::AMBIENT);
+    assert!(Species::Bat.flies());
+    assert_eq!(Species::Bat.xp_reward(), (0, 0));
+}

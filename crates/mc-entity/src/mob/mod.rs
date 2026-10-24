@@ -865,6 +865,8 @@ impl Mob {
                     (w, h)
                 }
             }
+            // Flying mobs (flying-mobs): a ghastling is 0.95 across.
+            Species::HappyGhast if self.is_baby() => (0.95, 0.95),
             _ if self.is_baby() => (w / 2.0, h / 2.0),
             _ => (w, h),
         }

@@ -506,6 +506,32 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         }
         return;
     }
+    // A harness on a grown happy ghast.
+    if name.ends_with("_harness")
+        && species == Species::HappyGhast
+        && !m.is_baby()
+        && m.gear[slot::BODY].is_none()
+    {
+        if let Some(item) = item {
+            m.gear[slot::BODY] = Some(Gear {
+                item,
+                count: 1,
+                damage: 0,
+                components: Default::default(),
+            });
+            consume(ctx, by, hslot);
+            fx::sound(
+                ctx,
+                "entity.happy_ghast.equip",
+                fx::category::NEUTRAL,
+                pos,
+                1.0,
+                1.0,
+            );
+            send_equipment(ctx, e);
+        }
+        return;
+    }
     // An owner's empty-handed (or non-food) use: sit or stand.
     if owner && matches!(species, Species::Wolf | Species::Cat | Species::Parrot) && !by.sneaking {
         m.sitting = !m.sitting;
@@ -520,6 +546,8 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         Species::Pig | Species::Strider => m.saddled(),
         // Land animals (Cursor)
         Species::Camel | Species::CamelHusk => m.saddled() && !m.is_baby(),
+        // Flying mobs (flying-mobs): a harnessed happy ghast.
+        Species::HappyGhast => m.gear[slot::BODY].is_some() && !m.is_baby(),
         Species::Horse | Species::Donkey | Species::Mule => !m.is_baby(),
         _ => false,
     };
@@ -555,6 +583,23 @@ pub fn shear(ctx: &ServerContext, e: &mut Entity) -> bool {
             crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 1.7, pos[2]], item, 1);
         }
         send_now(ctx, e);
+        return true;
+    }
+    // Flying mobs (flying-mobs): shears take a happy ghast's harness off.
+    if species == Species::HappyGhast
+        && let Some(g) = m.gear[slot::BODY].take()
+    {
+        m.dirty = true;
+        fx::sound(
+            ctx,
+            "entity.happy_ghast.unequip",
+            fx::category::PLAYERS,
+            pos,
+            1.0,
+            1.0,
+        );
+        crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 2.0, pos[2]], g.item, 1);
+        send_equipment(ctx, e);
         return true;
     }
     // Flying mobs (flying-mobs): a bogged gives up its two mushrooms, once.

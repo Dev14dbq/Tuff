@@ -890,12 +890,7 @@ pub(super) fn brain(species: Species) -> Brain {
             vec![hurt_by(1, false), nearest(1, 24.0, false)],
         ),
         HappyGhast => (
-            vec![
-                breed(2, 1.0),
-                tempt(3, 1.0),
-                follow_parent(4, 1.0),
-                air(5, 0.0, 12.0),
-            ],
+            vec![tempt(3, 1.0), follow_parent(4, 1.0), air(5, 0.0, 12.0)],
             vec![],
         ),
         Bogged | Parched => (
