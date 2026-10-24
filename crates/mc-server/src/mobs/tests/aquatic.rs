@@ -565,6 +565,24 @@ fn a_golden_dandelion_holds_a_baby_and_a_second_one_lets_it_grow() {
 }
 
 #[test]
+fn an_axolotl_playing_dead_is_not_there_for_hunters() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let mut e = new_mob(&ctx, Species::Axolotl, [0.5, -60.0, 0.5]);
+    if let Kind::Mob(m) = &mut e.kind {
+        m.quirks.aqua.dead_play = 100;
+    }
+    let mut all = [e];
+    assert!(!super::super::others(&all)[0].alive);
+    if let Kind::Mob(m) = &mut all[0].kind {
+        m.quirks.aqua.dead_play = 0;
+    }
+    assert!(super::super::others(&all)[0].alive);
+}
+
+#[test]
 fn an_axolotl_is_bred_with_a_bucket_of_tropical_fish_and_the_bucket_comes_back() {
     let Some(ctx) = flat() else {
         eprintln!("skipped: no game data");
