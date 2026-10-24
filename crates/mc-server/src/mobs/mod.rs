@@ -261,12 +261,32 @@ fn players(ctx: &ServerContext) -> Vec<Target> {
 
 /// Every mob and villager as the others see them.
 fn others(entities: &[Entity]) -> Vec<Other> {
+    // Whether a llama's caravan is held by a leashed llama at its head.
+    let held = |mut at: i32| {
+        for _ in 0..10 {
+            let Some(Kind::Mob(m)) = entities.iter().find(|e| e.id == at).map(|e| &e.kind) else {
+                return false;
+            };
+            if m.leash.is_some() {
+                return true;
+            }
+            match m.caravan_head {
+                Some(h) => at = h,
+                None => return false,
+            }
+        }
+        false
+    };
     entities
         .iter()
         .filter_map(|e| match &e.kind {
             Kind::Mob(m) => {
                 let (w, h) = m.size();
                 Some(Other {
+                    leashed: m.leash.is_some(),
+                    in_caravan: m.caravan_head.is_some(),
+                    has_tail: m.caravan_tail,
+                    chain_held: m.species.llama() && held(e.id),
                     id: e.id,
                     species: Some(m.species),
                     pos: e.pos,
@@ -288,6 +308,10 @@ fn others(entities: &[Entity]) -> Vec<Other> {
                 in_love: false,
                 owner: None,
                 alive: !e.removed,
+                leashed: false,
+                in_caravan: false,
+                has_tail: false,
+                chain_held: false,
             }),
             _ => None,
         })
@@ -650,6 +674,16 @@ fn handle(
             }
         }
         MobEvent::Cured => hurt::cure(ctx, &mut entities[i]),
+        MobEvent::CaravanJoin { head } | MobEvent::CaravanLeave { head } => {
+            let join = matches!(ev, MobEvent::CaravanJoin { .. });
+            if let Some(Kind::Mob(h)) = entities
+                .iter_mut()
+                .find(|e| e.id == head)
+                .map(|e| &mut e.kind)
+            {
+                h.caravan_tail = join;
+            }
+        }
         MobEvent::Alert { target } => {
             let range = species.follow_range();
             for (j, o) in entities.iter_mut().enumerate() {
@@ -748,6 +782,11 @@ fn shoot(
                 f64::from(14 - difficulty * 4),
             );
             fx::sound(ctx, "entity.drowned.shoot", 5, e.pos, 1.0, 1.0);
+        }
+        Missile::Spit => {
+            let from = [e.pos[0], e.pos[1] + m.eye_height() - 0.1, e.pos[2]];
+            let dir = [aim[0] - from[0], aim[1] - from[1] + flat * 0.2, aim[2] - from[2]];
+            spawn(mc_entity::extra::Shot::Spit, from, dir, 1.5, 10.0);
         }
         Missile::Potion(name) => {
             let Some(item) = ctx.items.id("minecraft:splash_potion") else {

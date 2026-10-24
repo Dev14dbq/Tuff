@@ -25,7 +25,9 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
     let from = e.pos;
     let to = [from[0] + e.vel[0], from[1] + e.vel[1], from[2] + e.vel[2]];
     let ignore = if e.age < 5 { owner } else { None };
-    match hits::trace(t, from, to, 0.125, ignore, &[]) {
+    // What spat it does not catch its own spit.
+    let skip: Vec<i32> = t.shooter.map(|(id, _)| id).into_iter().collect();
+    match hits::trace(t, from, to, 0.125, ignore, &skip) {
         None => e.pos = to,
         Some((f, strike)) => {
             e.pos = [
@@ -44,6 +46,8 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
     }
     let gravity = if matches!(shot, Shot::Potion { .. }) {
         0.05
+    } else if matches!(shot, Shot::Spit) {
+        0.06
     } else {
         0.03
     };
@@ -87,6 +91,22 @@ fn land(
                 });
             }
         }
+        Shot::Spit => match strike {
+            Strike::Player(i) => {
+                let victim = t.players[*i];
+                super::hurt_player(t, &victim, 1.0, "minecraft:spit", "death.attack.spit", owner, e.id);
+            }
+            Strike::Target(i) => {
+                t.out.hits.push(hits::Hit {
+                    target: t.targets[*i].id,
+                    amount: 1.0,
+                    by: owner,
+                    with: Some(e.id),
+                    kind: "minecraft:spit",
+                });
+            }
+            Strike::Block => {}
+        },
         Shot::Pearl => {
             fx::particles(ctx, "minecraft:portal", e.pos, 0.3, 0.1, 32);
             let Some(o) = owner else { return };

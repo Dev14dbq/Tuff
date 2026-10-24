@@ -257,7 +257,7 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                 Shot::Firework(_) => {
                     s.meta.extend(item("minecraft:firework_rocket"));
                 }
-                Shot::Fireball { .. } => {}
+                Shot::Fireball { .. } | Shot::Spit => {}
                 Shot::Cloud { radius, .. } => {
                     s.meta.push((8, MetadataValue::Float(*radius)));
                 }
@@ -361,6 +361,7 @@ pub fn type_name(kind: &Kind) -> Option<String> {
             Shot::Fireball { small: false } => "fireball",
             Shot::Arrow(_) => "arrow",
             Shot::Snowball => "snowball",
+            Shot::Spit => "llama_spit",
             Shot::Egg => "egg",
             Shot::Pearl => "ender_pearl",
             Shot::Potion {

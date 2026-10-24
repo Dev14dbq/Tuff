@@ -275,3 +275,104 @@ fn a_lead_pulls_and_leads() {
     let d = 9.5 - cow.pos[0];
     assert!((1.0..3.5).contains(&d), "{:?}", cow.pos);
 }
+
+#[test]
+fn a_hostile_mob_wakes_a_sleeping_fox() {
+    let mut world = Yard::default();
+    world.roofed = true;
+    let mut fox = mob(Species::Fox, [0.5, 0.0, 0.5]);
+    let mut out = Vec::new();
+    for t in 0..2000 {
+        tick(&mut fox, &senses(&world, &[], t, 2), &mut out);
+        if m(&mut fox).sitting {
+            break;
+        }
+    }
+    assert!(m(&mut fox).sitting, "never slept");
+    let zombie = [Other {
+        id: 9,
+        species: Some(Species::Zombie),
+        pos: [6.5, 0.0, 0.5],
+        width: 0.6,
+        height: 1.95,
+        baby: false,
+        in_love: false,
+        owner: None,
+        alive: true,
+        leashed: false,
+        in_caravan: false,
+        has_tail: false,
+        chain_held: false,
+    }];
+    let s = Senses {
+        mobs: &zombie,
+        ..senses(&world, &[], 3000, 2)
+    };
+    tick(&mut fox, &s, &mut out);
+    tick(&mut fox, &s, &mut out);
+    assert!(!m(&mut fox).sitting);
+}
+
+fn llama(id: i32, pos: [f64; 3]) -> Entity {
+    let mut e = mob(Species::Llama, pos);
+    e.id = id;
+    e
+}
+
+fn other_of(e: &Entity) -> Other {
+    let Kind::Mob(m) = &e.kind else { panic!() };
+    Other {
+        id: e.id,
+        species: Some(m.species),
+        pos: e.pos,
+        width: 0.9,
+        height: 1.87,
+        baby: false,
+        in_love: false,
+        owner: None,
+        alive: true,
+        leashed: m.leash.is_some(),
+        in_caravan: m.caravan_head.is_some(),
+        has_tail: m.caravan_tail,
+        chain_held: false,
+    }
+}
+
+#[test]
+fn llamas_fall_in_behind_a_leashed_one() {
+    let world = Yard::default();
+    let mut head = llama(1, [0.5, 0.0, 0.5]);
+    m(&mut head).leash = Some([0.5, 0.0, 0.5]);
+    let mut tail = llama(2, [7.5, 0.0, 0.5]);
+    let mut out = Vec::new();
+    for t in 0..400 {
+        let mut o = other_of(&head);
+        o.chain_held = true;
+        let others = [o];
+        let s = Senses {
+            mobs: &others,
+            ..senses(&world, &[], t, 2)
+        };
+        tick(&mut tail, &s, &mut out);
+        // The head stays on its lead.
+        m(&mut head).leash = Some([0.5, 0.0, 0.5]);
+    }
+    assert!(out.contains(&MobEvent::CaravanJoin { head: 1 }), "never joined");
+    assert!(tail.pos[0] < 3.5, "stayed at {:?}", tail.pos);
+    // Out of range, it lets go.
+    let far = Other {
+        pos: [60.0, 0.0, 0.5],
+        ..other_of(&head)
+    };
+    let others = [Other {
+        chain_held: true,
+        ..far
+    }];
+    let s = Senses {
+        mobs: &others,
+        ..senses(&world, &[], 500, 2)
+    };
+    tick(&mut tail, &s, &mut out);
+    tick(&mut tail, &s, &mut out);
+    assert!(out.contains(&MobEvent::CaravanLeave { head: 1 }));
+}

@@ -976,3 +976,55 @@ fn a_door_a_villager_left_open_shuts_once_nobody_is_near() {
     assert!(!open(&ctx));
     assert!(lock(&ctx.door_watch).is_empty());
 }
+
+#[test]
+fn a_hurt_llama_spits_at_the_player_and_it_stings() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    ctx.difficulty.store(2, std::sync::atomic::Ordering::Relaxed);
+    let uuid = join(&ctx, [0.5, -60.0, 3.5]);
+    let id = put(&ctx, Species::Llama, [0.5, -60.0, 0.5]);
+    // A blow too light to kill: the llama has a grudge now.
+    ctx.mobs.hit(ctx.dim, id, steve([0.5, -60.0, 3.5]), blow(0.5, [0.5, -60.0, 3.5]));
+    run(&ctx, 1);
+    move_steve(&ctx, [0.5, -60.0, 8.5]);
+    let mut spat = false;
+    for _ in 0..120 {
+        run(&ctx, 1);
+        crate::tick::run_scheduled_ticks(&ctx);
+        spat |= lock(&ctx.entities)
+            .iter()
+            .any(|e| matches!(&e.kind, Kind::Projectile(p) if p.shot == mc_entity::extra::Shot::Spit));
+    }
+    assert!(spat, "no spit");
+    let health = lock(&ctx.vitals)[&uuid].health;
+    assert!(health < 20.0, "health {health}");
+    // The llama is unhurt by its own spit.
+    assert!(with_mob(&ctx, id, |m| m.health) > 0.0);
+}
+
+#[test]
+fn a_wandering_trader_brings_two_leashed_llamas_that_leave_with_it() {
+    use crate::decor::leash::Holder;
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let trader = crate::trading::new_merchant(&ctx, "minecraft:wandering_trader", [10.5, -60.0, 10.5]).unwrap();
+    let tid = trader.id;
+    crate::trading::spawn(&ctx, trader);
+    crate::trading::bring_llamas(&ctx, tid, [10.5, -60.0, 10.5]);
+    let llamas = mobs_of(&ctx, Species::TraderLlama);
+    assert_eq!(llamas.len(), 2);
+    for l in &llamas {
+        assert_eq!(lock(&ctx.leashes).links.get(&l.id), Some(&Holder::Knot(tid)));
+    }
+    // The trader goes; so do its llamas, and no lead is left behind.
+    lock(&ctx.entities).retain(|e| e.id != tid);
+    crate::decor::leash::tick(&ctx);
+    assert!(mobs_of(&ctx, Species::TraderLlama).iter().all(|e| e.removed));
+    assert_eq!(items_of(&ctx, "minecraft:lead"), 0);
+}

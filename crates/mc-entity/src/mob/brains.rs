@@ -199,6 +199,7 @@ const WOLF_PREY: &[Species] = &[Species::Sheep, Species::Rabbit, Species::Fox];
 const SKELETONS: &[Species] = &[Species::Skeleton, Species::Stray, Species::WitherSkeleton];
 const CATS: &[Species] = &[Species::Cat];
 const WOLVES: &[Species] = &[Species::Wolf];
+const LLAMAS: &[Species] = &[Species::Llama, Species::TraderLlama];
 const FOX_PREY: &[Species] = &[Species::Chicken, Species::Rabbit];
 const RABBITS: &[Species] = &[Species::Rabbit];
 const NONE: &[Species] = &[];
@@ -227,7 +228,22 @@ pub(super) fn brain(species: Species) -> Brain {
             ],
             vec![],
         ),
-        Horse | Donkey | Mule | Llama | TraderLlama => (
+        Llama | TraderLlama => (
+            vec![
+                float(),
+                slot(2, MOVE, Goal::Caravan { speed: 2.1 }),
+                ranged(3, Ranged::Spit, 40, 20.0),
+                panic(4, 1.2),
+                breed(5, 1.0),
+                tempt(6, 1.25),
+                follow_parent(6, 1.0),
+                stroll(7, 0.7),
+                look(8, 6.0),
+                random_look(9),
+            ],
+            vec![hurt_by(1, false), prey(2, WOLVES, false, true)],
+        ),
+        Horse | Donkey | Mule => (
             vec![
                 float(),
                 panic(1, 1.2),
@@ -245,6 +261,7 @@ pub(super) fn brain(species: Species) -> Brain {
                 float(),
                 sit(2),
                 leap(4, 0.4),
+                avoid(4, Avoidee::Kinds(LLAMAS), 24.0, 1.5, 1.5),
                 melee(5, 1.0, false),
                 follow_owner(6, 1.0, 10.0, 2.0),
                 breed(7, 1.0),

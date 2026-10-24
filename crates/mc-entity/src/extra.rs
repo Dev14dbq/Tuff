@@ -72,6 +72,8 @@ pub enum Shot {
     Snowball,
     Egg,
     Pearl,
+    /// A llama's spit.
+    Spit,
     Potion {
         /// Item shown (splash or lingering potion).
         item: i32,

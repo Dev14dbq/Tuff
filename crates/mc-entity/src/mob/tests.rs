@@ -196,6 +196,10 @@ fn two_cows_in_love_breed() {
                     in_love: x.in_love(),
                     owner: None,
                     alive: true,
+                    leashed: false,
+                    in_caravan: false,
+                    has_tail: false,
+                    chain_held: false,
                 }
             })
             .collect();

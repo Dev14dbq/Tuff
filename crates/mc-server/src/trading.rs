@@ -716,10 +716,23 @@ pub fn tick_spawner(ctx: &ServerContext, level: &mut crate::level::WorldLevel, n
             "minecraft:wandering_trader",
             [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5],
         ) {
+            let (trader, at) = (entity.id, entity.pos);
             spawn(ctx, entity);
+            bring_llamas(ctx, trader, at);
             ctx.trades.spawner.lock().expect("spawner lock").chance = 25;
             return;
         }
+    }
+}
+
+/// Two trader llamas come with a wandering trader, on leads.
+pub fn bring_llamas(ctx: &ServerContext, trader: i32, at: [f64; 3]) {
+    for k in 0..2 {
+        let pos = [at[0] + 1.5 - f64::from(k) * 3.0, at[1], at[2] + 1.0];
+        let llama = crate::mobs::new_mob(ctx, mc_entity::Species::TraderLlama, pos);
+        let id = llama.id;
+        crate::decor::spawn_all(ctx, vec![llama]);
+        crate::decor::leash::attach(ctx, id, crate::decor::leash::Holder::Knot(trader));
     }
 }
 

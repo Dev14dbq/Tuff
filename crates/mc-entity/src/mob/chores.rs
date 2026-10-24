@@ -272,15 +272,21 @@ pub(super) fn shade(m: &mut Mob, b: &Body, s: &Senses) -> Option<Cell> {
     None
 }
 
-/// Whether someone a sleeping fox would wake for is near: a player within
-/// 12 blocks (6 up or down), or a hostile mob after something.
+/// Whether someone a sleeping fox would wake for is near: a player or a
+/// hostile mob within 12 blocks (6 up or down).
 pub(super) fn fox_alerted(b: &Body, s: &Senses) -> bool {
-    s.players.iter().any(|p| {
-        p.targetable
-            && (p.pos[0] - b.pos[0]).abs() <= 12.0
-            && (p.pos[1] - b.pos[1]).abs() <= 6.0
-            && (p.pos[2] - b.pos[2]).abs() <= 12.0
-    })
+    let near = |p: [f64; 3]| {
+        (p[0] - b.pos[0]).abs() <= 12.0
+            && (p[1] - b.pos[1]).abs() <= 6.0
+            && (p[2] - b.pos[2]).abs() <= 12.0
+    };
+    s.players.iter().any(|p| p.targetable && near(p.pos))
+        || s.mobs.iter().any(|o| {
+            o.alive
+                && o.id != b.id
+                && o.species.is_some_and(|k| k.category() == super::Category::Monster)
+                && near(o.pos)
+        })
 }
 
 /// The pull of a lead held at `holder`: past 6 blocks the mob is dragged

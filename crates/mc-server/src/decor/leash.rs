@@ -259,6 +259,7 @@ pub fn tick(ctx: &ServerContext) {
         return;
     }
     let mut snapped = Vec::new();
+    let mut gone = Vec::new();
     {
         let entities = lock(&ctx.entities);
         for (id, holder) in links {
@@ -269,7 +270,16 @@ pub fn tick(ctx: &ServerContext) {
                 }
                 continue;
             };
-            let snap = match holder_pos(ctx, &entities, holder) {
+            let held_at = holder_pos(ctx, &entities, holder);
+            // A trader's llamas go when the trader does.
+            if held_at.is_none()
+                && matches!(holder, Holder::Knot(_))
+                && matches!(&me.kind, Kind::Mob(m) if m.species == mc_entity::Species::TraderLlama)
+            {
+                gone.push(id);
+                continue;
+            }
+            let snap = match held_at {
                 None => true,
                 Some(f) => {
                     (me.pos[0] - f[0]).powi(2) + (me.pos[1] - f[1]).powi(2) + (me.pos[2] - f[2]).powi(2)
@@ -280,6 +290,13 @@ pub fn tick(ctx: &ServerContext) {
                 snapped.push((id, me.pos));
             }
         }
+    }
+    for id in gone {
+        detach(ctx, id);
+        if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id) {
+            e.removed = true;
+        }
+        let _ = ctx.events.send(Event::EntitiesRemoved(vec![id]));
     }
     for (id, at) in snapped {
         if unleash(ctx, id, at, true) {

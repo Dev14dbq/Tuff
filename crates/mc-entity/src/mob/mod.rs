@@ -115,6 +115,13 @@ pub struct Other {
     pub in_love: bool,
     pub owner: Option<u128>,
     pub alive: bool,
+    /// On a lead.
+    pub leashed: bool,
+    /// A llama in a caravan, with someone behind it, and whether the line
+    /// it is in is held by a leashed llama at its head.
+    pub in_caravan: bool,
+    pub has_tail: bool,
+    pub chain_held: bool,
 }
 
 /// Item facts the mobs need, answered by the server's item tables.
@@ -263,6 +270,8 @@ pub enum Missile {
     SmallFireball,
     /// A witch's splash potion (`minecraft:harming`).
     Potion(&'static str),
+    /// A llama's spit.
+    Spit,
 }
 
 /// What a mob did that the world must act on.
@@ -323,6 +332,9 @@ pub enum MobEvent {
     Buck,
     /// A zombie villager is cured: it becomes a villager.
     Cured,
+    /// A llama falls in behind this one (a caravan), or leaves it.
+    CaravanJoin { head: i32 },
+    CaravanLeave { head: i32 },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -436,6 +448,10 @@ pub struct Mob {
     pub target_since: u32,
     /// Walked into something sideways last tick.
     pub bumped: bool,
+    /// Llamas in a caravan: the one it follows, and whether another follows
+    /// it.
+    pub caravan_head: Option<i32>,
+    pub caravan_tail: bool,
     /// A zombie villager's former self: type, profession and level.
     pub villager: Option<(String, Option<String>, i32)>,
     /// Players riding it (entity ids).
@@ -526,6 +542,8 @@ impl Mob {
             perched: false,
             target_since: 0,
             bumped: false,
+            caravan_head: None,
+            caravan_tail: false,
             villager: None,
             riders: Vec::new(),
             speed_attr: species.speed(),

@@ -29,6 +29,8 @@ pub enum Ranged {
     Fireball,
     /// Blazes: three small fireballs, or a burn up close.
     Blaze,
+    /// Llamas spit at whoever they have a grudge against.
+    Spit,
 }
 
 /// Whom a mob keeps away from.
@@ -187,6 +189,9 @@ pub enum Goal {
     },
     /// Foxes look for shade in the sun.
     Shelter { speed: f64, interval: i32 },
+    /// A llama falls in behind a caravan (a leashed llama and those
+    /// following it).
+    Caravan { speed: f64 },
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -420,7 +425,7 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                 Ranged::Bow => holds(m, s, "minecraft:bow"),
                 Ranged::Trident => holds(m, s, "minecraft:trident"),
                 Ranged::Potion => m.drinking == 0,
-                Ranged::Fireball | Ranged::Blaze => true,
+                Ranged::Fireball | Ranged::Blaze | Ranged::Spit => true,
             };
             armed && target(m, s).is_some()
         }
@@ -653,6 +658,37 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             *spot = chores::find_perch(b, s, *bed);
             spot.is_some()
         }
+        Goal::Caravan { .. } => {
+            if m.leash.is_some() || m.caravan_head.is_some() || m.sitting {
+                return false;
+            }
+            let me = b.id;
+            let near = |o: &super::Other| {
+                o.id != me
+                    && o.alive
+                    && o.species.is_some_and(|k| k.llama())
+                    && (o.pos[0] - b.pos[0]).abs() <= 9.0
+                    && (o.pos[1] - b.pos[1]).abs() <= 4.0
+                    && (o.pos[2] - b.pos[2]).abs() <= 9.0
+            };
+            let nearest = |pick: &dyn Fn(&super::Other) -> bool| {
+                s.mobs
+                    .iter()
+                    .filter(|o| near(o) && !o.has_tail && pick(o))
+                    .min_by(|a, c| dist_sq(b.pos, a.pos).total_cmp(&dist_sq(b.pos, c.pos)))
+                    .map(|o| (o.id, o.pos, o.leashed, o.chain_held))
+            };
+            let Some((id, pos, leashed, held)) = nearest(&|o| o.in_caravan)
+                .or_else(|| nearest(&|o| o.leashed))
+            else {
+                return false;
+            };
+            if dist_sq(b.pos, pos) < 16.0 || !(leashed || held) {
+                return false;
+            }
+            m.caravan_head = Some(id);
+            true
+        }
         Goal::Shelter { interval, .. } => {
             if m.sitting || m.target.is_some() {
                 return false;
@@ -847,6 +883,12 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                 && !m.sitting
         }
         Goal::Shelter { .. } => !m.nav.is_done(),
+        Goal::Caravan { .. } => {
+            m.leash.is_none()
+                && m.caravan_head
+                    .and_then(|id| s.mob(id))
+                    .is_some_and(|o| o.alive && (o.leashed || o.chain_held) && dist_sq(b.pos, o.pos) <= 676.0)
+        }
     }
 }
 
@@ -913,6 +955,11 @@ fn start(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobE
             if !m.stared {
                 m.stared = true;
                 m.dirty = true;
+            }
+        }
+        Goal::Caravan { .. } => {
+            if let Some(head) = m.caravan_head {
+                out.push(MobEvent::CaravanJoin { head });
             }
         }
         Goal::Freeze => m.nav.stop(),
@@ -1001,6 +1048,12 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
             m.nav.stop();
         }
         Goal::Shelter { .. } => m.nav.stop(),
+        Goal::Caravan { .. } => {
+            if let Some(head) = m.caravan_head.take() {
+                out.push(MobEvent::CaravanLeave { head });
+            }
+            m.nav.stop();
+        }
         _ => {}
     }
 }
@@ -1306,6 +1359,17 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
                 m.goto = Some((center(c), *speed));
             }
         }
+        Goal::Caravan { speed } => {
+            // Keeps two blocks behind the one in front.
+            if let Some(o) = m.caravan_head.and_then(|id| s.mob(id)) {
+                let d = [o.pos[0] - b.pos[0], o.pos[1] - b.pos[1], o.pos[2] - b.pos[2]];
+                let f = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                let k = if f > 1e-6 { (f - 2.0).max(0.0) / f } else { 0.0 };
+                m.goto = (k > 0.0).then(|| {
+                    ([b.pos[0] + d[0] * k, b.pos[1] + d[1] * k, b.pos[2] + d[2] * k], *speed)
+                });
+            }
+        }
     }
 }
 
@@ -1398,6 +1462,30 @@ fn ranged(
                 *timer = interval;
             } else if *timer < 0 {
                 *timer = interval / 2 + m.below(interval as u32 / 2 + 1) as i32;
+            }
+        }
+        Ranged::Spit => {
+            // Stands off at 20 blocks and spits every two seconds.
+            if d <= range * range && visible {
+                m.nav.stop();
+            } else {
+                m.goto = Some((t.pos, 1.25));
+            }
+            *timer -= 1;
+            if *timer <= 0 {
+                if visible && d <= range * range {
+                    out.push(MobEvent::Shoot {
+                        target: t.id,
+                        aim: [t.pos[0], t.pos[1] + t.eye / 3.0, t.pos[2]],
+                        missile: Missile::Spit,
+                    });
+                    out.push(MobEvent::Sound {
+                        name: "entity.llama.spit".into(),
+                        volume: 1.0,
+                        pitch: 1.0,
+                    });
+                }
+                *timer = interval;
             }
         }
         Ranged::Fireball => {
