@@ -90,6 +90,11 @@ species! {
     Hoglin => "minecraft:hoglin", "Hoglin";
     Zoglin => "minecraft:zoglin", "Zoglin";
     PiglinBrute => "minecraft:piglin_brute", "Piglin Brute";
+    Armadillo => "minecraft:armadillo", "Armadillo";
+    Panda => "minecraft:panda", "Panda";
+    Camel => "minecraft:camel", "Camel";
+    CamelHusk => "minecraft:camel_husk", "Camel Husk";
+    Sniffer => "minecraft:sniffer", "Sniffer";
 }
 
 /// Which sound of a mob.
@@ -122,7 +127,8 @@ impl Species {
             Cow | Mooshroom | Sheep | Pig | Chicken | Rabbit | Horse | Donkey | Mule | Llama
             | TraderLlama | Wolf | Cat | Fox | Parrot | Strider => Category::Creature,
             // Land animals (Cursor)
-            Goat | PolarBear | Ocelot | SkeletonHorse | ZombieHorse => Category::Creature,
+            Goat | PolarBear | Ocelot | SkeletonHorse | ZombieHorse | Armadillo | Panda | Camel
+            | Sniffer => Category::Creature,
             IronGolem | SnowGolem => Category::Misc,
             _ => Category::Monster,
         }
@@ -171,6 +177,10 @@ impl Species {
             SkeletonHorse | ZombieHorse => (1.3964844, 1.6),
             Hoglin | Zoglin => (1.3964844, 1.4),
             PiglinBrute => (0.6, 1.95),
+            Armadillo => (0.7, 0.65),
+            Panda => (1.3, 1.25),
+            Camel | CamelHusk => (1.7, 2.375),
+            Sniffer => (1.9, 1.75),
         }
     }
 
@@ -230,6 +240,9 @@ impl Species {
             // Land animals (Cursor)
             Goat | Ocelot => 10.0,
             PolarBear => 30.0,
+            Armadillo => 12.0,
+            Camel | CamelHusk => 32.0,
+            Sniffer => 14.0,
             SkeletonHorse | ZombieHorse => 15.0,
             Hoglin | Zoglin => 40.0,
             PiglinBrute => 50.0,
@@ -256,6 +269,10 @@ impl Species {
             Goat | SkeletonHorse | ZombieHorse => 0.2,
             Ocelot | Hoglin | Zoglin => 0.3,
             PiglinBrute => 0.35,
+            Armadillo => 0.14,
+            Panda => 0.15,
+            Camel | CamelHusk => 0.09,
+            Sniffer => 0.1,
             _ => 0.25,
         }
     }
@@ -296,6 +313,7 @@ impl Species {
             IronGolem => 15.0,
             PolarBear | Hoglin | Zoglin => 6.0,
             Ocelot => 3.0,
+            Panda => 2.0,
             PiglinBrute => 7.0,
             _ => 0.0,
         }
@@ -338,6 +356,7 @@ impl Species {
                 | SkeletonHorse
                 | ZombieHorse
                 | Zoglin
+                | CamelHusk
         )
     }
 
@@ -411,7 +430,7 @@ impl Species {
     /// Can have babies (`AgeableMob`).
     pub fn ageable(self) -> bool {
         self.category() == Category::Creature && self != Species::Parrot
-            || matches!(self, Species::Hoglin | Species::Zoglin)
+            || matches!(self, Species::Hoglin | Species::Zoglin | Species::CamelHusk)
     }
 
     /// Babies of these grow up; zombies and piglins stay babies.
@@ -444,6 +463,10 @@ impl Species {
             Goat => "minecraft:goat_food",
             Ocelot => "minecraft:ocelot_food",
             Hoglin => "minecraft:hoglin_food",
+            Armadillo => "minecraft:armadillo_food",
+            Panda => "minecraft:panda_food",
+            Camel => "minecraft:camel_food",
+            Sniffer => "minecraft:sniffer_food",
             _ => return None,
         })
     }
@@ -455,6 +478,8 @@ impl Species {
             Horse | Donkey | Mule => Some("minecraft:horse_tempt_items"),
             Llama | TraderLlama => Some("minecraft:llama_tempt_items"),
             Strider => Some("minecraft:strider_tempt_items"),
+            // Land animals (Cursor)
+            CamelHusk => Some("minecraft:camel_husk_food"),
             Wolf | Parrot => None,
             _ => self.food_tag(),
         }
@@ -578,6 +603,11 @@ impl Species {
                     | PiglinBrute
                     | SkeletonHorse
                     | ZombieHorse
+                    | Armadillo
+                    | Panda
+                    | Camel
+                    | CamelHusk
+                    | Sniffer
             ),
             Sound::Hurt | Sound::Death => true,
         };

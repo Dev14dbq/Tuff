@@ -1021,7 +1021,7 @@ mod tests {
     fn only_known_species_are_kept() {
         let list = serde_json::json!([
             {"type": "minecraft:cow", "count": 4, "weight": 8},
-            {"type": "minecraft:camel", "count": 4, "weight": 5},
+            {"type": "minecraft:creaking", "count": 4, "weight": 5},
             {"type": "minecraft:zombie", "count": {"min_inclusive": 1, "max_inclusive": 2}, "weight": 90},
         ]);
         let e = entries(&list);

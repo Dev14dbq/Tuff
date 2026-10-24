@@ -17,7 +17,7 @@ pub use body::ENDERMITE_LIFE;
 mod brains;
 mod chores;
 pub mod goals;
-mod land;
+pub mod land;
 pub mod species;
 
 pub use goals::{Goal, Slot};
@@ -736,6 +736,11 @@ impl Mob {
                 mob.quirks.land.ram_cd = mob.rand_range(600, 1200);
                 mob.quirks.land.jump_cd = mob.rand_range(600, 1200);
             }
+            Species::Panda => {
+                let (main, hidden) = (land::Gene::random(&mut mob), land::Gene::random(&mut mob));
+                land::set_genes(&mut mob, main, hidden);
+            }
+            Species::Armadillo => mob.quirks.land.scute_in = mob.rand_range(6000, 12000),
             _ => {}
         }
         mob
@@ -1059,7 +1064,7 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
         });
     }
     body::life(m, &mut b, s, out);
-    land::pulse(m);
+    land::pulse(m, &b, s, out);
     if m.is_dead() || entity.removed {
         return;
     }

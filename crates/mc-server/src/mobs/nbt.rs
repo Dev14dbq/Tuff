@@ -237,6 +237,20 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
             m.quirks.land.right_horn = v;
         }
     }
+    if s == Species::Panda {
+        use mc_entity::mob::land::{Gene, set_genes};
+        let main = string(nbt, "MainGene").map(Gene::from_name);
+        let hidden = string(nbt, "HiddenGene").map(Gene::from_name);
+        if let (Some(main), Some(hidden)) = (main, hidden) {
+            set_genes(m, main, hidden);
+        }
+    }
+    if s == Species::Armadillo {
+        if let Some(t) = int(nbt, "scute_time") {
+            m.quirks.land.scute_in = t;
+        }
+        m.quirks.land.rolled = matches!(string(nbt, "state"), Some("scared" | "rolling"));
+    }
     if let Some(v) = int(nbt, "Lifetime")
         && s == Species::Endermite
     {
@@ -521,6 +535,21 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
                 "HasRightHorn",
                 Tag::Byte(i8::from(m.quirks.land.right_horn)),
             );
+        }
+        Species::Panda => {
+            use mc_entity::mob::land::Gene;
+            let gene = |b| Tag::String(Gene::from_byte(b).name().into());
+            c.insert("MainGene", gene(m.quirks.land.main_gene));
+            c.insert("HiddenGene", gene(m.quirks.land.hidden_gene));
+        }
+        Species::Armadillo => {
+            c.insert("scute_time", Tag::Int(m.quirks.land.scute_in));
+            let state = if m.quirks.land.rolled {
+                "scared"
+            } else {
+                "idle"
+            };
+            c.insert("state", Tag::String(state.into()));
         }
         _ => {}
     }

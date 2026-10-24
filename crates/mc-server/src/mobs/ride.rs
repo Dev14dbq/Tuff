@@ -40,6 +40,8 @@ pub fn steered_by(ctx: &ServerContext, e: &Entity) -> bool {
     };
     match m.species {
         Species::Horse | Species::Donkey | Species::Mule => m.saddled() && m.is_tame(),
+        // Land animals (Cursor): camels need no taming.
+        Species::Camel | Species::CamelHusk => m.saddled(),
         Species::Pig | Species::Strider => {
             let stick = stick_of(m.species);
             m.saddled()
@@ -70,7 +72,8 @@ fn stick_of(species: Species) -> &'static str {
 /// cheap: the check of the rider's hands happens in [`steered_by`].
 pub fn steered(e: &Entity) -> bool {
     matches!(&e.kind, Kind::Mob(m) if !m.riders.is_empty() && m.saddled()
-        && (m.species.horse() && m.is_tame() || matches!(m.species, Species::Pig | Species::Strider)))
+        && (m.species.horse() && m.is_tame()
+            || matches!(m.species, Species::Pig | Species::Strider | Species::Camel | Species::CamelHusk)))
 }
 
 /// One tick of a ridden mob: it lives (grows, burns, makes sounds) but the
@@ -89,7 +92,13 @@ pub fn mount(ctx: &ServerContext, e: &mut Entity, rider: i32) -> bool {
     let Kind::Mob(m) = &mut e.kind else {
         return false;
     };
-    if !m.riders.is_empty() || m.is_baby() {
+    // A camel carries two.
+    let seats = if matches!(m.species, Species::Camel | Species::CamelHusk) {
+        2
+    } else {
+        1
+    };
+    if m.riders.len() >= seats || m.riders.contains(&rider) || m.is_baby() {
         return false;
     }
     m.riders.push(rider);
@@ -200,6 +209,7 @@ pub fn saddle(ctx: &ServerContext, e: &mut Entity, item: i32) -> bool {
     let fits = match m.species {
         Species::Pig | Species::Strider => true,
         Species::Horse | Species::Donkey | Species::Mule => m.is_tame(),
+        Species::Camel | Species::CamelHusk => true,
         _ => false,
     };
     if !fits || m.saddled() || m.is_baby() {

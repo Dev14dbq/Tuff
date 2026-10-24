@@ -39,6 +39,17 @@ pub struct Land {
     pub horn_group: u8,
     /// The ram connected or missed: shed the charge speed.
     pub brake: bool,
+    /// Armadillo: curled up in its shell, and ticks since the last threat.
+    pub rolled: bool,
+    pub calm: i32,
+    /// Armadillo: ticks to its next scute.
+    pub scute_in: i32,
+    /// Panda: the shown and the hidden gene ([`Gene`] as a byte).
+    pub main_gene: u8,
+    pub hidden_gene: u8,
+    /// Sniffer: ticks until it may dig again, and the ticks left of a dig.
+    pub dig_cd: i32,
+    pub digging: i32,
 }
 
 impl Default for Land {
@@ -55,11 +66,234 @@ impl Default for Land {
             jumping: false,
             horn_group: 255,
             brake: false,
+            rolled: false,
+            calm: 0,
+            scute_in: 0,
+            main_gene: 0,
+            hidden_gene: 0,
+            dig_cd: 0,
+            digging: 0,
         }
     }
 }
 
-pub(super) fn pulse(m: &mut Mob) {
+/// A panda's genes (minecraft.wiki, "Panda", Genetics), as their byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gene {
+    Normal = 0,
+    Lazy = 1,
+    Worried = 2,
+    Playful = 3,
+    Brown = 4,
+    Weak = 5,
+    Aggressive = 6,
+}
+
+impl Gene {
+    pub const ALL: [Gene; 7] = [
+        Gene::Normal,
+        Gene::Lazy,
+        Gene::Worried,
+        Gene::Playful,
+        Gene::Brown,
+        Gene::Weak,
+        Gene::Aggressive,
+    ];
+
+    pub fn from_byte(b: u8) -> Gene {
+        Gene::ALL
+            .get(usize::from(b))
+            .copied()
+            .unwrap_or(Gene::Normal)
+    }
+
+    /// The name saved as `MainGene` and `HiddenGene`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Gene::Normal => "normal",
+            Gene::Lazy => "lazy",
+            Gene::Worried => "worried",
+            Gene::Playful => "playful",
+            Gene::Brown => "brown",
+            Gene::Weak => "weak",
+            Gene::Aggressive => "aggressive",
+        }
+    }
+
+    pub fn from_name(n: &str) -> Gene {
+        Gene::ALL
+            .into_iter()
+            .find(|g| g.name() == n)
+            .unwrap_or(Gene::Normal)
+    }
+
+    /// Brown and weak show only when both genes are them.
+    pub fn recessive(self) -> bool {
+        matches!(self, Gene::Brown | Gene::Weak)
+    }
+
+    /// A wild panda's gene: lazy, worried, playful and aggressive one in
+    /// sixteen each, weak five, brown two, normal five.
+    pub fn random(m: &mut Mob) -> Gene {
+        match m.below(16) {
+            0 => Gene::Lazy,
+            1 => Gene::Worried,
+            2 => Gene::Playful,
+            4 => Gene::Aggressive,
+            i if i < 9 => Gene::Weak,
+            9 | 10 => Gene::Brown,
+            _ => Gene::Normal,
+        }
+    }
+}
+
+/// The personality a panda shows: its main gene, unless that is recessive
+/// and the hidden one differs.
+pub fn personality(m: &Mob) -> Gene {
+    let (main, hidden) = (
+        Gene::from_byte(m.quirks.land.main_gene),
+        Gene::from_byte(m.quirks.land.hidden_gene),
+    );
+    if main.recessive() && main != hidden {
+        Gene::Normal
+    } else {
+        main
+    }
+}
+
+/// Sets a panda's genes, and what they make of it: a weak one has half the
+/// health, a lazy one walks at less than half the pace.
+pub fn set_genes(m: &mut Mob, main: Gene, hidden: Gene) {
+    m.quirks.land.main_gene = main as u8;
+    m.quirks.land.hidden_gene = hidden as u8;
+    let shown = personality(m);
+    m.set_max_health(if shown == Gene::Weak { 10.0 } else { 20.0 });
+    m.speed_attr = if shown == Gene::Lazy { 0.07 } else { 0.15 };
+    m.dirty = true;
+}
+
+/// Armadillo blocks: undead this near make it curl up.
+const ARMADILLO_FEAR: f64 = 7.0;
+/// Ticks without a threat before a curled armadillo opens up.
+const UNROLL: i32 = 60;
+/// A sniffer waits 8 minutes between finds.
+const DIG_WAIT: i32 = 9600;
+/// How long one dig takes.
+const DIG_TICKS: i32 = 120;
+
+fn sound(name: &str, out: &mut Vec<MobEvent>) {
+    out.push(MobEvent::Sound {
+        name: name.into(),
+        volume: 1.0,
+        pitch: 1.0,
+    });
+}
+
+/// Armadillos, pandas and sniffers each tick (minecraft.wiki: "Armadillo",
+/// "Panda", "Sniffer").
+fn life(m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<MobEvent>) {
+    match m.species {
+        Species::Armadillo => {
+            let undead = s.mobs.iter().any(|o| {
+                o.alive
+                    && o.species.is_some_and(Species::undead)
+                    && dist_sq(o.pos, b.pos) < ARMADILLO_FEAR * ARMADILLO_FEAR
+            });
+            let threat = undead || m.invulnerable > 0;
+            if threat {
+                m.quirks.land.calm = 0;
+                if !m.quirks.land.rolled {
+                    m.quirks.land.rolled = true;
+                    m.dirty = true;
+                    sound("entity.armadillo.roll", out);
+                }
+            } else if m.quirks.land.rolled {
+                m.quirks.land.calm += 1;
+                if m.quirks.land.calm >= UNROLL {
+                    m.quirks.land.rolled = false;
+                    m.dirty = true;
+                    sound("entity.armadillo.unroll_finish", out);
+                }
+            }
+            if m.quirks.land.rolled {
+                m.quirks.land.brake = true;
+                m.nav.stop();
+            }
+            if !m.is_baby() {
+                if m.quirks.land.scute_in <= 0 {
+                    m.quirks.land.scute_in = next_scute(m);
+                } else {
+                    m.quirks.land.scute_in -= 1;
+                    if m.quirks.land.scute_in == 0 {
+                        out.push(MobEvent::Lay {
+                            item: "minecraft:armadillo_scute",
+                        });
+                        sound("entity.armadillo.scute_drop", out);
+                    }
+                }
+            }
+        }
+        Species::Panda if m.is_baby() => {
+            let odds = if personality(m) == Gene::Weak {
+                500
+            } else {
+                6000
+            };
+            if m.below(odds) == 0 {
+                sound("entity.panda.sneeze", out);
+                if m.below(700) == 0 {
+                    out.push(MobEvent::Lay {
+                        item: "minecraft:slime_ball",
+                    });
+                }
+            }
+        }
+        Species::Sniffer if !m.is_baby() => {
+            let land = &mut m.quirks.land;
+            if land.dig_cd > 0 {
+                land.dig_cd -= 1;
+            }
+            if land.digging > 0 {
+                land.digging -= 1;
+                land.brake = true;
+                if land.digging == 0 {
+                    land.dig_cd = DIG_WAIT;
+                    let item = if m.below(2) == 0 {
+                        "minecraft:torchflower_seeds"
+                    } else {
+                        "minecraft:pitcher_pod"
+                    };
+                    out.push(MobEvent::Lay { item });
+                    sound("entity.sniffer.drop_seed", out);
+                    m.dirty = true;
+                }
+                return;
+            }
+            let c = cell_of(b.pos);
+            let free = m.riders.is_empty() && m.leash.is_none() && m.love == 0;
+            if land.dig_cd == 0
+                && free
+                && b.on_ground
+                && s.world.feature(c[0], c[1] - 1, c[2], Feature::Diggable)
+                && m.below(200) == 0
+            {
+                m.quirks.land.digging = DIG_TICKS;
+                m.nav.stop();
+                m.dirty = true;
+                sound("entity.sniffer.digging", out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Five to ten minutes.
+fn next_scute(m: &mut Mob) -> i32 {
+    m.rand_range(6000, 12000)
+}
+
+pub(super) fn pulse(m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<MobEvent>) {
+    life(m, b, s, out);
     if m.species != Species::Goat {
         return;
     }

@@ -795,6 +795,60 @@ pub(super) fn brain(species: Species) -> Brain {
                 prey(3, WITHER_SKELETONS, false, false),
             ],
         ),
+        Armadillo => (
+            vec![
+                float(),
+                panic(1, 2.0),
+                breed(2, 1.0),
+                tempt(3, 1.25),
+                follow_parent(4, 1.25),
+                stroll(5, 1.0),
+                look(6, 6.0),
+                random_look(7),
+            ],
+            vec![],
+        ),
+        // Every panda fights back; the aggressive ones see it through.
+        Panda => (
+            vec![
+                float(),
+                panic(1, 2.0),
+                breed(2, 1.0),
+                melee(3, 1.2, false),
+                tempt(4, 1.0),
+                follow_parent(5, 1.25),
+                stroll(6, 1.0),
+                look(7, 6.0),
+                random_look(8),
+            ],
+            vec![hurt_by(1, true)],
+        ),
+        Camel | CamelHusk => (
+            vec![
+                float(),
+                panic(1, 4.0),
+                breed(2, 1.0),
+                tempt(3, 2.5),
+                follow_parent(4, 2.5),
+                stroll(5, 2.0),
+                look(6, 6.0),
+                random_look(7),
+            ],
+            vec![],
+        ),
+        Sniffer => (
+            vec![
+                float(),
+                panic(1, 2.0),
+                breed(2, 1.0),
+                tempt(3, 1.25),
+                follow_parent(4, 1.25),
+                stroll(5, 1.0),
+                look(6, 6.0),
+                random_look(7),
+            ],
+            vec![],
+        ),
     };
     Brain { goals, targets }
 }

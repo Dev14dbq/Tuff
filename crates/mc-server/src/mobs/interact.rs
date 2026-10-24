@@ -170,6 +170,26 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         send_now(ctx, e);
         return;
     }
+    // Land animals (Cursor): a brush takes a scute off an armadillo, and
+    // wears by 16.
+    if name == "minecraft:brush" && species == Species::Armadillo && !m.is_baby() {
+        if let Some(scute) = ctx.items.id("minecraft:armadillo_scute") {
+            crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 0.5, pos[2]], scute, 1);
+        }
+        fx::sound(
+            ctx,
+            "entity.armadillo.brush",
+            fx::category::NEUTRAL,
+            pos,
+            1.0,
+            1.0,
+        );
+        if by.game_mode != 1 {
+            crate::held::wear(ctx, by.uuid, hslot, 16);
+        }
+        swing(ctx, by);
+        return;
+    }
     // Shears.
     if name == "minecraft:shears" {
         if shear(ctx, e) {
@@ -493,6 +513,8 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
     // Getting on.
     let rideable = match species {
         Species::Pig | Species::Strider => m.saddled(),
+        // Land animals (Cursor)
+        Species::Camel | Species::CamelHusk => m.saddled() && !m.is_baby(),
         Species::Horse | Species::Donkey | Species::Mule => !m.is_baby(),
         _ => false,
     };

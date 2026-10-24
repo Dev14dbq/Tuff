@@ -2,6 +2,8 @@ use super::*;
 use crate::combat::Blow;
 
 mod critters;
+// Land animals (Cursor)
+mod land;
 
 #[test]
 fn darkness_follows_the_day() {

@@ -135,6 +135,13 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     }
     let (armor, toughness) = armor_of(ctx, m);
     let amount = crate::damage::armor_reduce(h.amount, armor, toughness, h.kind);
+    // Land animals (Cursor): a curled armadillo takes what is left after
+    // one point, halved.
+    let amount = if m.species == Species::Armadillo && m.quirks.land.rolled {
+        ((amount - 1.0) / 2.0).max(0.0)
+    } else {
+        amount
+    };
     let amount = crate::effects::reduce_damage(&m.effects, amount, h.kind);
     if !m.hurt(amount, h.by.or(h.player.map(|_| -1))) {
         return false;
@@ -909,6 +916,11 @@ pub fn breed(
     // Land animals (Cursor): both screamers have a screaming baby, one
     // parent about half the time, neither about one in fifty.
     let (scream_a, scream_b) = (ma.quirks.land.screaming, mb.quirks.land.screaming);
+    // A panda takes one gene from each parent, rarely a new one.
+    let genes = [
+        [ma.quirks.land.main_gene, ma.quirks.land.hidden_gene],
+        [mb.quirks.land.main_gene, mb.quirks.land.hidden_gene],
+    ];
     let mut baby = super::new_mob(ctx, kind, pos);
     if let Kind::Mob(m) = &mut baby.kind {
         m.set_baby(true);
@@ -938,6 +950,18 @@ pub fn breed(
             m.quirks.land.left_horn = true;
             m.quirks.land.right_horn = true;
         }
+        if kind == Species::Panda {
+            use mc_entity::mob::land::{Gene, set_genes};
+            let pick = |m: &mut mc_entity::Mob, from: [u8; 2]| {
+                if m.below(32) == 0 {
+                    Gene::random(m)
+                } else {
+                    Gene::from_byte(from[m.below(2) as usize])
+                }
+            };
+            let (main, hidden) = (pick(m, genes[0]), pick(m, genes[1]));
+            set_genes(m, main, hidden);
+        }
         m.persistent = true;
     }
     for k in [i, j] {
@@ -952,6 +976,21 @@ pub fn breed(
         let _ = p;
         let xp = 1 + (crate::util::random_u64() % 7) as i32;
         crate::xp::spawn(ctx, pos, xp);
+    }
+    // Land animals (Cursor): sniffers lay an egg, which hatches later.
+    if kind == Species::Sniffer {
+        if let Some(egg) = ctx.items.id("minecraft:sniffer_egg") {
+            crate::tick::spawn_item_at(ctx, pos, egg, 1);
+        }
+        fx::sound(
+            ctx,
+            "entity.sniffer.drop_seed",
+            fx::category::NEUTRAL,
+            pos,
+            1.0,
+            1.0,
+        );
+        return None;
     }
     Some(baby)
 }

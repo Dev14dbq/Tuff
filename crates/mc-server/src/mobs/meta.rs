@@ -30,6 +30,8 @@ mod holder {
     pub const WOLF: i32 = 25;
     pub const PIG: i32 = 28;
     pub const CHICKEN: i32 = 30;
+    pub const SNIFFER_STATE: i32 = 35;
+    pub const ARMADILLO_STATE: i32 = 36;
 }
 
 /// The data-driven variant registry of a kind, if it has one.
@@ -265,6 +267,20 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             v.push((a, MetadataValue::Boolean(m.quirks.land.screaming)));
             v.push((a + 1, MetadataValue::Boolean(m.quirks.land.left_horn)));
             v.push((a + 2, MetadataValue::Boolean(m.quirks.land.right_horn)));
+        }
+        // Armadillo and sniffer states are enums of their own serializer
+        // types (36 and 35); a panda's genes are bytes after three timers.
+        Armadillo => {
+            let state = if m.quirks.land.rolled { 2 } else { 0 };
+            v.push((a, MetadataValue::Holder(holder::ARMADILLO_STATE, state)));
+        }
+        Sniffer => {
+            let state = if m.quirks.land.digging > 0 { 5 } else { 0 };
+            v.push((a, MetadataValue::Holder(holder::SNIFFER_STATE, state)));
+        }
+        Panda => {
+            v.push((a + 3, MetadataValue::Byte(m.quirks.land.main_gene as i8)));
+            v.push((a + 4, MetadataValue::Byte(m.quirks.land.hidden_gene as i8)));
         }
         _ => {}
     }
