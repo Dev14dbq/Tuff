@@ -722,6 +722,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
 
     let spawned = spawn::tick(ctx, &ground, &mut entities, &targets, now, day, difficulty);
     out.fresh.extend(spawned);
+    golems::villagers(ctx, &ground, &mut entities, now, &mut out.fresh);
     let made = spawner::tick(ctx, &ground, &entities, &targets, difficulty);
     out.fresh.extend(made);
     let made = crate::trials::tick(ctx, &ground, &entities, &targets, difficulty, now);

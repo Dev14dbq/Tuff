@@ -97,7 +97,7 @@ fn a_silverfish_hides_in_the_stone_it_walks_by() {
     {
         m.persistent = true;
     }
-    for _ in 0..40 {
+    for _ in 0..120 {
         run(&ctx, 50);
         if count_of(&ctx, Species::Silverfish) == 0 {
             break;
@@ -377,6 +377,162 @@ fn golems_stay_in_peaceful_and_far_from_players_and_are_saved() {
         .harm(ctx.dim, iron, 1000.0, "minecraft:generic", Some(STEVE));
     run(&ctx, 2);
     assert!(items_of(&ctx, "minecraft:iron_ingot") >= 3);
+}
+
+// ---- villagers call golems ----
+
+/// `n` villagers in a ring of radius two around `(x, z)`, rested or not.
+fn village(ctx: &ServerContext, n: usize, at: [f64; 2], rested: bool) -> Vec<i32> {
+    let now = lock(&ctx.time).age;
+    (0..n)
+        .map(|k| {
+            let a = k as f64 / n as f64 * std::f64::consts::TAU;
+            let id = villager_at(ctx, [at[0] + a.cos() * 2.0, -60.0, at[1] + a.sin() * 2.0]);
+            if rested {
+                for e in lock(&ctx.entities).iter_mut().filter(|e| e.id == id) {
+                    if let Kind::Merchant(m) = &mut e.kind {
+                        m.walk.slept = Some(now);
+                    }
+                }
+            }
+            id
+        })
+        .collect()
+}
+
+/// A husk that does nothing, to run from, kept in place.
+fn scare(ctx: &ServerContext, at: [f64; 3]) {
+    let alive = lock(&ctx.entities).iter().any(
+        |e| matches!(&e.kind, Kind::Mob(m) if m.species == Species::Husk && m.dying.is_none()),
+    );
+    if !alive {
+        let id = put(ctx, Species::Husk, at);
+        set_mob(ctx, id, |m| {
+            m.no_ai = true;
+            m.persistent = true;
+        });
+    }
+}
+
+fn golems_near(ctx: &ServerContext) -> usize {
+    count_of(ctx, Species::IronGolem)
+}
+
+fn scared_run(ctx: &ServerContext, ticks: usize, at: [f64; 3]) {
+    for _ in 0..ticks / 10 {
+        scare(ctx, at);
+        // The villagers run, but this village stays gathered (the test is
+        // about who calls, not about where they flee).
+        let mut all = lock(&ctx.entities);
+        let folk: Vec<usize> = (0..all.len())
+            .filter(|&i| matches!(all[i].kind, Kind::Merchant(_)))
+            .collect();
+        for (k, &i) in folk.iter().enumerate() {
+            let a = k as f64 / folk.len() as f64 * std::f64::consts::TAU;
+            all[i].pos = [40.5 + a.cos() * 2.0, -60.0, 40.5 + a.sin() * 2.0];
+        }
+        drop(all);
+        run_all(ctx, 10);
+    }
+}
+
+#[test]
+fn villagers_that_panic_together_call_one_golem_and_not_a_second_while_it_stands() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    normal(&ctx);
+    let _ = join(&ctx, [30.5, -60.0, 0.5]);
+    set_day(&ctx, 2000);
+    let _ = village(&ctx, 5, [40.5, 40.5], true);
+    scared_run(&ctx, 400, [40.5, -60.0, 43.5]);
+    assert_eq!(golems_near(&ctx), 1, "the crowd called no golem");
+    // The golem is no one's pet: it was not built by a player.
+    let g = lock(&ctx.entities)
+        .iter()
+        .find(|e| matches!(&e.kind, Kind::Mob(m) if m.species == Species::IronGolem))
+        .cloned()
+        .unwrap();
+    let Kind::Mob(m) = &g.kind else { panic!() };
+    assert!(!m.quirks.player_made);
+    assert!((g.pos[0] - 40.5).abs() <= 9.0 && (g.pos[2] - 40.5).abs() <= 9.0);
+    // Panic goes on, and still no second one while the first is near.
+    scared_run(&ctx, 1500, [40.5, -60.0, 43.5]);
+    assert_eq!(golems_near(&ctx), 1, "a second came");
+}
+
+#[test]
+fn a_new_golem_waits_thirty_seconds_after_the_last_was_called() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    normal(&ctx);
+    let _ = join(&ctx, [30.5, -60.0, 0.5]);
+    set_day(&ctx, 2000);
+    let _ = village(&ctx, 5, [40.5, 40.5], true);
+    scared_run(&ctx, 200, [40.5, -60.0, 43.5]);
+    assert_eq!(golems_near(&ctx), 1);
+    // It falls; the villagers still remember it for 600 ticks from the call.
+    lock(&ctx.entities)
+        .retain(|e| !matches!(&e.kind, Kind::Mob(m) if m.species == Species::IronGolem));
+    scared_run(&ctx, 300, [40.5, -60.0, 43.5]);
+    assert_eq!(golems_near(&ctx), 0, "came too soon");
+    scared_run(&ctx, 900, [40.5, -60.0, 43.5]);
+    assert_eq!(golems_near(&ctx), 1, "never came again");
+}
+
+#[test]
+fn too_few_or_too_tired_villagers_call_no_golem() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    normal(&ctx);
+    let _ = join(&ctx, [30.5, -60.0, 0.5]);
+    set_day(&ctx, 2000);
+    // Two panicking villagers are not enough...
+    let _ = village(&ctx, 2, [40.5, 40.5], true);
+    // ...nor are five that have not slept.
+    let _ = village(&ctx, 5, [-40.5, 40.5], false);
+    for k in 0..40 {
+        scare(&ctx, [40.5, -60.0, 43.5]);
+        if k % 2 == 0 {
+            // A second one for the other village.
+            let still = lock(&ctx.entities).iter().any(
+                |e| matches!(&e.kind, Kind::Mob(m) if m.species == Species::Husk && e.pos[0] < 0.0),
+            );
+            if !still {
+                let id = put(&ctx, Species::Husk, [-40.5, -60.0, 43.5]);
+                set_mob(&ctx, id, |m| {
+                    m.no_ai = true;
+                    m.persistent = true;
+                });
+            }
+        }
+        run_all(&ctx, 20);
+    }
+    assert_eq!(golems_near(&ctx), 0);
+}
+
+#[test]
+fn five_villagers_that_gossip_call_a_golem_too() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    normal(&ctx);
+    let _ = join(&ctx, [30.5, -60.0, 0.5]);
+    set_day(&ctx, 2000);
+    let _ = village(&ctx, 5, [40.5, 40.5], true);
+    for _ in 0..30 {
+        run_all(&ctx, 100);
+        if golems_near(&ctx) > 0 {
+            break;
+        }
+    }
+    assert_eq!(golems_near(&ctx), 1);
 }
 
 // ---- endermites ----

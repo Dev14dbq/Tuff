@@ -200,6 +200,216 @@ pub fn defend(entities: &mut [Entity], villager: usize, attacker: i32) {
     }
 }
 
+// ---- villagers call golems ----
+
+/// A villager wants a golem only if it slept in the last 20 minutes.
+const SLEPT_WITHIN: i64 = 24_000;
+/// How long a villager remembers a golem it saw (or one called).
+const REMEMBERS: i64 = 600;
+/// The wait between two gossips of a villager.
+const GOSSIP_WAIT: i64 = 1_200;
+/// Villagers within this many blocks (each way) take part.
+const GATHER: f64 = 10.0;
+/// Panicking villagers need 3 to agree, gossiping ones 5; at most this
+/// many are counted.
+const PANIC_NEED: usize = 3;
+const GOSSIP_NEED: usize = 5;
+const COUNTED: usize = 5;
+/// Blocks (sideways, up and down) around the caller the golem may come to,
+/// and the tries to find a place.
+const SPAWN_SIDE: i32 = 8;
+const SPAWN_UP: i32 = 6;
+const SPAWN_TRIES: usize = 10;
+
+fn walk_of(e: &Entity) -> Option<&mc_entity::villager::Walk> {
+    match &e.kind {
+        Kind::Merchant(m) if !m.wandering && !e.removed => Some(&m.walk),
+        _ => None,
+    }
+}
+
+fn walk_mut(e: &mut Entity) -> Option<&mut mc_entity::villager::Walk> {
+    match &mut e.kind {
+        Kind::Merchant(m) if !m.wandering && !e.removed => Some(&mut m.walk),
+        _ => None,
+    }
+}
+
+fn wants(w: &mc_entity::villager::Walk, now: i64) -> bool {
+    w.slept.is_some_and(|t| now - t < SLEPT_WITHIN) && w.golem_seen_until <= now
+}
+
+fn within(a: [f64; 3], b: [f64; 3], reach: f64) -> bool {
+    (0..3).all(|i| (a[i] - b[i]).abs() <= reach)
+}
+
+/// Blocks a golem does not stand on.
+fn bad_floor(name: &str) -> bool {
+    matches!(
+        name,
+        "minecraft:cobweb"
+            | "minecraft:cactus"
+            | "minecraft:conduit"
+            | "minecraft:ice"
+            | "minecraft:tnt"
+            | "minecraft:glass"
+            | "minecraft:glass_pane"
+    ) || name.ends_with("_leaves")
+        || name.ends_with("_stained_glass")
+        || name.ends_with("_stained_glass_pane")
+        || name.starts_with("minecraft:infested_")
+}
+
+fn below(n: u32) -> u32 {
+    (crate::util::random_u64() >> 33) as u32 % n.max(1)
+}
+
+/// A place for a golem near `around`: a floor of whole blocks to stand on,
+/// no solid block in its cell or the two above, no water.
+fn golem_spot(ctx: &ServerContext, ground: &super::Ground, around: [i32; 3]) -> Option<[i32; 3]> {
+    use mc_entity::Collide as _;
+    use mc_entity::nav::{Liquid, Terrain as _};
+    for _ in 0..SPAWN_TRIES {
+        let x = around[0] + below(2 * SPAWN_SIDE as u32 + 1) as i32 - SPAWN_SIDE;
+        let z = around[2] + below(2 * SPAWN_SIDE as u32 + 1) as i32 - SPAWN_SIDE;
+        for y in (around[1] - SPAWN_UP..=around[1] + SPAWN_UP).rev() {
+            let floor_name = name_at(ctx, Position::new(x, y - 1, z)).unwrap_or("");
+            let floor = ground.span(x, y - 1, z).is_some_and(|(_, top)| top >= 1.0);
+            if !floor || bad_floor(floor_name) {
+                continue;
+            }
+            let free = (0..3).all(|dy| !ground.solid(x, y + dy, z));
+            let dry = ground.liquid(x, y, z) == Liquid::None
+                && ground.liquid(x, y + 1, z) != Liquid::Water
+                && ground.liquid(x, y + 2, z) != Liquid::Water;
+            if free && dry {
+                return Some([x, y, z]);
+            }
+            break;
+        }
+    }
+    None
+}
+
+/// Villagers call iron golems (minecraft.wiki, "Iron Golem" → "Spawning"):
+/// a villager that slept in the last 20 minutes and knows of no golem
+/// near it asks the villagers around it (within 10 blocks, counting at
+/// most 5 of those that also slept and know of no golem) to agree. While
+/// it runs from a monster it asks every 5 seconds and needs 3 to agree;
+/// when it gossips (here: with a villager within 8 blocks, each at most
+/// once a minute) it needs 5. Then a golem appears within 8 blocks and 6
+/// up or down (10 tries), and every villager there remembers a golem for
+/// 30 seconds. Every 10 seconds a villager looks for a golem within 16
+/// blocks and remembers one for 30 seconds. Meeting at a bell is not
+/// modelled: gossip is two villagers near each other.
+pub fn villagers(
+    ctx: &ServerContext,
+    ground: &super::Ground,
+    entities: &mut [Entity],
+    now: i64,
+    fresh: &mut Vec<Entity>,
+) {
+    let people: Vec<usize> = (0..entities.len())
+        .filter(|&i| walk_of(&entities[i]).is_some())
+        .collect();
+    if people.is_empty() {
+        return;
+    }
+    // The sensor: a golem within 16 blocks.
+    for &i in &people {
+        if (now + i64::from(entities[i].id)) % 200 != 0 {
+            continue;
+        }
+        let at = entities[i].pos;
+        let seen = entities.iter().any(|e| {
+            !e.removed
+                && within(e.pos, at, 16.0)
+                && matches!(&e.kind, Kind::Mob(m) if m.species == Species::IronGolem && m.dying.is_none())
+        });
+        if seen && let Some(w) = walk_mut(&mut entities[i]) {
+            w.golem_seen_until = now + REMEMBERS;
+        }
+    }
+    for &i in &people {
+        let id = i64::from(entities[i].id);
+        let Some(w) = walk_of(&entities[i]) else {
+            continue;
+        };
+        let panicking = w.panic_ticks > 0;
+        let (need, friend) = if panicking {
+            // Every five seconds, starting as the fright does.
+            if w.panic_ticks % 100 != 1 {
+                continue;
+            }
+            (PANIC_NEED, None)
+        } else if (now + id * 37) % 200 == 0 {
+            let ready =
+                |w: &mc_entity::villager::Walk| w.gossiped.is_none_or(|t| now - t >= GOSSIP_WAIT);
+            let at = entities[i].pos;
+            if !ready(w) {
+                continue;
+            }
+            let friend = people.iter().copied().find(|&j| {
+                j != i
+                    && within(entities[j].pos, at, 8.0)
+                    && walk_of(&entities[j]).is_some_and(ready)
+            });
+            let Some(j) = friend else {
+                continue;
+            };
+            (GOSSIP_NEED, Some(j))
+        } else {
+            continue;
+        };
+        if !walk_of(&entities[i]).is_some_and(|w| wants(w, now)) {
+            continue;
+        }
+        // Those around it, and how many of them agree.
+        let at = entities[i].pos;
+        let around: Vec<usize> = people
+            .iter()
+            .copied()
+            .filter(|&j| within(entities[j].pos, at, GATHER))
+            .collect();
+        let agree = around
+            .iter()
+            .filter(|&&j| walk_of(&entities[j]).is_some_and(|w| wants(w, now)))
+            .take(COUNTED)
+            .count();
+        if agree < need {
+            continue;
+        }
+        // A gossip only counts (and uses up the wait) once the crowd is
+        // big enough: villagers keep talking until it is.
+        if let Some(j) = friend {
+            for k in [i, j] {
+                if let Some(w) = walk_mut(&mut entities[k]) {
+                    w.gossiped = Some(now);
+                }
+            }
+        }
+        let cell = [
+            at[0].floor() as i32,
+            at[1].floor() as i32,
+            at[2].floor() as i32,
+        ];
+        let Some(spot) = golem_spot(ctx, ground, cell) else {
+            continue;
+        };
+        let pos = [
+            f64::from(spot[0]) + 0.5,
+            f64::from(spot[1]),
+            f64::from(spot[2]) + 0.5,
+        ];
+        fresh.push(new_mob(ctx, Species::IronGolem, pos));
+        for j in around {
+            if let Some(w) = walk_mut(&mut entities[j]) {
+                w.golem_seen_until = now + REMEMBERS;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
