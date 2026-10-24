@@ -146,6 +146,9 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     if !m.hurt(amount, h.by.or(h.player.map(|_| -1))) {
         return false;
     }
+    if let Some(p) = h.player {
+        crate::stats::custom(ctx, p, "damage_dealt", (amount * 10.0).round() as i32);
+    }
     // Hurt by no one (water, a fall, a wall), an enderman mostly teleports.
     if m.species == Species::Enderman && h.by.is_none() && h.player.is_none() && m.below(10) != 0 {
         let ground = super::Ground::new(ctx);
@@ -754,6 +757,9 @@ pub fn die(
         super::ride::eject(ctx, e);
     }
     fx::status(ctx, id, 3);
+    if let Some(player) = by_player {
+        crate::stats::killed(ctx, player, e);
+    }
     let pos = e.pos;
     let Kind::Mob(m) = &mut e.kind else {
         return;
@@ -979,7 +985,7 @@ pub fn breed(
     }
     fx::status(ctx, entities[i].id, 18);
     if let Some(p) = by {
-        let _ = p;
+        crate::stats::custom(ctx, p, "animals_bred", 1);
         let xp = 1 + (crate::util::random_u64() % 7) as i32;
         crate::xp::spawn(ctx, pos, xp);
     }

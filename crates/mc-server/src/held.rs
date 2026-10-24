@@ -94,7 +94,7 @@ pub fn consume(ctx: &ServerContext, uuid: u128, slot: usize, n: i32) {
 
 /// Wears the item in a slot by `amount`; it breaks at its limit.
 pub fn wear(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32) {
-    let mut broke = false;
+    let mut broke = None;
     {
         let mut inventories = lock(&ctx.inventories);
         let Some(hands) = inventories.get_mut(&uuid) else {
@@ -113,12 +113,13 @@ pub fn wear(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32) {
         }
         stack.damage += amount;
         if stack.damage >= max {
+            broke = Some(stack.item);
             hands.slots[slot] = None;
-            broke = true;
         }
     }
     changed(ctx, uuid, &[slot]);
-    if broke {
+    if let Some(item) = broke {
+        crate::stats::item(ctx, uuid, crate::stats::BROKEN, item, 1);
         let entity_id = lock(&ctx.players).get(&uuid).map(|p| p.entity_id);
         if let Some(entity_id) = entity_id {
             // Entity events 47..52: main hand, off hand, head, chest, legs, feet.

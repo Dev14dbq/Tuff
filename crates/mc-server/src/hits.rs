@@ -285,12 +285,14 @@ pub fn target_strength(cell: [i32; 3], face: usize, point: [f64; 3]) -> u8 {
 
 /// A projectile stopped at `point` against a block: a target block gives a
 /// signal for 8 ticks (20 for an arrow or a trident, `long`).
-pub fn hit_block(ctx: &ServerContext, strike: &Strike, point: [f64; 3], long: bool) {
+///
+/// Whether a target block was hit.
+pub fn hit_block(ctx: &ServerContext, strike: &Strike, point: [f64; 3], long: bool) -> bool {
     let Strike::Block { cell, face } = *strike else {
-        return;
+        return false;
     };
     if block_at(ctx, cell).and_then(|s| ctx.data.blocks.block_name(s)) != Some("minecraft:target") {
-        return;
+        return false;
     }
     let mut level = crate::level::WorldLevel::new(ctx);
     let logic = level.logic();
@@ -309,6 +311,7 @@ pub fn hit_block(ctx: &ServerContext, strike: &Strike, point: [f64; 3], long: bo
             .events
             .send(crate::context::Event::BlocksChanged { by: 0, changes });
     }
+    true
 }
 
 /// The name of a player, for death messages.

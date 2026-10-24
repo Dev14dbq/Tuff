@@ -63,9 +63,7 @@ pub struct Spawner {
     chunk_biomes: HashMap<(i32, i32), Option<BiomeSpawns>>,
     /// The world seed (slime chunks), once read.
     seed: Option<Option<i64>>,
-    /// Ticks each player has gone without sleep, and when phantoms next
-    /// look.
-    unrest: HashMap<u128, i64>,
+    /// When phantoms next look.
     phantoms_at: i64,
 }
 
@@ -564,7 +562,7 @@ fn spawn_round(
     // Phantoms come for players who have not slept for three days.
     phantoms(
         ctx,
-        (&mut spawner.unrest, &mut spawner.phantoms_at),
+        &mut spawner.phantoms_at,
         &spots,
         now,
         difficulty,
@@ -841,21 +839,16 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
 }
 
 /// Phantoms: every minute or two, each player in the open at night who has
-/// not slept for three days or more may draw a few from the sky.
+/// not slept for three days or more (their `time_since_rest` statistic)
+/// may draw a few from the sky.
 fn phantoms(
     ctx: &ServerContext,
-    (unrest_of, next_at): (&mut HashMap<u128, i64>, &mut i64),
+    next_at: &mut i64,
     spots: &Spots,
     now: i64,
     difficulty: i32,
     out: &mut Vec<Entity>,
 ) {
-    let resting: Vec<u128> = lock(&ctx.sleepers).keys().copied().collect();
-    unrest_of.retain(|u, _| spots.targets.iter().any(|t| t.uuid == *u));
-    for t in spots.targets {
-        let n = unrest_of.entry(t.uuid).or_insert(0);
-        *n = if resting.contains(&t.uuid) { 0 } else { *n + 1 };
-    }
     if now < *next_at {
         return;
     }
@@ -872,7 +865,12 @@ fn phantoms(
     let world_age = lock(&ctx.time).age;
     let regional = regional_difficulty(difficulty, world_age, day_time);
     for t in spots.targets.iter().filter(|t| t.targetable) {
-        let unrest = unrest_of.get(&t.uuid).copied().unwrap_or(0);
+        let unrest = i64::from(crate::stats::get(
+            ctx,
+            t.uuid,
+            crate::stats::CUSTOM,
+            "time_since_rest",
+        ));
         let p = Position::new(
             t.pos[0].floor() as i32,
             t.pos[1].floor() as i32,

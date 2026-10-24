@@ -344,6 +344,8 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             }
             crate::effects::tick(&ctx, count as i64);
             crate::vitals::tick(&ctx);
+            crate::stats::tick(&ctx);
+            crate::commands::watch(&ctx);
             crate::worn::tick(&ctx);
             crate::projectiles::trident::tick_spins(&ctx);
             crate::projectiles::crossbow::tick_charging(&ctx);

@@ -365,6 +365,11 @@ impl Machine {
             let result = self.menu.result();
             self.slots.clone_from(&self.last);
             if let Some(r) = result {
+                if matches!(self.menu, Menu::Stonecutter | Menu::Loom | Menu::Smithing)
+                    && let Some(made) = &self.slots[r]
+                {
+                    crate::stats::item(ctx, uuid, crate::stats::CRAFTED, made.item, made.count);
+                }
                 self.slots[r] = None;
             }
             self.take(ctx, uuid);
@@ -533,6 +538,7 @@ impl Machine {
         }
         crate::enchants::set_levels(&mut made, key, &have);
         self.slots[0] = Some(made);
+        crate::stats::custom(ctx, uuid, "enchant_item", 1);
         if !creative {
             pay_levels(ctx, uuid, paid);
             take_one(&mut self.slots[1], paid);
@@ -1275,6 +1281,7 @@ mod tests {
     #[test]
     fn enchanting_table_enchants_a_book() {
         let Some(ctx) = setup() else { return };
+        crate::stats::load(&ctx, P);
         let mut m = machine(
             &ctx,
             Menu::Enchanting,
@@ -1287,6 +1294,7 @@ mod tests {
         assert!(costs[0] > 0, "{costs:?}");
         assert!(clues[0] >= 0);
         m.button(&ctx, P, 0);
+        assert_eq!(crate::stats::get(&ctx, P, crate::stats::CUSTOM, "enchant_item"), 1);
         let made = m.slots[0].clone().unwrap();
         assert_eq!(ctx.items.name(made.item), Some("minecraft:enchanted_book"));
         assert!(!levels(&ctx, &made).is_empty());

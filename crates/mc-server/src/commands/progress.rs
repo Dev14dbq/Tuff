@@ -1,11 +1,12 @@
 //! `/advancement` and `/recipe`: what players have achieved and which
 //! recipes their book knows. The progress is kept while the server runs.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use mc_command::args::full_id;
 use mc_nbt::{Compound, Tag};
+use mc_protocol::packets::play::{RecipeBookAdd, RecipeBookRemove, RecipeBookSettings};
 use mc_protocol::text::{list, translate};
 
 use super::run::err;
@@ -52,6 +53,79 @@ pub struct Book {
     advs: BTreeMap<String, Adv>,
     children: HashMap<String, Vec<String>>,
     recipes: BTreeSet<String>,
+    /// `minecraft:inventory_changed` criteria.
+    inventory: Vec<InventoryCriterion>,
+    /// Those criteria by an item that can complete them.
+    by_item: HashMap<i32, Vec<usize>>,
+    /// (advancement, criterion) completed by entering water.
+    water: Vec<(String, String)>,
+    /// (advancement, criterion) waiting for each recipe.
+    waiting: HashMap<String, Vec<(String, String)>>,
+}
+
+/// A criterion that completes once the inventory holds every item a
+/// predicate asks for (each an item or the items of a tag).
+#[derive(Debug)]
+struct InventoryCriterion {
+    advancement: String,
+    criterion: String,
+    wants: Vec<HashSet<i32>>,
+}
+
+/// Where what an award causes is sent: the player's events.
+pub struct Sink<'a> {
+    pub ctx: &'a ServerContext,
+    pub events: &'a mut Vec<Event>,
+}
+
+impl Sink<'_> {
+    /// Tells a player's recipe book of a recipe it gained; those told one
+    /// after the other share a packet.
+    fn book_added(&mut self, uuid: u128, id: i32) {
+        let Some(entry) = self.ctx.recipes.book_entry(id, true, true) else {
+            return;
+        };
+        if let Some(Event::Direct {
+            uuid: last,
+            packet: Direct::RecipeAdd(add),
+        }) = self.events.last_mut()
+            && *last == uuid
+            && !add.replace
+        {
+            add.entries.push(entry);
+            return;
+        }
+        self.events.push(Event::Direct {
+            uuid,
+            packet: Direct::RecipeAdd(RecipeBookAdd {
+                entries: vec![entry],
+                replace: false,
+            }),
+        });
+    }
+
+    fn book_removed(&mut self, uuid: u128, id: i32) {
+        if let Some(Event::Direct {
+            uuid: last,
+            packet: Direct::RecipeRemove(remove),
+        }) = self.events.last_mut()
+            && *last == uuid
+        {
+            remove.recipes.push(id);
+            return;
+        }
+        self.events.push(Event::Direct {
+            uuid,
+            packet: Direct::RecipeRemove(RecipeBookRemove { recipes: vec![id] }),
+        });
+    }
+}
+
+fn sink<'a>(r: &'a mut Run<'_>) -> Sink<'a> {
+    Sink {
+        ctx: r.ctx,
+        events: &mut r.out.events,
+    }
 }
 
 /// What each player has done.
@@ -59,6 +133,17 @@ pub struct Book {
 pub struct Progress {
     done: HashMap<u128, HashMap<String, BTreeSet<String>>>,
     known: HashMap<u128, BTreeSet<String>>,
+    /// Known recipes the player has not looked at yet.
+    highlight: HashMap<u128, BTreeSet<String>>,
+    /// The items the inventory held when it was last looked at.
+    held: HashMap<u128, Vec<i32>>,
+    /// Players who were in water on the last look.
+    wet: HashSet<u128>,
+    /// Each player's recipe books: whether open, and whether filtered to
+    /// what can be crafted.
+    settings: HashMap<u128, ([bool; 4], [bool; 4])>,
+    /// Players whose self-completing criteria were awarded since joining.
+    ticked: HashSet<u128>,
 }
 
 fn book(ctx: &ServerContext) -> Arc<Book> {
@@ -101,6 +186,36 @@ fn book(ctx: &ServerContext) -> Arc<Book> {
                 ))
             })
             .collect();
+        for (k, c) in v["criteria"].as_object().into_iter().flatten() {
+            match c["trigger"].as_str() {
+                Some("minecraft:inventory_changed") => {
+                    let wants: Vec<HashSet<i32>> = c["conditions"]["items"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|p| items_of(ctx, &p["items"]))
+                        .collect();
+                    if wants.is_empty() || wants.iter().any(HashSet::is_empty) {
+                        continue;
+                    }
+                    let at = b.inventory.len();
+                    for &item in &wants[0] {
+                        b.by_item.entry(item).or_default().push(at);
+                    }
+                    b.inventory.push(InventoryCriterion {
+                        advancement: id.clone(),
+                        criterion: k.clone(),
+                        wants,
+                    });
+                }
+                Some("minecraft:enter_block")
+                    if c["conditions"]["blocks"].as_str() == Some("minecraft:water") =>
+                {
+                    b.water.push((id.clone(), k.clone()));
+                }
+                _ => {}
+            }
+        }
         let requirements = match v["requirements"].as_array() {
             Some(groups) => groups
                 .iter()
@@ -137,6 +252,12 @@ fn book(ctx: &ServerContext) -> Arc<Book> {
         if let Some(p) = &adv.parent {
             b.children.entry(p.clone()).or_default().push(id.clone());
         }
+        for (criterion, recipe) in &adv.unlocks {
+            b.waiting
+                .entry(recipe.clone())
+                .or_default()
+                .push((id.clone(), criterion.clone()));
+        }
         b.advs.insert(id, adv);
     }
     for id in pack
@@ -155,6 +276,21 @@ fn book(ctx: &ServerContext) -> Arc<Book> {
     let b = Arc::new(b);
     lock(&ctx.rare).book = Some(b.clone());
     b
+}
+
+/// The items a predicate's `items` names: an item, a `#tag`, or a list.
+fn items_of(ctx: &ServerContext, v: &serde_json::Value) -> HashSet<i32> {
+    let one = |s: &str| -> Vec<i32> {
+        match s.strip_prefix('#') {
+            Some(tag) => ctx.recipes.item_tags.get(tag).cloned().unwrap_or_default(),
+            None => ctx.items.id(s).into_iter().collect(),
+        }
+    };
+    match v {
+        serde_json::Value::String(s) => one(s).into_iter().collect(),
+        serde_json::Value::Array(l) => l.iter().filter_map(|s| s.as_str()).flat_map(one).collect(),
+        _ => HashSet::new(),
+    }
 }
 
 impl Adv {
@@ -189,7 +325,14 @@ fn advancements_file(ctx: &ServerContext, uuid: u128) -> Option<std::path::PathB
 }
 
 /// What a joining player had done and knew, from their files.
-pub fn load_progress(ctx: &ServerContext, uuid: u128, recipes: &[String]) {
+pub fn load_progress(
+    ctx: &ServerContext,
+    uuid: u128,
+    recipes: &[String],
+    saved: &crate::players::BookState,
+) {
+    // Reading every advancement takes a while: do it here, not in a tick.
+    book(ctx);
     let mut done: HashMap<String, BTreeSet<String>> = HashMap::new();
     if let Some(file) = advancements_file(ctx, uuid)
         && let Ok(text) = std::fs::read_to_string(&file)
@@ -203,10 +346,254 @@ pub fn load_progress(ctx: &ServerContext, uuid: u128, recipes: &[String]) {
     }
     let mut state = lock(&ctx.rare);
     state.progress.done.insert(uuid, done);
+    state.progress.known.insert(
+        uuid,
+        recipes
+            .iter()
+            .map(|r| full_id(r))
+            .filter(|r| ctx.recipes.book_id(r).is_some() || book_hidden(ctx, r))
+            .collect(),
+    );
     state
         .progress
+        .settings
+        .insert(uuid, (saved.open, saved.filter));
+    state.progress.highlight.insert(
+        uuid,
+        saved
+            .highlight
+            .iter()
+            .map(|r| full_id(r))
+            .filter(|r| ctx.recipes.book_id(r).is_some())
+            .collect(),
+    );
+    // Everything in the inventory counts as new again.
+    state.progress.held.remove(&uuid);
+    state.progress.wet.remove(&uuid);
+    state.progress.ticked.remove(&uuid);
+}
+
+/// Whether `recipe` is one the data pack has but the book does not show
+/// (its file is still kept in the player's list).
+fn book_hidden(ctx: &ServerContext, recipe: &str) -> bool {
+    ctx.data
+        .data_pack()
+        .read_entry("minecraft:recipe", recipe)
+        .is_ok()
+}
+
+/// The recipes a player has not looked at yet, sorted, for their file.
+pub fn highlighted(ctx: &ServerContext, uuid: u128) -> Vec<String> {
+    lock(&ctx.rare)
+        .progress
+        .highlight
+        .get(&uuid)
+        .map(|k| k.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// The recipe book state of a player, for their file.
+pub fn book_state(ctx: &ServerContext, uuid: u128) -> crate::players::BookState {
+    let (open, filter) = lock(&ctx.rare)
+        .progress
+        .settings
+        .get(&uuid)
+        .copied()
+        .unwrap_or_default();
+    crate::players::BookState {
+        open,
+        filter,
+        highlight: highlighted(ctx, uuid),
+    }
+}
+
+/// A book of a player was opened, closed or switched to what can be
+/// crafted (Recipe Book Change Settings).
+pub fn book_settings(ctx: &ServerContext, uuid: u128, book: i32, open: bool, filter: bool) {
+    let Ok(book @ 0..4) = usize::try_from(book) else {
+        return;
+    };
+    let mut state = lock(&ctx.rare);
+    let (opens, filters) = state.progress.settings.entry(uuid).or_default();
+    opens[book] = open;
+    filters[book] = filter;
+}
+
+/// The packet that tells a joining player's client which books are open.
+pub fn settings_packet(ctx: &ServerContext, uuid: u128) -> RecipeBookSettings {
+    let (open, filter) = lock(&ctx.rare)
+        .progress
+        .settings
+        .get(&uuid)
+        .copied()
+        .unwrap_or_default();
+    RecipeBookSettings {
+        books: std::array::from_fn(|i| (open[i], filter[i])),
+    }
+}
+
+/// A recipe the player made is added to their book.
+pub fn unlock(ctx: &ServerContext, uuid: u128, recipe: &str) {
+    if knows_recipe(ctx, uuid, recipe) {
+        return;
+    }
+    trigger(ctx, uuid, |r, b, p| {
+        unlock_recipe(r, b, p, recipe);
+    });
+}
+
+/// Looks at what every player carries: picking up an ingredient unlocks
+/// the recipes whose advancement wants it.
+pub fn watch(ctx: &ServerContext) {
+    let held: Vec<(u128, Vec<i32>)> = {
+        let players = lock(&ctx.players);
+        let inventories = lock(&ctx.inventories);
+        players
+            .keys()
+            .filter_map(|&uuid| {
+                let mut items: Vec<i32> = inventories
+                    .get(&uuid)?
+                    .slots
+                    .iter()
+                    .flatten()
+                    .map(|s| s.item)
+                    .collect();
+                items.sort_unstable();
+                items.dedup();
+                Some((uuid, items))
+            })
+            .collect()
+    };
+    for (uuid, items) in held {
+        if lock(&ctx.rare).progress.ticked.insert(uuid) {
+            trigger(ctx, uuid, tick_awards);
+        }
+        inventory_changed(ctx, uuid, &items);
+    }
+}
+
+/// Whether a player's recipe book has `recipe`.
+pub fn knows_recipe(ctx: &ServerContext, uuid: u128, recipe: &str) -> bool {
+    lock(&ctx.rare)
+        .progress
         .known
-        .insert(uuid, recipes.iter().cloned().collect());
+        .get(&uuid)
+        .is_some_and(|k| k.contains(recipe))
+}
+
+/// The packet that gives a joining player's book what they know, with
+/// the unseen recipes marked.
+pub fn initial_book(ctx: &ServerContext, uuid: u128) -> RecipeBookAdd {
+    let state = lock(&ctx.rare);
+    let none = BTreeSet::new();
+    let known = state.progress.known.get(&uuid).unwrap_or(&none);
+    let unseen = state.progress.highlight.get(&uuid).unwrap_or(&none);
+    RecipeBookAdd {
+        entries: known
+            .iter()
+            .filter_map(|r| {
+                let id = ctx.recipes.book_id(r)?;
+                ctx.recipes.book_entry(id, false, unseen.contains(r))
+            })
+            .collect(),
+        replace: true,
+    }
+}
+
+/// The client showed a recipe's highlight: it is not new any more.
+pub fn recipe_seen(ctx: &ServerContext, uuid: u128, id: i32) {
+    let Some(r) = ctx.recipes.book_recipe(id) else {
+        return;
+    };
+    if let Some(h) = lock(&ctx.rare).progress.highlight.get_mut(&uuid) {
+        h.remove(&r.name);
+    }
+}
+
+/// Runs a trigger for a player and sends what it caused.
+fn trigger(ctx: &ServerContext, uuid: u128, award: impl FnOnce(&mut Sink, &Book, &Target)) {
+    let Some(target) = super::target::player(ctx, uuid) else {
+        return;
+    };
+    let b = book(ctx);
+    let mut events = Vec::new();
+    award(
+        &mut Sink {
+            ctx,
+            events: &mut events,
+        },
+        &b,
+        &target,
+    );
+    for e in events {
+        let _ = ctx.events.send(e);
+    }
+}
+
+/// The player's inventory holds `items` (every kind in it) now that it
+/// changed: the recipes whose first ingredient is among them unlock.
+pub fn inventory_changed(ctx: &ServerContext, uuid: u128, items: &[i32]) {
+    {
+        let mut state = lock(&ctx.rare);
+        if state.progress.held.get(&uuid).is_some_and(|h| h == items) {
+            return;
+        }
+        state.progress.held.insert(uuid, items.to_vec());
+    }
+    let b = book(ctx);
+    let mut hits: BTreeSet<usize> = BTreeSet::new();
+    for item in items {
+        for &at in b.by_item.get(item).into_iter().flatten() {
+            let c = &b.inventory[at];
+            if c.wants.iter().all(|w| items.iter().any(|i| w.contains(i))) {
+                hits.insert(at);
+            }
+        }
+    }
+    // What is already done is not worked through again.
+    let fresh: Vec<usize> = {
+        let state = lock(&ctx.rare);
+        let done = state.progress.done.get(&uuid);
+        hits.into_iter()
+            .filter(|&at| {
+                let c = &b.inventory[at];
+                !done
+                    .and_then(|d| d.get(&c.advancement))
+                    .is_some_and(|d| d.contains(&c.criterion))
+            })
+            .collect()
+    };
+    if fresh.is_empty() {
+        return;
+    }
+    trigger(ctx, uuid, |r, b, p| {
+        for at in fresh {
+            let c = &b.inventory[at];
+            grant(r, b, p, &c.advancement, Some(&c.criterion));
+        }
+    });
+}
+
+/// Whether the player is in water now: entering it completes the
+/// criteria of the boat recipes.
+pub fn in_water(ctx: &ServerContext, uuid: u128, wet: bool) {
+    let was = {
+        let mut state = lock(&ctx.rare);
+        if wet {
+            !state.progress.wet.insert(uuid)
+        } else {
+            state.progress.wet.remove(&uuid);
+            return;
+        }
+    };
+    if was {
+        return;
+    }
+    trigger(ctx, uuid, |r, b, p| {
+        for (id, criterion) in &b.water {
+            grant(r, b, p, id, Some(criterion));
+        }
+    });
 }
 
 /// `yyyy-MM-dd HH:mm:ss +0000` for now, as vanilla dates criteria.
@@ -326,7 +713,7 @@ fn name(id: &str, adv: &Adv) -> Tag {
 }
 
 /// Gives a player what completing an advancement earns, and tells everyone.
-fn rewarded(r: &mut Run, b: &Book, p: &Target, id: &str, adv: &Adv) {
+fn rewarded(r: &mut Sink, b: &Book, p: &Target, id: &str, adv: &Adv) {
     let uuid = p.uuid();
     for recipe in &adv.recipes {
         unlock_recipe(r, b, p, recipe);
@@ -340,7 +727,7 @@ fn rewarded(r: &mut Run, b: &Book, p: &Target, id: &str, adv: &Adv) {
             })
         };
         if let Some(packet) = packet {
-            r.out.events.push(Event::Direct {
+            r.events.push(Event::Direct {
                 uuid,
                 packet: Direct::Experience(packet),
             });
@@ -358,7 +745,7 @@ fn rewarded(r: &mut Run, b: &Book, p: &Target, id: &str, adv: &Adv) {
         );
         let everyone: Vec<u128> = lock(&r.ctx.players).keys().copied().collect();
         for u in everyone {
-            r.out.events.push(Event::Message {
+            r.events.push(Event::Message {
                 uuid: u,
                 line: line.clone(),
                 overlay: false,
@@ -368,27 +755,52 @@ fn rewarded(r: &mut Run, b: &Book, p: &Target, id: &str, adv: &Adv) {
 }
 
 /// A recipe becomes known: advancements waiting for it progress.
-fn unlock_recipe(r: &mut Run, b: &Book, p: &Target, recipe: &str) -> bool {
+fn unlock_recipe(r: &mut Sink, b: &Book, p: &Target, recipe: &str) -> bool {
+    let uuid = p.uuid();
     let new = lock(&r.ctx.rare)
         .progress
         .known
-        .entry(p.uuid())
+        .entry(uuid)
         .or_default()
         .insert(recipe.to_owned());
     if new {
-        for (id, adv) in &b.advs {
-            for (criterion, wanted) in &adv.unlocks {
-                if wanted == recipe {
-                    grant(r, b, p, id, Some(criterion));
-                }
-            }
+        if let Some(id) = r.ctx.recipes.book_id(recipe) {
+            lock(&r.ctx.rare)
+                .progress
+                .highlight
+                .entry(uuid)
+                .or_default()
+                .insert(recipe.to_owned());
+            r.book_added(uuid, id);
+        }
+        for (id, criterion) in b.waiting.get(recipe).into_iter().flatten() {
+            grant(r, b, p, id, Some(criterion));
         }
     }
     new
 }
 
+/// A recipe leaves the book.
+fn forget_recipe(r: &mut Sink, p: &Target, recipe: &str) -> bool {
+    let uuid = p.uuid();
+    let mut state = lock(&r.ctx.rare);
+    let had = state
+        .progress
+        .known
+        .get_mut(&uuid)
+        .is_some_and(|k| k.remove(recipe));
+    if let Some(h) = state.progress.highlight.get_mut(&uuid) {
+        h.remove(recipe);
+    }
+    drop(state);
+    if had && let Some(id) = r.ctx.recipes.book_id(recipe) {
+        r.book_removed(uuid, id);
+    }
+    had
+}
+
 /// Completes the criteria that complete by themselves.
-fn tick_awards(r: &mut Run, b: &Book, p: &Target) {
+fn tick_awards(r: &mut Sink, b: &Book, p: &Target) {
     for (id, adv) in &b.advs {
         if adv.ticks.is_empty() {
             continue;
@@ -412,7 +824,7 @@ fn tick_awards(r: &mut Run, b: &Book, p: &Target) {
     }
 }
 
-fn grant(r: &mut Run, b: &Book, p: &Target, id: &str, only: Option<&str>) -> bool {
+fn grant(r: &mut Sink, b: &Book, p: &Target, id: &str, only: Option<&str>) -> bool {
     let adv = &b.advs[id];
     let (was, changed) = {
         let mut st = lock(&r.ctx.rare);
@@ -446,7 +858,7 @@ fn grant(r: &mut Run, b: &Book, p: &Target, id: &str, only: Option<&str>) -> boo
     changed
 }
 
-fn revoke(r: &mut Run, b: &Book, p: &Target, id: &str, only: Option<&str>) -> bool {
+fn revoke(r: &mut Sink, b: &Book, p: &Target, id: &str, only: Option<&str>) -> bool {
     let _ = b;
     let mut st = lock(&r.ctx.rare);
     let Some(have) = st
@@ -534,12 +946,12 @@ fn advancement(r: &mut Run, path: &[&str], giving: bool) -> Result<i32> {
     let verb = if giving { "grant" } else { "revoke" };
     let mut count = 0;
     for p in &players {
-        tick_awards(r, &b, p);
+        tick_awards(&mut sink(r), &b, p);
         for i in &ids {
             let changed = if giving {
-                grant(r, &b, p, i, criterion.as_deref())
+                grant(&mut sink(r), &b, p, i, criterion.as_deref())
             } else {
-                revoke(r, &b, p, i, criterion.as_deref())
+                revoke(&mut sink(r), &b, p, i, criterion.as_deref())
             };
             count += i32::from(changed);
         }
@@ -579,21 +991,16 @@ fn recipe(r: &mut Run, giving: bool) -> Result<i32> {
     }
     let mut count = 0;
     for p in &players {
-        tick_awards(r, &b, p);
+        tick_awards(&mut sink(r), &b, p);
         let ids: Vec<String> = match &wanted {
             Some(id) => vec![id.clone()],
             None => b.recipes.iter().cloned().collect(),
         };
         for id in ids {
             let changed = if giving {
-                unlock_recipe(r, &b, p, &id)
+                unlock_recipe(&mut sink(r), &b, p, &id)
             } else {
-                lock(&r.ctx.rare)
-                    .progress
-                    .known
-                    .entry(p.uuid())
-                    .or_default()
-                    .remove(&id)
+                forget_recipe(&mut sink(r), p, &id)
             };
             count += i32::from(changed);
         }
@@ -615,4 +1022,183 @@ fn recipe(r: &mut Run, giving: bool) -> Result<i32> {
     };
     r.success(msg, true);
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::Pose;
+    use crate::players::{BookState, Saved, Store};
+    use crate::testkit;
+    use mc_protocol::packets::play::ItemStack;
+
+    const ME: u128 = 0xb00b;
+
+    fn setup() -> Option<Arc<ServerContext>> {
+        let ctx = testkit::flat()?;
+        testkit::join(&ctx, ME, 52, [0.5, -60.0, 0.5], 0);
+        load_progress(&ctx, ME, &[], &BookState::default());
+        Some(ctx)
+    }
+
+    fn run(ctx: &ServerContext, line: &str) -> super::super::Output {
+        let mut control = crate::tick::TickControl::default();
+        super::super::execute(ctx, &mut control, &super::super::Source::Console, line)
+    }
+
+    /// The recipe ids a player's packets added and removed.
+    fn changes(events: &[Event]) -> (Vec<i32>, Vec<i32>) {
+        let (mut added, mut removed) = (Vec::new(), Vec::new());
+        for e in events {
+            match e {
+                Event::Direct {
+                    packet: Direct::RecipeAdd(add),
+                    ..
+                } => added.extend(add.entries.iter().map(|e| e.id)),
+                Event::Direct {
+                    packet: Direct::RecipeRemove(remove),
+                    ..
+                } => removed.extend(&remove.recipes),
+                _ => {}
+            }
+        }
+        (added, removed)
+    }
+
+    fn drain(rx: &mut crate::context::EventReceiver) -> Vec<Event> {
+        std::iter::from_fn(|| rx.try_changed()).collect()
+    }
+
+    #[test]
+    fn recipe_give_and_take_change_the_book_and_tell_the_client() {
+        let Some(ctx) = setup() else { return };
+        let stick = ctx.recipes.book_id("minecraft:stick").unwrap();
+        let out = run(&ctx, "recipe give P52 minecraft:stick");
+        let (added, removed) = changes(&out.events);
+        assert!(added.contains(&stick) && removed.is_empty());
+        assert!(knows_recipe(&ctx, ME, "minecraft:stick"));
+        assert!(highlighted_of(&ctx).contains(&"minecraft:stick".to_owned()));
+        // Giving it again changes nothing.
+        assert!(
+            changes(&run(&ctx, "recipe give P52 minecraft:stick").events)
+                .0
+                .is_empty()
+        );
+        let out = run(&ctx, "recipe take P52 minecraft:stick");
+        assert_eq!(changes(&out.events), (vec![], vec![stick]));
+        assert!(!knows_recipe(&ctx, ME, "minecraft:stick"));
+        assert!(!highlighted_of(&ctx).contains(&"minecraft:stick".to_owned()));
+        // Everything at once.
+        let out = run(&ctx, "recipe give P52 *");
+        assert!(changes(&out.events).0.len() > 100);
+        let all = initial_book(&ctx, ME);
+        assert!(all.replace && all.entries.len() > 100);
+        run(&ctx, "recipe take P52 *");
+        assert!(known_recipes(&ctx, ME).is_empty());
+    }
+
+    fn highlighted_of(ctx: &ServerContext) -> Vec<String> {
+        book_state(ctx, ME).highlight
+    }
+
+    #[test]
+    fn picking_up_an_ingredient_unlocks_the_recipes_that_use_it() {
+        let Some(ctx) = setup() else { return };
+        let mut rx = ctx.events.subscribe();
+        watch(&ctx);
+        // The first look gives what a player gets for nothing.
+        assert!(knows_recipe(&ctx, ME, "minecraft:crafting_table"));
+        assert!(!knows_recipe(&ctx, ME, "minecraft:stick"));
+        let planks = ctx.items.id("minecraft:oak_planks").unwrap();
+        lock(&ctx.inventories).get_mut(&ME).unwrap().slots[20] = Some(ItemStack::new(planks, 3));
+        watch(&ctx);
+        assert!(knows_recipe(&ctx, ME, "minecraft:stick"));
+        let (added, _) = changes(&drain(&mut rx));
+        assert!(added.contains(&ctx.recipes.book_id("minecraft:stick").unwrap()));
+        // Nothing new when nothing changed.
+        watch(&ctx);
+        assert!(changes(&drain(&mut rx)).0.is_empty());
+        // A recipe nobody asks the player to hold for stays locked.
+        assert!(!knows_recipe(
+            &ctx,
+            ME,
+            "minecraft:iron_ingot_from_smelting_raw_iron"
+        ));
+    }
+
+    #[test]
+    fn looking_at_a_recipe_clears_its_highlight() {
+        let Some(ctx) = setup() else { return };
+        run(&ctx, "recipe give P52 minecraft:stick");
+        let id = ctx.recipes.book_id("minecraft:stick").unwrap();
+        assert!(highlighted_of(&ctx).contains(&"minecraft:stick".to_owned()));
+        recipe_seen(&ctx, ME, id);
+        assert!(!highlighted_of(&ctx).contains(&"minecraft:stick".to_owned()));
+        assert!(knows_recipe(&ctx, ME, "minecraft:stick"));
+    }
+
+    #[test]
+    fn the_book_and_its_settings_are_saved_and_loaded() {
+        let Some(ctx) = setup() else { return };
+        run(&ctx, "recipe give P52 minecraft:stick");
+        run(&ctx, "recipe give P52 minecraft:furnace");
+        for seen in ["minecraft:furnace", "minecraft:crafting_table"] {
+            recipe_seen(&ctx, ME, ctx.recipes.book_id(seen).unwrap());
+        }
+        book_settings(&ctx, ME, 0, true, false);
+        book_settings(&ctx, ME, 3, false, true);
+        let dir = std::env::temp_dir().join(format!("mc-book-{}", std::process::id()));
+        let store = Store::new(&dir, &HashMap::new());
+        let saved = Saved {
+            pose: Pose {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                yaw: 0.0,
+                pitch: 0.0,
+                on_ground: true,
+            },
+            dimension: "minecraft:overworld".into(),
+            game_mode: 0,
+            flying: false,
+            hands: Default::default(),
+            vitals: Default::default(),
+            extra: crate::players::Extra {
+                recipes: known_recipes(&ctx, ME),
+                book: book_state(&ctx, ME),
+                ..Default::default()
+            },
+        };
+        store.save(ME, &saved, 1).unwrap();
+        let back = store.load(ME).unwrap().unwrap().extra;
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(
+            back.recipes,
+            vec![
+                "minecraft:crafting_table",
+                "minecraft:furnace",
+                "minecraft:stick"
+            ]
+        );
+        assert_eq!(back.book.highlight, vec!["minecraft:stick".to_owned()]);
+        assert_eq!(back.book.open, [true, false, false, false]);
+        assert_eq!(back.book.filter, [false, false, false, true]);
+        // A joining player gets it back, with only the unseen one new.
+        let other = ME + 1;
+        testkit::join(&ctx, other, 53, [0.5, -60.0, 0.5], 0);
+        load_progress(&ctx, other, &back.recipes, &back.book);
+        let packet = initial_book(&ctx, other);
+        assert!(packet.replace);
+        let new: Vec<i32> = packet
+            .entries
+            .iter()
+            .filter(|e| e.highlight)
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(new, vec![ctx.recipes.book_id("minecraft:stick").unwrap()]);
+        assert!(packet.entries.iter().all(|e| !e.notification));
+        let settings = settings_packet(&ctx, other);
+        assert_eq!(settings.books[0], (true, false));
+        assert_eq!(settings.books[3], (false, true));
+    }
 }

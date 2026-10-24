@@ -3743,3 +3743,53 @@ async fn items_thrown_from_the_inventory_window_and_the_cursor_on_close() {
     }
     let _ = stop.send(());
 }
+
+#[tokio::test]
+async fn clicking_a_recipe_in_the_book_fills_the_grid_or_shows_a_ghost() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Cook".into()];
+    let (addr, ctx, stop) = running(config).await;
+    let (mut cook, _) = join_offline(addr, ctx.ids.clone(), "Cook").await;
+    let item = |n: &str| ctx.data.builtin.id("minecraft:item", n).unwrap();
+    // A recipe given arrives as an addition to the book.
+    let (_, seen) = chat_command(&mut cook, "recipe give Cook minecraft:stick").await;
+    packet(&mut cook, &seen, "minecraft:recipe_book_add").await;
+    let stick = ctx.recipes.book_id("minecraft:stick").unwrap();
+    let place = |all: bool| {
+        let mut body = Vec::new();
+        body.put_varint(0);
+        body.put_varint(stick);
+        body.put_bool(all);
+        body
+    };
+    // Without planks the grid cannot be filled: the client gets a ghost.
+    cook.send("minecraft:place_recipe", place(false)).await;
+    cook.recv_until("minecraft:place_ghost_recipe").await;
+    creative_slot(&mut cook, 36, item("minecraft:oak_planks"), 5).await;
+    cook.send("minecraft:place_recipe", place(true)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let hands = ctx
+        .inventories
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .cloned()
+        .unwrap();
+    // Two stacks of two planks stand one over the other, and sticks wait.
+    assert_eq!(hands.slots[1].as_ref().map(|s| s.count), Some(2));
+    assert_eq!(hands.slots[3].as_ref().map(|s| s.count), Some(2));
+    assert_eq!(
+        hands.slots[0].as_ref().map(|s| s.item),
+        Some(item("minecraft:stick"))
+    );
+    assert_eq!(hands.slots[36].as_ref().map(|s| s.count), Some(1));
+    let _ = stop.send(());
+}

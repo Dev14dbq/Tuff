@@ -95,6 +95,7 @@ pub fn release(ctx: &ServerContext, actor: Actor, hand: i32, ticks: i32) {
     if ticks < 10 || !usable(ctx, &actor, &h.stack) {
         return;
     }
+    crate::stats::item(ctx, actor.uuid, crate::stats::USED, h.stack.item, 1);
     let spin = effect(ctx, &h.stack, "minecraft:trident_spin_attack_strength");
     let sound = sound_of(ctx, &h.stack);
     let creative = actor.game_mode == 1;

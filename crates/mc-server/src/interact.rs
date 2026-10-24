@@ -441,6 +441,10 @@ pub fn dig(
         return outcome;
     }
     outcome.updates.push((position, left));
+    // Creative players break without it being mined.
+    if actor.game_mode != CREATIVE {
+        crate::stats::block(ctx, actor.uuid, crate::stats::MINED, state, 1);
+    }
     // Unstable TNT lights when it is broken (not in creative).
     if actor.game_mode != CREATIVE
         && blocks.block_name(state) == Some("minecraft:tnt")
@@ -587,6 +591,7 @@ pub fn use_item_on(
         && block_at(clicked).and_then(|s| blocks.block_name(s)) == Some("minecraft:crafting_table")
     {
         outcome.open_crafting = true;
+        crate::stats::custom(ctx, actor.uuid, "interact_with_crafting_table", 1);
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,
             entity_id: actor.entity_id,
@@ -601,6 +606,7 @@ pub fn use_item_on(
             .and_then(crate::menus::Menu::of_block)
     {
         outcome.open_menu = Some((clicked, menu));
+        crate::stats::opened(ctx, actor.uuid, block_at(clicked).and_then(|s| blocks.block_name(s)));
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,
             entity_id: actor.entity_id,
@@ -615,6 +621,7 @@ pub fn use_item_on(
             .and_then(crate::containers::kind_of)
     {
         outcome.open = Some((clicked, kind));
+        crate::stats::opened(ctx, actor.uuid, block_at(clicked).and_then(|s| blocks.block_name(s)));
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,
             entity_id: actor.entity_id,
@@ -664,6 +671,9 @@ pub fn use_item_on(
     // Axes, hoes, shovels, bone meal, honeycomb and stacking candles act
     // on the block.
     if crate::blockuse::use_item_on(ctx, &mut outcome, actor, hand, clicked, face, cursor) {
+        if let Some(item) = held {
+            crate::stats::item(ctx, actor.uuid, crate::stats::USED, item.item, 1);
+        }
         return outcome;
     }
     // Flint and steel and fire charges light fire.
@@ -682,6 +692,7 @@ pub fn use_item_on(
         let changes = level.into_changes();
         outcome.updates.extend(changes.iter().copied());
         outcome.events.push(Event::BlocksChanged { by: 0, changes });
+        crate::stats::item(ctx, actor.uuid, crate::stats::USED, ctx.items.id("minecraft:ender_eye").unwrap_or(0), 1);
         if actor.game_mode != CREATIVE {
             replace_held(ctx, &mut outcome, actor, hand, None);
         }
@@ -740,6 +751,9 @@ pub fn use_item_on(
                 cursor,
             ))
     {
+        if let Some(item) = held {
+            crate::stats::item(ctx, actor.uuid, crate::stats::USED, item.item, 1);
+        }
         return outcome;
     }
     if let Some(tool @ ("minecraft:flint_and_steel" | "minecraft:fire_charge")) = held_name {
@@ -777,6 +791,9 @@ pub fn use_item_on(
             volume: 1.0,
             pitch,
         });
+        if let Some(item) = held {
+            crate::stats::item(ctx, actor.uuid, crate::stats::USED, item.item, 1);
+        }
         if tool == "minecraft:fire_charge" {
             if actor.game_mode != CREATIVE {
                 replace_held(ctx, &mut outcome, actor, hand, None);
@@ -927,6 +944,9 @@ pub fn use_item_on(
             });
         }
     }
+    if let Some(item) = held {
+        crate::stats::item(ctx, actor.uuid, crate::stats::USED, item.item, 1);
+    }
     outcome.events.push(Event::Swing {
         uuid: actor.uuid,
         entity_id: actor.entity_id,
@@ -982,8 +1002,10 @@ fn wear_held(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, hand: i32
     if max == 0 {
         return;
     }
+    let mut broke = None;
     stack.damage += crate::enchant_effects::wear(ctx, stack, amount);
     if stack.damage >= max {
+        broke = Some(stack.item);
         hands.slots[slot] = None;
         outcome.events.push(Event::HandBroke {
             uuid: actor.uuid,
@@ -996,6 +1018,10 @@ fn wear_held(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, hand: i32
         slot: slot as i16,
         item: hands.slots[slot].clone(),
     });
+    drop(inventories);
+    if let Some(item) = broke {
+        crate::stats::item(ctx, actor.uuid, crate::stats::BROKEN, item, 1);
+    }
 }
 
 /// Puts `item` (or nothing) in place of one of the held stack; a stack of
@@ -1130,7 +1156,18 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
     if crate::mobs::ride::boost(ctx, &actor, hand).is_some() {
         return outcome;
     }
+    let thrown = crate::held::held(ctx, actor.uuid, hand);
     if let Some(done) = crate::projectiles::use_item(ctx, actor, hand, yaw, pitch) {
+        // Thrown things are used (bows, rods and tridents count when they let go).
+        if let Some(h) = thrown
+            && !matches!(
+                h.name.as_str(),
+                "minecraft:bow" | "minecraft:crossbow" | "minecraft:trident" | "minecraft:fishing_rod"
+            )
+            && !done.events.is_empty()
+        {
+            crate::stats::item(ctx, actor.uuid, crate::stats::USED, h.stack.item, 1);
+        }
         return done;
     }
     if let Some(done) = crate::mobs::eggs::use_in_air(ctx, actor, hand, yaw, pitch) {

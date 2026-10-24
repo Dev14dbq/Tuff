@@ -82,6 +82,65 @@ impl Respawn {
     }
 }
 
+/// The recipe book's state besides the known recipes: for the crafting,
+/// furnace, blast furnace and smoker books whether each is open and
+/// filters to what can be crafted, and the recipes unlocked but not yet
+/// seen (`recipeBook`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BookState {
+    pub open: [bool; 4],
+    pub filter: [bool; 4],
+    pub highlight: Vec<String>,
+}
+
+/// `recipeBook` keys of each book's open and filter flags.
+const BOOK_FLAGS: [(&str, &str); 4] = [
+    ("isGuiOpen", "isFilteringCraftable"),
+    ("isFurnaceGuiOpen", "isFurnaceFilteringCraftable"),
+    (
+        "isBlastingFurnaceGuiOpen",
+        "isBlastingFurnaceFilteringCraftable",
+    ),
+    ("isSmokerGuiOpen", "isSmokerFilteringCraftable"),
+];
+
+impl BookState {
+    fn read(book: &Compound) -> Self {
+        let flag = |k: &str| matches!(book.get(k), Some(Tag::Byte(b)) if *b != 0);
+        let mut out = Self::default();
+        for (i, (open, filter)) in BOOK_FLAGS.iter().enumerate() {
+            out.open[i] = flag(open);
+            out.filter[i] = flag(filter);
+        }
+        if let Some(Tag::List(l)) = book.get("toBeDisplayed") {
+            out.highlight = l
+                .iter()
+                .filter_map(|t| match t {
+                    Tag::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect();
+        }
+        out
+    }
+
+    fn write(&self, book: &mut Compound) {
+        for (i, (open, filter)) in BOOK_FLAGS.iter().enumerate() {
+            book.insert(*open, Tag::Byte(i8::from(self.open[i])));
+            book.insert(*filter, Tag::Byte(i8::from(self.filter[i])));
+        }
+        book.insert(
+            "toBeDisplayed",
+            Tag::List(
+                self.highlight
+                    .iter()
+                    .map(|r| Tag::String(r.clone()))
+                    .collect(),
+            ),
+        );
+    }
+}
+
 /// What a player keeps besides their body and items.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Extra {
@@ -94,6 +153,8 @@ pub struct Extra {
     pub ender: Vec<Option<ItemStack>>,
     /// Known recipes (`recipeBook.recipes`).
     pub recipes: Vec<String>,
+    /// The rest of the recipe book.
+    pub book: BookState,
     /// What the player rode (`RootVehicle`).
     pub root_vehicle: Option<Compound>,
 }
@@ -282,6 +343,10 @@ impl Store {
                 },
                 _ => Vec::new(),
             },
+            book: match root.get("recipeBook") {
+                Some(Tag::Compound(book)) => BookState::read(book),
+                _ => BookState::default(),
+            },
             respawn: match root.get("respawn") {
                 Some(Tag::Compound(c)) => Respawn::from_nbt(c),
                 _ => None,
@@ -396,9 +461,7 @@ impl Store {
                     .collect(),
             ),
         );
-        if book.get("toBeDisplayed").is_none() {
-            book.insert("toBeDisplayed", Tag::List(Vec::new()));
-        }
+        saved.extra.book.write(&mut book);
         root.insert("recipeBook", Tag::Compound(book));
         if saved.extra.tags.is_empty() {
             root.remove("Tags");

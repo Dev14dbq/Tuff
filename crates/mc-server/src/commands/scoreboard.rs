@@ -871,6 +871,52 @@ pub fn criteria(ctx: &ServerContext, holder: &str, values: &[(&str, i32)], out: 
     send(out, packets);
 }
 
+/// A player's statistic went up by `n`: the score of each objective
+/// counting it (`minecraft.mined:minecraft.stone`, `deathCount`...) goes up
+/// with it, for everyone to see.
+pub fn stat_scores(ctx: &ServerContext, uuid: u128, kind: &str, id: &str, n: i32) {
+    if lock(&ctx.scoreboard).objectives.is_empty() {
+        return;
+    }
+    let dots = |s: &str| s.replacen(':', ".", 1);
+    let mut criteria = vec![format!("{}:{}", dots(kind), dots(id))];
+    if kind == crate::stats::CUSTOM {
+        match id {
+            "minecraft:deaths" => criteria.push("deathCount".into()),
+            "minecraft:player_kills" => {
+                criteria.push("playerKillCount".into());
+                criteria.push("totalKillCount".into());
+            }
+            "minecraft:mob_kills" => criteria.push("totalKillCount".into()),
+            _ => {}
+        }
+    }
+    let Some(holder) = lock(&ctx.players)
+        .get(&uuid)
+        .map(|p| p.profile.name.clone())
+    else {
+        return;
+    };
+    let mut packets = Vec::new();
+    {
+        let mut board = lock(&ctx.scoreboard);
+        let names: Vec<String> = board
+            .objectives
+            .values()
+            .filter(|o| criteria.contains(&o.criteria))
+            .map(|o| o.name.clone())
+            .collect();
+        for name in names {
+            packets.extend(change(&mut board, &holder, &name, |s| {
+                s.value = s.value.saturating_add(n);
+            }));
+        }
+    }
+    for p in packets {
+        let _ = ctx.events.send(Event::Scoreboard(p));
+    }
+}
+
 /// Puts a stored result into scores.
 pub fn store(ctx: &ServerContext, store: &Store, value: i32, out: &mut Output) {
     let StoreTarget::Score { holders, objective } = &store.target else {

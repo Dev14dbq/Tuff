@@ -881,7 +881,8 @@ fn breeding_pays_one_to_seven() {
         return;
     };
     let _ = join(&ctx, [0.5, -60.0, 0.5]);
-    for _ in 0..8 {
+    crate::stats::load(&ctx, STEVE);
+    for bred in 1..=8 {
         clear_orbs(&ctx);
         let a = put(&ctx, Species::Cow, [0.5, -60.0, 0.5]);
         let b = put(&ctx, Species::Cow, [1.0, -60.0, 0.5]);
@@ -895,6 +896,7 @@ fn breeding_pays_one_to_seven() {
         run(&ctx, 200);
         let xp = orb_points(&ctx);
         assert!((1..=7).contains(&xp), "bred for {xp}");
+        assert_eq!(crate::stats::get(&ctx, STEVE, crate::stats::CUSTOM, "animals_bred"), bred);
         lock(&ctx.entities).retain(|e| !matches!(e.kind, Kind::Mob(_)));
     }
 }

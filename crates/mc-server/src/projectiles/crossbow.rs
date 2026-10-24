@@ -188,6 +188,7 @@ pub fn release(ctx: &ServerContext, actor: Actor, hand: i32, ticks: i32) {
     if !loaded(&bow.stack).is_empty() || ticks < charge_ticks(ctx, &bow.stack) {
         return;
     }
+    crate::stats::item(ctx, actor.uuid, crate::stats::USED, bow.stack.item, 1);
     let count = 1 + ee::modify(
         ctx,
         "minecraft:projectile_count",

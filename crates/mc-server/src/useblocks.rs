@@ -158,6 +158,7 @@ pub fn try_use(
         "minecraft:jukebox" => jukebox(ctx, outcome, actor, hand, clicked, state, held_name),
         "minecraft:bell" => {
             ctx.mobs.bell(ctx.dim, clicked);
+            crate::stats::custom(ctx, actor.uuid, "bell_ring", 1);
             fx::sound(
                 ctx,
                 "block.bell.use",

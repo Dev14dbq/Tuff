@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use mc_data::{McData, resolve_tags};
 use mc_nbt::{Compound, Tag};
-use mc_protocol::packets::play::ItemStack;
+use mc_protocol::packets::play::{BookEntry, ItemStack, RecipeDisplay, SlotDisplay};
 use serde_json::Value;
 
 /// Items an ingredient accepts.
@@ -35,6 +35,8 @@ enum Shape {
 struct Recipe {
     shape: Shape,
     result: ItemStack,
+    /// The recipe's registry name.
+    name: String,
 }
 
 /// A furnace, blast furnace, smoker or campfire recipe.
@@ -71,9 +73,44 @@ pub struct Smithing {
     pub pattern: Option<String>,
 }
 
+/// A recipe the recipe book lists: its crafting, furnace, blast furnace or
+/// smoker kind, what it shows and what it takes to place it.
+#[derive(Clone, Debug)]
+pub struct BookRecipe {
+    /// The recipe's registry name.
+    pub name: String,
+    pub display: RecipeDisplay,
+    /// `minecraft:recipe_book_category`.
+    pub category: i32,
+    /// Recipes of one group share a place in the book.
+    pub group: Option<i32>,
+    /// Which book: 0 crafting, 1 furnace, 2 blast furnace, 3 smoker (4 for
+    /// the campfire, which has none).
+    pub book: usize,
+    pub width: usize,
+    pub height: usize,
+    /// Whether the ingredients sit in a `width`×`height` pattern (else any
+    /// order).
+    pub shaped: bool,
+    /// The items each slot takes, row by row for a pattern; `None` is an
+    /// empty cell.
+    pub slots: Vec<Option<Vec<i32>>>,
+}
+
+impl BookRecipe {
+    /// The items each ingredient takes, empty cells left out.
+    pub fn ingredients(&self) -> Vec<Vec<i32>> {
+        self.slots.iter().flatten().cloned().collect()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Recipes {
     recipes: Vec<Recipe>,
+    /// The recipe book's recipes; a recipe is known to the client by its
+    /// index here.
+    pub book: Vec<BookRecipe>,
+    book_ids: HashMap<String, usize>,
     pub cooking: Vec<Cooking>,
     /// In the order the client is told of them.
     pub stonecutting: Vec<Cut>,
@@ -251,11 +288,23 @@ impl Recipes {
                 }
                 _ => continue,
             };
-            recipes.push(Recipe { shape, result });
+            recipes.push(Recipe {
+                shape,
+                result,
+                name: name.to_string(),
+            });
         }
+        let book = book_recipes(data, &pack, items, &item_tags);
+        let book_ids = book
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.name.clone(), i))
+            .collect();
         let names = items.iter().map(|(n, &id)| (id, n.clone())).collect();
         Self {
             recipes,
+            book,
+            book_ids,
             cooking,
             stonecutting,
             smithing,
@@ -323,8 +372,41 @@ impl Recipes {
         self.recipes.len()
     }
 
+    /// The number the client knows the book recipe `name` by.
+    pub fn book_id(&self, name: &str) -> Option<i32> {
+        self.book_ids.get(name).map(|&i| i as i32)
+    }
+
+    /// The book recipe the client calls `id`.
+    pub fn book_recipe(&self, id: i32) -> Option<&BookRecipe> {
+        self.book.get(usize::try_from(id).ok()?)
+    }
+
+    /// What Recipe Book Add tells of book recipe `id`.
+    pub fn book_entry(&self, id: i32, notification: bool, highlight: bool) -> Option<BookEntry> {
+        let r = self.book_recipe(id)?;
+        Some(BookEntry {
+            id,
+            display: r.display.clone(),
+            group: r.group,
+            category: r.category,
+            ingredients: Some(r.ingredients()),
+            notification,
+            highlight,
+        })
+    }
+
     /// What a `size`×`size` crafting grid (row by row) makes.
     pub fn craft(&self, grid: &[Option<ItemStack>], size: usize) -> Option<ItemStack> {
+        self.craft_named(grid, size).map(|(made, _)| made)
+    }
+
+    /// [`Recipes::craft`] with the name of the recipe that made it.
+    pub fn craft_named(
+        &self,
+        grid: &[Option<ItemStack>],
+        size: usize,
+    ) -> Option<(ItemStack, &str)> {
         let items: Vec<Option<i32>> = grid.iter().map(|s| s.as_ref().map(|s| s.item)).collect();
         // The smallest box around what is in the grid.
         let filled: Vec<(usize, usize)> = (0..size * size)
@@ -359,7 +441,7 @@ impl Recipes {
                         recipe.result.item,
                         (back, left, right, front),
                     ) {
-                        return Some(made);
+                        return Some((made, recipe.name.as_str()));
                     }
                     false
                 }
@@ -390,7 +472,7 @@ impl Recipes {
                 }
             };
             if fits {
-                return Some(recipe.result.clone());
+                return Some((recipe.result.clone(), recipe.name.as_str()));
             }
         }
         None
@@ -453,6 +535,221 @@ impl Recipes {
         }
         Some(stack)
     }
+}
+
+/// The recipes the recipe book lists, in the order of their registry names.
+fn book_recipes(
+    data: &McData,
+    pack: &mc_data::DataPack,
+    items: &HashMap<String, i32>,
+    item_tags: &std::collections::BTreeMap<String, Vec<i32>>,
+) -> Vec<BookRecipe> {
+    let item = |name: &str| items.get(name).copied();
+    let one = |s: &str| -> Vec<i32> {
+        match s.strip_prefix('#') {
+            Some(tag) => item_tags.get(tag).cloned().unwrap_or_default(),
+            None => item(s).into_iter().collect(),
+        }
+    };
+    let accepted = |v: &Value| -> Option<Vec<i32>> {
+        let mut set: Vec<i32> = match v {
+            Value::String(s) => one(s),
+            Value::Array(list) => list
+                .iter()
+                .filter_map(Value::as_str)
+                .flat_map(one)
+                .collect(),
+            _ => return None,
+        };
+        set.sort_unstable();
+        set.dedup();
+        (!set.is_empty()).then_some(set)
+    };
+    let shown = |v: &Value| -> SlotDisplay {
+        let one = |s: &str| match s.strip_prefix('#') {
+            Some(tag) => SlotDisplay::Tag(tag.to_owned()),
+            None => item(s).map_or(SlotDisplay::Empty, SlotDisplay::Item),
+        };
+        match v {
+            Value::String(s) => one(s),
+            Value::Array(list) => {
+                SlotDisplay::Composite(list.iter().filter_map(Value::as_str).map(one).collect())
+            }
+            _ => SlotDisplay::Empty,
+        }
+    };
+    let category = |name: &str| {
+        data.builtin
+            .id(
+                "minecraft:recipe_book_category",
+                &format!("minecraft:{name}"),
+            )
+            .unwrap_or(0)
+    };
+    let station = |name: &str| item(name).map_or(SlotDisplay::Empty, SlotDisplay::Item);
+    let mut groups: HashMap<String, i32> = HashMap::new();
+    let mut out = Vec::new();
+    for name in pack
+        .registry_entries("minecraft:recipe")
+        .unwrap_or_default()
+    {
+        let Ok(json) = pack.read_entry("minecraft:recipe", &name) else {
+            continue;
+        };
+        let kind = json["type"].as_str().unwrap_or("");
+        let Some(result) = json["result"]["id"].as_str().and_then(item) else {
+            continue;
+        };
+        let result_stack =
+            ItemStack::new(result, json["result"]["count"].as_i64().unwrap_or(1) as i32);
+        let result = SlotDisplay::ItemStack(result_stack);
+        let wanted = json["category"].as_str().unwrap_or("");
+        let (display, category, book, width, height, shaped, slots) = match kind {
+            "minecraft:crafting_shaped" => {
+                let rows: Vec<&str> = json["pattern"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect();
+                let width = rows.iter().map(|r| r.chars().count()).max().unwrap_or(0);
+                let mut shows = Vec::new();
+                let mut slots = Vec::new();
+                let mut ok = width > 0;
+                for row in &rows {
+                    for i in 0..width {
+                        match row.chars().nth(i) {
+                            Some(' ') | None => {
+                                shows.push(SlotDisplay::Empty);
+                                slots.push(None);
+                            }
+                            Some(c) => {
+                                let key = &json["key"][c.to_string()];
+                                match accepted(key) {
+                                    Some(set) => {
+                                        shows.push(shown(key));
+                                        slots.push(Some(set));
+                                    }
+                                    None => ok = false,
+                                }
+                            }
+                        }
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                (
+                    RecipeDisplay::Shaped {
+                        width: width as i32,
+                        height: rows.len() as i32,
+                        ingredients: shows,
+                        result,
+                        station: station("minecraft:crafting_table"),
+                    },
+                    category(match wanted {
+                        "building" => "crafting_building_blocks",
+                        "redstone" => "crafting_redstone",
+                        "equipment" => "crafting_equipment",
+                        _ => "crafting_misc",
+                    }),
+                    0,
+                    width,
+                    rows.len(),
+                    true,
+                    slots,
+                )
+            }
+            "minecraft:crafting_shapeless" => {
+                let list = json["ingredients"].as_array().cloned().unwrap_or_default();
+                let slots: Option<Vec<Option<Vec<i32>>>> =
+                    list.iter().map(|v| accepted(v).map(Some)).collect();
+                let Some(slots) = slots.filter(|s| !s.is_empty()) else {
+                    continue;
+                };
+                (
+                    RecipeDisplay::Shapeless {
+                        ingredients: list.iter().map(shown).collect(),
+                        result,
+                        station: station("minecraft:crafting_table"),
+                    },
+                    category(match wanted {
+                        "building" => "crafting_building_blocks",
+                        "redstone" => "crafting_redstone",
+                        "equipment" => "crafting_equipment",
+                        _ => "crafting_misc",
+                    }),
+                    0,
+                    0,
+                    0,
+                    false,
+                    slots,
+                )
+            }
+            "minecraft:smelting"
+            | "minecraft:blasting"
+            | "minecraft:smoking"
+            | "minecraft:campfire_cooking" => {
+                let Some(set) = accepted(&json["ingredient"]) else {
+                    continue;
+                };
+                let (book, cat, block) = match kind {
+                    "minecraft:smelting" => (
+                        1,
+                        match wanted {
+                            "food" => "furnace_food",
+                            "blocks" => "furnace_blocks",
+                            _ => "furnace_misc",
+                        },
+                        "minecraft:furnace",
+                    ),
+                    "minecraft:blasting" => (
+                        2,
+                        match wanted {
+                            "blocks" => "blast_furnace_blocks",
+                            _ => "blast_furnace_misc",
+                        },
+                        "minecraft:blast_furnace",
+                    ),
+                    "minecraft:smoking" => (3, "smoker_food", "minecraft:smoker"),
+                    _ => (4, "campfire", "minecraft:campfire"),
+                };
+                (
+                    RecipeDisplay::Furnace {
+                        ingredient: shown(&json["ingredient"]),
+                        fuel: SlotDisplay::AnyFuel,
+                        result,
+                        station: station(block),
+                        time: json["cookingtime"].as_i64().unwrap_or(200) as i32,
+                        experience: json["experience"].as_f64().unwrap_or(0.0) as f32,
+                    },
+                    category(cat),
+                    book,
+                    1,
+                    1,
+                    true,
+                    vec![Some(set)],
+                )
+            }
+            _ => continue,
+        };
+        let group = json["group"].as_str().filter(|g| !g.is_empty()).map(|g| {
+            let next = groups.len() as i32;
+            *groups.entry(g.to_owned()).or_insert(next)
+        });
+        out.push(BookRecipe {
+            name: name.to_string(),
+            display,
+            category,
+            group,
+            book,
+            width,
+            height,
+            shaped,
+            slots,
+        });
+    }
+    out
 }
 
 /// Whether each ingredient from `i` on can take a different unused item.

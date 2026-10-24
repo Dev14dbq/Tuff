@@ -526,6 +526,7 @@ pub fn open(ctx: &ServerContext, uuid: u128, entity_id: i32) -> Option<Snapshot>
         if m.offers.is_empty() || m.is_baby() {
             return None;
         }
+        crate::stats::custom(ctx, uuid, "talked_to_villager", 1);
         refresh_prices(ctx, uuid, m);
         if !m.trading.contains(&uuid) {
             m.trading.push(uuid);
@@ -640,6 +641,7 @@ pub fn complete(
         }
         Some((times, reward))
     })??;
+    crate::stats::custom(ctx, uuid, "traded_with_villager", gained.0);
     if gained.1 {
         let points: i32 = (0..gained.0).map(|_| 3 + below(4) as i32).sum();
         give_xp(ctx, uuid, points);
@@ -1167,7 +1169,9 @@ mod tests {
         let id = e.id;
         merchant(&mut e).offers[0].xp = 10;
         ctx.entities.lock().unwrap().push(e);
+        crate::stats::load(&ctx, 1);
         let snap = complete(&ctx, 1, id, 0, 1).expect("trade");
+        assert_eq!(crate::stats::get(&ctx, 1, crate::stats::CUSTOM, "traded_with_villager"), 1);
         assert_eq!(snap.offers[0].uses, 1);
         assert_eq!(snap.xp, 10);
         let mut e = ctx.entities.lock().unwrap().pop().unwrap();

@@ -688,6 +688,24 @@ pub mod play {
             window: i32,
             button: i32,
         },
+        /// A recipe clicked in the recipe book: fill the grid with it
+        /// (`all` with shift held).
+        PlaceRecipe {
+            window: i32,
+            recipe: i32,
+            all: bool,
+        },
+        /// The recipe book of a window (0 crafting, 1 furnace, 2 blast
+        /// furnace, 3 smoker) opened or closed, or its filter switched.
+        RecipeBookChangeSettings {
+            book: i32,
+            open: bool,
+            filter: bool,
+        },
+        /// A highlighted recipe was looked at.
+        RecipeBookSeenRecipe {
+            recipe: i32,
+        },
         /// A crafter slot clicked on or off.
         ContainerSlotStateChanged {
             slot: i32,
@@ -882,6 +900,19 @@ pub mod play {
                 "minecraft:container_button_click" => Serverbound::ContainerButtonClick {
                     window: r.varint()?,
                     button: r.varint()?,
+                },
+                "minecraft:place_recipe" => Serverbound::PlaceRecipe {
+                    window: r.varint()?,
+                    recipe: r.varint()?,
+                    all: r.bool()?,
+                },
+                "minecraft:recipe_book_change_settings" => Serverbound::RecipeBookChangeSettings {
+                    book: r.varint()?,
+                    open: r.bool()?,
+                    filter: r.bool()?,
+                },
+                "minecraft:recipe_book_seen_recipe" => Serverbound::RecipeBookSeenRecipe {
+                    recipe: r.varint()?,
                 },
                 "minecraft:container_slot_state_changed" => {
                     Serverbound::ContainerSlotStateChanged {
@@ -1740,6 +1771,281 @@ pub mod play {
                 out.put_varint(5);
                 ItemStack::encode(Some(result), out);
             }
+        }
+    }
+
+    /// What a slot of a recipe shows (`minecraft:slot_display`).
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum SlotDisplay {
+        Empty,
+        AnyFuel,
+        Item(i32),
+        ItemStack(ItemStack),
+        /// An item tag, without the `#`.
+        Tag(String),
+        /// Dyed: the dye and the target.
+        Dyed(Box<SlotDisplay>, Box<SlotDisplay>),
+        /// A trim shown on a base with a material (`pattern` is the trim
+        /// pattern's id).
+        SmithingTrim {
+            base: Box<SlotDisplay>,
+            material: Box<SlotDisplay>,
+            pattern: i32,
+        },
+        Composite(Vec<SlotDisplay>),
+    }
+
+    impl SlotDisplay {
+        pub fn encode(&self, out: &mut Vec<u8>) {
+            match self {
+                Self::Empty => out.put_varint(0),
+                Self::AnyFuel => out.put_varint(1),
+                Self::Item(item) => {
+                    out.put_varint(4);
+                    out.put_varint(*item);
+                }
+                Self::ItemStack(stack) => {
+                    out.put_varint(5);
+                    ItemStack::encode(Some(stack), out);
+                }
+                Self::Tag(tag) => {
+                    out.put_varint(6);
+                    out.put_string(tag);
+                }
+                Self::Dyed(dye, target) => {
+                    out.put_varint(7);
+                    dye.encode(out);
+                    target.encode(out);
+                }
+                Self::SmithingTrim {
+                    base,
+                    material,
+                    pattern,
+                } => {
+                    out.put_varint(8);
+                    base.encode(out);
+                    material.encode(out);
+                    out.put_varint(*pattern);
+                }
+                Self::Composite(options) => {
+                    out.put_varint(10);
+                    out.put_len(options.len());
+                    for o in options {
+                        o.encode(out);
+                    }
+                }
+            }
+        }
+    }
+
+    /// How the recipe book shows a recipe (`minecraft:recipe_display`);
+    /// every kind ends with the crafting station's icon.
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum RecipeDisplay {
+        Shapeless {
+            ingredients: Vec<SlotDisplay>,
+            result: SlotDisplay,
+            station: SlotDisplay,
+        },
+        Shaped {
+            width: i32,
+            height: i32,
+            ingredients: Vec<SlotDisplay>,
+            result: SlotDisplay,
+            station: SlotDisplay,
+        },
+        Furnace {
+            ingredient: SlotDisplay,
+            fuel: SlotDisplay,
+            result: SlotDisplay,
+            station: SlotDisplay,
+            time: i32,
+            experience: f32,
+        },
+        Stonecutter {
+            ingredient: SlotDisplay,
+            result: SlotDisplay,
+            station: SlotDisplay,
+        },
+        Smithing {
+            template: SlotDisplay,
+            base: SlotDisplay,
+            addition: SlotDisplay,
+            result: SlotDisplay,
+            station: SlotDisplay,
+        },
+    }
+
+    impl RecipeDisplay {
+        pub fn encode(&self, out: &mut Vec<u8>) {
+            fn all(out: &mut Vec<u8>, list: &[SlotDisplay]) {
+                out.put_len(list.len());
+                for d in list {
+                    d.encode(out);
+                }
+            }
+            match self {
+                Self::Shapeless {
+                    ingredients,
+                    result,
+                    station,
+                } => {
+                    out.put_varint(0);
+                    all(out, ingredients);
+                    result.encode(out);
+                    station.encode(out);
+                }
+                Self::Shaped {
+                    width,
+                    height,
+                    ingredients,
+                    result,
+                    station,
+                } => {
+                    out.put_varint(1);
+                    out.put_varint(*width);
+                    out.put_varint(*height);
+                    all(out, ingredients);
+                    result.encode(out);
+                    station.encode(out);
+                }
+                Self::Furnace {
+                    ingredient,
+                    fuel,
+                    result,
+                    station,
+                    time,
+                    experience,
+                } => {
+                    out.put_varint(2);
+                    ingredient.encode(out);
+                    fuel.encode(out);
+                    result.encode(out);
+                    station.encode(out);
+                    out.put_varint(*time);
+                    out.put_f32(*experience);
+                }
+                Self::Stonecutter {
+                    ingredient,
+                    result,
+                    station,
+                } => {
+                    out.put_varint(3);
+                    ingredient.encode(out);
+                    result.encode(out);
+                    station.encode(out);
+                }
+                Self::Smithing {
+                    template,
+                    base,
+                    addition,
+                    result,
+                    station,
+                } => {
+                    out.put_varint(4);
+                    template.encode(out);
+                    base.encode(out);
+                    addition.encode(out);
+                    result.encode(out);
+                    station.encode(out);
+                }
+            }
+        }
+    }
+
+    /// One recipe of the recipe book.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct BookEntry {
+        /// The number the client knows the recipe by.
+        pub id: i32,
+        pub display: RecipeDisplay,
+        /// Recipes with the same group share a slot in the book.
+        pub group: Option<i32>,
+        /// `minecraft:recipe_book_category`.
+        pub category: i32,
+        /// The items each ingredient accepts (to tell what can be crafted).
+        pub ingredients: Option<Vec<Vec<i32>>>,
+        /// Toast the unlock.
+        pub notification: bool,
+        /// Mark as new.
+        pub highlight: bool,
+    }
+
+    /// Recipe Book Add: recipes to know (all of them if `replace`).
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct RecipeBookAdd {
+        pub entries: Vec<BookEntry>,
+        pub replace: bool,
+    }
+    packet!(RecipeBookAdd, Play, "minecraft:recipe_book_add");
+    impl Encode for RecipeBookAdd {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_len(self.entries.len());
+            for e in &self.entries {
+                out.put_varint(e.id);
+                e.display.encode(out);
+                // Optional ints are written plus one, 0 being none.
+                out.put_varint(e.group.map_or(0, |g| g + 1));
+                out.put_varint(e.category);
+                out.put_bool(e.ingredients.is_some());
+                if let Some(sets) = &e.ingredients {
+                    out.put_len(sets.len());
+                    for set in sets {
+                        out.put_len(set.len() + 1);
+                        for &item in set {
+                            out.put_varint(item);
+                        }
+                    }
+                }
+                out.put_u8(u8::from(e.notification) | u8::from(e.highlight) << 1);
+            }
+            out.put_bool(self.replace);
+        }
+    }
+
+    /// Recipe Book Remove: recipes to forget.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct RecipeBookRemove {
+        pub recipes: Vec<i32>,
+    }
+    packet!(RecipeBookRemove, Play, "minecraft:recipe_book_remove");
+    impl Encode for RecipeBookRemove {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_len(self.recipes.len());
+            for &r in &self.recipes {
+                out.put_varint(r);
+            }
+        }
+    }
+
+    /// Recipe Book Settings: for the crafting, furnace, blast furnace and
+    /// smoker books, whether it is open and filters to what can be crafted.
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct RecipeBookSettings {
+        pub books: [(bool, bool); 4],
+    }
+    packet!(RecipeBookSettings, Play, "minecraft:recipe_book_settings");
+    impl Encode for RecipeBookSettings {
+        fn encode(&self, out: &mut Vec<u8>) {
+            for (open, filter) in self.books {
+                out.put_bool(open);
+                out.put_bool(filter);
+            }
+        }
+    }
+
+    /// Place Ghost Recipe: show the recipe in the window's grid (the items
+    /// were missing).
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct PlaceGhostRecipe {
+        pub window: i32,
+        pub display: RecipeDisplay,
+    }
+    packet!(PlaceGhostRecipe, Play, "minecraft:place_ghost_recipe");
+    impl Encode for PlaceGhostRecipe {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.window);
+            self.display.encode(out);
         }
     }
 
@@ -3685,5 +3991,112 @@ mod sign_update_tests {
         };
         assert!(front);
         assert!(lines.iter().all(String::is_empty));
+    }
+}
+
+#[cfg(test)]
+mod recipe_book_tests {
+    use super::play::{
+        BookEntry, ItemStack, PlaceGhostRecipe, RecipeBookAdd, RecipeBookRemove,
+        RecipeBookSettings, RecipeDisplay, Serverbound, SlotDisplay,
+    };
+    use crate::Encode;
+    use crate::codec::Reader;
+
+    fn bytes(p: &impl Encode) -> Vec<u8> {
+        let mut out = Vec::new();
+        p.encode(&mut out);
+        out
+    }
+
+    #[test]
+    fn the_recipe_book_packets_decode_as_the_client_sends_them() {
+        let place = Serverbound::decode(
+            "minecraft:place_recipe",
+            &mut Reader::new(&[3, 0xac, 0x02, 1]),
+        )
+        .unwrap();
+        assert_eq!(
+            place,
+            Serverbound::PlaceRecipe {
+                window: 3,
+                recipe: 300,
+                all: true
+            }
+        );
+        let settings = Serverbound::decode(
+            "minecraft:recipe_book_change_settings",
+            &mut Reader::new(&[2, 1, 0]),
+        )
+        .unwrap();
+        assert_eq!(
+            settings,
+            Serverbound::RecipeBookChangeSettings {
+                book: 2,
+                open: true,
+                filter: false
+            }
+        );
+        let seen = Serverbound::decode("minecraft:recipe_book_seen_recipe", &mut Reader::new(&[7]))
+            .unwrap();
+        assert_eq!(seen, Serverbound::RecipeBookSeenRecipe { recipe: 7 });
+    }
+
+    #[test]
+    fn a_recipe_is_written_with_its_display_group_category_and_flags() {
+        let display = RecipeDisplay::Shapeless {
+            ingredients: vec![
+                SlotDisplay::Tag("minecraft:planks".into()),
+                SlotDisplay::Item(5),
+            ],
+            result: SlotDisplay::ItemStack(ItemStack::new(9, 4)),
+            station: SlotDisplay::Item(1),
+        };
+        let packet = RecipeBookAdd {
+            entries: vec![BookEntry {
+                id: 2,
+                display,
+                group: Some(0),
+                category: 3,
+                ingredients: Some(vec![vec![5, 6]]),
+                notification: true,
+                highlight: true,
+            }],
+            replace: false,
+        };
+        let out = bytes(&packet);
+        // One entry, id 2, display type 0 with two ingredients.
+        assert_eq!(&out[..4], &[1, 2, 0, 2]);
+        // The tag display (type 6) names the tag.
+        assert_eq!(out[4], 6);
+        assert_eq!(&out[5..5 + 17], b"\x10minecraft:planks");
+        // At the end: group 0 is written as 1, category 3, ingredients
+        // present: one set of two ids, flags 3, not replacing.
+        assert_eq!(&out[out.len() - 9..], [1, 3, 1, 1, 3, 5, 6, 3, 0]);
+    }
+
+    #[test]
+    fn removals_settings_and_ghosts_are_written() {
+        assert_eq!(
+            bytes(&RecipeBookRemove {
+                recipes: vec![1, 200]
+            }),
+            [2, 1, 0xc8, 0x01]
+        );
+        let mut books = [(false, false); 4];
+        books[1] = (true, true);
+        assert_eq!(
+            bytes(&RecipeBookSettings { books }),
+            [0, 0, 1, 1, 0, 0, 0, 0]
+        );
+        let ghost = PlaceGhostRecipe {
+            window: 2,
+            display: RecipeDisplay::Stonecutter {
+                ingredient: SlotDisplay::Item(1),
+                result: SlotDisplay::Empty,
+                station: SlotDisplay::AnyFuel,
+            },
+        };
+        assert_eq!(bytes(&ghost), [2, 3, 4, 1, 0, 1]);
     }
 }

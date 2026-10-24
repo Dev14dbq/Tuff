@@ -682,6 +682,10 @@ pub fn change(
             if points > 0 {
                 crate::xp::award(ctx, uuid, points, true);
             }
+            if let Some(out) = &open.slots[2] {
+                let taken = out.count - new.as_ref().map_or(0, |s| s.count);
+                crate::stats::item(ctx, uuid, crate::stats::CRAFTED, out.item, taken);
+            }
         }
         open.slots[*slot] = new.clone();
         done.push((*slot, new));

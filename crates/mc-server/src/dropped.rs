@@ -349,6 +349,7 @@ fn pick_up(ctx: &ServerContext, entity: &mut Entity, players: &[Player]) {
             .map(|slot| (slot as i16, hands.slots[slot].clone()))
             .collect();
         drop(inventories);
+        crate::stats::item(ctx, *uuid, crate::stats::PICKED_UP, item, taken);
         let _ = ctx.events.send(Event::ItemTaken {
             item_entity: entity.id,
             collector: *player_entity,

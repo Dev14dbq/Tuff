@@ -345,6 +345,155 @@ impl Windows {
         )
     }
 
+    /// A recipe clicked in the recipe book: the open crafting grid or
+    /// furnace is filled with it from the inventory, or the client is shown
+    /// the recipe as a ghost when something is missing.
+    pub fn place_recipe(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        window: i32,
+        recipe: i32,
+        all: bool,
+    ) -> anyhow::Result<()> {
+        let Who {
+            ctx,
+            uuid,
+            entity_id,
+            pose,
+        } = who;
+        let Some(recipe) = ctx.recipes.book_recipe(recipe).cloned() else {
+            return Ok(());
+        };
+        if !crate::commands::knows_recipe(ctx, uuid, &recipe.name) {
+            return Ok(());
+        }
+        let max = |item: i32| ctx.items.max_stack(item);
+        let mut placed = None;
+        let mut shown = None;
+        if window == 0 {
+            if recipe.book != 0 {
+                return Ok(());
+            }
+            change_hands(ctx, uuid, entity_id, |hands| {
+                let mut grid = hands.slots[1..5].to_vec();
+                placed = crate::recipe_book::place(hands, &mut grid, (2, 2), &recipe, all, &max);
+                if placed.is_some() {
+                    hands.slots[1..5].clone_from_slice(&grid);
+                    hands.slots[0] = crate::recipe_book::craft(ctx, uuid, &grid, 2);
+                }
+                shown = Some((hands.slots.clone(), hands.carried.clone()));
+            });
+            if let Some((slots, carried)) = shown {
+                self.state_id += 1;
+                writer.queue(&play::ContainerSetContent {
+                    window: 0,
+                    state_id: self.state_id,
+                    slots,
+                    carried,
+                })?;
+            }
+        } else {
+            let Some(open) = self.open.as_mut().filter(|o| o.id == window) else {
+                return Ok(());
+            };
+            let own;
+            match &mut open.kind {
+                Kind::Crafting { grid } => {
+                    if recipe.book != 0 {
+                        return Ok(());
+                    }
+                    change_hands(ctx, uuid, entity_id, |hands| {
+                        let mut cells = grid[1..10].to_vec();
+                        placed = crate::recipe_book::place(
+                            hands,
+                            &mut cells,
+                            (3, 3),
+                            &recipe,
+                            all,
+                            &max,
+                        );
+                        if placed.is_some() {
+                            grid[1..10].clone_from_slice(&cells);
+                            grid[0] = crate::recipe_book::craft(ctx, uuid, &cells, 3);
+                        }
+                    });
+                    own = grid.clone();
+                }
+                Kind::Container { parts } if parts.len() == 1 && parts[0].1 == 3 => {
+                    let at = parts[0].0;
+                    let state = ctx.world.block(at, &ctx.data.blocks).unwrap_or(0);
+                    let book = match ctx.data.blocks.block_name(state) {
+                        Some("minecraft:furnace") => 1,
+                        Some("minecraft:blast_furnace") => 2,
+                        Some("minecraft:smoker") => 3,
+                        _ => return Ok(()),
+                    };
+                    let Some(kind) = ctx
+                        .data
+                        .blocks
+                        .block_name(state)
+                        .and_then(containers::kind_of)
+                    else {
+                        return Ok(());
+                    };
+                    if recipe.book != book {
+                        return Ok(());
+                    }
+                    let mut slots = containers::slots(ctx, at, kind);
+                    change_hands(ctx, uuid, entity_id, |hands| {
+                        let mut input = vec![slots[0].take()];
+                        placed = crate::recipe_book::place(
+                            hands,
+                            &mut input,
+                            (1, 1),
+                            &recipe,
+                            all,
+                            &max,
+                        );
+                        slots[0] = input.pop().flatten();
+                    });
+                    if placed.is_some() {
+                        containers::put(ctx, at, kind, &[(0, slots[0].clone())]);
+                    }
+                    own = containers::slots(ctx, at, kind);
+                }
+                _ => return Ok(()),
+            }
+            {
+                let hands = ctx
+                    .inventories
+                    .lock()
+                    .expect("inventories lock")
+                    .get(&uuid)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut slots = own;
+                slots.extend(hands.slots[9..45].iter().cloned());
+                self.state_id += 1;
+                writer.queue(&play::ContainerSetContent {
+                    window,
+                    state_id: self.state_id,
+                    slots,
+                    carried: hands.carried,
+                })?;
+            }
+        }
+        let Some(placed) = placed else {
+            return Ok(());
+        };
+        for stack in placed.thrown {
+            crate::tick::throw_item(ctx, pose, stack);
+        }
+        if placed.missing {
+            writer.queue(&play::PlaceGhostRecipe {
+                window,
+                display: recipe.display,
+            })?;
+        }
+        Ok(())
+    }
+
     /// A click in window 0 (the inventory) or the open window.
     pub fn click(
         &mut self,
@@ -361,6 +510,8 @@ impl Windows {
         if click.window == 0 {
             let mut thrown = Vec::new();
             let mut result = None;
+            let mut crafted = None;
+            let mut made_from = None;
             let mut undone = None;
             let creative = ctx
                 .players
@@ -386,18 +537,31 @@ impl Windows {
                     })
                 });
                 if bound_off && !creative {
-                    *hands = before;
+                    *hands = before.clone();
                     thrown.clear();
                     undone = Some((hands.slots.clone(), hands.carried.clone()));
                 }
                 // The 2×2 grid's result.
-                let made = ctx.recipes.craft(&hands.slots[1..5], 2);
+                if click.slot == 0 {
+                    crafted = crate::stats::crafts(&before.slots[..5], &hands.slots[..5]);
+                    if crafted.is_some() {
+                        made_from = Some(before.slots[1..5].to_vec());
+                    }
+                }
+                let made = crate::recipe_book::craft(ctx, uuid, &hands.slots[1..5], 2);
                 if made != hands.slots[0] {
                     hands.slots[0] = made.clone();
                     result = Some(made);
                 }
             });
+            if let Some((item, count)) = crafted {
+                crate::stats::item(ctx, uuid, crate::stats::CRAFTED, item, count);
+            }
+            if let Some(grid) = made_from {
+                crate::recipe_book::used(ctx, uuid, &grid, 2);
+            }
             for stack in thrown {
+                crate::stats::threw(ctx, uuid, &stack);
                 crate::tick::throw_item(ctx, pose, stack);
             }
             if let Some((slots, carried)) = undone {
@@ -457,7 +621,9 @@ impl Windows {
             };
             if let Some(stack) = before {
                 let count = if click.button == 1 { stack.count } else { 1 };
-                crate::tick::throw_item(ctx, pose, ItemStack { count, ..stack });
+                let stack = ItemStack { count, ..stack };
+                crate::stats::threw(ctx, uuid, &stack);
+                crate::tick::throw_item(ctx, pose, stack);
             }
         }
         // What both sides held before, for the stacks' damage.
@@ -500,6 +666,7 @@ impl Windows {
             );
         });
         for stack in thrown {
+            crate::stats::threw(ctx, uuid, &stack);
             crate::tick::throw_item(ctx, pose, stack);
         }
         let id = open.id;
@@ -530,11 +697,18 @@ impl Windows {
                 }
             }
             Kind::Crafting { grid } => {
+                let before = grid.clone();
                 for (s, stack) in theirs {
                     let known: Vec<&ItemStack> = hand_stacks.iter().chain(&window_stacks).collect();
                     grid[s] = stack.map(|h| h.resolve(known.iter().copied()));
                 }
-                let made = ctx.recipes.craft(&grid[1..10], 3);
+                if click.slot == 0
+                    && let Some((item, count)) = crate::stats::crafts(&before[..10], &grid[..10])
+                {
+                    crate::stats::item(ctx, uuid, crate::stats::CRAFTED, item, count);
+                    crate::recipe_book::used(ctx, uuid, &before[1..10], 3);
+                }
+                let made = crate::recipe_book::craft(ctx, uuid, &grid[1..10], 3);
                 if made != grid[0] {
                     grid[0] = made.clone();
                     self.set_slot(writer, id, 0, made)?;
