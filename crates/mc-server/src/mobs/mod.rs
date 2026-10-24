@@ -11,6 +11,7 @@
 //! - [`nbt`]: mobs as `/summon` and `/data` see them.
 
 pub mod air;
+pub mod bees;
 pub(crate) mod blocks;
 pub mod chest;
 mod crowd;
@@ -559,6 +560,11 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     }
     chest::mirror(ctx, &mut entities);
     air::tick(ctx, &mut entities, &targets, now);
+    {
+        let home = raining || !bright;
+        bees::bees(ctx, level, &mut entities, now, home);
+        bees::hives(ctx, level, home);
+    }
 
     let ground = Ground::new(ctx);
     let items = ItemSense {

@@ -866,6 +866,7 @@ pub(super) fn brain(species: Species) -> Brain {
         Bee => (
             vec![
                 melee(0, 1.4, false),
+                slot(2, MOVE, Goal::Air(air::Act::Errand)),
                 breed(3, 1.0),
                 tempt(4, 1.25),
                 follow_parent(5, 1.25),

@@ -487,6 +487,14 @@ pub fn dig(
                 .push((position, crate::loot::Drop::of(&stack)));
         }
     }
+    // Flying mobs (flying-mobs): the bees of a broken hive come out angry.
+    if blocks
+        .block_name(state)
+        .is_some_and(crate::mobs::bees::is_hive)
+        && actor.game_mode != CREATIVE
+    {
+        crate::mobs::bees::disturbed(ctx, position, Some(actor.uuid), false);
+    }
     if blocks.block_name(state) == Some("minecraft:jukebox")
         && let Some(be) = ctx.world.block_entity(position, blocks)
         && let Some(mc_nbt::Tag::Compound(record)) = be.data.get("RecordItem")
@@ -606,7 +614,11 @@ pub fn use_item_on(
             .and_then(crate::menus::Menu::of_block)
     {
         outcome.open_menu = Some((clicked, menu));
-        crate::stats::opened(ctx, actor.uuid, block_at(clicked).and_then(|s| blocks.block_name(s)));
+        crate::stats::opened(
+            ctx,
+            actor.uuid,
+            block_at(clicked).and_then(|s| blocks.block_name(s)),
+        );
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,
             entity_id: actor.entity_id,
@@ -621,7 +633,11 @@ pub fn use_item_on(
             .and_then(crate::containers::kind_of)
     {
         outcome.open = Some((clicked, kind));
-        crate::stats::opened(ctx, actor.uuid, block_at(clicked).and_then(|s| blocks.block_name(s)));
+        crate::stats::opened(
+            ctx,
+            actor.uuid,
+            block_at(clicked).and_then(|s| blocks.block_name(s)),
+        );
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,
             entity_id: actor.entity_id,
@@ -692,7 +708,13 @@ pub fn use_item_on(
         let changes = level.into_changes();
         outcome.updates.extend(changes.iter().copied());
         outcome.events.push(Event::BlocksChanged { by: 0, changes });
-        crate::stats::item(ctx, actor.uuid, crate::stats::USED, ctx.items.id("minecraft:ender_eye").unwrap_or(0), 1);
+        crate::stats::item(
+            ctx,
+            actor.uuid,
+            crate::stats::USED,
+            ctx.items.id("minecraft:ender_eye").unwrap_or(0),
+            1,
+        );
         if actor.game_mode != CREATIVE {
             replace_held(ctx, &mut outcome, actor, hand, None);
         }
@@ -1162,7 +1184,10 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
         if let Some(h) = thrown
             && !matches!(
                 h.name.as_str(),
-                "minecraft:bow" | "minecraft:crossbow" | "minecraft:trident" | "minecraft:fishing_rod"
+                "minecraft:bow"
+                    | "minecraft:crossbow"
+                    | "minecraft:trident"
+                    | "minecraft:fishing_rod"
             )
             && !done.events.is_empty()
         {

@@ -12,6 +12,9 @@ use super::{
 pub enum Act {
     /// An allay stays by the player it was given an item by.
     Follow,
+    /// Goes where the server sent it (`Air::errand`): a bee to a flower or
+    /// its hive.
+    Errand,
     /// A breeze fires a wind charge; `timer` counts to the next one.
     Shoot { timer: i32 },
     /// A breeze crouches and leaps; `timer` counts the windup.
@@ -162,6 +165,7 @@ pub(super) fn can_use(act: &mut Act, m: &mut Mob, b: &Body, s: &Senses) -> bool 
     }
     match act {
         Act::Follow => liked(m, s).is_some(),
+        Act::Errand => m.quirks.air.errand.is_some(),
         Act::Shoot { .. } => target(m, s).is_some_and(|t| dist_sq(b.pos, t.pos) < 16.0 * 16.0),
         Act::Bounce { .. } => b.on_ground && target(m, s).is_some(),
         Act::Peek { .. } => true,
@@ -184,6 +188,7 @@ pub(super) fn can_use(act: &mut Act, m: &mut Mob, b: &Body, s: &Senses) -> bool 
 pub(super) fn can_continue(act: &Act, m: &Mob, b: &Body, s: &Senses) -> bool {
     match act {
         Act::Follow => liked(m, s).is_some(),
+        Act::Errand => m.quirks.air.errand.is_some(),
         Act::Shoot { .. } | Act::Bounce { .. } => m.target.is_some() && !m.is_dead(),
         Act::Peek { .. } => !m.is_dead(),
         Act::Freeze => m.quirks.air.frozen,
@@ -239,6 +244,11 @@ pub(super) fn tick(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses, out: &m
             } else if d < 4.0 {
                 m.nav.stop();
                 m.goto = None;
+            }
+        }
+        Act::Errand => {
+            if let Some(at) = m.quirks.air.errand {
+                m.goto = Some((at, 1.0));
             }
         }
         Act::Shoot { timer } => {

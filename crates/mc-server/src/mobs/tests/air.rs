@@ -322,3 +322,71 @@ fn a_bee_stings_poisons_and_dies() {
     run(&ctx, 1300);
     assert!(mob_of(&ctx, id).is_none_or(|e| matches!(&e.kind, Kind::Mob(m) if m.is_dead())));
 }
+
+#[test]
+fn a_bee_takes_nectar_home_and_the_hive_gives_honey() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [3.5, -60.0, 12.5]);
+    set(&ctx, [0, -60, 0], "minecraft:dandelion");
+    set(&ctx, [6, -60, 6], "minecraft:bee_nest");
+    crate::poi::sync(&ctx);
+    let id = put(&ctx, Species::Bee, [2.5, -60.0, 2.5]);
+    let hive = mc_protocol::Position::new(6, -60, 6);
+    let mut nectar = false;
+    let mut entered = false;
+    for _ in 0..2500 {
+        run(&ctx, 1);
+        crate::poi::sync(&ctx);
+        nectar |= mob_of(&ctx, id)
+            .is_some_and(|e| matches!(&e.kind, Kind::Mob(m) if m.quirks.air.nectar));
+        if mob_of(&ctx, id).is_none() {
+            entered = true;
+            break;
+        }
+    }
+    assert!(nectar, "no nectar");
+    assert!(entered, "never went in");
+    assert_eq!(crate::mobs::bees::inside(&ctx, hive).len(), 1);
+    // After its stay it comes out, and the honey level is up.
+    for _ in 0..2500 {
+        run(&ctx, 1);
+    }
+    assert_eq!(count_of(&ctx, Species::Bee), 1, "never came out");
+    let level = ctx
+        .world
+        .block(hive, &ctx.data.blocks)
+        .and_then(|s| ctx.data.blocks.property(s, "honey_level"))
+        .and_then(|v| v.parse::<i32>().ok());
+    assert!(level.is_some_and(|l| l >= 1), "honey {level:?}");
+}
+
+#[test]
+fn a_robbed_hive_lets_angry_bees_out_unless_a_campfire_smokes_them() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let uuid = join(&ctx, [3.5, -60.0, 12.5]);
+    set(&ctx, [6, -60, 6], "minecraft:beehive");
+    let hive = mc_protocol::Position::new(6, -60, 6);
+    let bee = put(&ctx, Species::Bee, [6.5, -60.0, 7.5]);
+    let mut entities = lock(&ctx.entities);
+    let i = entities.iter().position(|e| e.id == bee).unwrap();
+    assert!(crate::mobs::bees::enter(&ctx, &mut entities, i, hive));
+    drop(entities);
+    // A lit campfire five blocks down keeps them in.
+    set(&ctx, [6, -64, 6], "minecraft:campfire");
+    crate::mobs::bees::disturbed(&ctx, hive, Some(uuid), true);
+    assert_eq!(crate::mobs::bees::inside(&ctx, hive).len(), 1);
+    set_state(&ctx, [6, -64, 6], ctx.shapes.air());
+    crate::mobs::bees::disturbed(&ctx, hive, Some(uuid), true);
+    assert!(crate::mobs::bees::inside(&ctx, hive).is_empty());
+    run(&ctx, 1);
+    let angry = lock(&ctx.entities)
+        .iter()
+        .any(|e| matches!(&e.kind, Kind::Mob(m) if m.species == Species::Bee && m.anger > 0));
+    assert!(angry, "no angry bee");
+}
