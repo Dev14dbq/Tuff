@@ -119,6 +119,9 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
     if let Some(v) = int(nbt, "Age") {
         m.baby_age = v;
     }
+    if let Some(v) = flag(nbt, "AgeLocked") {
+        m.quirks.aqua.age_locked = v;
+    }
     if let Some(v) = int(nbt, "InLove") {
         m.love = v;
     }
@@ -400,6 +403,7 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
     let s = m.species;
     if s.ageable() {
         c.insert("Age", Tag::Int(m.baby_age));
+        c.insert("AgeLocked", Tag::Byte(i8::from(m.quirks.aqua.age_locked)));
         c.insert("ForcedAge", Tag::Int(0));
         c.insert("InLove", Tag::Int(m.love));
         if let Some(by) = m.love_by {

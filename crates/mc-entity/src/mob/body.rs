@@ -66,7 +66,7 @@ pub(super) fn in_water(b: &Body, s: &Senses) -> bool {
 /// What happens every tick whatever the mob wants.
 pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent>) {
     // Growing up, and the wait between babies.
-    if m.baby_age < 0 {
+    if m.baby_age < 0 && !m.quirks.aqua.age_locked {
         m.baby_age += 1;
         if m.baby_age == 0 {
             m.dirty = true;

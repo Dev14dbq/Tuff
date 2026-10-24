@@ -460,6 +460,33 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
             return;
         }
     }
+    // Aquatic (Claude): a golden dandelion stops a baby growing, or lets it go on.
+    if name == "minecraft:golden_dandelion"
+        && (m.is_baby() || species == Species::Tadpole)
+    {
+        let locked = !m.quirks.aqua.age_locked;
+        m.quirks.aqua.age_locked = locked;
+        if locked {
+            m.baby_age = if species == Species::Tadpole { 0 } else { -24000 };
+            m.quirks.aqua.growth = 0;
+            m.persistent = true;
+        }
+        consume(ctx, by, hslot);
+        fx::sound(
+            ctx,
+            if locked {
+                "item.golden_dandelion.use"
+            } else {
+                "item.golden_dandelion.unuse"
+            },
+            fx::category::NEUTRAL,
+            pos,
+            1.0,
+            1.0,
+        );
+        send_now(ctx, e);
+        return;
+    }
     // Saddles and horse armor.
     if name == "minecraft:saddle" {
         if let Some(item) = item

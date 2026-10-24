@@ -132,6 +132,8 @@ pub struct Aqua {
     pub caught: Option<i32>,
     /// Tadpole: ticks lived.
     pub growth: i32,
+    /// A golden dandelion holds a baby (or a tadpole) at its age.
+    pub age_locked: bool,
     /// Guardian: ticks charging the beam, whom it aims at (entity id, 0
     /// for none), and the spikes pulled in.
     pub charge: i32,
@@ -170,6 +172,7 @@ impl Default for Aqua {
             tongue: 0,
             caught: None,
             growth: 0,
+            age_locked: false,
             charge: 0,
             beam: 0,
             retract: false,
@@ -1117,6 +1120,9 @@ pub(super) fn pulse(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEven
         }
         Species::Tadpole => {
             let a = &mut m.quirks.aqua;
+            if a.age_locked {
+                return;
+            }
             a.growth += 1;
             if a.growth >= TADPOLE_GROWTH {
                 out.push(MobEvent::Sound {

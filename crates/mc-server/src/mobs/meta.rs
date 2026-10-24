@@ -322,7 +322,7 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
         }
         Tadpole => {
             v.push((16, MetadataValue::Boolean(m.quirks.aqua.from_bucket)));
-            v.push((17, MetadataValue::Boolean(false)));
+            v.push((17, MetadataValue::Boolean(m.quirks.aqua.age_locked)));
         }
         Guardian | ElderGuardian => {
             v.push((16, MetadataValue::Boolean(m.quirks.aqua.retract)));

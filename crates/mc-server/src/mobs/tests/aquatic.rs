@@ -526,6 +526,32 @@ fn a_tame_nautilus_takes_a_saddle_and_armor_and_carries_a_rider() {
 }
 
 #[test]
+fn a_golden_dandelion_holds_a_baby_and_a_second_one_lets_it_grow() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    join(&ctx, [0.5, -60.0, 0.5]);
+    let id = put(&ctx, Species::Turtle, [2.5, -60.0, 0.5]);
+    set_mob(&ctx, id, |m| {
+        m.no_ai = true;
+        m.set_baby(true);
+        m.baby_age = -100;
+    });
+    hold(&ctx, "minecraft:golden_dandelion", 2);
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 50);
+    let (locked, age, kept) =
+        set_mob(&ctx, id, |m| (m.quirks.aqua.age_locked, m.baby_age, m.persistent));
+    assert!(locked && kept);
+    assert_eq!(age, -24000, "the timer starts over and does not run");
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 10);
+    assert!(!set_mob(&ctx, id, |m| m.quirks.aqua.age_locked));
+    assert!(set_mob(&ctx, id, |m| m.baby_age) > -24000);
+}
+
+#[test]
 fn an_axolotl_is_bred_with_a_bucket_of_tropical_fish_and_the_bucket_comes_back() {
     let Some(ctx) = flat() else {
         eprintln!("skipped: no game data");
