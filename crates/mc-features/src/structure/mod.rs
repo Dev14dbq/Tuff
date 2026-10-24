@@ -746,11 +746,13 @@ impl Structures {
         heights: Heights,
         ground: &mut dyn Ground,
     ) -> Vec<Arc<Start>> {
-        self.starts_as(seed, x, z, heights, ground, false)
+        self.starts_as(seed, x, z, heights, ground, None)
     }
 
-    /// [`Self::starts`] with only the start piece of jigsaw structures, as
-    /// vanilla checks where one could start (`/locate`): much quicker.
+    /// [`Self::starts`] with only the start piece of jigsaw structures, and
+    /// only sets that can place one of `wanted`, as vanilla checks where
+    /// one could start (`/locate`): much quicker. A treasure search must
+    /// not assemble the mineshafts and fossils in every chunk it looks at.
     pub fn start_pieces(
         &self,
         seed: i64,
@@ -758,8 +760,9 @@ impl Structures {
         z: i32,
         heights: Heights,
         ground: &mut dyn Ground,
+        wanted: &HashSet<usize>,
     ) -> Vec<Arc<Start>> {
-        self.starts_as(seed, x, z, heights, ground, true)
+        self.starts_as(seed, x, z, heights, ground, Some(wanted))
     }
 
     fn starts_as(
@@ -769,10 +772,15 @@ impl Structures {
         z: i32,
         heights: Heights,
         ground: &mut dyn Ground,
-        start_only: bool,
+        // Start pieces only, of the sets that can place one of these.
+        only: Option<&HashSet<usize>>,
     ) -> Vec<Arc<Start>> {
+        let start_only = only.is_some();
         let mut out = Vec::new();
         for set in &self.sets {
+            if only.is_some_and(|want| !set.structures.iter().any(|e| want.contains(&e.0))) {
+                continue;
+            }
             if set.structures.is_empty() || !self.is_structure_chunk(set, seed, x, z) {
                 continue;
             }
