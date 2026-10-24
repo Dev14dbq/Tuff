@@ -267,7 +267,7 @@ impl Pipeline {
                 .get(&(x, z))
                 .and_then(|cell| cell.get().cloned());
             known.unwrap_or_else(|| {
-                structures.start_pieces(self.seed, x, z, self.heights, &mut ground)
+                structures.start_pieces(self.seed, x, z, self.heights, &mut ground, &wanted)
             })
         };
         let (i, at) = structures.locate(self.seed, &wanted, pos, radius, &mut starts)?;

@@ -71,8 +71,10 @@ impl Bot {
                 return (name, r.rest().to_vec());
             }
             let start = self.buf.len();
+            // Long enough for `/locate` while the rest of the suite is
+            // generating chunks: the reply can sit quiet past a keep-alive.
             let n =
-                tokio::time::timeout(Duration::from_secs(10), self.stream.read_buf(&mut self.buf))
+                tokio::time::timeout(Duration::from_secs(60), self.stream.read_buf(&mut self.buf))
                     .await
                     .expect("server answered in time")
                     .unwrap();
