@@ -39,6 +39,17 @@ fn float(c: &Compound, key: &str) -> Option<f32> {
     }
 }
 
+fn cell(c: &Compound, key: &str) -> Option<[i32; 3]> {
+    match c.get(key)? {
+        Tag::IntArray(v) if v.len() == 3 => Some([v[0], v[1], v[2]]),
+        _ => None,
+    }
+}
+
+fn cell_tag(c: [i32; 3]) -> Tag {
+    Tag::IntArray(c.to_vec())
+}
+
 fn flag(c: &Compound, key: &str) -> Option<bool> {
     int(c, key).map(|v| v != 0)
 }
@@ -250,6 +261,46 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
             m.quirks.land.scute_in = t;
         }
         m.quirks.land.rolled = matches!(string(nbt, "state"), Some("scared" | "rolling"));
+    }
+    // Flying mobs (flying-mobs)
+    {
+        let air = &mut m.quirks.air;
+        match s {
+            Species::Bat => air.hanging = flag(nbt, "BatFlags").unwrap_or(false),
+            Species::Bee => {
+                air.nectar = flag(nbt, "HasNectar").unwrap_or(false);
+                air.stung = flag(nbt, "HasStung").unwrap_or(false);
+                air.hive = cell(nbt, "hive_pos");
+                air.flower = cell(nbt, "flower_pos");
+                air.cannot_enter = int(nbt, "CannotEnterHiveTicks").unwrap_or(0);
+                air.since_pollination = int(nbt, "TicksSincePollination").unwrap_or(0);
+                air.crops = int(nbt, "CropsGrownSincePollination").unwrap_or(0);
+            }
+            Species::Allay => {
+                air.dup_cd = int(nbt, "DuplicationCooldown").unwrap_or(0);
+                air.liked = uuid(nbt, "liked_player");
+            }
+            Species::Bogged => air.sheared = flag(nbt, "sheared").unwrap_or(false),
+            Species::Shulker => {
+                air.face = int(nbt, "AttachFace").unwrap_or(0).clamp(0, 5) as u8;
+                air.peek = int(nbt, "Peek").unwrap_or(0);
+                air.color = int(nbt, "Color").unwrap_or(16).clamp(0, 16) as u8;
+            }
+            Species::Creaking => air.home = cell(nbt, "home_pos"),
+            Species::CopperGolem => {
+                air.weather = match string(nbt, "weather_state") {
+                    Some("exposed") => 1,
+                    Some("weathered") => 2,
+                    Some("oxidized") => 3,
+                    _ => 0,
+                };
+                air.next_weather = match nbt.get("next_weather_age") {
+                    Some(Tag::Long(v)) => *v,
+                    _ => -1,
+                };
+            }
+            _ => {}
+        }
     }
     if let Some(v) = int(nbt, "Lifetime")
         && s == Species::Endermite
@@ -556,6 +607,53 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
                 "idle"
             };
             c.insert("state", Tag::String(state.into()));
+        }
+        // Flying mobs (flying-mobs)
+        Species::Bat => {
+            c.insert("BatFlags", Tag::Byte(i8::from(m.quirks.air.hanging)));
+        }
+        Species::Bee => {
+            let air = &m.quirks.air;
+            c.insert("HasNectar", Tag::Byte(i8::from(air.nectar)));
+            c.insert("HasStung", Tag::Byte(i8::from(air.stung)));
+            if let Some(h) = air.hive {
+                c.insert("hive_pos", cell_tag(h));
+            }
+            if let Some(f) = air.flower {
+                c.insert("flower_pos", cell_tag(f));
+            }
+            c.insert("CannotEnterHiveTicks", Tag::Int(air.cannot_enter));
+            c.insert("TicksSincePollination", Tag::Int(air.since_pollination));
+            c.insert("CropsGrownSincePollination", Tag::Int(air.crops));
+        }
+        Species::Allay => {
+            c.insert(
+                "DuplicationCooldown",
+                Tag::Long(i64::from(m.quirks.air.dup_cd)),
+            );
+            if let Some(u) = m.quirks.air.liked {
+                c.insert("liked_player", uuid_tag(u));
+            }
+        }
+        Species::Bogged => {
+            c.insert("sheared", Tag::Byte(i8::from(m.quirks.air.sheared)));
+        }
+        Species::Shulker => {
+            let air = &m.quirks.air;
+            c.insert("AttachFace", Tag::Byte(air.face as i8));
+            c.insert("Peek", Tag::Byte(air.peek as i8));
+            c.insert("Color", Tag::Byte(air.color as i8));
+        }
+        Species::Creaking => {
+            if let Some(h) = m.quirks.air.home {
+                c.insert("home_pos", cell_tag(h));
+            }
+        }
+        Species::CopperGolem => {
+            let name = ["unaffected", "exposed", "weathered", "oxidized"]
+                [usize::from(m.quirks.air.weather.min(3))];
+            c.insert("weather_state", Tag::String(name.into()));
+            c.insert("next_weather_age", Tag::Long(m.quirks.air.next_weather));
         }
         _ => {}
     }

@@ -150,6 +150,10 @@ pub enum Shot {
     WindCharge {
         breeze: bool,
     },
+    /// A shulker's bullet, homing on the entity with this id.
+    ShulkerBullet {
+        target: i32,
+    },
     /// A fishing bobber; `hooked` is the entity it pulls.
     Bobber {
         hooked: Option<i32>,

@@ -9,6 +9,7 @@
 //! [`shoot`].
 
 pub mod arrow;
+pub mod bullet;
 pub mod crossbow;
 pub mod eye;
 pub mod fireball;
@@ -149,6 +150,7 @@ enum Class {
     Trident,
     Lightning,
     Wind,
+    Bullet,
     Fireball,
     Thrown,
     Eye,
@@ -168,6 +170,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         Shot::Arrow(_) => Class::Arrow,
         Shot::Lightning { .. } => Class::Lightning,
         Shot::WindCharge { .. } => Class::Wind,
+        Shot::ShulkerBullet { .. } => Class::Bullet,
         Shot::Fireball { .. } => Class::Fireball,
         Shot::Eye { .. } => Class::Eye,
         Shot::Firework(_) => Class::Firework,
@@ -181,6 +184,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         Class::Trident => trident::tick(t, e),
         Class::Lightning => lightning::tick(t, e),
         Class::Wind => wind::tick(t, e),
+        Class::Bullet => bullet::tick(t, e),
         Class::Fireball => fireball::tick(t, e),
         Class::Thrown => thrown::tick(t, e),
         Class::Eye => eye::tick(t, e),

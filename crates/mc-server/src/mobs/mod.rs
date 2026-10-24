@@ -438,6 +438,7 @@ impl mc_entity::mob::Items for ItemSense<'_> {
 pub fn category(species: Species) -> i32 {
     match species.category() {
         Category::Monster => 5,
+        Category::Ambient => fx::category::AMBIENT,
         Category::Creature | Category::Misc => fx::category::NEUTRAL,
     }
 }
@@ -948,7 +949,7 @@ fn trample_farmland(
 fn shoot(
     ctx: &ServerContext,
     e: &Entity,
-    _target: i32,
+    target: i32,
     aim: [f64; 3],
     missile: Missile,
     difficulty: i32,
@@ -1065,6 +1066,27 @@ fn shoot(
                 from,
                 dir,
                 1.0,
+                0.0,
+            );
+        }
+        // Flying mobs (flying-mobs)
+        Missile::WindCharge => {
+            let from = [e.pos[0], e.pos[1] + m.size().1 / 2.0, e.pos[2]];
+            spawn(
+                mc_entity::extra::Shot::WindCharge { breeze: true },
+                from,
+                [d[0], aim[1] - from[1], d[2]],
+                0.7,
+                5.0 - f64::from(difficulty),
+            );
+        }
+        Missile::ShulkerBullet => {
+            let from = [e.pos[0], e.pos[1] + 0.5, e.pos[2]];
+            spawn(
+                mc_entity::extra::Shot::ShulkerBullet { target },
+                from,
+                [aim[0] - from[0], aim[1] - from[1], aim[2] - from[2]],
+                0.15,
                 0.0,
             );
         }

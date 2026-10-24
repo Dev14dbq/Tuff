@@ -24,6 +24,7 @@ const RANGE: i32 = 8;
 /// Monsters per 289 chunks (17 × 17 around one player), animals likewise.
 const MONSTER_CAP: i32 = 70;
 const CREATURE_CAP: i32 = 10;
+const AMBIENT_CAP: i32 = 15;
 /// Chunks tried for monsters each tick (vanilla tries all of them).
 const MONSTER_TRIES: usize = 3;
 /// Ticks between looks at which chunks are in range.
@@ -47,6 +48,7 @@ struct Entry {
 struct BiomeSpawns {
     creature: Vec<Entry>,
     monster: Vec<Entry>,
+    ambient: Vec<Entry>,
     /// Chance of animals when a chunk is generated.
     probability: f64,
 }
@@ -117,6 +119,7 @@ fn load_biomes(ctx: &ServerContext) -> HashMap<String, BiomeSpawns> {
             BiomeSpawns {
                 creature: entries(&spawns["creature"]),
                 monster: entries(&spawns["monster"]),
+                ambient: entries(&spawns["ambient"]),
                 probability: attrs["minecraft:gameplay/creature_world_gen_spawn_probability"]
                     .as_f64()
                     .unwrap_or(0.1),
@@ -308,6 +311,14 @@ impl Spots<'_> {
         match species.category() {
             // Golems come from villagers and players, never from here.
             Category::Misc => false,
+            // Bats: in the dark, light 3 or less.
+            Category::Ambient => {
+                self.ctx
+                    .world
+                    .sky_light(p)
+                    .max(self.ctx.world.block_light(p))
+                    <= 3
+            }
             Category::Creature => {
                 // Its kind of ground underfoot, in the light.
                 let below = self
@@ -366,6 +377,7 @@ impl Spots<'_> {
             Category::Creature => &spawns.creature,
             Category::Monster => &spawns.monster,
             Category::Misc => return,
+            Category::Ambient => &spawns.ambient,
         };
         let Some(entry) = pick(list) else {
             return;
@@ -382,7 +394,7 @@ impl Spots<'_> {
         // is mostly caves.
         let y = match category {
             Category::Creature | Category::Misc => top + 1,
-            Category::Monster => {
+            Category::Monster | Category::Ambient => {
                 let min = self.ctx.world.min_y;
                 min + below((top + 2 - min).max(1) as u32) as i32
             }
@@ -488,7 +500,7 @@ fn spawn_round(
     let list = spawner.eligible.clone();
     let chunks: HashSet<(i32, i32)> = list.iter().copied().collect();
     let n = chunks.len() as i32;
-    let (mut creatures, mut monsters) = (0, 0);
+    let (mut creatures, mut monsters, mut bats) = (0, 0, 0);
     for e in entities.iter() {
         if let Kind::Mob(m) = &e.kind
             && m.dying.is_none()
@@ -500,6 +512,7 @@ fn spawn_round(
             match m.species.category() {
                 Category::Creature => creatures += 1,
                 Category::Monster => monsters += 1,
+                Category::Ambient => bats += 1,
                 Category::Misc => {}
             }
         }
@@ -568,6 +581,13 @@ fn spawn_round(
         difficulty,
         &mut out,
     );
+    // Bats, every tick like monsters, up to a cap of their own.
+    if bats < AMBIENT_CAP * n / 289 {
+        let chunk = list[below(list.len() as u32) as usize];
+        if let Some(b) = in_biome(chunk.0 * 16 + 8, chunk.1 * 16 + 8, biomes) {
+            spots.try_pack(&b, Category::Ambient, chunk, false, &mut out);
+        }
+    }
     // Monsters, every tick, in a few chunks picked at random.
     if difficulty > 0 && monsters < monster_cap && ctx.game_rule_bool("minecraft:spawn_monsters") {
         for _ in 0..MONSTER_TRIES {
@@ -930,10 +950,10 @@ pub fn despawn(
         let Kind::Mob(m) = &mut e.kind else {
             continue;
         };
-        if m.species.category() != Category::Monster || e.removed {
+        if !matches!(m.species.category(), Category::Monster | Category::Ambient) || e.removed {
             continue;
         }
-        if difficulty == 0 {
+        if difficulty == 0 && m.species.category() == Category::Monster {
             e.removed = true;
             gone.push(id);
             continue;

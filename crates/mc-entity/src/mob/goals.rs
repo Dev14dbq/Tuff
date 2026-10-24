@@ -264,6 +264,8 @@ pub enum Goal {
     },
     // Land animals (Cursor)
     Land(super::land::Act),
+    // Flying mobs (flying-mobs)
+    Air(super::air::Act),
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -272,7 +274,7 @@ pub(super) fn eye(m: &Mob, pos: [f64; 3]) -> [f64; 3] {
     [pos[0], pos[1] + m.eye_height(), pos[2]]
 }
 
-fn eye_of(t: &Seen) -> [f64; 3] {
+pub(super) fn eye_of(t: &Seen) -> [f64; 3] {
     [t.pos[0], t.pos[1] + t.eye, t.pos[2]]
 }
 
@@ -337,7 +339,13 @@ pub(super) fn random_spot(
 }
 
 /// A random point in the air near `from` (fliers).
-fn random_air(m: &mut Mob, s: &Senses, from: [f64; 3], h: f64, v: f64) -> Option<[f64; 3]> {
+pub(super) fn random_air(
+    m: &mut Mob,
+    s: &Senses,
+    from: [f64; 3],
+    h: f64,
+    v: f64,
+) -> Option<[f64; 3]> {
     for _ in 0..10 {
         let p = [
             from[0] + (m.next_f64() * 2.0 - 1.0) * h,
@@ -383,7 +391,7 @@ pub(super) fn teleport_near(
 }
 
 /// The mob's target, if it is still there to go after.
-fn target(m: &Mob, s: &Senses) -> Option<Seen> {
+pub(super) fn target(m: &Mob, s: &Senses) -> Option<Seen> {
     s.seen(m.target?)
 }
 
@@ -404,7 +412,7 @@ fn reach(m: &Mob, t: &Seen) -> f64 {
     (w * 2.0).powi(2) + t.width
 }
 
-fn look_at(m: &mut Mob, t: &Seen) {
+pub(super) fn look_at(m: &mut Mob, t: &Seen) {
     m.look = Some(eye_of(t));
 }
 
@@ -900,6 +908,7 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::can_use(act, m, b, s),
+        Goal::Air(act) => super::air::can_use(act, m, b, s),
     }
 }
 
@@ -1104,6 +1113,7 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::can_continue(act, m),
+        Goal::Air(act) => super::air::can_continue(act, m, b, s),
     }
 }
 
@@ -1201,6 +1211,7 @@ fn start(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobE
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::start(act, m, out),
+        Goal::Air(act) => super::air::start(act, m, out),
         _ => {}
     }
 }
@@ -1293,6 +1304,7 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::stop(act, m),
+        Goal::Air(act) => super::air::stop(act, m),
         _ => {}
     }
 }
@@ -1668,6 +1680,7 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::tick(act, m, b, s, out),
+        Goal::Air(act) => super::air::tick(act, m, b, s, out),
     }
 }
 

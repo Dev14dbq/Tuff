@@ -733,7 +733,11 @@ fn projectile(ctx: &ServerContext, e: &Entity, p: &Projectile, c: &mut Compound)
         Shot::DragonFireball | Shot::WindCharge { .. } => {
             c.insert("acceleration_power", Tag::Double(0.1));
         }
-        Shot::Spit | Shot::Breath { .. } | Shot::Lightning { .. } | Shot::Bobber { .. } => {}
+        Shot::Spit
+        | Shot::ShulkerBullet { .. }
+        | Shot::Breath { .. }
+        | Shot::Lightning { .. }
+        | Shot::Bobber { .. } => {}
     }
 }
 

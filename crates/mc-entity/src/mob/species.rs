@@ -10,6 +10,9 @@ pub enum Category {
     /// Neither: golems. They do not spawn with the biomes, do not despawn
     /// and give no experience.
     Misc,
+    /// Bats (flying-mobs): they spawn in the dark to a cap of their own,
+    /// despawn like monsters and give nothing.
+    Ambient,
 }
 
 macro_rules! species {
@@ -95,6 +98,19 @@ species! {
     Camel => "minecraft:camel", "Camel";
     CamelHusk => "minecraft:camel_husk", "Camel Husk";
     Sniffer => "minecraft:sniffer", "Sniffer";
+    // Flying mobs (flying-mobs)
+    Bat => "minecraft:bat", "Bat";
+    Bee => "minecraft:bee", "Bee";
+    Allay => "minecraft:allay", "Allay";
+    Breeze => "minecraft:breeze", "Breeze";
+    HappyGhast => "minecraft:happy_ghast", "Happy Ghast";
+    Bogged => "minecraft:bogged", "Bogged";
+    Parched => "minecraft:parched", "Parched";
+    Giant => "minecraft:giant", "Giant";
+    Shulker => "minecraft:shulker", "Shulker";
+    Creaking => "minecraft:creaking", "Creaking";
+    CopperGolem => "minecraft:copper_golem", "Copper Golem";
+    SulfurCube => "minecraft:sulfur_cube", "Sulfur Cube";
 }
 
 /// Which sound of a mob.
@@ -130,6 +146,10 @@ impl Species {
             Goat | PolarBear | Ocelot | SkeletonHorse | ZombieHorse | Armadillo | Panda | Camel
             | Sniffer => Category::Creature,
             IronGolem | SnowGolem => Category::Misc,
+            // Flying mobs (flying-mobs)
+            Bee | HappyGhast => Category::Creature,
+            Allay | CopperGolem => Category::Misc,
+            Bat => Category::Ambient,
             _ => Category::Monster,
         }
     }
@@ -181,6 +201,18 @@ impl Species {
             Panda => (1.3, 1.25),
             Camel | CamelHusk => (1.7, 2.375),
             Sniffer => (1.9, 1.75),
+            // Flying mobs (flying-mobs)
+            Bat => (0.5, 0.9),
+            Bee => (0.55, 0.5),
+            Allay => (0.35, 0.6),
+            Breeze => (0.6, 1.77),
+            HappyGhast => (4.0, 4.0),
+            Bogged | Parched => (0.6, 1.99),
+            Giant => (3.6, 12.0),
+            Shulker => (1.0, 1.0),
+            Creaking => (0.9, 2.7),
+            CopperGolem => (0.49, 0.98),
+            SulfurCube => (0.98, 0.98),
         }
     }
 
@@ -213,6 +245,16 @@ impl Species {
             Goat => 0.95,
             Ocelot => 0.5,
             PiglinBrute => 1.79 / 1.95,
+            // Flying mobs (flying-mobs)
+            Bat | Bee | Shulker => 0.5,
+            Allay => 0.6,
+            Breeze => 1.3452 / 1.77,
+            HappyGhast => 0.65,
+            Bogged | Parched => 1.74 / 1.99,
+            Giant => 0.87,
+            Creaking => 2.3 / 2.7,
+            CopperGolem => 0.8125 / 0.98,
+            SulfurCube => 0.625,
             _ => 0.85,
         }
     }
@@ -246,6 +288,16 @@ impl Species {
             SkeletonHorse | ZombieHorse => 15.0,
             Hoglin | Zoglin => 40.0,
             PiglinBrute => 50.0,
+            // Flying mobs (flying-mobs)
+            Bat => 6.0,
+            Bee => 10.0,
+            Allay => 20.0,
+            Breeze | Shulker => 30.0,
+            Bogged | Parched => 16.0,
+            Giant => 100.0,
+            Creaking => 1.0,
+            CopperGolem => 12.0,
+            SulfurCube => 8.0,
             _ => 20.0,
         }
     }
@@ -273,6 +325,16 @@ impl Species {
             Panda => 0.15,
             Camel | CamelHusk => 0.09,
             Sniffer => 0.1,
+            // Flying mobs (flying-mobs)
+            Bee => 0.3,
+            Allay => 0.1,
+            Breeze => 0.63,
+            HappyGhast => 0.05,
+            Giant => 0.5,
+            Shulker => 0.0,
+            Creaking => 0.3,
+            CopperGolem => 0.2,
+            SulfurCube => 0.4,
             _ => 0.25,
         }
     }
@@ -289,6 +351,10 @@ impl Species {
             Wither => 40.0,
             PolarBear => 20.0,
             PiglinBrute => 12.0,
+            // Flying mobs (flying-mobs)
+            Bee | Allay => 48.0,
+            Breeze => 24.0,
+            Creaking => 32.0,
             _ => 16.0,
         }
     }
@@ -315,6 +381,10 @@ impl Species {
             Ocelot => 3.0,
             Panda => 2.0,
             PiglinBrute => 7.0,
+            // Flying mobs (flying-mobs)
+            Bee | Allay | Bogged | Parched => 2.0,
+            Giant => 50.0,
+            Creaking => 3.0,
             _ => 0.0,
         }
     }
@@ -334,6 +404,8 @@ impl Species {
         match self {
             Species::IronGolem => 1.0,
             Species::Hoglin | Species::Zoglin => 0.6,
+            // Flying mobs (flying-mobs): a shulker never budges.
+            Species::Shulker => 1.0,
             _ => 0.0,
         }
     }
@@ -357,6 +429,9 @@ impl Species {
                 | ZombieHorse
                 | Zoglin
                 | CamelHusk
+                // Flying mobs (flying-mobs)
+                | Bogged
+                | Parched
         )
     }
 
@@ -365,7 +440,7 @@ impl Species {
         use Species::*;
         matches!(
             self,
-            Zombie | Drowned | ZombieVillager | Skeleton | Stray | Phantom
+            Zombie | Drowned | ZombieVillager | Skeleton | Stray | Phantom | Bogged
         )
     }
 
@@ -395,6 +470,11 @@ impl Species {
                 | Species::Parrot
                 | Species::EnderDragon
                 | Species::Wither
+                // Flying mobs (flying-mobs)
+                | Species::Bat
+                | Species::Bee
+                | Species::Allay
+                | Species::HappyGhast
         )
     }
 
@@ -412,6 +492,14 @@ impl Species {
                 | Species::SnowGolem
                 | Species::EnderDragon
                 | Species::Wither
+                // Flying mobs (flying-mobs)
+                | Species::Bat
+                | Species::Bee
+                | Species::Allay
+                | Species::HappyGhast
+                | Species::Breeze
+                | Species::Shulker
+                | Species::CopperGolem
         )
     }
 
@@ -431,6 +519,8 @@ impl Species {
     pub fn ageable(self) -> bool {
         self.category() == Category::Creature && self != Species::Parrot
             || matches!(self, Species::Hoglin | Species::Zoglin | Species::CamelHusk)
+            // Flying mobs (flying-mobs): small sulfur cubes grow up.
+            || self == Species::SulfurCube
     }
 
     /// Babies of these grow up; zombies and piglins stay babies.
@@ -467,6 +557,10 @@ impl Species {
             Panda => "minecraft:panda_food",
             Camel => "minecraft:camel_food",
             Sniffer => "minecraft:sniffer_food",
+            // Flying mobs (flying-mobs)
+            Bee => "minecraft:bee_food",
+            HappyGhast => "minecraft:happy_ghast_food",
+            SulfurCube => "minecraft:sulfur_cube_food",
             _ => return None,
         })
     }
@@ -480,6 +574,8 @@ impl Species {
             Strider => Some("minecraft:strider_tempt_items"),
             // Land animals (Cursor)
             CamelHusk => Some("minecraft:camel_husk_food"),
+            // Flying mobs (flying-mobs)
+            HappyGhast => Some("minecraft:happy_ghast_tempt_items"),
             Wolf | Parrot => None,
             _ => self.food_tag(),
         }
@@ -532,7 +628,12 @@ impl Species {
     pub fn skeleton(self) -> bool {
         matches!(
             self,
-            Species::Skeleton | Species::Stray | Species::WitherSkeleton
+            Species::Skeleton
+                | Species::Stray
+                | Species::WitherSkeleton
+                // Flying mobs (flying-mobs)
+                | Species::Bogged
+                | Species::Parched
         )
     }
 
@@ -540,7 +641,11 @@ impl Species {
     pub fn arthropod(self) -> bool {
         matches!(
             self,
-            Species::Spider | Species::CaveSpider | Species::Silverfish | Species::Endermite
+            Species::Spider
+                | Species::CaveSpider
+                | Species::Silverfish
+                | Species::Endermite
+                | Species::Bee
         )
     }
 
@@ -550,11 +655,15 @@ impl Species {
         use Species::*;
         match self.category() {
             Category::Creature => (1, 3),
-            Category::Misc => (0, 0),
+            Category::Misc | Category::Ambient => (0, 0),
             Category::Monster => match self {
                 Blaze => (10, 10),
                 Endermite => (3, 3),
                 PiglinBrute => (20, 20),
+                // Flying mobs (flying-mobs)
+                Breeze => (10, 10),
+                Creaking => (0, 0),
+                SulfurCube => (1, 2),
                 Wither => (50, 50),
                 // The dragon's experience comes out as it dies.
                 Slime | MagmaCube | EnderDragon => (0, 0),
@@ -573,7 +682,10 @@ impl Species {
             _ => self.path(),
         };
         let ok = match which {
-            Sound::Ambient => !matches!(self, Creeper | Slime | MagmaCube | IronGolem),
+            Sound::Ambient => !matches!(
+                self,
+                Creeper | Slime | MagmaCube | IronGolem | Bee | CopperGolem | SulfurCube
+            ),
             Sound::Step => matches!(
                 self,
                 Cow | Mooshroom
@@ -608,6 +720,11 @@ impl Species {
                     | Camel
                     | CamelHusk
                     | Sniffer
+                    // Flying mobs (flying-mobs)
+                    | Bogged
+                    | Parched
+                    | Creaking
+                    | CopperGolem
             ),
             Sound::Hurt | Sound::Death => true,
         };
@@ -647,6 +764,8 @@ impl Species {
             | Species::Llama
             | Species::TraderLlama => 0.8,
             Species::Slime | Species::MagmaCube => 0.4,
+            // Flying mobs (flying-mobs)
+            Species::Bat => 0.1,
             _ => 1.0,
         }
     }

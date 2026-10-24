@@ -1,6 +1,7 @@
 //! The goals of each kind of mob, by priority (minecraft.wiki, the "Behavior"
 //! section of each mob's page).
 
+use super::air;
 use super::goals::{Avoidee, Goal, Ranged, Slot};
 use super::land::Act;
 use super::{Brain, JUMP, LOOK, MOVE, Species, TARGET};
@@ -172,6 +173,11 @@ fn perch(p: u8, bed: bool, speed: f64) -> Slot {
 
 fn leap(p: u8, up: f64) -> Slot {
     slot(p, MOVE | JUMP, Goal::Leap { up })
+}
+
+/// A flyer's wander: float about in the air near itself.
+fn air(p: u8, rise: f64, range: f64) -> Slot {
+    slot(p, MOVE, Goal::Hover { range, rise })
 }
 
 /// The animals of a farm: float, panic, breed, tempt, follow the parents,
@@ -847,6 +853,101 @@ pub(super) fn brain(species: Species) -> Brain {
                 look(6, 6.0),
                 random_look(7),
             ],
+            vec![],
+        ),
+        // Flying mobs (flying-mobs)
+        Bat => (
+            vec![
+                slot(0, MOVE | JUMP, Goal::Air(air::Act::Roost { spot: None })),
+                air(1, 0.0, 6.0),
+            ],
+            vec![],
+        ),
+        Bee => (
+            vec![
+                melee(0, 1.4, false),
+                breed(3, 1.0),
+                tempt(4, 1.25),
+                follow_parent(5, 1.25),
+                air(8, 0.0, 8.0),
+                look(9, 6.0),
+            ],
+            vec![hurt_by(1, true)],
+        ),
+        Allay => (
+            vec![slot(0, MOVE, Goal::Air(air::Act::Follow)), air(4, 0.0, 8.0)],
+            vec![],
+        ),
+        Breeze => (
+            vec![
+                slot(1, MOVE | LOOK, Goal::Air(air::Act::Shoot { timer: 60 })),
+                slot(2, MOVE | JUMP, Goal::Air(air::Act::Bounce { timer: 0 })),
+                stroll(5, 0.8),
+                look(10, 4.0),
+                random_look(10),
+            ],
+            vec![hurt_by(1, false), nearest(1, 24.0, false)],
+        ),
+        HappyGhast => (
+            vec![
+                breed(2, 1.0),
+                tempt(3, 1.0),
+                follow_parent(4, 1.0),
+                air(5, 0.0, 12.0),
+            ],
+            vec![],
+        ),
+        Bogged | Parched => (
+            vec![
+                float(),
+                slot(2, MOVE, Goal::FleeSun { speed: 1.0 }),
+                avoid(3, Avoidee::Kinds(WOLVES), 6.0, 1.0, 1.2),
+                ranged(4, Ranged::Bow, 20, 15.0),
+                melee(4, 1.2, false),
+                stroll(5, 1.0),
+                look(6, 8.0),
+                random_look(6),
+            ],
+            vec![
+                hurt_by(1, false),
+                nearest(2, 16.0, false),
+                prey(3, IRON_GOLEMS, false, false),
+            ],
+        ),
+        Giant => (
+            vec![
+                float(),
+                melee(2, 1.0, false),
+                stroll(7, 1.0),
+                look(8, 8.0),
+                random_look(8),
+            ],
+            vec![hurt_by(1, true), nearest(2, 16.0, false)],
+        ),
+        Shulker => (
+            vec![
+                slot(1, MOVE | LOOK, Goal::Air(air::Act::Peek { left: 0 })),
+                look(10, 8.0),
+            ],
+            vec![hurt_by(1, false), nearest(2, 16.0, false)],
+        ),
+        Creaking => (
+            vec![
+                float(),
+                slot(2, MOVE | LOOK, Goal::Air(air::Act::Freeze)),
+                melee(3, 1.0, false),
+                stroll(5, 0.8),
+                look(8, 8.0),
+                random_look(8),
+            ],
+            vec![nearest(1, 32.0, false)],
+        ),
+        CopperGolem => (
+            vec![float(), stroll(5, 1.0), look(7, 6.0), random_look(8)],
+            vec![],
+        ),
+        SulfurCube => (
+            vec![slot(1, MOVE | LOOK | JUMP, Goal::Hop { delay: 0 })],
             vec![],
         ),
     };

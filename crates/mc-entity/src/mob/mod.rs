@@ -14,6 +14,7 @@
 
 mod body;
 pub use body::ENDERMITE_LIFE;
+pub mod air;
 mod brains;
 mod chores;
 pub mod goals;
@@ -278,6 +279,11 @@ pub enum Missile {
     Spit,
     /// A snow golem's snowball.
     Snowball,
+    // Flying mobs (flying-mobs)
+    /// A breeze's wind charge.
+    WindCharge,
+    /// A shulker's homing bullet.
+    ShulkerBullet,
 }
 
 /// What a mob did that the world must act on.
@@ -427,6 +433,8 @@ pub struct Quirks {
     pub pumpkin: bool,
     // Land animals (Cursor)
     pub land: land::Land,
+    // Flying mobs (flying-mobs)
+    pub air: air::Air,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1071,6 +1079,7 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
     }
     body::life(m, &mut b, s, out);
     land::pulse(m, &b, s, out);
+    air::pulse(m, &b, s, out);
     if m.is_dead() || entity.removed {
         return;
     }
