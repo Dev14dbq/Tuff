@@ -351,6 +351,27 @@ fn conversions(m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<MobEvent>) {
                 out.push(MobEvent::Convert(Species::ZombifiedPiglin));
             }
         }
+        // Land animals (Cursor): out of the Nether, hoglins and brutes
+        // zombify after 15 seconds as piglins do.
+        Species::Hoglin | Species::PiglinBrute if !s.nether && !m.no_ai => {
+            m.soaked += 1;
+            if m.soaked > 300 {
+                let (sound, to) = if m.species == Species::Hoglin {
+                    ("entity.hoglin.converted_to_zombified", Species::Zoglin)
+                } else {
+                    (
+                        "entity.piglin_brute.converted_to_zombified",
+                        Species::ZombifiedPiglin,
+                    )
+                };
+                out.push(MobEvent::Sound {
+                    name: sound.into(),
+                    volume: 1.0,
+                    pitch: 1.0,
+                });
+                out.push(MobEvent::Convert(to));
+            }
+        }
         _ => {}
     }
 }
@@ -435,6 +456,15 @@ pub(super) fn physics(
     input: Option<Input>,
     out: &mut Vec<MobEvent>,
 ) {
+    // Land animals (Cursor): a ram that connected or missed stops short.
+    let input = if m.quirks.land.brake {
+        m.quirks.land.brake = false;
+        b.vel[0] = 0.0;
+        b.vel[2] = 0.0;
+        None
+    } else {
+        input
+    };
     let (w, h) = m.size();
     let cell = cell_of(b.pos);
     let wet = in_water(b, s);
@@ -525,6 +555,13 @@ pub(super) fn physics(
             if m.jump && b.on_ground {
                 // Jump boost: a tenth of a block a tick more per level.
                 b.vel[1] = 0.42 + 0.1 * f64::from(m.effect_level("jump_boost"));
+                // Land animals (Cursor): a goat's long jump replaces the hop.
+                if m.quirks.land.leap_vy > 0.0 {
+                    b.vel[1] = m.quirks.land.leap_vy;
+                    b.vel[0] = m.quirks.land.leap_vx;
+                    b.vel[2] = m.quirks.land.leap_vz;
+                    m.quirks.land.leap_vy = 0.0;
+                }
             }
         }
     }
@@ -605,6 +642,11 @@ pub(super) fn physics(
         let gathered = m.fall_distance;
         let fell = gathered + drop;
         m.fall_distance = 0.0;
+        // Land animals (Cursor): the long-jump pose lasts until it lands.
+        if !was_on_ground && m.quirks.land.jumping {
+            m.quirks.land.jumping = false;
+            m.dirty = true;
+        }
         if fell > 0.0 {
             out.push(MobEvent::Landed { distance: fell });
         }

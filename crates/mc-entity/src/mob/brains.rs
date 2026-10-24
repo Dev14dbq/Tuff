@@ -2,6 +2,7 @@
 //! section of each mob's page).
 
 use super::goals::{Avoidee, Goal, Ranged, Slot};
+use super::land::Act;
 use super::{Brain, JUMP, LOOK, MOVE, Species, TARGET};
 
 fn slot(priority: u8, flags: u8, goal: Goal) -> Slot {
@@ -204,6 +205,43 @@ const FOX_PREY: &[Species] = &[Species::Chicken, Species::Rabbit];
 const RABBITS: &[Species] = &[Species::Rabbit];
 const ENDERMITES: &[Species] = &[Species::Endermite];
 const IRON_GOLEMS: &[Species] = &[Species::IronGolem];
+// Land animals (Cursor)
+const FOXES: &[Species] = &[Species::Fox];
+const CHICKENS: &[Species] = &[Species::Chicken];
+const WITHER_SKELETONS: &[Species] = &[Species::WitherSkeleton, Species::Wither];
+/// What a zoglin goes for: every mob but creepers, ghasts and zoglins.
+const ZOGLIN_PREY: &[Species] = &[
+    Species::Cow,
+    Species::Mooshroom,
+    Species::Sheep,
+    Species::Pig,
+    Species::Chicken,
+    Species::Rabbit,
+    Species::Horse,
+    Species::Donkey,
+    Species::Mule,
+    Species::Llama,
+    Species::TraderLlama,
+    Species::Wolf,
+    Species::Cat,
+    Species::Fox,
+    Species::Goat,
+    Species::PolarBear,
+    Species::Ocelot,
+    Species::Zombie,
+    Species::Husk,
+    Species::Skeleton,
+    Species::Stray,
+    Species::Spider,
+    Species::CaveSpider,
+    Species::Enderman,
+    Species::Piglin,
+    Species::PiglinBrute,
+    Species::Hoglin,
+    Species::Witch,
+    Species::IronGolem,
+    Species::SnowGolem,
+];
 /// What golems hunt: the monsters that walk (not creepers for the iron
 /// golem, flyers and bosses for neither).
 const GOLEM_PREY: &[Species] = &[
@@ -649,6 +687,168 @@ pub(super) fn brain(species: Species) -> Brain {
         ),
         // The bosses think in the server's own tick (`bosses`).
         EnderDragon | Wither => (vec![], vec![]),
+        // Land animals (Cursor)
+        Goat => (
+            vec![
+                float(),
+                panic(1, 1.4),
+                breed(2, 1.0),
+                tempt(3, 1.25),
+                slot(
+                    4,
+                    MOVE | LOOK,
+                    Goal::Land(Act::Ram {
+                        phase: 0,
+                        at: None,
+                        who: None,
+                    }),
+                ),
+                slot(
+                    5,
+                    MOVE | JUMP,
+                    Goal::Land(Act::LongJump {
+                        left: 0,
+                        spot: None,
+                    }),
+                ),
+                follow_parent(6, 1.1),
+                stroll(7, 1.0),
+                look(8, 6.0),
+                random_look(9),
+            ],
+            vec![],
+        ),
+        // Neutral: it fights back, and goes for foxes.
+        PolarBear => (
+            vec![
+                float(),
+                melee(1, 1.25, false),
+                follow_parent(4, 1.25),
+                stroll(5, 1.0),
+                look(6, 6.0),
+                random_look(7),
+            ],
+            vec![hurt_by(1, true), prey(3, FOXES, false, true)],
+        ),
+        // Shy of players, it stalks chickens.
+        Ocelot => (
+            vec![
+                float(),
+                tempt(3, 0.6),
+                avoid(4, Avoidee::Players, 16.0, 0.8, 1.33),
+                leap(7, 0.3),
+                melee(8, 1.0, false),
+                breed(9, 0.8),
+                stroll(10, 0.8),
+                look(11, 10.0),
+            ],
+            vec![prey(1, CHICKENS, false, false)],
+        ),
+        SkeletonHorse | ZombieHorse => (
+            vec![
+                float(),
+                panic(1, 1.2),
+                stroll(6, 0.7),
+                look(7, 6.0),
+                random_look(8),
+            ],
+            vec![],
+        ),
+        Hoglin => (
+            vec![
+                float(),
+                melee(2, 1.0, false),
+                breed(3, 1.0),
+                follow_parent(4, 1.0),
+                stroll(7, 0.4),
+                look(8, 8.0),
+                random_look(8),
+            ],
+            vec![hurt_by(1, true), nearest(2, 16.0, false)],
+        ),
+        Zoglin => (
+            vec![
+                float(),
+                melee(2, 1.0, false),
+                stroll(7, 0.4),
+                look(8, 8.0),
+                random_look(8),
+            ],
+            vec![
+                hurt_by(1, false),
+                nearest(2, 16.0, false),
+                prey(3, ZOGLIN_PREY, true, false),
+            ],
+        ),
+        // Gold means nothing to a brute.
+        PiglinBrute => (
+            vec![
+                float(),
+                melee(2, 1.0, false),
+                stroll(7, 0.6),
+                look(8, 8.0),
+                random_look(8),
+            ],
+            vec![
+                hurt_by(1, true),
+                nearest(2, 12.0, false),
+                prey(3, WITHER_SKELETONS, false, false),
+            ],
+        ),
+        Armadillo => (
+            vec![
+                float(),
+                panic(1, 2.0),
+                breed(2, 1.0),
+                tempt(3, 1.25),
+                follow_parent(4, 1.25),
+                stroll(5, 1.0),
+                look(6, 6.0),
+                random_look(7),
+            ],
+            vec![],
+        ),
+        // Every panda fights back; the aggressive ones see it through.
+        Panda => (
+            vec![
+                float(),
+                panic(1, 2.0),
+                breed(2, 1.0),
+                melee(3, 1.2, false),
+                tempt(4, 1.0),
+                follow_parent(5, 1.25),
+                stroll(6, 1.0),
+                look(7, 6.0),
+                random_look(8),
+            ],
+            vec![hurt_by(1, true)],
+        ),
+        Camel | CamelHusk => (
+            vec![
+                float(),
+                panic(1, 4.0),
+                breed(2, 1.0),
+                tempt(3, 2.5),
+                follow_parent(4, 2.5),
+                stroll(5, 2.0),
+                look(6, 6.0),
+                random_look(7),
+            ],
+            vec![],
+        ),
+        Sniffer => (
+            vec![
+                float(),
+                panic(1, 2.0),
+                breed(2, 1.0),
+                tempt(3, 1.25),
+                follow_parent(4, 1.25),
+                stroll(5, 1.0),
+                look(6, 6.0),
+                random_look(7),
+            ],
+            vec![],
+        ),
     };
     Brain { goals, targets }
 }

@@ -27,7 +27,7 @@ impl Terrain for Flat {
 struct Wheat;
 impl Items for Wheat {
     fn tagged(&self, item: i32, tag: &str) -> bool {
-        item == 1 && tag == "minecraft:cow_food"
+        item == 1 && matches!(tag, "minecraft:cow_food" | "minecraft:goat_food")
     }
     fn name(&self, item: i32) -> &str {
         match item {
@@ -435,6 +435,83 @@ fn walkers_do_not_hop_forever_at_a_wall_or_fence() {
         assert!(pos[0] < 3.0, "{pos:?}");
         assert!(jumps <= 2, "{jumps} jumps");
     }
+}
+
+#[test]
+fn a_goat_is_a_mountain_goat() {
+    let s = Species::Goat;
+    assert_eq!(s.id(), "minecraft:goat");
+    assert_eq!(s.size(), (0.9, 1.3));
+    assert_eq!(s.max_health(), 10.0);
+    assert!((s.speed() - 0.2).abs() < 1e-9);
+    assert_eq!(s.safe_fall(), 13.0);
+    assert_eq!(s.category(), Category::Creature);
+    assert_eq!(s.food_tag(), Some("minecraft:goat_food"));
+    assert_eq!(s.attack_damage(), 0.0);
+    assert_eq!(
+        s.sound(Sound::Step, false).as_deref(),
+        Some("entity.goat.step")
+    );
+    let mut g = Mob::new(s, 1);
+    assert!(g.quirks.land.left_horn && g.quirks.land.right_horn);
+    assert!(!g.quirks.land.screaming);
+    g.quirks.land.screaming = true;
+    assert_eq!(
+        g.sound_name(Sound::Ambient).as_deref(),
+        Some("entity.goat.screaming.ambient")
+    );
+    assert_eq!(
+        g.sound_name(Sound::Step).as_deref(),
+        Some("entity.goat.step")
+    );
+    g.quirks.land.jumping = true;
+    assert_eq!(g.size(), (0.63, 0.91));
+    g.set_baby(true);
+    assert_eq!(g.size(), (0.315, 0.455));
+}
+
+#[test]
+fn a_goat_rams_a_mob_it_can_see() {
+    let mut e = mob(Species::Goat, [0.5, 0.0, 0.5]);
+    e.on_ground = true;
+    m(&mut e).yaw = 0.0;
+    m(&mut e).quirks.land.ram_cd = 0;
+    m(&mut e).quirks.land.jump_cd = 10_000;
+    let sheep = Other {
+        id: 7,
+        species: Some(Species::Sheep),
+        pos: [0.5, 0.0, 6.5],
+        width: 0.9,
+        height: 1.3,
+        baby: false,
+        in_love: false,
+        owner: None,
+        alive: true,
+        leashed: false,
+        in_caravan: false,
+        has_tail: false,
+        chain_held: false,
+    };
+    let mut out = Vec::new();
+    for t in 0..80 {
+        tick(
+            &mut e,
+            &senses(&[], std::slice::from_ref(&sheep), t, false),
+            &mut out,
+        );
+    }
+    assert!(
+        out.iter().any(|ev| matches!(
+            ev,
+            MobEvent::Ram {
+                target: 7,
+                damage: d,
+                ..
+            } if (*d - 2.0).abs() < 1e-3
+        )),
+        "{out:?} pos {:?}",
+        e.pos
+    );
 }
 
 #[test]

@@ -102,6 +102,22 @@ pub trait Terrain: Collide {
     fn infestable(&self, _x: i32, _y: i32, _z: i32) -> bool {
         false
     }
+    /// A block a land animal cares about (powder snow, a horn block).
+    fn feature(&self, _x: i32, _y: i32, _z: i32, _kind: Feature) -> bool {
+        false
+    }
+}
+
+/// A block fact the land animals ask about. The default is "no".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Feature {
+    PowderSnow,
+    HornSnap,
+    Diggable,
+    Repellent,
+    Bamboo,
+    Moss,
+    Cake,
 }
 
 /// What a walker is like.

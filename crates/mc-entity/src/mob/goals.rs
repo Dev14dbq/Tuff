@@ -49,7 +49,9 @@ pub enum Goal {
     /// Swim up out of water.
     Float,
     /// Run off after being hurt.
-    Panic { speed: f64 },
+    Panic {
+        speed: f64,
+    },
     /// Wander to a random place now and then.
     Stroll {
         speed: f64,
@@ -58,9 +60,15 @@ pub enum Goal {
         avoid_water: bool,
     },
     /// Watch a player that comes close.
-    LookAtPlayer { range: f64, left: i32 },
+    LookAtPlayer {
+        range: f64,
+        left: i32,
+    },
     /// Turn the head to a random side.
-    RandomLook { left: i32, angle: f64 },
+    RandomLook {
+        left: i32,
+        angle: f64,
+    },
     /// Chase the target and hit it.
     Melee {
         speed: f64,
@@ -68,7 +76,10 @@ pub enum Goal {
         fickle: bool,
     },
     /// Back away from the target when it is too close.
-    Retreat { range: f64, speed: f64 },
+    Retreat {
+        range: f64,
+        speed: f64,
+    },
     /// Keep away from players or some kinds of mob.
     Avoid {
         from: Avoidee,
@@ -80,7 +91,9 @@ pub enum Goal {
     /// Creeper: fuse while the target is close.
     Swell,
     /// Pounce at a target a few blocks away.
-    Leap { up: f64 },
+    Leap {
+        up: f64,
+    },
     /// Shoot or throw from a distance.
     Ranged {
         kind: Ranged,
@@ -93,7 +106,9 @@ pub enum Goal {
         seen: i32,
     },
     /// Sheep: graze on grass.
-    EatGrass { left: i32 },
+    EatGrass {
+        left: i32,
+    },
     /// Follow a player holding its food.
     Tempt {
         speed: f64,
@@ -115,13 +130,24 @@ pub enum Goal {
     /// A pet told to sit stays put.
     Sit,
     /// A pet follows its owner, and catches up by teleporting.
-    FollowOwner { speed: f64, start: f64, stop: f64 },
+    FollowOwner {
+        speed: f64,
+        start: f64,
+        stop: f64,
+    },
     /// Undead on fire look for shade.
-    FleeSun { speed: f64 },
+    FleeSun {
+        speed: f64,
+    },
     /// Slimes and magma cubes hop about.
-    Hop { delay: i32 },
+    Hop {
+        delay: i32,
+    },
     /// Fliers drift to random places.
-    Hover { range: f64, rise: f64 },
+    Hover {
+        range: f64,
+        rise: f64,
+    },
     /// Phantoms circle and swoop.
     Swoop {
         /// Ticks until the next swoop; negative while swooping.
@@ -134,7 +160,9 @@ pub enum Goal {
     Admire,
     // Target goals.
     /// Go after whoever hurt the mob; `alert` calls the others of its kind.
-    HurtBy { alert: bool },
+    HurtBy {
+        alert: bool,
+    },
     /// Go after the nearest player.
     Nearest {
         range: f64,
@@ -147,7 +175,9 @@ pub enum Goal {
     },
     /// Go after the nearest player with a bad name (iron golems that no
     /// player made).
-    Notorious { unseen: i32 },
+    Notorious {
+        unseen: i32,
+    },
     /// Go after the nearest mob of some kinds (or villagers).
     Prey {
         kinds: &'static [Species],
@@ -193,17 +223,30 @@ pub enum Goal {
         stay: i32,
     },
     /// Foxes look for shade in the sun.
-    Shelter { speed: f64, interval: i32 },
+    Shelter {
+        speed: f64,
+        interval: i32,
+    },
     /// A strider out of lava heads back to it.
-    SeekLava { speed: f64, interval: i32 },
+    SeekLava {
+        speed: f64,
+        interval: i32,
+    },
     /// A llama falls in behind a caravan (a leashed llama and those
     /// following it).
-    Caravan { speed: f64 },
+    Caravan {
+        speed: f64,
+    },
     /// An iron golem goes back to the villagers it knows and wanders about
     /// them.
-    Patrol { speed: f64 },
+    Patrol {
+        speed: f64,
+    },
     /// An iron golem holds a poppy out to a villager now and then.
-    OfferFlower { left: i32, to: Option<i32> },
+    OfferFlower {
+        left: i32,
+        to: Option<i32>,
+    },
     /// A silverfish that was hurt calls the others out of their blocks
     /// when the count runs out (`Quirks::call_friends`).
     WakeFriends,
@@ -215,6 +258,8 @@ pub enum Goal {
         /// Where it wanders to instead.
         walk: Option<Cell>,
     },
+    // Land animals (Cursor)
+    Land(super::land::Act),
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -846,6 +891,8 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                 None => false,
             }
         }
+        // Land animals (Cursor)
+        Goal::Land(act) => super::land::can_use(act, m, b, s),
     }
 }
 
@@ -1046,6 +1093,8 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                     o.alive && (o.leashed || o.chain_held) && dist_sq(b.pos, o.pos) <= 676.0
                 })
         }
+        // Land animals (Cursor)
+        Goal::Land(act) => super::land::can_continue(act, m),
     }
 }
 
@@ -1141,6 +1190,8 @@ fn start(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobE
             let r = m.below(1200) + 1200;
             *stay = (m.below(r) + 1200) as i32;
         }
+        // Land animals (Cursor)
+        Goal::Land(act) => super::land::start(act, m, out),
         _ => {}
     }
 }
@@ -1231,6 +1282,8 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
             }
             m.nav.stop();
         }
+        // Land animals (Cursor)
+        Goal::Land(act) => super::land::stop(act, m),
         _ => {}
     }
 }
@@ -1599,6 +1652,8 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
                 });
             }
         }
+        // Land animals (Cursor)
+        Goal::Land(act) => super::land::tick(act, m, b, s, out),
     }
 }
 

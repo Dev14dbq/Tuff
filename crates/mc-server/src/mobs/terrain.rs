@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use mc_entity::Collide;
-use mc_entity::nav::{Door, Graze, Liquid, Perch, Terrain};
+use mc_entity::nav::{Door, Feature, Graze, Liquid, Perch, Terrain};
 use mc_protocol::Position;
 
 use crate::context::ServerContext;
@@ -272,6 +272,17 @@ impl<'a> Ground<'a> {
     pub fn loaded(&self, x: i32, z: i32) -> bool {
         self.ctx.world.chunk_loaded(x >> 4, z >> 4)
     }
+
+    fn name_at(&self, x: i32, y: i32, z: i32) -> Option<&str> {
+        if !self.loaded(x, z) {
+            return None;
+        }
+        let state = self
+            .ctx
+            .world
+            .block(Position::new(x, y, z), &self.ctx.data.blocks)?;
+        self.ctx.data.blocks.block_name(state)
+    }
 }
 
 impl Collide for Ground<'_> {
@@ -393,4 +404,34 @@ impl Terrain for Ground<'_> {
             Graze::None
         }
     }
+
+    fn feature(&self, x: i32, y: i32, z: i32, kind: Feature) -> bool {
+        let Some(name) = self.name_at(x, y, z) else {
+            return false;
+        };
+        match kind {
+            Feature::PowderSnow => name == "minecraft:powder_snow",
+            Feature::Bamboo => name == "minecraft:bamboo" || name == "minecraft:bamboo_sapling",
+            Feature::Cake => name == "minecraft:cake",
+            Feature::Moss => name == "minecraft:moss_block",
+            Feature::HornSnap => block_in_tag(self.ctx, "minecraft:snaps_goat_horn", name),
+            Feature::Diggable => block_in_tag(self.ctx, "minecraft:sniffer_diggable_block", name),
+            Feature::Repellent => block_in_tag(self.ctx, "minecraft:hoglin_repellents", name),
+        }
+    }
+}
+
+fn block_in_tag(ctx: &ServerContext, tag: &'static str, name: &str) -> bool {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Mutex;
+    static CACHE: OnceLock<Mutex<HashMap<&'static str, HashSet<String>>>> = OnceLock::new();
+    let mut cache = crate::tick::lock(CACHE.get_or_init(Default::default));
+    let set = cache.entry(tag).or_insert_with(|| {
+        ctx.commands
+            .env
+            .tag("minecraft:block", tag)
+            .into_iter()
+            .collect()
+    });
+    set.contains(name)
 }

@@ -173,6 +173,8 @@ fn spawnable_on(species: Species) -> &'static str {
         Species::Fox => "minecraft:foxes_spawnable_on",
         Species::Mooshroom => "minecraft:mooshrooms_spawnable_on",
         Species::Parrot => "minecraft:parrots_spawnable_on",
+        // Land animals (Cursor)
+        Species::Goat => "minecraft:goats_spawnable_on",
         _ => "minecraft:animals_spawnable_on",
     }
 }
@@ -772,6 +774,23 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
                 }
             };
         }
+        // Land animals (Cursor). Natural spawns only: a summon keeps the
+        // defaults (both horns, not screaming, grown up).
+        Goat if biome.is_some() => {
+            if m.below(100) < 5 {
+                m.set_baby(true);
+            } else if m.below(10) == 0 {
+                if m.below(2) == 0 {
+                    m.quirks.land.left_horn = false;
+                } else {
+                    m.quirks.land.right_horn = false;
+                }
+            }
+            if m.below(50) == 0 {
+                m.quirks.land.screaming = true;
+                m.quirks.land.ram_cd = m.rand_range(100, 300);
+            }
+        }
         _ => {}
     }
     if species.category() == Category::Monster {
@@ -785,6 +804,8 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
         Skeleton | Stray => Some("bow"),
         WitherSkeleton => Some("stone_sword"),
         ZombifiedPiglin => Some("golden_sword"),
+        // Land animals (Cursor)
+        PiglinBrute => Some("golden_axe"),
         Piglin => Some(if m.below(2) == 0 {
             "crossbow"
         } else {
@@ -1000,7 +1021,7 @@ mod tests {
     fn only_known_species_are_kept() {
         let list = serde_json::json!([
             {"type": "minecraft:cow", "count": 4, "weight": 8},
-            {"type": "minecraft:camel", "count": 4, "weight": 5},
+            {"type": "minecraft:creaking", "count": 4, "weight": 5},
             {"type": "minecraft:zombie", "count": {"min_inclusive": 1, "max_inclusive": 2}, "weight": 90},
         ]);
         let e = entries(&list);

@@ -81,6 +81,20 @@ species! {
     Endermite => "minecraft:endermite", "Endermite";
     IronGolem => "minecraft:iron_golem", "Iron Golem";
     SnowGolem => "minecraft:snow_golem", "Snow Golem";
+    // Land animals (Cursor)
+    Goat => "minecraft:goat", "Goat";
+    PolarBear => "minecraft:polar_bear", "Polar Bear";
+    Ocelot => "minecraft:ocelot", "Ocelot";
+    SkeletonHorse => "minecraft:skeleton_horse", "Skeleton Horse";
+    ZombieHorse => "minecraft:zombie_horse", "Zombie Horse";
+    Hoglin => "minecraft:hoglin", "Hoglin";
+    Zoglin => "minecraft:zoglin", "Zoglin";
+    PiglinBrute => "minecraft:piglin_brute", "Piglin Brute";
+    Armadillo => "minecraft:armadillo", "Armadillo";
+    Panda => "minecraft:panda", "Panda";
+    Camel => "minecraft:camel", "Camel";
+    CamelHusk => "minecraft:camel_husk", "Camel Husk";
+    Sniffer => "minecraft:sniffer", "Sniffer";
 }
 
 /// Which sound of a mob.
@@ -112,6 +126,9 @@ impl Species {
         match self {
             Cow | Mooshroom | Sheep | Pig | Chicken | Rabbit | Horse | Donkey | Mule | Llama
             | TraderLlama | Wolf | Cat | Fox | Parrot | Strider => Category::Creature,
+            // Land animals (Cursor)
+            Goat | PolarBear | Ocelot | SkeletonHorse | ZombieHorse | Armadillo | Panda | Camel
+            | Sniffer => Category::Creature,
             IronGolem | SnowGolem => Category::Misc,
             _ => Category::Monster,
         }
@@ -153,6 +170,17 @@ impl Species {
             Blaze => (0.6, 1.8),
             EnderDragon => (16.0, 8.0),
             Wither => (0.9, 3.5),
+            // Land animals (Cursor)
+            Goat => (0.9, 1.3),
+            PolarBear => (1.4, 1.4),
+            Ocelot => (0.6, 0.7),
+            SkeletonHorse | ZombieHorse => (1.3964844, 1.6),
+            Hoglin | Zoglin => (1.3964844, 1.4),
+            PiglinBrute => (0.6, 1.95),
+            Armadillo => (0.7, 0.65),
+            Panda => (1.3, 1.25),
+            Camel | CamelHusk => (1.7, 2.375),
+            Sniffer => (1.9, 1.75),
         }
     }
 
@@ -181,6 +209,10 @@ impl Species {
             Silverfish | Endermite => 0.13 / 0.3,
             IronGolem => 2.5 / 2.7,
             SnowGolem => 1.7 / 1.9,
+            // Land animals (Cursor)
+            Goat => 0.95,
+            Ocelot => 0.5,
+            PiglinBrute => 1.79 / 1.95,
             _ => 0.85,
         }
     }
@@ -205,6 +237,15 @@ impl Species {
             Slime | MagmaCube => 1.0,
             EnderDragon => 200.0,
             Wither => 300.0,
+            // Land animals (Cursor)
+            Goat | Ocelot => 10.0,
+            PolarBear => 30.0,
+            Armadillo => 12.0,
+            Camel | CamelHusk => 32.0,
+            Sniffer => 14.0,
+            SkeletonHorse | ZombieHorse => 15.0,
+            Hoglin | Zoglin => 40.0,
+            PiglinBrute => 50.0,
             _ => 20.0,
         }
     }
@@ -224,6 +265,14 @@ impl Species {
             Phantom | Ghast => 0.7,
             Wither => 0.6,
             Slime | MagmaCube => 0.3,
+            // Land animals (Cursor)
+            Goat | SkeletonHorse | ZombieHorse => 0.2,
+            Ocelot | Hoglin | Zoglin => 0.3,
+            PiglinBrute => 0.35,
+            Armadillo => 0.14,
+            Panda => 0.15,
+            Camel | CamelHusk => 0.09,
+            Sniffer => 0.1,
             _ => 0.25,
         }
     }
@@ -238,6 +287,8 @@ impl Species {
             Blaze => 48.0,
             Fox => 32.0,
             Wither => 40.0,
+            PolarBear => 20.0,
+            PiglinBrute => 12.0,
             _ => 16.0,
         }
     }
@@ -260,6 +311,10 @@ impl Species {
             Endermite => 2.0,
             // Each blow rolls 7.5 to 21.5 around this (see the melee goal).
             IronGolem => 15.0,
+            PolarBear | Hoglin | Zoglin => 6.0,
+            Ocelot => 3.0,
+            Panda => 2.0,
+            PiglinBrute => 7.0,
             _ => 0.0,
         }
     }
@@ -278,6 +333,7 @@ impl Species {
     pub fn knockback_resistance(self) -> f64 {
         match self {
             Species::IronGolem => 1.0,
+            Species::Hoglin | Species::Zoglin => 0.6,
             _ => 0.0,
         }
     }
@@ -297,6 +353,10 @@ impl Species {
                 | Phantom
                 | ZombifiedPiglin
                 | Wither
+                | SkeletonHorse
+                | ZombieHorse
+                | Zoglin
+                | CamelHusk
         )
     }
 
@@ -360,6 +420,9 @@ impl Species {
         match self {
             Species::Rabbit | Species::Fox => 5.0,
             Species::Horse | Species::Donkey | Species::Mule => 4.0,
+            // Land animals (Cursor): 10 HP less fall damage than the usual 3.
+            Species::Goat => 13.0,
+            Species::SkeletonHorse | Species::ZombieHorse => 4.0,
             _ => 3.0,
         }
     }
@@ -367,6 +430,7 @@ impl Species {
     /// Can have babies (`AgeableMob`).
     pub fn ageable(self) -> bool {
         self.category() == Category::Creature && self != Species::Parrot
+            || matches!(self, Species::Hoglin | Species::Zoglin | Species::CamelHusk)
     }
 
     /// Babies of these grow up; zombies and piglins stay babies.
@@ -395,6 +459,14 @@ impl Species {
             Cat => "minecraft:cat_food",
             Fox => "minecraft:fox_food",
             Parrot => "minecraft:parrot_food",
+            // Land animals (Cursor)
+            Goat => "minecraft:goat_food",
+            Ocelot => "minecraft:ocelot_food",
+            Hoglin => "minecraft:hoglin_food",
+            Armadillo => "minecraft:armadillo_food",
+            Panda => "minecraft:panda_food",
+            Camel => "minecraft:camel_food",
+            Sniffer => "minecraft:sniffer_food",
             _ => return None,
         })
     }
@@ -406,6 +478,8 @@ impl Species {
             Horse | Donkey | Mule => Some("minecraft:horse_tempt_items"),
             Llama | TraderLlama => Some("minecraft:llama_tempt_items"),
             Strider => Some("minecraft:strider_tempt_items"),
+            // Land animals (Cursor)
+            CamelHusk => Some("minecraft:camel_husk_food"),
             Wolf | Parrot => None,
             _ => self.food_tag(),
         }
@@ -480,6 +554,7 @@ impl Species {
             Category::Monster => match self {
                 Blaze => (10, 10),
                 Endermite => (3, 3),
+                PiglinBrute => (20, 20),
                 Wither => (50, 50),
                 // The dragon's experience comes out as it dies.
                 Slime | MagmaCube | EnderDragon => (0, 0),
@@ -520,6 +595,19 @@ impl Species {
                     | Silverfish
                     | Endermite
                     | IronGolem
+                    // Land animals (Cursor)
+                    | Goat
+                    | PolarBear
+                    | Hoglin
+                    | Zoglin
+                    | PiglinBrute
+                    | SkeletonHorse
+                    | ZombieHorse
+                    | Armadillo
+                    | Panda
+                    | Camel
+                    | CamelHusk
+                    | Sniffer
             ),
             Sound::Hurt | Sound::Death => true,
         };

@@ -19,6 +19,7 @@ pub mod golems;
 pub mod hurt;
 pub mod infest;
 pub mod interact;
+mod land;
 pub mod meta;
 pub mod nbt;
 pub mod ride;
@@ -905,6 +906,13 @@ fn handle(
         MobEvent::Vanish => entities[i].removed = true,
         MobEvent::Hide { cell } => infest::hide(ctx, level, entities, i, cell),
         MobEvent::WakeFriends => infest::wake_friends(ctx, level, entities, i, &mut out.fresh),
+        // Land animals (Cursor)
+        MobEvent::Ram {
+            target,
+            damage,
+            knockback,
+        } => land::ram(ctx, entities, i, target, damage, knockback, targets),
+        MobEvent::Horn => land::horn(ctx, &mut entities[i]),
     }
 }
 

@@ -135,6 +135,13 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     }
     let (armor, toughness) = armor_of(ctx, m);
     let amount = crate::damage::armor_reduce(h.amount, armor, toughness, h.kind);
+    // Land animals (Cursor): a curled armadillo takes what is left after
+    // one point, halved.
+    let amount = if m.species == Species::Armadillo && m.quirks.land.rolled {
+        ((amount - 1.0) / 2.0).max(0.0)
+    } else {
+        amount
+    };
     let amount = crate::effects::reduce_damage(&m.effects, amount, h.kind);
     if !m.hurt(amount, h.by.or(h.player.map(|_| -1))) {
         return false;
@@ -357,6 +364,14 @@ pub fn mob_attacks(
     // The weapon's modifiers, strength and weakness change the blow.
     let damage = crate::mob_effects::attribute(ctx, m, "attack_damage", f64::from(damage))
         .clamp(0.0, 2048.0) as f32;
+    // Land animals (Cursor): a grown hoglin's or zoglin's blow rolls
+    // between half and one and a half times its damage, and throws.
+    let throws = matches!(species, Species::Hoglin | Species::Zoglin) && !m.is_baby();
+    let damage = if throws && damage > 0.0 {
+        damage / 2.0 + crate::hits::rnd() as f32 * damage
+    } else {
+        damage
+    };
     let disables = weapon.and_then(|w| w.weapon).map_or(0.0, |w| w.1);
     let burning = m.burning > 0;
     if let Some(t) = targets.iter().find(|t| t.id == target) {
@@ -372,6 +387,12 @@ pub fn mob_attacks(
             disables_shield: disables,
         };
         if crate::combat::hurt_player(ctx, t.uuid, &hit).is_some() {
+            if throws {
+                let (dx, dz) = (t.pos[0] - pos[0], t.pos[2] - pos[2]);
+                let len = dx.hypot(dz).max(1e-4);
+                let push = [dx / len * 0.5, 0.5, dz / len * 0.5];
+                crate::combat::push_player(ctx, t.uuid, t.id, push);
+            }
             poison(ctx, t.uuid, species, difficulty);
             if burning && crate::hits::rnd() < f64::from(difficulty) * 0.3 {
                 // Burning zombies set what they hit alight.
@@ -395,8 +416,9 @@ pub fn mob_attacks(
             if self::harm(ctx, &mut entities[j], &harm) {
                 bite(ctx, &mut entities[j], species, difficulty);
             }
-            // An iron golem throws what it hits up into the air.
-            if species == Species::IronGolem
+            // An iron golem throws what it hits up into the air, and so
+            // do grown hoglins and zoglins.
+            if (species == Species::IronGolem || throws)
                 && let Kind::Mob(t) = &entities[j].kind
             {
                 let lift = 0.4 * (1.0 - armor_resistance(ctx, t)).max(0.0);
@@ -891,6 +913,14 @@ pub fn breed(
     let pos = a.pos;
     let (va, vb) = (ma.variant, mb.variant);
     let owner = ma.owner.or(mb.owner);
+    // Land animals (Cursor): both screamers have a screaming baby, one
+    // parent about half the time, neither about one in fifty.
+    let (scream_a, scream_b) = (ma.quirks.land.screaming, mb.quirks.land.screaming);
+    // A panda takes one gene from each parent, rarely a new one.
+    let genes = [
+        [ma.quirks.land.main_gene, ma.quirks.land.hidden_gene],
+        [mb.quirks.land.main_gene, mb.quirks.land.hidden_gene],
+    ];
     let mut baby = super::new_mob(ctx, kind, pos);
     if let Kind::Mob(m) = &mut baby.kind {
         m.set_baby(true);
@@ -908,6 +938,30 @@ pub fn breed(
             m.owner = owner;
             m.set_max_health(if kind == Species::Wolf { 40.0 } else { 10.0 });
         }
+        // Land animals (Cursor)
+        if kind == Species::Goat {
+            m.quirks.land.screaming = if scream_a && scream_b {
+                true
+            } else if scream_a || scream_b {
+                m.below(2) == 0
+            } else {
+                m.below(50) == 0
+            };
+            m.quirks.land.left_horn = true;
+            m.quirks.land.right_horn = true;
+        }
+        if kind == Species::Panda {
+            use mc_entity::mob::land::{Gene, set_genes};
+            let pick = |m: &mut mc_entity::Mob, from: [u8; 2]| {
+                if m.below(32) == 0 {
+                    Gene::random(m)
+                } else {
+                    Gene::from_byte(from[m.below(2) as usize])
+                }
+            };
+            let (main, hidden) = (pick(m, genes[0]), pick(m, genes[1]));
+            set_genes(m, main, hidden);
+        }
         m.persistent = true;
     }
     for k in [i, j] {
@@ -922,6 +976,21 @@ pub fn breed(
         let _ = p;
         let xp = 1 + (crate::util::random_u64() % 7) as i32;
         crate::xp::spawn(ctx, pos, xp);
+    }
+    // Land animals (Cursor): sniffers lay an egg, which hatches later.
+    if kind == Species::Sniffer {
+        if let Some(egg) = ctx.items.id("minecraft:sniffer_egg") {
+            crate::tick::spawn_item_at(ctx, pos, egg, 1);
+        }
+        fx::sound(
+            ctx,
+            "entity.sniffer.drop_seed",
+            fx::category::NEUTRAL,
+            pos,
+            1.0,
+            1.0,
+        );
+        return None;
     }
     Some(baby)
 }
