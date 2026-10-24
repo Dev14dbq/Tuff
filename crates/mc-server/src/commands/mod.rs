@@ -40,7 +40,10 @@ use crate::tick::{TickControl, lock};
 pub(crate) use functions::tick as run_functions;
 pub(crate) use run::resolve_text;
 
-pub use progress::{known_recipes, load_progress, save_advancements};
+pub use progress::{
+    highlighted, in_water, initial_book, inventory_changed, known_recipes, knows_recipe,
+    load_progress, recipe_seen, save_advancements,
+};
 pub use scoreboard::stat_scores;
 pub use suggest::suggest;
 

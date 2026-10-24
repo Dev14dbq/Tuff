@@ -487,7 +487,7 @@ async fn play(
     let mut ctx = writer.ctx.of_player(uuid);
     // Subscribe before reading the player list, so nobody slips through.
     let mut events = ctx.events.subscribe();
-    crate::commands::load_progress(&ctx, uuid, &me.extra.recipes);
+    crate::commands::load_progress(&ctx, uuid, &me.extra.recipes, &me.extra.book.highlight);
     crate::stats::load(&ctx, uuid);
     let mut pose = session
         .saved
@@ -1581,6 +1581,8 @@ async fn play(
                                 Direct::TestHighlight(p) => writer.queue(&p)?,
                                 Direct::Motion(p) => writer.queue(&p)?,
                                 Direct::Map(p) => writer.queue(&p)?,
+                                Direct::RecipeAdd(p) => writer.queue(&p)?,
+                                Direct::RecipeRemove(p) => writer.queue(&p)?,
                             }
                         }
                         Ok(Event::Scoreboard(p)) => send_scoreboard(writer, &p)?,

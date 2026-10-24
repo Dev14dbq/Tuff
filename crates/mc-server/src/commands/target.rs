@@ -226,21 +226,32 @@ fn item_key(ctx: &ServerContext, item: i32) -> String {
     }
 }
 
+fn player_target(
+    board: &crate::scoreboard::Scoreboard,
+    p: &crate::context::OnlinePlayer,
+) -> Option<Target> {
+    Some(Target::Player {
+        uuid: p.profile.uuid,
+        name: p.profile.name.clone(),
+        pose: p.pose?,
+        game_mode: p.game_mode,
+        tags: p.extra.tags.clone(),
+        team: decor(board, &p.profile.name, Tag::from(p.profile.name.as_str())),
+    })
+}
+
+/// One online player.
+pub fn player(ctx: &ServerContext, uuid: u128) -> Option<Target> {
+    let board = lock(&ctx.scoreboard);
+    player_target(&board, lock(&ctx.players).get(&uuid)?)
+}
+
 /// Every player and entity, players first in join order.
 pub fn everyone(ctx: &ServerContext) -> Vec<Target> {
     let board = lock(&ctx.scoreboard);
     let mut out: Vec<Target> = lock(&ctx.players)
         .values()
-        .filter_map(|p| {
-            Some(Target::Player {
-                uuid: p.profile.uuid,
-                name: p.profile.name.clone(),
-                pose: p.pose?,
-                game_mode: p.game_mode,
-                tags: p.extra.tags.clone(),
-                team: decor(&board, &p.profile.name, Tag::from(p.profile.name.as_str())),
-            })
-        })
+        .filter_map(|p| player_target(&board, p))
         .collect();
     for e in lock(&ctx.entities).iter().filter(|e| !e.removed) {
         let (kind, name_key) = match &e.kind {

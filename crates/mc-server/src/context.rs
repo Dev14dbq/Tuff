@@ -78,6 +78,10 @@ pub enum Direct {
     Motion(mc_protocol::packets::play::SetEntityMotion),
     /// Colours and icons of one map.
     Map(mc_protocol::packets::play::MapItemData),
+    /// Recipes gained by the recipe book.
+    RecipeAdd(mc_protocol::packets::play::RecipeBookAdd),
+    /// Recipes lost by the recipe book.
+    RecipeRemove(mc_protocol::packets::play::RecipeBookRemove),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
