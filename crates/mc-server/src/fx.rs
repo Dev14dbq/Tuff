@@ -294,7 +294,7 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                 }
                 Shot::Bobber { .. } => {}
                 Shot::Lightning { .. } => s.data = 0,
-                Shot::WindCharge { .. } => {}
+                Shot::WindCharge { .. } | Shot::Fangs { .. } => {}
             }
         }
         Kind::Crystal(c) => {
@@ -486,6 +486,7 @@ pub fn type_name(kind: &Kind) -> Option<String> {
             Shot::Lightning { .. } => "lightning_bolt",
             Shot::WindCharge { breeze: true } => "breeze_wind_charge",
             Shot::WindCharge { breeze: false } => "wind_charge",
+            Shot::Fangs { .. } => "evoker_fangs",
         }
         .into(),
         Kind::Hung(h) => match &h.decor {

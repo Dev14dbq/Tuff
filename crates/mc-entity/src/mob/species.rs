@@ -95,6 +95,13 @@ species! {
     Camel => "minecraft:camel", "Camel";
     CamelHusk => "minecraft:camel_husk", "Camel Husk";
     Sniffer => "minecraft:sniffer", "Sniffer";
+    // Illagers and their kin
+    Pillager => "minecraft:pillager", "Pillager";
+    Vindicator => "minecraft:vindicator", "Vindicator";
+    Evoker => "minecraft:evoker", "Evoker";
+    Illusioner => "minecraft:illusioner", "Illusioner";
+    Vex => "minecraft:vex", "Vex";
+    Ravager => "minecraft:ravager", "Ravager";
 }
 
 /// Which sound of a mob.
@@ -181,6 +188,10 @@ impl Species {
             Panda => (1.3, 1.25),
             Camel | CamelHusk => (1.7, 2.375),
             Sniffer => (1.9, 1.75),
+            // Illagers and their kin
+            Pillager | Vindicator | Evoker | Illusioner => (0.6, 1.95),
+            Vex => (0.4, 0.8),
+            Ravager => (1.95, 2.2),
         }
     }
 
@@ -213,6 +224,10 @@ impl Species {
             Goat => 0.95,
             Ocelot => 0.5,
             PiglinBrute => 1.79 / 1.95,
+            // Illagers and their kin
+            Pillager | Vindicator | Evoker | Illusioner => 1.62 / 1.95,
+            Vex => 0.51875 / 0.8,
+            Ravager => 2.1 / 2.2,
             _ => 0.85,
         }
     }
@@ -246,6 +261,11 @@ impl Species {
             SkeletonHorse | ZombieHorse => 15.0,
             Hoglin | Zoglin => 40.0,
             PiglinBrute => 50.0,
+            // Illagers and their kin
+            Pillager | Vindicator | Evoker => 24.0,
+            Illusioner => 32.0,
+            Vex => 14.0,
+            Ravager => 100.0,
             _ => 20.0,
         }
     }
@@ -273,6 +293,11 @@ impl Species {
             Panda => 0.15,
             Camel | CamelHusk => 0.09,
             Sniffer => 0.1,
+            // Illagers and their kin
+            Pillager | Vindicator => 0.35,
+            Evoker | Illusioner => 0.5,
+            Vex => 0.6,
+            Ravager => 0.3,
             _ => 0.25,
         }
     }
@@ -289,6 +314,10 @@ impl Species {
             Wither => 40.0,
             PolarBear => 20.0,
             PiglinBrute => 12.0,
+            // Illagers and their kin
+            Pillager | Ravager => 32.0,
+            Vindicator | Evoker => 12.0,
+            Illusioner => 18.0,
             _ => 16.0,
         }
     }
@@ -315,6 +344,10 @@ impl Species {
             Ocelot => 3.0,
             Panda => 2.0,
             PiglinBrute => 7.0,
+            // Illagers and their kin
+            Pillager | Vindicator => 5.0,
+            Vex => 4.0,
+            Ravager => 12.0,
             _ => 0.0,
         }
     }
@@ -334,6 +367,7 @@ impl Species {
         match self {
             Species::IronGolem => 1.0,
             Species::Hoglin | Species::Zoglin => 0.6,
+            Species::Ravager => 0.75,
             _ => 0.0,
         }
     }
@@ -395,6 +429,7 @@ impl Species {
                 | Species::Parrot
                 | Species::EnderDragon
                 | Species::Wither
+                | Species::Vex
         )
     }
 
@@ -412,6 +447,7 @@ impl Species {
                 | Species::SnowGolem
                 | Species::EnderDragon
                 | Species::Wither
+                | Species::Vex
         )
     }
 
@@ -536,6 +572,19 @@ impl Species {
         )
     }
 
+    /// Illagers: pillagers, vindicators, evokers, illusioners.
+    pub fn illager(self) -> bool {
+        matches!(
+            self,
+            Species::Pillager | Species::Vindicator | Species::Evoker | Species::Illusioner
+        )
+    }
+
+    /// Those that fight in raids: illagers, witches and ravagers.
+    pub fn raider(self) -> bool {
+        self.illager() || matches!(self, Species::Witch | Species::Ravager)
+    }
+
     /// Arthropods: Bane of Arthropods hurts them more and slows them.
     pub fn arthropod(self) -> bool {
         matches!(
@@ -554,7 +603,8 @@ impl Species {
             Category::Monster => match self {
                 Blaze => (10, 10),
                 Endermite => (3, 3),
-                PiglinBrute => (20, 20),
+                PiglinBrute | Ravager => (20, 20),
+                Evoker => (10, 10),
                 Wither => (50, 50),
                 // The dragon's experience comes out as it dies.
                 Slime | MagmaCube | EnderDragon => (0, 0),
@@ -608,6 +658,7 @@ impl Species {
                     | Camel
                     | CamelHusk
                     | Sniffer
+                    | Ravager
             ),
             Sound::Hurt | Sound::Death => true,
         };

@@ -146,6 +146,13 @@ pub enum Shot {
         /// Only seen: no fire, no damage.
         visual: bool,
     },
+    /// Evoker fangs: ticks before they snap, ticks they stay after, and
+    /// whether they have bitten (clients are told once).
+    Fangs {
+        warmup: i32,
+        life: i32,
+        snapped: bool,
+    },
     /// A wind charge: a player's (thrown) or a breeze's.
     WindCharge {
         breeze: bool,

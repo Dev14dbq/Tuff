@@ -264,6 +264,8 @@ pub enum Goal {
     },
     // Land animals (Cursor)
     Land(super::land::Act),
+    /// Illagers, vexes and ravagers.
+    Illager(super::illager::Act),
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -900,6 +902,7 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::can_use(act, m, b, s),
+        Goal::Illager(act) => super::illager::can_use(act, m, b, s),
     }
 }
 
@@ -1104,6 +1107,7 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::can_continue(act, m),
+        Goal::Illager(act) => super::illager::can_continue(act, m, s),
     }
 }
 
@@ -1201,6 +1205,7 @@ fn start(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobE
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::start(act, m, out),
+        Goal::Illager(act) => super::illager::start(act, m, b, s, out),
         _ => {}
     }
 }
@@ -1293,6 +1298,7 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::stop(act, m),
+        Goal::Illager(act) => super::illager::stop(act, m),
         _ => {}
     }
 }
@@ -1334,6 +1340,10 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
                 out.push(MobEvent::Swing);
                 // An iron golem's blow is half its attack and a roll of up to
                 // all of it again: 7.5 to 21.5.
+                if m.species == Species::Ravager {
+                    out.push(MobEvent::Status(4));
+                    m.quirks.illager.attack_tick = 10;
+                }
                 let damage = if m.species == Species::IronGolem {
                     out.push(MobEvent::Status(4));
                     let a = m.species.attack_damage();
@@ -1668,6 +1678,7 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::tick(act, m, b, s, out),
+        Goal::Illager(act) => super::illager::tick(act, m, b, s, out),
     }
 }
 

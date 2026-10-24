@@ -804,6 +804,11 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
         ZombifiedPiglin => Some("golden_sword"),
         // Land animals (Cursor)
         PiglinBrute => Some("golden_axe"),
+        // Illagers and their kin
+        Pillager => Some("crossbow"),
+        Vindicator => Some("iron_axe"),
+        Vex => Some("iron_sword"),
+        Illusioner => Some("bow"),
         Piglin => Some(if m.below(2) == 0 {
             "crossbow"
         } else {
