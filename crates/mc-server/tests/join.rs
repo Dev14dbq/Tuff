@@ -3793,3 +3793,85 @@ async fn clicking_a_recipe_in_the_book_fills_the_grid_or_shows_a_ghost() {
     assert_eq!(hands.slots[36].as_ref().map(|s| s.count), Some(1));
     let _ = stop.send(());
 }
+
+#[tokio::test]
+async fn a_thrown_block_is_gone_from_the_hand_for_the_server_too() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Miner".into()];
+    let server = Server::bind(config).await.unwrap();
+    server
+        .context()
+        .game_rules
+        .lock()
+        .unwrap()
+        .set("respawn_radius", mc_server::rules::Value::Int(0));
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut miner, _) = join_offline(addr, ctx.ids.clone(), "Miner").await;
+    let command = |text: &str| {
+        let mut body = Vec::new();
+        body.put_string(text);
+        body
+    };
+    miner.send("minecraft:chat_command", command("gamemode survival")).await;
+    miner.recv_until("minecraft:game_event").await;
+    miner.send("minecraft:chat_command", command("setblock 1 -60 0 stone")).await;
+    miner.recv_until("minecraft:block_update").await;
+    miner.send("minecraft:chat_command", command("give Miner minecraft:cobblestone 1")).await;
+    miner.recv_until("minecraft:container_set_slot").await;
+
+    // Q: drop one.
+    let mut drop = Vec::new();
+    drop.put_varint(4);
+    drop.put_position(mc_protocol::Position::new(0, 0, 0));
+    drop.put_i8(0);
+    drop.put_varint(0);
+    miner.send("minecraft:player_action", drop).await;
+    miner.recv_until("minecraft:add_entity").await;
+    assert!(
+        ctx.inventories.lock().unwrap().values().all(|h| h.slots.iter().all(Option::is_none)),
+        "the thrown block left the server's hands too"
+    );
+
+    // Right click the stone: nothing is in the hand, nothing may be placed.
+    let mut place = Vec::new();
+    place.put_varint(0);
+    place.put_position(mc_protocol::Position::new(1, -60, 0));
+    place.put_varint(1);
+    for c in [0.5f32, 1.0, 0.5] {
+        place.put_f32(c);
+    }
+    place.put_bool(false);
+    place.put_bool(false);
+    place.put_varint(2);
+    miner.send("minecraft:use_item_on", place).await;
+    let placed = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let (name, body) = miner.recv().await;
+            if name == "minecraft:block_update" {
+                let mut r = Reader::new(&body);
+                if r.position().unwrap() == mc_protocol::Position::new(1, -59, 0) {
+                    return r.varint().unwrap();
+                }
+            }
+        }
+    })
+    .await;
+    // The server may only put the air back that the client guessed away.
+    assert!(
+        matches!(placed, Err(_) | Ok(0)),
+        "a block was placed from an empty hand"
+    );
+    let _ = stop.send(());
+}
