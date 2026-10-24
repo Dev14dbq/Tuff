@@ -470,6 +470,7 @@ fn breaking_a_heart_kills_its_creaking() {
     assert_eq!(count_of(&ctx, Species::Creaking), 1);
     let p = mc_protocol::Position::new(10, -60, 10);
     let state = ctx.world.block(p, &ctx.data.blocks).unwrap();
+    set_state(&ctx, [10, -60, 10], ctx.shapes.air());
     crate::mobs::creaking::broken(&ctx, p, state, Some(STEVE));
     run(&ctx, 30);
     assert_eq!(count_of(&ctx, Species::Creaking), 0);

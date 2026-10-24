@@ -347,6 +347,10 @@ impl Spots<'_> {
                 if species == Species::Slime {
                     return self.slime_fits(x, y, z);
                 }
+                // Sulfur cubes spawn at any light level.
+                if species == Species::SulfurCube {
+                    return true;
+                }
                 if self.ctx.world.block_light(p) > 0 {
                     return false;
                 }
@@ -953,7 +957,10 @@ pub fn despawn(
         if !matches!(m.species.category(), Category::Monster | Category::Ambient) || e.removed {
             continue;
         }
-        if difficulty == 0 && m.species.category() == Category::Monster {
+        if difficulty == 0
+            && m.species.category() == Category::Monster
+            && m.species != Species::SulfurCube
+        {
             e.removed = true;
             gone.push(id);
             continue;
@@ -1039,7 +1046,7 @@ mod tests {
     fn only_known_species_are_kept() {
         let list = serde_json::json!([
             {"type": "minecraft:cow", "count": 4, "weight": 8},
-            {"type": "minecraft:creaking", "count": 4, "weight": 5},
+            {"type": "minecraft:warden", "count": 4, "weight": 5},
             {"type": "minecraft:zombie", "count": {"min_inclusive": 1, "max_inclusive": 2}, "weight": 90},
         ]);
         let e = entries(&list);

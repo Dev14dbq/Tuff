@@ -602,6 +602,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         if difficulty == 0
             && m.species.category() == Category::Monster
             && m.species != Species::EnderDragon
+            && m.species != Species::SulfurCube
         {
             e.removed = true;
             out.removed.push(e.id);
