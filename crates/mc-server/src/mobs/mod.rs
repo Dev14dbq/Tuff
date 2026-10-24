@@ -398,10 +398,10 @@ fn others(entities: &[Entity]) -> Vec<Other> {
                     in_love: m.in_love(),
                     owner: m.owner,
                     // An axolotl playing dead is not there for anything hunting it.
-                    alive: m.dying.is_none()
-                        && !m.is_dead()
-                        && !e.removed
-                        && !(m.species == Species::Axolotl && m.quirks.aqua.dead_play > 0),
+                    alive: !(m.dying.is_some()
+                        || m.is_dead()
+                        || e.removed
+                        || m.species == Species::Axolotl && m.quirks.aqua.dead_play > 0),
                 })
             }
             Kind::Merchant(m) => Some(Other {

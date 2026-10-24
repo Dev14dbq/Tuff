@@ -676,7 +676,7 @@ pub fn trample_eggs(
         return;
     }
     let chance = if fell.is_some() { 3 } else { 100 };
-    if crate::util::random_u64() % chance != 0 {
+    if !crate::util::random_u64().is_multiple_of(chance) {
         return;
     }
     let at = mc_protocol::Position::new(
