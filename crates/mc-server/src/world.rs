@@ -620,6 +620,9 @@ impl World {
                     | "minecraft:furnace"
                     | "minecraft:blast_furnace"
                     | "minecraft:smoker"
+                    | "minecraft:brewing_stand"
+                    | "minecraft:campfire"
+                    | "minecraft:crafter"
                     | "minecraft:daylight_detector"
             )
         });
@@ -1889,6 +1892,25 @@ pub(crate) fn client_data(id: &str, data: &mc_nbt::Compound) -> Option<mc_nbt::C
     ];
     if CONTAINERS.contains(&id) {
         return None;
+    }
+    // A campfire shows the food on it, and only that.
+    if id == "minecraft:campfire" {
+        let mut out = mc_nbt::Compound::new();
+        if let Some(items) = data.get("Items") {
+            out.insert("Items", items.clone());
+        }
+        return Some(out);
+    }
+    // A vault shows its config and what it displays; the rewards stay with
+    // the server.
+    if id == "minecraft:vault" {
+        let mut out = mc_nbt::Compound::new();
+        for key in ["config", "shared_data"] {
+            if let Some(v) = data.get(key) {
+                out.insert(key, v.clone());
+            }
+        }
+        return Some(out);
     }
     let mut data = data.clone();
     for key in [

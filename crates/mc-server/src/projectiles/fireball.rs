@@ -88,6 +88,8 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             mob: true,
             dangerous: false,
             by: None,
+            fire: t.ctx.game_rule_bool("mob_griefing"),
+            respawn: None,
         });
     }
 }

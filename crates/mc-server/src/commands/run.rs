@@ -849,7 +849,7 @@ pub(super) fn style(t: &mut Tag, styles: &[(&str, &str)]) {
 }
 
 /// Fills in `selector` parts of a text component with who they find.
-pub(super) fn resolve_text(ctx: &ServerContext, src: &Src, t: &Tag) -> Tag {
+pub(crate) fn resolve_text(ctx: &ServerContext, src: &Src, t: &Tag) -> Tag {
     match t {
         Tag::Compound(c) => {
             if let Some(Tag::String(sel)) = c.get("selector") {
@@ -876,6 +876,37 @@ pub(super) fn resolve_text(ctx: &ServerContext, src: &Src, t: &Tag) -> Tag {
                     }
                 };
             }
+            // `{score: {name, objective}}` shows the score; `@s` is the source.
+            if let Some(Tag::Compound(score)) = c.get("score") {
+                let name = match score.get("name") {
+                    Some(Tag::String(n)) => n.clone(),
+                    _ => String::new(),
+                };
+                let objective = match score.get("objective") {
+                    Some(Tag::String(o)) => o.clone(),
+                    _ => String::new(),
+                };
+                let holders: Vec<String> = if name.starts_with('@') {
+                    let mut reader = mc_command::reader::Reader::new(&name);
+                    mc_command::args::read_selector(&mut reader, &ctx.commands.env)
+                        .map(|s| target::resolve(ctx, &s, src))
+                        .unwrap_or_default()
+                        .iter()
+                        .map(Target::holder)
+                        .collect()
+                } else {
+                    vec![name]
+                };
+                let value = holders.first().and_then(|h| {
+                    lock(&ctx.scoreboard)
+                        .score(h, &objective)
+                        .map(|s| s.value.to_string())
+                });
+                return Tag::from(value.unwrap_or_default().as_str());
+            }
+            if let Some(Tag::String(path)) = c.get("nbt") {
+                return nbt_text(ctx, src, path, c);
+            }
             let mut out = Compound::new();
             for (k, v) in c.iter() {
                 let v = if k == "extra" || k == "with" {
@@ -890,6 +921,76 @@ pub(super) fn resolve_text(ctx: &ServerContext, src: &Src, t: &Tag) -> Tag {
         Tag::List(l) => Tag::List(l.iter().map(|e| resolve_text(ctx, src, e)).collect()),
         other => other.clone(),
     }
+}
+
+/// `{nbt: path, entity | block | storage: ..}`: what the path finds in that
+/// data, one after another with the `separator` (`", "`); `interpret` takes
+/// each as a text component.
+fn nbt_text(ctx: &ServerContext, src: &Src, path: &str, c: &Compound) -> Tag {
+    use super::data::{Holder, read};
+    let holder = match (c.get("entity"), c.get("block"), c.get("storage")) {
+        (Some(Tag::String(sel)), _, _) => {
+            let mut reader = mc_command::reader::Reader::new(sel);
+            mc_command::args::read_selector(&mut reader, &ctx.commands.env)
+                .ok()
+                .and_then(|s| target::resolve(ctx, &s, src).into_iter().next())
+                .map(|t| Holder::Entity(Box::new(t)))
+        }
+        (_, Some(Tag::String(at)), _) => {
+            let parts: Vec<&str> = at.split_whitespace().collect();
+            (parts.len() == 3).then(|| {
+                let coord = |i: usize| {
+                    let s = parts[i];
+                    let (rel, num) = match s.strip_prefix(['~', '^']) {
+                        Some(rest) => (true, rest),
+                        None => (false, s),
+                    };
+                    let v: f64 = num.parse().unwrap_or(0.0);
+                    (if rel { src.pos[i] + v } else { v }).floor() as i32
+                };
+                Holder::Block(Position::new(coord(0), coord(1), coord(2)))
+            })
+        }
+        (_, _, Some(Tag::String(id))) => Some(Holder::Storage(if id.contains(':') {
+            id.clone()
+        } else {
+            format!("minecraft:{id}")
+        })),
+        _ => None,
+    };
+    let interpret = matches!(c.get("interpret"), Some(Tag::Byte(1)));
+    let separator = match c.get("separator") {
+        Some(Tag::String(s)) => Tag::String(s.clone()),
+        Some(other) => resolve_text(ctx, src, other),
+        None => Tag::String(", ".into()),
+    };
+    let found = holder
+        .and_then(|h| read(ctx, &h).ok())
+        .and_then(|data| {
+            let mut reader = mc_command::reader::Reader::new(path);
+            mc_command::nbtpath::parse(&mut reader)
+                .ok()?
+                .get(&Tag::Compound(data))
+                .ok()
+        })
+        .unwrap_or_default();
+    let mut parts = Vec::new();
+    for (i, t) in found.iter().enumerate() {
+        if i > 0 {
+            parts.push(separator.clone());
+        }
+        parts.push(match t {
+            Tag::String(s) if interpret => mc_nbt::parse_snbt(s)
+                .map_or_else(|_| Tag::String(s.clone()), |v| resolve_text(ctx, src, &v)),
+            Tag::String(s) if !interpret => Tag::String(format!("\"{s}\"")),
+            other if interpret => resolve_text(ctx, src, other),
+            other => Tag::String(mc_command::particle::snbt(other)),
+        });
+    }
+    let mut out = Compound::new();
+    out.insert("text", "");
+    out.insert("extra", Tag::List(parts));
+    Tag::Compound(out)
 }
 
 fn tellraw(r: &mut Run) -> Result<i32> {

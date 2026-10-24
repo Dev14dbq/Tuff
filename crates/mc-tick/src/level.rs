@@ -44,6 +44,11 @@ pub trait Level {
         fluid == crate::fluids::Fluid::Water
     }
 
+    /// Whether vines spread (game rule `spread_vines`).
+    fn spread_vines(&self) -> bool {
+        true
+    }
+
     /// Water cannot stay here (the Nether): wet sponges dry at once.
     fn ultrawarm(&self) -> bool {
         false
@@ -213,6 +218,12 @@ pub trait Level {
         None
     }
 
+    /// The structure block at `p` is powered (or not): a save or load block
+    /// starts when the power comes.
+    fn structure_block_power(&mut self, _p: BlockPos, _powered: bool) {}
+    /// A test block's power changed.
+    fn test_block_power(&mut self, _p: BlockPos, _powered: bool) {}
+
     /// The due tick of the command block at `p`: it runs.
     fn command_block_tick(&mut self, _p: BlockPos) {}
 
@@ -223,4 +234,7 @@ pub trait Level {
 
     /// A dispenser or dropper at `p` facing `facing` fires.
     fn dispense(&mut self, _p: BlockPos, _facing: Dir, _dropper: bool) {}
+
+    /// A crafter at `p` was triggered: it crafts what its grid holds.
+    fn craft(&mut self, _p: BlockPos) {}
 }

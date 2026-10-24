@@ -106,6 +106,8 @@ pub fn tick_all(
                     mob: false,
                     dangerous: false,
                     by: None,
+                    fire: false,
+                    respawn: None,
                 });
             }
             destroyed.push((e.uuid, e.id, e.pos, by));

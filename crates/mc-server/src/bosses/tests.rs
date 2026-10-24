@@ -906,6 +906,8 @@ fn blue_skulls_break_almost_anything() {
         mob: true,
         dangerous: true,
         by: Some("minecraft:wither"),
+        fire: false,
+        respawn: None,
     };
     let mut level = WorldLevel::new(&ctx);
     let mut entities = Vec::new();

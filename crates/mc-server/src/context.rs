@@ -72,6 +72,8 @@ pub enum Direct {
     /// A command block's data, which opens its window.
     BlockEntityData(mc_protocol::packets::play::BlockEntityData),
     EntityEvent(mc_protocol::packets::play::EntityEvent),
+    TestStatus(mc_protocol::packets::play::TestInstanceBlockStatus),
+    TestHighlight(mc_protocol::packets::play::GameTestHighlightPos),
     /// A push (knockback): the player's own velocity.
     Motion(mc_protocol::packets::play::SetEntityMotion),
 }
@@ -186,10 +188,11 @@ pub enum Event {
         /// `minecraft:block` registry id.
         block: i32,
     },
-    /// A furnace's progress changed (its window's four properties).
+    /// A furnace's or brewing stand's progress changed (its window's
+    /// properties).
     FurnaceProgress {
         position: mc_protocol::Position,
-        values: [i16; 4],
+        values: Vec<i16>,
     },
     /// A player finished eating or drinking.
     UsedItem {
@@ -406,6 +409,8 @@ pub struct Shared {
     pub items: crate::items::Items,
     /// Burn times of fuels.
     pub fuels: crate::furnaces::Fuels,
+    /// Brewing recipes and fuels.
+    pub brewing: crate::brewing::Mixes,
     /// Players in bed at night, since when.
     pub sleepers: Mutex<crate::useblocks::Sleepers>,
     /// Players eating or drinking (tick thread counts down).
@@ -504,6 +509,15 @@ pub struct ServerContext {
     pub moving: Mutex<Vec<(mc_tick::BlockPos, mc_tick::pistons::Moving)>>,
     /// Furnaces burning or cooking (tick thread).
     pub furnaces: Mutex<crate::furnaces::Active>,
+    /// Brewing stands brewing (tick thread).
+    pub brewers: Mutex<crate::brewing::Active>,
+    /// Campfires with food on them (tick thread).
+    pub campfires: Mutex<crate::campfires::Active>,
+    /// Crafters showing `crafting` (tick thread).
+    pub crafters: Mutex<crate::crafter::Active>,
+    /// Explosions waiting for the next tick (beds and anchors used where
+    /// they do not work).
+    pub pending_blasts: Mutex<Vec<crate::explosion::Blast>>,
     /// Hoppers that tick (tick thread).
     pub hoppers: Mutex<crate::hoppers::Active>,
     /// Recent redstone torch toggles by position (burnout).
@@ -767,6 +781,10 @@ impl ServerContext {
             block_events: Mutex::new(Vec::new()),
             moving: Mutex::new(Vec::new()),
             furnaces: Mutex::new(HashMap::new()),
+            brewers: Mutex::new(HashMap::new()),
+            campfires: Mutex::new(Default::default()),
+            crafters: Mutex::new(HashMap::new()),
+            pending_blasts: Mutex::new(Vec::new()),
             hoppers: Mutex::new(Default::default()),
             torch_toggles: Mutex::new(HashMap::new()),
             container_updates: Mutex::new(Vec::new()),
@@ -864,6 +882,7 @@ impl ServerContext {
             Some(ids) => crate::furnaces::Fuels::load(&data, &items, ids),
             None => crate::furnaces::Fuels::default(),
         };
+        let brewing = crate::brewing::Mixes::load(&data, &items);
         let warned_observed = std::cell::Cell::new(false);
         let observed = |file: &str| {
             let path = config.data_dir.join("observed").join(file);
@@ -1007,6 +1026,7 @@ impl ServerContext {
             vitals: Mutex::new(HashMap::new()),
             items,
             using: Mutex::new(HashMap::new()),
+            brewing,
             fuels,
             sleepers: Mutex::new(HashMap::new()),
             difficulty: AtomicI32::new(difficulty),
@@ -1080,6 +1100,10 @@ impl ServerContext {
             hoppers: Mutex::new(Default::default()),
             torch_toggles: Mutex::new(HashMap::new()),
             furnaces: Mutex::new(HashMap::new()),
+            brewers: Mutex::new(HashMap::new()),
+            campfires: Mutex::new(Default::default()),
+            crafters: Mutex::new(HashMap::new()),
+            pending_blasts: Mutex::new(Vec::new()),
             block_events: Mutex::new(Vec::new()),
             moving: Mutex::new(Vec::new()),
             // Every movement is an event; leave room for many moving players.

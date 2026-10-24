@@ -11,7 +11,8 @@
 //!
 //! Dispensers and droppers read power at their own block or the one above
 //! (like pistons, "quasi-connectivity"); a rising edge sets `triggered` and
-//! schedules a tick 4 later, which fires them once.
+//! schedules a tick 4 later, which fires them once. Crafters do the same,
+//! reading power at their own block only, and craft.
 
 use crate::dir::{BlockPos, Dir};
 use crate::level::Level;
@@ -32,6 +33,10 @@ fn is_dispenser(ctx: Ctx, state: u32) -> Option<bool> {
         Some("minecraft:dropper") => Some(true),
         _ => None,
     }
+}
+
+fn is_crafter(ctx: Ctx, state: u32) -> bool {
+    ctx.shapes.block_name(state) == Some("minecraft:crafter")
 }
 
 fn flag(ctx: Ctx, state: u32, name: &str) -> bool {
@@ -64,8 +69,12 @@ pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
     let state = level.block(p);
     if is_hopper(ctx, state) {
         check_enabled(level, ctx, p, state);
-    } else if is_dispenser(ctx, state).is_some() {
-        let powered = powered_for_dispense(level, ctx, p);
+    } else if is_dispenser(ctx, state).is_some() || is_crafter(ctx, state) {
+        let powered = if is_crafter(ctx, state) {
+            redstone::received(level, ctx, p, true) > 0
+        } else {
+            powered_for_dispense(level, ctx, p)
+        };
         let triggered = flag(ctx, state, "triggered");
         if powered && !triggered {
             let kind = ctx.shapes.block_index(state);
@@ -91,6 +100,8 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
             .and_then(Dir::from_name)
     {
         level.dispense(p, facing, dropper);
+    } else if is_crafter(ctx, state) {
+        level.craft(p);
     }
 }
 

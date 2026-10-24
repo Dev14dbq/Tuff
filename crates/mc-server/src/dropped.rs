@@ -38,6 +38,9 @@ pub fn tick(
     };
     let was_on_ground = entity.on_ground;
     let (water, lava) = fluid_heights(ctx, entity);
+    // Flowing fluid carries it.
+    let b = entity.aabb();
+    crate::currents::push(ctx, b.min, b.max, &mut entity.vel);
     let v = &mut entity.vel;
     if water > 0.1 || lava > 0.1 {
         // Items float up slowly and are slowed sideways.

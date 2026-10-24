@@ -434,6 +434,16 @@ pub fn dig(
         }
         outcome.events.push(Event::ContainerGone { position });
     }
+    if blocks
+        .block_name(state)
+        .is_some_and(crate::campfires::is_campfire)
+    {
+        for stack in crate::campfires::broken(ctx, position) {
+            outcome
+                .drops
+                .push((position, crate::loot::Drop::of(&stack)));
+        }
+    }
     if blocks.block_name(state) == Some("minecraft:jukebox")
         && let Some(be) = ctx.world.block_entity(position, blocks)
         && let Some(mc_nbt::Tag::Compound(record)) = be.data.get("RecordItem")
@@ -808,6 +818,8 @@ pub fn use_item_on(
     for &(p, state) in &placed.blocks {
         crate::containers::placed(ctx, p, state);
         crate::command_blocks::placed(ctx, p, state);
+        crate::structure_blocks::placed(ctx, p, state);
+        crate::test_blocks::placed(ctx, p, state);
         if let Some(id) = ctx.data.blocks.block_name(state).and_then(sign_entity) {
             ctx.world.set_block_entity(
                 mc_world::BlockEntity {
@@ -1116,7 +1128,7 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
             let placed = if fluid == "minecraft:water"
                 && blocks.property(state, "waterlogged") == Some("false")
             {
-                level.set_block(hit, ctx.shapes.with(state, "waterlogged", "true"))
+                level.set_block(hit, crate::campfires::waterlogged(ctx, hit, state))
             } else {
                 let fits = |s: u32| ctx.shapes.is_air(s) || ctx.rules.is_replaceable(s);
                 let at = if fits(state) { hit } else { offset(hit, face) };

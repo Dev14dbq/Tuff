@@ -498,7 +498,7 @@ async fn play(
             .collect(),
         max_players: ctx.config.max_players as i32,
         view_distance: i32::from(ctx.config.view_distance),
-        simulation_distance: i32::from(ctx.config.view_distance),
+        simulation_distance: i32::from(ctx.config.simulation_distance),
         reduced_debug_info: ctx.game_rule_bool("reduced_debug_info"),
         enable_respawn_screen: !ctx.game_rule_bool("immediate_respawn"),
         do_limited_crafting: ctx.game_rule_bool("limited_crafting"),
@@ -799,6 +799,9 @@ async fn play(
                         play::Serverbound::ContainerButtonClick { window, button } => {
                             windows.button(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, button)?;
                         }
+                        play::Serverbound::ContainerSlotStateChanged { slot, window, enabled } => {
+                            windows.slot_state(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, slot, enabled)?;
+                        }
                         play::Serverbound::EditBook { slot, pages, title } => {
                             let index = match slot {
                                 0..=8 => 36 + slot as usize,
@@ -1021,6 +1024,19 @@ async fn play(
                             let held = ctx.inventories.lock().expect("inventories lock")
                                 .get(&uuid).and_then(|h| h.held(hand).map(|s| s.item));
                             if held.is_some_and(|i| ctx.items.name(i) == Some("minecraft:written_book")) {
+                                // Selectors and scores in the text are filled in for the reader.
+                                let mut resolved = None;
+                                change_hands(&ctx, uuid, entity_id, |hands| {
+                                    let slot = hands.hand_slot(hand);
+                                    if let Some(Some(stack)) = hands.slots.get_mut(slot)
+                                        && crate::books::resolve(&ctx, uuid, stack)
+                                    {
+                                        resolved = Some((slot, stack.clone()));
+                                    }
+                                });
+                                if let Some((slot, stack)) = resolved {
+                                    windows.inventory_slot(writer, slot as i16, Some(stack))?;
+                                }
                                 writer.queue(&play::OpenBook { hand })?;
                             }
                             crate::vitals::start_using(&ctx, uuid, entity_id, hand, game_mode);
@@ -1137,6 +1153,31 @@ async fn play(
                         play::Serverbound::SetCommandBlock { position, command, mode, flags } => {
                             let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                             let action = Action::CommandBlock { position, command, mode, flags };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                        }
+                        play::Serverbound::SetJigsawBlock { position, name, target, pool, final_state, joint, selection_priority, placement_priority } => {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::SetJigsaw { position, name, target, pool, final_state, joint, selection_priority, placement_priority };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                        }
+                        play::Serverbound::SetTestBlock { position, mode, message } => {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::SetTestBlock { position, mode, message };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                        }
+                        play::Serverbound::TestInstanceBlockAction { position, action, test, size, rotation, ignore_entities } => {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::TestInstance { position, action, test, size, rotation, ignore_entities };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                        }
+                        play::Serverbound::JigsawGenerate { position, levels, keep_jigsaws } => {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::GenerateJigsaw { position, levels, keep_jigsaws };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                        }
+                        play::Serverbound::SetStructureBlock { position, action, mode, name, offset, size, mirror, rotation, metadata, integrity, seed, flags } => {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::SetStructure { position, action, mode, name, offset, size, mirror, rotation, metadata, integrity, seed, flags };
                             let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
                         play::Serverbound::SetCommandMinecart { entity_id: cart, command, track_output } => {
@@ -1524,6 +1565,8 @@ async fn play(
                                 Direct::GameEvent(p) => writer.queue(&p)?,
                                 Direct::BlockEntityData(p) => writer.queue(&p)?,
                                 Direct::EntityEvent(p) => writer.queue(&p)?,
+                                Direct::TestStatus(p) => writer.queue(&p)?,
+                                Direct::TestHighlight(p) => writer.queue(&p)?,
                                 Direct::Motion(p) => writer.queue(&p)?,
                             }
                         }

@@ -387,6 +387,14 @@ impl Level for WorldLevel<'_> {
         crate::command_blocks::power(self.ctx, to_position(p), powered)
     }
 
+    fn structure_block_power(&mut self, p: BlockPos, powered: bool) {
+        crate::structure_blocks::power(self.ctx, to_position(p), powered);
+    }
+
+    fn test_block_power(&mut self, p: BlockPos, powered: bool) {
+        crate::test_blocks::power(self.ctx, to_position(p), powered);
+    }
+
     fn command_block_tick(&mut self, p: BlockPos) {
         crate::command_blocks::tick(self, to_position(p));
     }
@@ -509,6 +517,10 @@ impl Level for WorldLevel<'_> {
         })
     }
 
+    fn spread_vines(&self) -> bool {
+        self.ctx.game_rule_bool("minecraft:spread_vines")
+    }
+
     fn ultrawarm(&self) -> bool {
         self.ctx.world.dimension.contains("nether")
     }
@@ -587,6 +599,10 @@ impl Level for WorldLevel<'_> {
 
     fn dispense(&mut self, p: BlockPos, facing: mc_tick::Dir, dropper: bool) {
         crate::hoppers::dispense(self, to_position(p), facing, dropper);
+    }
+
+    fn craft(&mut self, p: BlockPos) {
+        crate::crafter::craft(self, to_position(p));
     }
 
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32) {

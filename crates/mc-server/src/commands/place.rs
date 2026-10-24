@@ -29,7 +29,7 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
 /// world); generated worlds use their pipeline's.
 static LOADED: OnceLock<Option<Features>> = OnceLock::new();
 
-fn features(ctx: &ServerContext) -> Option<&Features> {
+pub(crate) fn features(ctx: &ServerContext) -> Option<&Features> {
     if let Some(p) = ctx.world.pipeline() {
         return Some(&p.features);
     }
@@ -70,6 +70,83 @@ fn features(ctx: &ServerContext) -> Option<&Features> {
         .as_ref()
 }
 
+/// What a placement changed: blocks, and block entity data to put in them.
+pub(crate) type Parts = (Vec<(Position, u32)>, Vec<(Position, Compound)>);
+
+/// A structure template placed at `at` as the structure block places it:
+/// the blocks and block entities it would change, not yet applied.
+pub(crate) fn place_template(
+    ctx: &ServerContext,
+    t: &mc_features::structure::template::Template,
+    at: Position,
+    settings: &Settings,
+    seed: i64,
+) -> Option<Parts> {
+    let features = features(ctx)?;
+    let mut live = Live {
+        ctx,
+        features,
+        changes: HashMap::new(),
+        order: Vec::new(),
+        entities: Vec::new(),
+    };
+    let mut rand = mc_features::rand::WorldgenRandom::legacy(seed);
+    let p = P::new(at.x, at.y, at.z);
+    t.place(&features.facts, &mut live, &mut rand, p, p, settings);
+    Some(live.into_parts())
+}
+
+/// A jigsaw structure grown from `p` as a jigsaw block's Generate does:
+/// `Err(true)` for a pool that does not exist, `Err(false)` when nothing
+/// fit.
+pub(crate) fn place_jigsaw(
+    ctx: &ServerContext,
+    pool: &str,
+    target: &str,
+    depth: i32,
+    p: Position,
+    keep_jigsaws: bool,
+) -> std::result::Result<Parts, bool> {
+    let Some(features) = features(ctx).filter(|f| f.structures.has_pool(pool)) else {
+        return Err(true);
+    };
+    let mut live = Live {
+        ctx,
+        features,
+        changes: HashMap::new(),
+        order: Vec::new(),
+        entities: Vec::new(),
+    };
+    let heights = Region::heights(&live);
+    let seed = crate::util::random_u64() as i64;
+    let start = features
+        .structures
+        .generate_jigsaw(
+            pool,
+            target,
+            depth,
+            P::new(p.x, p.y, p.z),
+            seed,
+            heights,
+            &mut live,
+        )
+        .map_err(|_| false)?;
+    let b = start.bbox;
+    let world_seed = ctx.config.seed.unwrap_or(0);
+    for cz in (b.min.z >> 4)..=(b.max.z >> 4) {
+        for cx in (b.min.x >> 4)..=(b.max.x >> 4) {
+            let mut rand = mc_features::rand::WorldgenRandom::legacy(0);
+            rand.set_large_feature_seed(world_seed, cx, cz);
+            mc_features::structure::jigsaw::keeping_jigsaws(keep_jigsaws, || {
+                features
+                    .structures
+                    .place(features, &mut live, &mut rand, &start, cx, cz);
+            });
+        }
+    }
+    Ok(live.into_parts())
+}
+
 /// The live world as features see it; changes are kept until `finish`.
 struct Live<'a> {
     ctx: &'a ServerContext,
@@ -82,6 +159,20 @@ struct Live<'a> {
 impl Live<'_> {
     fn pos(p: P) -> Position {
         Position::new(p.x, p.y, p.z)
+    }
+
+    fn into_parts(self) -> Parts {
+        let changes = self
+            .order
+            .iter()
+            .map(|&(x, y, z)| (Position::new(x, y, z), self.changes[&(x, y, z)]))
+            .collect();
+        let entities = self
+            .entities
+            .into_iter()
+            .map(|(p, nbt)| (Self::pos(p), nbt))
+            .collect();
+        (changes, entities)
     }
 
     /// Puts the changes into the world (with updates and packets).

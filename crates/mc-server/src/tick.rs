@@ -153,6 +153,53 @@ pub enum Action {
         mode: i32,
         flags: u8,
     },
+    /// A jigsaw block's window was done.
+    SetJigsaw {
+        position: Position,
+        name: String,
+        target: String,
+        pool: String,
+        final_state: String,
+        joint: String,
+        selection_priority: i32,
+        placement_priority: i32,
+    },
+    /// Generate in a jigsaw block's window.
+    GenerateJigsaw {
+        position: Position,
+        levels: i32,
+        keep_jigsaws: bool,
+    },
+    /// A test block's window was done.
+    SetTestBlock {
+        position: Position,
+        mode: i32,
+        message: String,
+    },
+    /// A test instance block's window asked for something.
+    TestInstance {
+        position: Position,
+        action: i32,
+        test: Option<String>,
+        size: [i32; 3],
+        rotation: i32,
+        ignore_entities: bool,
+    },
+    /// A structure block's window was done.
+    SetStructure {
+        position: Position,
+        action: i32,
+        mode: i32,
+        name: String,
+        offset: [i8; 3],
+        size: [u8; 3],
+        mirror: i32,
+        rotation: i32,
+        metadata: String,
+        integrity: f32,
+        seed: i64,
+        flags: u8,
+    },
     /// A command block minecart's window was done.
     CommandMinecart {
         entity_id: i32,
@@ -214,6 +261,10 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
                 crate::random_ticks::tick(d);
                 crate::daylight::tick(d, lock(&d.time).age);
                 crate::furnaces::tick(d);
+                crate::brewing::tick(d);
+                crate::campfires::tick(d);
+                crate::test_blocks::tick(d, lock(&d.time).age);
+                crate::crafter::tick(d);
                 crate::beacons::tick(d, count as i64);
                 lock(&d.border).tick();
             }
@@ -397,6 +448,9 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
         match id.as_str() {
             "minecraft:hopper" => crate::hoppers::register(ctx, p),
             "minecraft:daylight_detector" => crate::daylight::register(ctx, p),
+            "minecraft:brewing_stand" => crate::brewing::wake(ctx, p),
+            "minecraft:campfire" => crate::campfires::wake(ctx, p),
+            "minecraft:crafter" => crate::crafter::wake(ctx, p),
             _ => crate::furnaces::wake(ctx, p),
         }
     }
@@ -513,6 +567,7 @@ pub(crate) fn containers_changed(ctx: &ServerContext) {
     }
     for &p in &changed {
         crate::furnaces::wake(ctx, p);
+        crate::brewing::wake(ctx, p);
     }
     let mut level = crate::level::WorldLevel::new(ctx);
     let logic = level.logic();
@@ -744,6 +799,21 @@ pub(crate) fn picks_up(pose: &crate::context::Pose, item: &mc_entity::Entity) ->
         && pose.z + 1.3 > b.min[2]
 }
 
+/// Whether `pos` is in a chunk within the simulation distance of a player
+/// (a square of chunks around them).
+pub(crate) fn simulated_at(
+    ctx: &ServerContext,
+    players: &[(u128, i32, i32, crate::context::Pose)],
+    pos: [f64; 3],
+) -> bool {
+    let d = i32::from(ctx.config.simulation_distance);
+    let (cx, cz) = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
+    players.iter().any(|(.., pose)| {
+        let (px, pz) = ((pose.x.floor() as i32) >> 4, (pose.z.floor() as i32) >> 4);
+        (cx - px).abs() <= d && (cz - pz).abs() <= d
+    })
+}
+
 /// Falling blocks fall and land; items fall, slide, despawn and are picked up.
 fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     let mut entities = std::mem::take(&mut *lock(&ctx.entities));
@@ -795,7 +865,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     let mut gone = Vec::new();
     // Items that moved into another block look for stacks to join sooner.
     let mut crossed = Vec::new();
-    let (mut blasts, mut fuses) = (Vec::new(), Vec::new());
+    let (mut blasts, mut fuses) = (std::mem::take(&mut *lock(&ctx.pending_blasts)), Vec::new());
     let now = lock(&ctx.time).age;
     let mut claimed = crate::trading::claimed_sites(&entities);
     // What villagers see: night for the bed, zombies to run from.
@@ -863,6 +933,11 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                 }
             }
             mc_entity::Kind::Tnt { fuse, owner } => {
+                // Far from every player it does not tick, so it never goes
+                // off (entities tick only within the simulation distance).
+                if !simulated_at(ctx, &players, entity.pos) {
+                    continue;
+                }
                 mc_entity::fall(entity, &Solid(level));
                 if entity.on_ground {
                     entity.vel[0] *= 0.7;
@@ -1131,6 +1206,111 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             )
             .into_iter()
             .collect(),
+            ..Outcome::default()
+        },
+        Action::SetJigsaw {
+            position,
+            name,
+            target,
+            pool,
+            final_state,
+            joint,
+            selection_priority,
+            placement_priority,
+        } => {
+            crate::structure_blocks::set_jigsaw(
+                ctx,
+                actor.uuid,
+                actor.game_mode,
+                position,
+                &name,
+                &target,
+                &pool,
+                &final_state,
+                &joint,
+                selection_priority,
+                placement_priority,
+            );
+            Outcome::default()
+        }
+        Action::GenerateJigsaw {
+            position,
+            levels,
+            keep_jigsaws,
+        } => Outcome {
+            messages: crate::structure_blocks::generate_jigsaw(
+                ctx,
+                actor.uuid,
+                actor.game_mode,
+                position,
+                levels,
+                keep_jigsaws,
+            ),
+            ..Outcome::default()
+        },
+        Action::SetTestBlock {
+            position,
+            mode,
+            message,
+        } => Outcome {
+            messages: crate::test_blocks::set_test_block(
+                ctx,
+                actor.uuid,
+                actor.game_mode,
+                position,
+                mode,
+                &message,
+            ),
+            ..Outcome::default()
+        },
+        Action::TestInstance {
+            position,
+            action,
+            test,
+            size,
+            rotation,
+            ignore_entities,
+        } => crate::test_blocks::instance_action(
+            ctx,
+            actor,
+            position,
+            action,
+            test,
+            size,
+            rotation,
+            ignore_entities,
+        ),
+        Action::SetStructure {
+            position,
+            action,
+            mode,
+            name,
+            offset,
+            size,
+            mirror,
+            rotation,
+            metadata,
+            integrity,
+            seed,
+            flags,
+        } => Outcome {
+            messages: crate::structure_blocks::set_structure(
+                ctx,
+                actor.uuid,
+                actor.game_mode,
+                position,
+                action,
+                mode,
+                &name,
+                offset,
+                size,
+                mirror,
+                rotation,
+                &metadata,
+                integrity,
+                seed,
+                flags,
+            ),
             ..Outcome::default()
         },
         Action::CommandMinecart {

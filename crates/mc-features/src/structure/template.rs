@@ -397,6 +397,11 @@ impl Template {
         let (_, Tag::Compound(root), _) = mc_nbt::read_named(&bytes).ok()? else {
             return None;
         };
+        Self::from_nbt(&root, facts)
+    }
+
+    /// The template a structure file's root compound describes.
+    pub fn from_nbt(root: &Compound, facts: &Facts) -> Option<Self> {
         let size = ints(root.get("size"))?;
         let palette_states = |list: &Tag| -> Vec<u32> {
             match list {

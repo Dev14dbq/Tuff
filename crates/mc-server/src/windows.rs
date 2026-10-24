@@ -271,10 +271,21 @@ impl Windows {
         for &(p, _) in &parts {
             slots.extend(containers::open(ctx, uuid, p, kind));
         }
+        if kind.entity == crate::crafter::ID {
+            slots[9] = crate::crafter::result(ctx, position);
+        }
         self.show(writer, who, menu, title, slots, Kind::Container { parts })?;
         // A furnace window shows its fire and progress.
         if kind.slots == 3 {
             let values = crate::furnaces::progress(ctx, position).values();
+            self.container_data(writer, position, &values)?;
+        }
+        if kind.entity == crate::crafter::ID {
+            let values = crate::crafter::values(ctx, position);
+            self.container_data(writer, position, &values)?;
+        }
+        if kind.entity == "minecraft:brewing_stand" {
+            let values = crate::brewing::progress(ctx, position).values();
             self.container_data(writer, position, &values)?;
         }
         Ok(())
@@ -863,6 +874,38 @@ impl Windows {
         let shown = m.slots.clone();
         m.button(who.ctx, who.uuid, button);
         self.sync_machine(writer, who, shown)
+    }
+
+    /// A crafter slot switched on or off from its window.
+    pub fn slot_state(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        window: i32,
+        slot: i32,
+        enabled: bool,
+    ) -> anyhow::Result<()> {
+        let Some(open) = self.open.as_ref().filter(|o| o.id == window) else {
+            return Ok(());
+        };
+        let Kind::Container { parts } = &open.kind else {
+            return Ok(());
+        };
+        let Some(&(p, _)) = parts.first() else {
+            return Ok(());
+        };
+        let ctx = who.ctx;
+        let is_crafter = ctx
+            .world
+            .block(p, &ctx.data.blocks)
+            .and_then(|s| ctx.data.blocks.block_name(s))
+            == Some(crate::crafter::ID);
+        if !is_crafter || !(0..9).contains(&slot) {
+            return Ok(());
+        }
+        crate::crafter::set_slot_enabled(ctx, p, slot as usize, enabled);
+        let values = crate::crafter::values(ctx, p);
+        self.container_data(writer, p, &values)
     }
 
     /// The client closed a window.

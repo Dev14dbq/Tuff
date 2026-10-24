@@ -218,6 +218,8 @@ pub fn tick(
                 mob: true,
                 dangerous: false,
                 by: Some("minecraft:wither"),
+                fire: false,
+                respawn: None,
             });
             fx::emit(
                 ctx,

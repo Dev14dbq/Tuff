@@ -107,6 +107,9 @@ pub struct MobState {
     pub fighters: Mutex<crate::combat::Fighters>,
     /// Ticks until each spawner (dimension, x, y, z) tries again.
     pub spawner_delays: Mutex<HashMap<(usize, i32, i32, i32), i32>>,
+    /// Trial spawners' waves, and the configs they named (by data pack name).
+    pub trials: Mutex<crate::trials::Trials>,
+    pub trial_configs: Mutex<HashMap<String, crate::trials::Config>>,
     /// Health of villagers, which zombies hurt (20 when not listed).
     villagers: Mutex<HashMap<i32, f32>>,
 }
@@ -558,6 +561,11 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             m.head_yaw,
             m.burning > 0,
         );
+        // Flowing water and lava carry it (not what flies).
+        if !m.species.flies() && !ride::steered(e) {
+            let b = e.aabb();
+            crate::currents::push(ctx, b.min, b.max, &mut e.vel);
+        }
         // Ridden by a player: they steer, it only lives.
         let senses = Senses {
             world: &ground,
@@ -665,6 +673,9 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     out.fresh.extend(spawned);
     let made = spawner::tick(ctx, &ground, &entities, &targets, difficulty);
     out.fresh.extend(made);
+    let made = crate::trials::tick(ctx, &ground, &entities, &targets, difficulty, now);
+    out.fresh.extend(made);
+    crate::trials::tick_vaults(ctx, &targets, now);
     let leashed: std::collections::HashSet<i32> =
         lock(&ctx.leashes).links.keys().copied().collect();
     out.removed.extend(spawn::despawn(
@@ -739,6 +750,8 @@ fn handle(
                 mob: true,
                 dangerous: false,
                 by: None,
+                fire: false,
+                respawn: None,
             });
         }
         MobEvent::Lay { item } => hurt::lay(ctx, &entities[i], item),

@@ -567,3 +567,58 @@ fn a_fall_tramples_farmland() {
     assert_eq!(block(&ctx, AT), "minecraft:dirt");
     assert_eq!(block(&ctx, above), "minecraft:air");
 }
+
+#[test]
+fn lectern_pulses_when_a_page_turns() {
+    let Some((ctx, _)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let lectern = Position::new(60, -59, 0);
+    put(
+        &ctx,
+        lectern,
+        "minecraft:lectern",
+        &[
+            ("facing", "north"),
+            ("has_book", "true"),
+            ("powered", "false"),
+        ],
+    );
+    let beside = crate::level::to_pos(Position::new(61, -59, 0));
+    let below = crate::level::to_pos(Position::new(60, -60, 0));
+    let mut level = WorldLevel::new(&ctx);
+    let logic = level.logic();
+    let at = crate::level::to_pos(lectern);
+    mc_tick::redstone::lectern_pulse(&mut level, logic, at);
+    // 15 into every neighbour, strongly into a block below.
+    assert_eq!(
+        mc_tick::redstone::power_from(&level, logic, beside, mc_tick::Dir::West, false),
+        15
+    );
+    drop(level);
+    assert!(block(&ctx, lectern).contains("powered=true"));
+    // The scheduled tick ends it two ticks on.
+    let state = ctx.world.block(lectern, &ctx.data.blocks).unwrap();
+    let kind = logic.shapes.block_index(state);
+    let due = lock(&ctx.ticks).blocks.is_scheduled(at, kind);
+    assert!(due, "a tick to end the pulse is scheduled");
+    let mut level = WorldLevel::new(&ctx);
+    mc_tick::redstone::block_tick(&mut level, logic, at, kind);
+    drop(level);
+    assert!(block(&ctx, lectern).contains("powered=false"));
+    let _ = below;
+    // Taking the book out while it pulses ends the signal and the book.
+    let mut level = WorldLevel::new(&ctx);
+    mc_tick::redstone::lectern_pulse(&mut level, logic, at);
+    drop(level);
+    assert!(block(&ctx, lectern).contains("powered=true"));
+    let mut level = WorldLevel::new(&ctx);
+    mc_tick::redstone::lectern_reset(&mut level, logic, at);
+    drop(level);
+    let now = block(&ctx, lectern);
+    assert!(
+        now.contains("powered=false") && now.contains("has_book=false"),
+        "{now}"
+    );
+}

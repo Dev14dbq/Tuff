@@ -44,6 +44,8 @@ pub enum Behaviour {
     /// Grass blocks and mycelium spread onto dirt and die in the dark.
     Spreading,
     Leaves,
+    /// Vines creep along walls, up and down (game rule `spread_vines`).
+    Vine,
     /// Saplings: stage 0 → 1, then a tree.
     Sapling,
     Ice,
@@ -75,6 +77,7 @@ impl Behaviour {
             "cocoa" => Self::Cocoa,
             "kelp" | "weeping_vines" | "twisting_vines" | "cave_vines" => Self::GrowingTip,
             "grass_block" | "mycelium" => Self::Spreading,
+            "vine" => Self::Vine,
             "ice" => Self::Ice,
             "frosted_ice" => Self::FrostedIce,
             "snow" => Self::SnowLayer,
@@ -82,9 +85,8 @@ impl Behaviour {
             "lava" => Self::Lava,
             _ if name.ends_with("_leaves") => Self::Leaves,
             "oak_sapling" | "spruce_sapling" | "birch_sapling" | "jungle_sapling"
-            | "acacia_sapling" | "dark_oak_sapling" | "pale_oak_sapling" | "cherry_sapling" => {
-                Self::Sapling
-            }
+            | "acacia_sapling" | "dark_oak_sapling" | "pale_oak_sapling" | "cherry_sapling"
+            | "mangrove_propagule" => Self::Sapling,
             _ => Self::None,
         }
     }
@@ -166,10 +168,28 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut 
         }
         Behaviour::GrowingTip => growing_tip(level, ctx, p, state, rng),
         Behaviour::Spreading => spreading(level, ctx, p, state, rng),
+        Behaviour::Vine => vine(level, ctx, p, state, rng),
         Behaviour::Leaves => {
             if crate::leaves::decays(ctx, state) {
                 level.destroyed(p, state);
                 set_block(level, ctx, p, ctx.shapes.air(), Flags::ALL);
+            }
+        }
+        Behaviour::Sapling if name(ctx, state) == "mangrove_propagule" => {
+            // Hanging ones ripen one stage a tick; planted ones need no
+            // light and grow like saplings (wiki, "Mangrove Propagule").
+            if ctx.shapes.property(state, "hanging") == Some("true") {
+                let age = int(ctx, state, "age");
+                if age < 4 {
+                    grow(level, ctx, p, state, age + 1);
+                }
+            } else if rng.below(7) == 0 {
+                if int(ctx, state, "stage") == 0 {
+                    let next = ctx.shapes.with(state, "stage", "1");
+                    set_block(level, ctx, p, next, Flags::NONE);
+                } else {
+                    level.grow_tree(p, state);
+                }
             }
         }
         Behaviour::Sapling => {
@@ -694,6 +714,132 @@ fn growing_tip(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &m
             stem = ctx.shapes.with(stem, "berries", berries);
         }
         set_block(level, ctx, p, stem, Flags::ALL);
+    }
+}
+
+fn face(ctx: Ctx, state: u32, d: Dir) -> bool {
+    ctx.shapes.property(state, d.name()) == Some("true")
+}
+
+/// A wall (or ceiling) a vine can hold to: a block whose face towards the
+/// vine is full.
+fn holds_vine(level: &dyn Level, ctx: Ctx, at: BlockPos) -> bool {
+    ctx.facts.blocks_motion(level.block(at))
+}
+
+/// Vines within 4 blocks sideways and 1 up or down stop it spreading when
+/// there are five (itself counted).
+fn can_spread(level: &dyn Level, ctx: Ctx, p: BlockPos, vine: u32) -> bool {
+    let kind = ctx.shapes.block_index(vine);
+    let mut left = 5;
+    for dx in -4..=4 {
+        for dy in -1..=1 {
+            for dz in -4..=4 {
+                let q = BlockPos::new(p.x + dx, p.y + dy, p.z + dz);
+                if ctx.shapes.block_index(level.block(q)) == kind {
+                    left -= 1;
+                    if left <= 0 {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+/// A vine's random tick (minecraft.wiki, "Vines" → "Growth"): a quarter of
+/// the time, with the rule `spread_vines` on, it tries one random way.
+fn vine(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut Rng) {
+    if !level.spread_vines() || rng.below(4) != 0 {
+        return;
+    }
+    let dir = Dir::ALL[rng.below(6) as usize];
+    let set = |level: &mut dyn Level, at: BlockPos, base: u32, d: Dir| {
+        let new = ctx.shapes.with(base, d.name(), "true");
+        set_block(level, ctx, at, new, Flags::NONE);
+    };
+    let blank = ctx.shapes.default_state("minecraft:vine");
+    let Some(blank) = blank else {
+        return;
+    };
+    let horizontal = !matches!(dir, Dir::Up | Dir::Down);
+    if horizontal && !face(ctx, state, dir) {
+        if !can_spread(level, ctx, p, state) {
+            return;
+        }
+        let rel = p.offset(dir);
+        let there = level.block(rel);
+        if ctx.shapes.is_air(there) {
+            let (cw, ccw) = (dir.cw(), dir.ccw());
+            let (flag, flag1) = (face(ctx, state, cw), face(ctx, state, ccw));
+            let rel_cw = rel.offset(cw);
+            let rel_ccw = rel.offset(ccw);
+            if flag && holds_vine(level, ctx, rel_cw) {
+                set(level, rel, blank, cw);
+            } else if flag1 && holds_vine(level, ctx, rel_ccw) {
+                set(level, rel, blank, ccw);
+            } else {
+                let opposite = dir.opposite();
+                if flag
+                    && ctx.shapes.is_air(level.block(rel_cw))
+                    && holds_vine(level, ctx, p.offset(cw))
+                {
+                    set(level, rel_cw, blank, opposite);
+                } else if flag1
+                    && ctx.shapes.is_air(level.block(rel_ccw))
+                    && holds_vine(level, ctx, p.offset(ccw))
+                {
+                    set(level, rel_ccw, blank, opposite);
+                } else if rng.unit() < 0.05 && holds_vine(level, ctx, rel.offset(Dir::Up)) {
+                    set(level, rel, blank, Dir::Up);
+                }
+            }
+        } else if holds_vine(level, ctx, rel) {
+            set(level, p, state, dir);
+        }
+        return;
+    }
+    let sides = [Dir::North, Dir::East, Dir::South, Dir::West];
+    let has_side = |s: u32| sides.iter().any(|&d| face(ctx, s, d));
+    if dir == Dir::Up && level.in_world(p.offset(Dir::Up)) {
+        let above = p.offset(Dir::Up);
+        if holds_vine(level, ctx, above) {
+            set(level, p, state, Dir::Up);
+            return;
+        }
+        if ctx.shapes.is_air(level.block(above)) {
+            if !can_spread(level, ctx, p, state) {
+                return;
+            }
+            let mut s = state;
+            for d in sides {
+                if rng.below(2) == 0 || !holds_vine(level, ctx, above.offset(d)) {
+                    s = ctx.shapes.with(s, d.name(), "false");
+                }
+            }
+            if has_side(s) {
+                set_block(level, ctx, above, s, Flags::NONE);
+            }
+            return;
+        }
+    }
+    let below = p.offset(Dir::Down);
+    if level.in_world(below) {
+        let below_state = level.block(below);
+        let same = ctx.shapes.block_index(below_state) == ctx.shapes.block_index(state);
+        if ctx.shapes.is_air(below_state) || same {
+            let target = if same { below_state } else { blank };
+            let mut s = target;
+            for d in sides {
+                if rng.below(2) == 0 && face(ctx, state, d) {
+                    s = ctx.shapes.with(s, d.name(), "true");
+                }
+            }
+            if s != target && has_side(s) {
+                set_block(level, ctx, below, s, Flags::NONE);
+            }
+        }
     }
 }
 

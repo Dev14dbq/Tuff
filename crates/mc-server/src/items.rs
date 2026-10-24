@@ -85,6 +85,11 @@ impl Items {
         })
     }
 
+    /// One more than the highest item id.
+    pub fn count(&self) -> usize {
+        self.by_id.len()
+    }
+
     pub fn get(&self, id: i32) -> Option<&Item> {
         self.by_id.get(usize::try_from(id).ok()?)?.as_ref()
     }

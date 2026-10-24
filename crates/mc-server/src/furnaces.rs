@@ -44,8 +44,8 @@ pub struct Progress {
 }
 
 impl Progress {
-    pub fn values(&self) -> [i16; 4] {
-        [
+    pub fn values(&self) -> Vec<i16> {
+        vec![
             self.lit as i16,
             self.lit_total as i16,
             self.cook as i16,

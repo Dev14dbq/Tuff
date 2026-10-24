@@ -98,8 +98,17 @@ fn store_at(ctx: &ServerContext, p: Position) -> Option<Store<'_>> {
 /// container (in the order they are tried), or pull out of.
 fn sided_slots(name: &str, size: usize, side: Dir, inserting: bool) -> Vec<usize> {
     match name {
-        // Brewing and autocrafting are not hopper-fed yet.
-        "minecraft:brewing_stand" | "minecraft:crafter" | "minecraft:ender_chest" => Vec::new(),
+        "minecraft:ender_chest" => Vec::new(),
+        // Nothing comes out of a crafter, and the tenth slot is only shown.
+        "minecraft:crafter" if !inserting => Vec::new(),
+        "minecraft:crafter" => (0..9).collect(),
+        // The ingredient through the top, bottles and fuel through the
+        // sides, bottles and the ingredient through the bottom.
+        "minecraft:brewing_stand" => match side {
+            Dir::Up => vec![3],
+            Dir::Down => vec![0, 1, 2, 3],
+            _ => vec![0, 1, 2, 4],
+        },
         "minecraft:furnace" | "minecraft:blast_furnace" | "minecraft:smoker" => {
             if inserting {
                 match side {
@@ -138,6 +147,13 @@ fn move_one(ctx: &ServerContext, src: Store, from_side: Dir, dst: Store, to_side
     sided_slots(src.name, slots.len(), from_side, false)
         .into_iter()
         .filter(|&slot| slots[slot].is_some())
+        // Only an empty bottle comes out of a brewing stand's ingredient slot.
+        .filter(|&slot| {
+            src.name != "minecraft:brewing_stand"
+                || slot != 3
+                || slots[3].as_ref().map(|s| ctx.items.name(s.item))
+                    == Some(Some("minecraft:glass_bottle"))
+        })
         .any(|slot| transfer_from_slot(ctx, src.at, src.kind, slot, dst, to_side))
 }
 
@@ -284,7 +300,7 @@ fn behavior(
             let placed = if fluid == "minecraft:water"
                 && blocks.property(state, "waterlogged") == Some("false")
             {
-                level.set_block(front, ctx.shapes.with(state, "waterlogged", "true"))
+                level.set_block(front, crate::campfires::waterlogged(ctx, front, state))
             } else if ctx.shapes.is_air(state) || ctx.rules.is_replaceable(state) {
                 let source = ctx.shapes.default_state(fluid).unwrap_or(0);
                 let same = block == fluid && blocks.property(state, "level") == Some("0");
@@ -629,13 +645,34 @@ fn transfer_from_slot(
     true
 }
 
+/// Puts one of `stack` into whatever holds items at `p`, through its face
+/// `side`. `false` if there is nothing there or no room.
+pub fn insert_at(ctx: &ServerContext, p: Position, side: Dir, stack: &ItemStack) -> bool {
+    store_at(ctx, p).is_some_and(|dst| insert_one(ctx, dst, side, stack))
+}
+
 /// Puts one of `stack` into `dst` through its face `side`,
 /// onto a matching stack first. `false` if there is no room.
 fn insert_one(ctx: &ServerContext, dst: Store, side: Dir, stack: &ItemStack) -> bool {
     let (to, to_kind, to_name) = (dst.at, dst.kind, dst.name);
     let mut dst = containers::slots(ctx, to, to_kind);
-    let into = sided_slots(to_name, dst.len(), side, true);
+    let mut into = sided_slots(to_name, dst.len(), side, true);
+    if to_name == "minecraft:brewing_stand" {
+        into.retain(|&i| crate::brewing::accepts(ctx, &dst, i, stack));
+    }
     let max = ctx.items.max_stack(stack.item);
+    // A crafter takes it in the first slot that may have it.
+    if to_name == crate::crafter::ID {
+        let Some(t) = into
+            .into_iter()
+            .find(|&i| crate::crafter::accepts(ctx, to, &dst, i, stack))
+        else {
+            return false;
+        };
+        let moved = stack.with_count(dst[t].as_ref().map_or(0, |d| d.count) + 1);
+        containers::put(ctx, to, to_kind, &[(t, Some(moved))]);
+        return true;
+    }
     let merge = into.iter().copied().find(|&i| {
         dst[i]
             .as_ref()

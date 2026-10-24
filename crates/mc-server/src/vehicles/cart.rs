@@ -162,6 +162,8 @@ fn step(t: &mut Tick, e: &mut Entity, v: &mut Vehicle) {
                 mob: false,
                 dangerous: false,
                 by: None,
+                fire: false,
+                respawn: None,
             });
             return;
         }

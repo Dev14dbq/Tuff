@@ -39,6 +39,29 @@ pub struct Features {
     pub unsupported: Vec<(String, usize)>,
 }
 
+/// Configured features a grown sapling places (the `TreeGrower`s).
+const SAPLING_TREES: &[&str] = &[
+    "oak",
+    "fancy_oak",
+    "birch",
+    "spruce",
+    "mega_spruce",
+    "mega_pine",
+    "jungle_tree_no_vine",
+    "mega_jungle_tree",
+    "acacia",
+    "dark_oak",
+    "pale_oak_bonemeal",
+    "cherry",
+    "azalea_tree",
+    "mangrove",
+    "tall_mangrove",
+    "oak_bees_005",
+    "fancy_oak_bees_005",
+    "birch_bees_005",
+    "cherry_bees_005",
+];
+
 impl std::fmt::Debug for Features {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Features")
@@ -132,6 +155,10 @@ impl Features {
         }
         let structures =
             crate::structure::Structures::load(worldgen, facts.clone(), &loader, biome_ids);
+        // The trees saplings grow into, whether or not a biome plants them.
+        for id in SAPLING_TREES {
+            loader.configured(&Value::String((*id).to_owned()));
+        }
         let configured = loader.configured_by_id();
         let mut unsupported: Vec<(String, usize)> = loader
             .unsupported

@@ -47,6 +47,40 @@ pub fn kind_of(data: &mc_nbt::Compound) -> Option<Species> {
     }
 }
 
+/// What a spawner makes this round: one of its `SpawnPotentials` by weight
+/// when it has any, else its `SpawnData`.
+fn choose(data: &mc_nbt::Compound) -> Option<Species> {
+    if let Some(Tag::List(list)) = data.get("SpawnPotentials") {
+        let entries: Vec<(u32, Species)> = list
+            .iter()
+            .filter_map(|e| {
+                let Tag::Compound(e) = e else { return None };
+                let weight = short(e, "weight").unwrap_or(1).max(0) as u32;
+                let Some(Tag::Compound(d)) = e.get("data") else {
+                    return None;
+                };
+                let wrapped = {
+                    let mut c = mc_nbt::Compound::new();
+                    c.insert("SpawnData", Tag::Compound(d.clone()));
+                    c
+                };
+                Some((weight, kind_of(&wrapped)?))
+            })
+            .collect();
+        let total: u32 = entries.iter().map(|e| e.0).sum();
+        if total > 0 {
+            let mut roll = below(total);
+            for (w, s) in entries {
+                if roll < w {
+                    return Some(s);
+                }
+                roll -= w;
+            }
+        }
+    }
+    kind_of(data)
+}
+
 /// Runs the spawners near players; returns the mobs they made.
 pub fn tick(
     ctx: &ServerContext,
@@ -56,6 +90,10 @@ pub fn tick(
     difficulty: i32,
 ) -> Vec<Entity> {
     let mut out = Vec::new();
+    // The game rule `spawner_blocks_work` switches all of them off.
+    if !ctx.game_rule_bool("spawner_blocks_work") {
+        return out;
+    }
     let spawners = ctx.world.block_entities_of("minecraft:mob_spawner");
     let mut delays = lock(&ctx.mobs.spawner_delays);
     delays.retain(|&(dim, x, y, z), _| {
@@ -67,15 +105,16 @@ pub fn tick(
             f64::from(be.y) + 0.5,
             f64::from(be.z) + 0.5,
         ];
+        let reach =
+            f64::from(short(&be.data, "RequiredPlayerRange").unwrap_or(PLAYER_RANGE as i32));
         let near = targets.iter().any(|t| {
             t.targetable
-                && (0..3).map(|i| (t.pos[i] - center[i]).powi(2)).sum::<f64>()
-                    < PLAYER_RANGE * PLAYER_RANGE
+                && (0..3).map(|i| (t.pos[i] - center[i]).powi(2)).sum::<f64>() < reach * reach
         });
         if !near {
             continue;
         }
-        let Some(species) = kind_of(&be.data) else {
+        let Some(species) = choose(&be.data) else {
             continue;
         };
         if species.category() == Category::Monster && difficulty == 0 {
@@ -134,4 +173,36 @@ pub fn tick(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: &str, weight: i16) -> Tag {
+        let mut entity = mc_nbt::Compound::new();
+        entity.insert("id", Tag::from(id));
+        let mut data = mc_nbt::Compound::new();
+        data.insert("entity", Tag::Compound(entity));
+        let mut e = mc_nbt::Compound::new();
+        e.insert("weight", Tag::Short(weight));
+        e.insert("data", Tag::Compound(data));
+        Tag::Compound(e)
+    }
+
+    #[test]
+    fn potentials_are_picked_by_weight() {
+        let mut d = mc_nbt::Compound::new();
+        d.insert(
+            "SpawnPotentials",
+            Tag::List(vec![
+                entry("minecraft:zombie", 0),
+                entry("minecraft:skeleton", 5),
+            ]),
+        );
+        for _ in 0..20 {
+            assert_eq!(choose(&d), Species::from_id("minecraft:skeleton"));
+        }
+        assert_eq!(choose(&mc_nbt::Compound::new()), None);
+    }
 }

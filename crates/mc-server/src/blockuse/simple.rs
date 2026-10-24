@@ -2,7 +2,8 @@
 //! each): cakes are eaten and take a candle, candles go out, flower pots
 //! take and give back a plant, chiseled bookshelves and lecterns hold
 //! books, shears carve pumpkins and take honeycomb, signs are dyed, waxed
-//! and edited, redstone ore glows, the dragon egg flees.
+//! and edited, redstone ore glows, the dragon egg flees, campfires take
+//! food.
 
 use mc_nbt::{Compound, Tag};
 use mc_protocol::Position;
@@ -25,6 +26,17 @@ pub fn use_on(c: &Click, outcome: &mut Outcome) -> bool {
             } else {
                 false
             }
+        }
+        "campfire" | "soul_campfire" => {
+            // Food goes on, one at a time.
+            let Some(h) = &c.held else {
+                return false;
+            };
+            if !crate::campfires::place(c.ctx, c.at, &h.stack) {
+                return false;
+            }
+            use_up(c, 1);
+            true
         }
         "flower_pot" => pot(c, outcome, true),
         _ if n.starts_with("potted_") => pot(c, outcome, false),
@@ -309,12 +321,39 @@ fn bookshelf(c: &Click, outcome: &mut Outcome) -> bool {
     true
 }
 
+/// A signed book on a lectern gets the text it holds resolved for whoever
+/// opens it, as in hand.
+fn resolve_book(c: &Click) {
+    let ctx = c.ctx;
+    let blocks = &ctx.data.blocks;
+    let Some(mut be) = ctx.world.block_entity(c.at, blocks) else {
+        return;
+    };
+    let Some(Tag::Compound(book)) = be.data.get("Book") else {
+        return;
+    };
+    let Some(Tag::String(id)) = book.get("id") else {
+        return;
+    };
+    let Some(item) = ctx.items.id(id) else {
+        return;
+    };
+    let mut stack = mc_protocol::packets::play::ItemStack::from_nbt_with(book, item);
+    if crate::books::resolve(ctx, c.actor.uuid, &mut stack) {
+        let name = id.clone();
+        be.data
+            .insert("Book", Tag::Compound(stack.to_nbt_with(&name)));
+        ctx.world.set_block_entity(be, blocks);
+    }
+}
+
 fn lectern(c: &Click, outcome: &mut Outcome) -> bool {
     let held = c.held_name();
     let book = matches!(held, "minecraft:written_book" | "minecraft:writable_book");
     if c.prop("has_book") == Some("true") {
         // Reading: the lectern's window, on the main hand's click.
         if c.hand == 0 {
+            resolve_book(c);
             outcome.open_menu = Some((c.at, crate::menus::Menu::Lectern));
         }
         return c.hand == 0;

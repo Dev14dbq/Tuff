@@ -250,7 +250,9 @@ impl Element {
                 if !legacy {
                     list.push(Arc::new(Processor::Ignore { air: false }));
                 }
-                list.push(Arc::new(Processor::JigsawReplace));
+                if !KEEP_JIGSAWS.with(std::cell::Cell::get) {
+                    list.push(Arc::new(Processor::JigsawReplace));
+                }
                 list.extend(processors.iter().cloned());
                 if *projection == Projection::TerrainMatching {
                     list.push(Arc::new(Processor::Gravity {
@@ -362,6 +364,20 @@ impl Piece {
         self.pos = self.pos.offset(0, dy, 0);
         self.bbox = self.bbox.moved(0, dy, 0);
     }
+}
+
+thread_local! {
+    static KEEP_JIGSAWS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` with jigsaw blocks left as they are in the pieces it places
+/// (a jigsaw block's "Keep Jigsaws"), rather than turned into their final
+/// state.
+pub fn keeping_jigsaws<R>(keep: bool, f: impl FnOnce() -> R) -> R {
+    let was = KEEP_JIGSAWS.with(|k| k.replace(keep));
+    let out = f();
+    KEEP_JIGSAWS.with(|k| k.set(was));
+    out
 }
 
 /// Where children may still go: a box minus the pieces placed in it.

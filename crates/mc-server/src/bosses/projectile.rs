@@ -162,6 +162,8 @@ fn skull_hit(t: &mut Tick, e: &Entity, strike: Strike, dangerous: bool) {
         mob: true,
         dangerous,
         by: Some("minecraft:wither"),
+        fire: false,
+        respawn: None,
     });
 }
 

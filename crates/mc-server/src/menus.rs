@@ -585,14 +585,11 @@ impl Machine {
             be.data.remove("Book");
             be.data.insert("Page", Tag::Int(0));
             ctx.world.set_block_entity(be, blocks);
-            if let Some(state) = ctx.world.block(self.at, blocks)
-                && let Some(new) = blocks.with_property(state, "has_book", "false")
-            {
-                let mut level = crate::level::WorldLevel::new(ctx);
-                level.set_block(self.at, new);
-                let changes = level.into_changes();
-                let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
-            }
+            let mut level = crate::level::WorldLevel::new(ctx);
+            let logic = level.logic();
+            mc_tick::redstone::lectern_reset(&mut level, logic, crate::level::to_pos(self.at));
+            let changes = level.into_changes();
+            let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
             self.slots[0] = None;
             return;
         }
@@ -609,6 +606,12 @@ impl Machine {
         self.selected = page;
         be.data.insert("Page", Tag::Int(page));
         ctx.world.set_block_entity(be, blocks);
+        // Turning a page gives a redstone pulse.
+        let mut level = crate::level::WorldLevel::new(ctx);
+        let logic = level.logic();
+        mc_tick::redstone::lectern_pulse(&mut level, logic, crate::level::to_pos(self.at));
+        let changes = level.into_changes();
+        let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
         ctx.container_updates
             .lock()
             .expect("container updates lock")
