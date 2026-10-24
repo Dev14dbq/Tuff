@@ -64,6 +64,7 @@ mod storage;
 mod structure_blocks;
 mod summon;
 mod tick;
+mod trials;
 mod trading;
 mod useblocks;
 mod util;

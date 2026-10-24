@@ -90,6 +90,9 @@ pub struct MobState {
     pub fighters: Mutex<crate::combat::Fighters>,
     /// Ticks until each spawner (dimension, x, y, z) tries again.
     pub spawner_delays: Mutex<HashMap<(usize, i32, i32, i32), i32>>,
+    /// Trial spawners' waves, and the configs they named (by data pack name).
+    pub trials: Mutex<crate::trials::Trials>,
+    pub trial_configs: Mutex<HashMap<String, crate::trials::Config>>,
     /// Health of villagers, which zombies hurt (20 when not listed).
     villagers: Mutex<HashMap<i32, f32>>,
 }
@@ -534,6 +537,9 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     out.fresh.extend(spawned);
     let made = spawner::tick(ctx, &ground, &entities, &targets, difficulty);
     out.fresh.extend(made);
+    let made = crate::trials::tick(ctx, &ground, &entities, &targets, difficulty, now);
+    out.fresh.extend(made);
+    crate::trials::tick_vaults(ctx, &targets, now);
     out.removed
         .extend(spawn::despawn(&mut entities, &targets, difficulty));
     drop(ground);

@@ -124,7 +124,7 @@ fn rand_int(lo: i32, hi: i32) -> i32 {
     lo + (random_u64() % (i64::from(hi) - i64::from(lo) + 1) as u64) as i32
 }
 
-fn json_tag(v: &Value) -> Tag {
+pub(crate) fn json_tag(v: &Value) -> Tag {
     match v {
         Value::Bool(b) => Tag::Byte(i8::from(*b)),
         Value::Number(n) => match n.as_i64() {

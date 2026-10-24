@@ -174,6 +174,15 @@ pub fn try_use(
             true
         }
         n if n.ends_with("_bed") => bed(ctx, outcome, actor, clicked, state),
+        "minecraft:vault" => match &held {
+            Some(h) if crate::trials::insert_key(ctx, clicked, actor.uuid, h) => {
+                if actor.game_mode != CREATIVE {
+                    consume_held(ctx, actor, hand);
+                }
+                true
+            }
+            _ => false,
+        },
         "minecraft:respawn_anchor" => anchor(ctx, outcome, actor, hand, clicked, state, held_name),
         "minecraft:command_block"
         | "minecraft:chain_command_block"

@@ -1849,6 +1849,17 @@ pub(crate) fn client_data(id: &str, data: &mc_nbt::Compound) -> Option<mc_nbt::C
         }
         return Some(out);
     }
+    // A vault shows its config and what it displays; the rewards stay with
+    // the server.
+    if id == "minecraft:vault" {
+        let mut out = mc_nbt::Compound::new();
+        for key in ["config", "shared_data"] {
+            if let Some(v) = data.get(key) {
+                out.insert(key, v.clone());
+            }
+        }
+        return Some(out);
+    }
     let mut data = data.clone();
     for key in [
         "Items",
