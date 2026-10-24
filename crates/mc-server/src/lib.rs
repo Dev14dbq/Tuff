@@ -5,6 +5,7 @@
 //! list, and a superflat world players can walk and chat in. One tokio task per connection;
 //! the tick thread from ARCHITECTURE.md §4 arrives with world simulation.
 
+mod archaeology;
 mod auth;
 mod beacons;
 mod blocks;
@@ -57,6 +58,7 @@ mod persist;
 mod pipeline;
 mod players;
 mod portals;
+mod pots;
 mod precipitation;
 mod projectiles;
 pub mod properties;

@@ -3,9 +3,10 @@
 //! patterns match too) and `crafting_shapeless`. An ingredient is an item,
 //! an item tag (`#minecraft:planks`) or a list of those.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use mc_data::{McData, resolve_tags};
+use mc_nbt::{Compound, Tag};
 use mc_protocol::packets::play::ItemStack;
 use serde_json::Value;
 
@@ -21,6 +22,13 @@ enum Shape {
         cells: Vec<Option<Ingredient>>,
     },
     Shapeless(Vec<Ingredient>),
+    /// `crafting_decorated_pot`: back, left, right, front of the 3×3.
+    DecoratedPot {
+        back: Ingredient,
+        left: Ingredient,
+        right: Ingredient,
+        front: Ingredient,
+    },
 }
 
 #[derive(Debug)]
@@ -72,6 +80,8 @@ pub struct Recipes {
     pub smithing: Vec<Smithing>,
     /// Item tags (`minecraft:planks`) with the items in them.
     pub item_tags: std::collections::HashMap<String, Vec<i32>>,
+    /// Item id to `minecraft:` name, for components crafting has to write.
+    names: HashMap<i32, String>,
 }
 
 impl Recipes {
@@ -211,6 +221,22 @@ impl Recipes {
                         cells,
                     }
                 }
+                Some("minecraft:crafting_decorated_pot") => {
+                    match (
+                        ingredient(&json["back"]),
+                        ingredient(&json["left"]),
+                        ingredient(&json["right"]),
+                        ingredient(&json["front"]),
+                    ) {
+                        (Some(back), Some(left), Some(right), Some(front)) => Shape::DecoratedPot {
+                            back,
+                            left,
+                            right,
+                            front,
+                        },
+                        _ => continue,
+                    }
+                }
                 Some("minecraft:crafting_shapeless") => {
                     let list: Option<Vec<Ingredient>> = json["ingredients"]
                         .as_array()
@@ -227,6 +253,7 @@ impl Recipes {
             };
             recipes.push(Recipe { shape, result });
         }
+        let names = items.iter().map(|(n, &id)| (id, n.clone())).collect();
         Self {
             recipes,
             cooking,
@@ -236,6 +263,7 @@ impl Recipes {
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), v.to_vec()))
                 .collect(),
+            names,
         }
     }
 
@@ -318,6 +346,23 @@ impl Recipes {
         let cell = |x: usize, y: usize| items[(y0 + y) * size + x0 + x];
         for recipe in &self.recipes {
             let fits = match &recipe.shape {
+                Shape::DecoratedPot {
+                    back,
+                    left,
+                    right,
+                    front,
+                } => {
+                    if let Some(made) = self.decorated_pot(
+                        grid,
+                        size,
+                        (x0, y0, w, h),
+                        recipe.result.item,
+                        (back, left, right, front),
+                    ) {
+                        return Some(made);
+                    }
+                    false
+                }
                 Shape::Shaped {
                     width,
                     height,
@@ -350,6 +395,64 @@ impl Recipes {
         }
         None
     }
+
+    /// The decorated-pot pattern: sherds or bricks on the four sides, corners
+    /// and the centre empty. The result carries `pot_decorations` unless every
+    /// side is a plain brick (the item's default).
+    fn decorated_pot(
+        &self,
+        grid: &[Option<ItemStack>],
+        size: usize,
+        origin: (usize, usize, usize, usize),
+        result: i32,
+        sides: (&Ingredient, &Ingredient, &Ingredient, &Ingredient),
+    ) -> Option<ItemStack> {
+        let (x0, y0, w, h) = origin;
+        let (back, left, right, front) = sides;
+        if w != 3 || h != 3 {
+            return None;
+        }
+        let at = |x: usize, y: usize| grid.get((y0 + y) * size + x0 + x)?.as_ref();
+        let fits = |x, y, ing: &Ingredient| at(x, y).is_some_and(|s| ing.contains(&s.item));
+        let empty = |x, y| at(x, y).is_none();
+        if !fits(1, 0, back) || !fits(0, 1, left) || !fits(2, 1, right) || !fits(1, 2, front) {
+            return None;
+        }
+        if [(0, 0), (2, 0), (1, 1), (0, 2), (2, 2)]
+            .into_iter()
+            .any(|(x, y)| !empty(x, y))
+        {
+            return None;
+        }
+        let mut stack = ItemStack::new(result, 1);
+        let mut dec = Compound::new();
+        let mut plain = true;
+        for (key, x, y) in [
+            ("back", 1, 0),
+            ("left", 0, 1),
+            ("right", 2, 1),
+            ("front", 1, 2),
+        ] {
+            let side = at(x, y)?;
+            let name = self.names.get(&side.item)?;
+            if name != "minecraft:brick" || side.damage != 0 || !side.components.is_empty() {
+                plain = false;
+            }
+            let mut saved = Compound::new();
+            saved.insert("id", Tag::String(name.clone()));
+            saved.insert("count", Tag::Int(1));
+            if let Some(comp) = side.components.to_nbt(side.damage)
+                && !comp.is_empty()
+            {
+                saved.insert("components", Tag::Compound(comp));
+            }
+            dec.insert(key, Tag::Compound(saved));
+        }
+        if !plain {
+            stack.components.set("pot_decorations", Tag::Compound(dec));
+        }
+        Some(stack)
+    }
 }
 
 /// Whether each ingredient from `i` on can take a different unused item.
@@ -372,6 +475,7 @@ fn assign(ingredients: &[Ingredient], items: &[i32], used: &mut Vec<bool>, i: us
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mc_nbt::Tag;
 
     fn data() -> Option<McData> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
@@ -417,6 +521,33 @@ mod tests {
         grid[7] = stack("minecraft:stick");
         let made = recipes.craft(&grid, 3).unwrap();
         assert_eq!((made.item, made.count), (id("minecraft:torch"), 4));
+        // Sherds around a pot: the sides become pot_decorations.
+        let mut grid = vec![None; 9];
+        grid[1] = stack("minecraft:angler_pottery_sherd");
+        grid[3] = stack("minecraft:brick");
+        grid[5] = stack("minecraft:arms_up_pottery_sherd");
+        grid[7] = stack("minecraft:brick");
+        let made = recipes.craft(&grid, 3).unwrap();
+        assert_eq!(made.item, id("minecraft:decorated_pot"));
+        let Tag::Compound(dec) = made.components.get("pot_decorations").unwrap() else {
+            panic!("decorations");
+        };
+        let Tag::Compound(back) = dec.get("back").unwrap() else {
+            panic!("back");
+        };
+        assert_eq!(
+            back.get("id"),
+            Some(&Tag::String("minecraft:angler_pottery_sherd".into()))
+        );
+        let Tag::Compound(right) = dec.get("right").unwrap() else {
+            panic!("right");
+        };
+        assert_eq!(
+            right.get("id"),
+            Some(&Tag::String("minecraft:arms_up_pottery_sherd".into()))
+        );
+        // A 2×2 cannot hold the pattern.
+        assert!(recipes.craft(&grid[..4], 2).is_none());
         // Nonsense makes nothing.
         assert!(
             recipes

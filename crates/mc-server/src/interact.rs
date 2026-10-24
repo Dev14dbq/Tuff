@@ -387,6 +387,15 @@ pub fn dig(
         return outcome;
     }
     let block_at = |p: Position| world.block(p, blocks);
+    // Read the pot before the block (and its entity) is removed.
+    let pot = (blocks.block_name(state) == Some("minecraft:decorated_pot")).then(|| {
+        crate::pots::harvest(
+            ctx,
+            position,
+            state,
+            crate::pots::Breaker::player(ctx, actor.uuid, actor.game_mode == CREATIVE),
+        )
+    });
     // The other half of a door or bed goes with the shape updates.
     let left = blocks::break_block(&ctx.data, &ctx.rules, position, state, &block_at)[0].1;
     let mut level = WorldLevel::new(ctx);
@@ -460,7 +469,14 @@ pub fn dig(
         ));
         crate::fx::level_event(ctx, 1011, centre(position), 0);
     }
-    if actor.game_mode != CREATIVE
+    let shown = pot.as_ref().map(|h| h.shown).unwrap_or(state);
+    if let Some(harvest) = pot {
+        if actor.game_mode != CREATIVE && ctx.game_rule_bool("block_drops") {
+            for drop in harvest.drops {
+                outcome.drops.push((position, drop));
+            }
+        }
+    } else if actor.game_mode != CREATIVE
         && ctx.game_rule_bool("block_drops")
         && let Some(name) = blocks.block_name(state)
     {
@@ -475,7 +491,7 @@ pub fn dig(
     outcome.events.push(Event::BlockBroken {
         by: actor.uuid,
         position,
-        state,
+        state: shown,
     });
     // Everyone gets every change, the breaker included (vanilla sends the
     // broken block to the breaker twice: as the answer and with the rest).
@@ -820,6 +836,7 @@ pub fn use_item_on(
         crate::command_blocks::placed(ctx, p, state);
         crate::structure_blocks::placed(ctx, p, state);
         crate::test_blocks::placed(ctx, p, state);
+        crate::pots::placed(ctx, p, state, actor.uuid, hand);
         if let Some(id) = ctx.data.blocks.block_name(state).and_then(sign_entity) {
             ctx.world.set_block_entity(
                 mc_world::BlockEntity {

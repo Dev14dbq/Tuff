@@ -40,6 +40,10 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 Strike::Player(i) => Some(t.players[*i]),
                 _ => None,
             };
+            if matches!(strike, Strike::Block { .. }) && matches!(shot, Shot::Snowball | Shot::Egg)
+            {
+                crate::pots::projectile(ctx, from, to);
+            }
             land(t, e, &shot, owner, who, &strike);
             e.removed = true;
             return;

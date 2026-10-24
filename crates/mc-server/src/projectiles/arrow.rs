@@ -151,6 +151,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             match strike {
                 Strike::Block { .. } => {
                     hits::hit_block(ctx, &strike, e.pos, true);
+                    crate::pots::projectile(ctx, from, to);
                     fx::sound(
                         ctx,
                         hit_sound(a),

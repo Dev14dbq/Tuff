@@ -314,6 +314,20 @@ impl Level for WorldLevel<'_> {
         let ctx = self.ctx;
         let blocks = &ctx.data.blocks;
         let at = to_position(p);
+        if blocks.block_name(state) == Some("minecraft:decorated_pot") {
+            let harvest = crate::pots::harvest(ctx, at, state, crate::pots::Breaker::Other);
+            if ctx.game_rule_bool("block_drops") {
+                for drop in harvest.drops {
+                    crate::tick::drop_item(ctx, at, drop);
+                }
+            }
+            let _ = ctx.events.send(crate::context::Event::BlockBroken {
+                by: 0,
+                position: at,
+                state: harvest.shown,
+            });
+            return;
+        }
         if let Some(name) = blocks.block_name(state)
             && ctx.game_rule_bool("block_drops")
         {

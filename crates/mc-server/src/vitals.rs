@@ -245,6 +245,7 @@ pub fn start_using(
 
 /// The player let go of use (or changed what they hold).
 pub fn stop_using(ctx: &ServerContext, uuid: u128) {
+    crate::archaeology::stop(ctx, uuid);
     if let Some(using) = lock(&ctx.using).remove(&uuid) {
         let _ = ctx.events.send(Event::UsingItem {
             uuid,

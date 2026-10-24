@@ -736,6 +736,12 @@ pub fn codec(name: &str) -> Option<&'static Net> {
     static COOLDOWN: [Field; 2] = [req("seconds", Net::Float), opt("cooldown_group", Net::Str)];
     static ENCHANTABLE: [Field; 1] = [req("value", Net::VarInt)];
     static REPAIRABLE: [Field; 1] = [req("items", Net::HolderSet(ITEMS))];
+    static POT_DECORATIONS: [Field; 4] = [
+        opt("back", Net::Template),
+        opt("left", Net::Template),
+        opt("right", Net::Template),
+        opt("front", Net::Template),
+    ];
     let name = full_name(name);
     let short = name.strip_prefix("minecraft:")?;
     static N1: Net = Net::Nbt;
@@ -770,6 +776,7 @@ pub fn codec(name: &str) -> Option<&'static Net> {
     static N30: Net = Net::Fields(&COOLDOWN);
     static N31: Net = Net::Fields(&ENCHANTABLE);
     static N32: Net = Net::Fields(&REPAIRABLE);
+    static N33: Net = Net::Fields(&POT_DECORATIONS);
     Some(match short {
         "custom_data"
         | "bucket_entity_data"
@@ -818,6 +825,7 @@ pub fn codec(name: &str) -> Option<&'static Net> {
         "use_cooldown" => &N30,
         "enchantable" => &N31,
         "repairable" => &N32,
+        "pot_decorations" => &N33,
         _ => return None,
     })
 }
@@ -1702,6 +1710,8 @@ mod tests {
         items.insert("minecraft:dirt".to_owned(), 55);
         items.insert("minecraft:diamond_sword".to_owned(), 1050);
         items.insert("minecraft:arrow".to_owned(), 1009);
+        items.insert("minecraft:brick".to_owned(), 2);
+        items.insert("minecraft:angler_pottery_sherd".to_owned(), 4);
         let mut types = HashMap::new();
         for (i, n) in [
             "custom_data",
@@ -1724,6 +1734,7 @@ mod tests {
         types.insert("minecraft:potion_contents".to_owned(), 53);
         types.insert("minecraft:container".to_owned(), 77);
         types.insert("minecraft:charged_projectiles".to_owned(), 51);
+        types.insert("minecraft:pot_decorations".to_owned(), 76);
         let mut ench = HashMap::new();
         ench.insert("minecraft:sharpness".to_owned(), 33);
         ench.insert("minecraft:unbreaking".to_owned(), 40);
@@ -1833,6 +1844,37 @@ mod tests {
         assert_eq!(h.resolve([&a, &b]), b);
         let plain = HashedStack::of(&ItemStack::new(1050, 3));
         assert_eq!(plain.resolve([&a]), ItemStack::new(1050, 3));
+    }
+
+    #[test]
+    fn pot_decorations_round_trip() {
+        registries();
+        let side = |id: &str| {
+            let mut c = Compound::new();
+            c.insert("id", Tag::String(id.to_owned()));
+            c.insert("count", Tag::Int(1));
+            Tag::Compound(c)
+        };
+        let mut dec = Compound::new();
+        dec.insert("back", side("minecraft:brick"));
+        dec.insert("left", side("minecraft:angler_pottery_sherd"));
+        let mut stack = ItemStack::new(1, 1);
+        stack.components.set("pot_decorations", Tag::Compound(dec));
+        let mut out = Vec::new();
+        ItemStack::encode(Some(&stack), &mut out);
+        let again = ItemStack::decode(&mut Reader::new(&out)).unwrap().unwrap();
+        let Some(Tag::Compound(got)) = again.components.get("pot_decorations") else {
+            panic!("missing decorations");
+        };
+        let Tag::Compound(left) = got.get("left").unwrap() else {
+            panic!("left");
+        };
+        assert_eq!(
+            left.get("id"),
+            Some(&Tag::String("minecraft:angler_pottery_sherd".into()))
+        );
+        assert!(got.get("front").is_none());
+        assert!(got.get("right").is_none());
     }
 
     #[test]

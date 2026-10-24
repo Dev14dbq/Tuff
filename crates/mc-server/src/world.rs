@@ -624,6 +624,7 @@ impl World {
                     | "minecraft:campfire"
                     | "minecraft:crafter"
                     | "minecraft:daylight_detector"
+                    | "minecraft:brushable_block"
             )
         });
         let mut woken = self.woken.lock().expect("woken lock");
