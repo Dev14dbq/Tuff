@@ -3,8 +3,8 @@
 use super::body::{params, yaw_to};
 use super::chores;
 use super::{
-    Body, Missile, Mob, MobEvent, PLAYER_EYE, Seen, Senses, Species, Target, cell_of,
-    dist_sq, line_clear, slot,
+    Body, Missile, Mob, MobEvent, PLAYER_EYE, Seen, Senses, Species, Target, cell_of, dist_sq,
+    line_clear, slot,
 };
 use crate::nav::{Cell, Graze, Liquid, standable};
 

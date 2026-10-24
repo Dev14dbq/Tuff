@@ -878,6 +878,13 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
     if matches!(species, Zombie | Husk | ZombieVillager) {
         m.breaks_doors = m.next_f64() < special * 0.1;
     }
+    if species == Turtle {
+        m.quirks.aqua.home = Some([
+            e.pos[0].floor() as i32,
+            e.pos[1].floor() as i32,
+            e.pos[2].floor() as i32,
+        ]);
+    }
     match species {
         Sheep => {
             let roll = m.below(10_000);

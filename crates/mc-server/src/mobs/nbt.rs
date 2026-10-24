@@ -251,6 +251,7 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
         }
         m.quirks.land.rolled = matches!(string(nbt, "state"), Some("scared" | "rolling"));
     }
+    load_aquatic(nbt, m);
     if let Some(v) = int(nbt, "Lifetime")
         && s == Species::Endermite
     {
@@ -556,6 +557,115 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
                 "idle"
             };
             c.insert("state", Tag::String(state.into()));
+        }
+        _ => save_aquatic(m, c),
+    }
+}
+
+/// Aquatic (Claude): what the water kinds read from their data.
+fn load_aquatic(nbt: &Compound, m: &mut Mob) {
+    use Species::*;
+    let s = m.species;
+    if !s.swims() {
+        return;
+    }
+    if let Some(v) = flag(nbt, "FromBucket") {
+        m.quirks.aqua.from_bucket = v;
+        if v {
+            m.persistent = true;
+        }
+    }
+    match s {
+        Salmon => {
+            m.variant = match string(nbt, "type") {
+                Some("small") => 0,
+                Some("large") => 2,
+                _ => m.variant.clamp(0, 2),
+            };
+        }
+        Pufferfish => {
+            if let Some(v) = int(nbt, "PuffState") {
+                m.quirks.aqua.puff = v.clamp(0, 2) as u8;
+            }
+        }
+        TropicalFish => {
+            if let Some(v) = int(nbt, "Variant") {
+                m.variant = v;
+            }
+        }
+        Axolotl => {
+            if let Some(v) = int(nbt, "Variant") {
+                m.variant = v.clamp(0, 4);
+            }
+        }
+        Tadpole => {
+            if let Some(v) = int(nbt, "Age") {
+                m.quirks.aqua.growth = v.max(0);
+            }
+        }
+        GlowSquid => {
+            if let Some(v) = int(nbt, "DarkTicksRemaining") {
+                m.quirks.aqua.dark = v.max(0);
+            }
+        }
+        Dolphin => {
+            if let Some(v) = flag(nbt, "GotFish") {
+                m.quirks.aqua.got_fish = v;
+            }
+            if let Some(v) = int(nbt, "Moistness") {
+                m.quirks.aqua.air = v;
+            }
+        }
+        Turtle => {
+            if let Some(v) = flag(nbt, "has_egg") {
+                m.quirks.aqua.has_egg = v;
+            }
+            if let Some(Tag::IntArray(h)) = nbt.get("home_pos")
+                && h.len() == 3
+            {
+                m.quirks.aqua.home = Some([h[0], h[1], h[2]]);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Aquatic (Claude): what the water kinds keep.
+fn save_aquatic(m: &Mob, c: &mut Compound) {
+    use Species::*;
+    let a = &m.quirks.aqua;
+    match m.species {
+        Cod | Salmon | Pufferfish | TropicalFish | Axolotl | Tadpole => {
+            c.insert("FromBucket", Tag::Byte(i8::from(a.from_bucket)));
+        }
+        _ => {}
+    }
+    match m.species {
+        Salmon => {
+            let kind = ["small", "medium", "large"][m.variant.clamp(0, 2) as usize];
+            c.insert("type", Tag::String(kind.into()));
+        }
+        Pufferfish => {
+            c.insert("PuffState", Tag::Int(i32::from(a.puff)));
+        }
+        TropicalFish | Axolotl => {
+            c.insert("Variant", Tag::Int(m.variant));
+        }
+        Tadpole => {
+            c.insert("Age", Tag::Int(a.growth));
+        }
+        GlowSquid => {
+            c.insert("DarkTicksRemaining", Tag::Int(a.dark));
+        }
+        Dolphin => {
+            c.insert("GotFish", Tag::Byte(i8::from(a.got_fish)));
+            c.insert("Moistness", Tag::Int(a.air));
+        }
+        Turtle => {
+            c.insert("has_egg", Tag::Byte(i8::from(a.has_egg)));
+            if let Some(h) = a.home {
+                c.insert("home_pos", Tag::IntArray(h.to_vec()));
+            }
         }
         _ => {}
     }

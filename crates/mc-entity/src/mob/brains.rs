@@ -1,8 +1,8 @@
 //! The goals of each kind of mob, by priority (minecraft.wiki, the "Behavior"
 //! section of each mob's page).
 
-use super::goals::{Avoidee, Goal, Ranged, Slot};
 use super::aqua::Act as Aq;
+use super::goals::{Avoidee, Goal, Ranged, Slot};
 use super::land::Act;
 use super::{Brain, JUMP, LOOK, MOVE, Species, TARGET};
 
@@ -913,7 +913,13 @@ fn bolt(p: u8, speed: f64) -> Slot {
     )
 }
 
-fn hunt(p: u8, kinds: &'static [Species], hostile: &'static [Species], small: bool, wait: bool) -> Slot {
+fn hunt(
+    p: u8,
+    kinds: &'static [Species],
+    hostile: &'static [Species],
+    small: bool,
+    wait: bool,
+) -> Slot {
     aq(
         p,
         TARGET,
@@ -953,14 +959,7 @@ fn aquatic(species: Species) -> (Vec<Slot>, Vec<Slot>) {
         Dolphin => (
             vec![
                 aq(0, MOVE, Aq::Breathe { to: None }),
-                aq(
-                    0,
-                    MOVE,
-                    Aq::ToWater {
-                        to: None,
-                        left: 0,
-                    },
-                ),
+                aq(0, MOVE, Aq::ToWater { to: None, left: 0 }),
                 aq(1, MOVE, Aq::Treasure { left: 0 }),
                 aq(
                     4,
@@ -984,22 +983,8 @@ fn aquatic(species: Species) -> (Vec<Slot>, Vec<Slot>) {
                 breed(2, 1.0),
                 aq(3, MOVE | LOOK, Aq::LayEgg { left: 0 }),
                 tempt(4, 1.1),
-                aq(
-                    5,
-                    MOVE,
-                    Aq::ToWater {
-                        to: None,
-                        left: 0,
-                    },
-                ),
-                aq(
-                    6,
-                    MOVE,
-                    Aq::Home {
-                        to: None,
-                        left: 0,
-                    },
-                ),
+                aq(5, MOVE, Aq::ToWater { to: None, left: 0 }),
+                aq(6, MOVE, Aq::Home { to: None, left: 0 }),
                 aq(
                     7,
                     MOVE,
@@ -1024,14 +1009,7 @@ fn aquatic(species: Species) -> (Vec<Slot>, Vec<Slot>) {
                 tempt(2, 1.1),
                 melee(3, 1.0, false),
                 follow_parent(4, 1.1),
-                aq(
-                    5,
-                    MOVE,
-                    Aq::ToWater {
-                        to: None,
-                        left: 0,
-                    },
-                ),
+                aq(5, MOVE, Aq::ToWater { to: None, left: 0 }),
                 swim(6, 1.0, 30),
                 stroll(7, 1.0),
                 look(8, 6.0),
@@ -1045,14 +1023,7 @@ fn aquatic(species: Species) -> (Vec<Slot>, Vec<Slot>) {
                 aq(2, MOVE | LOOK, Aq::Tongue { range: 5.0 }),
                 breed(3, 1.0),
                 tempt(4, 1.25),
-                aq(
-                    5,
-                    MOVE,
-                    Aq::LaySpawn {
-                        to: None,
-                        left: 0,
-                    },
-                ),
+                aq(5, MOVE, Aq::LaySpawn { to: None, left: 0 }),
                 swim(6, 1.0, 40),
                 stroll(7, 1.0),
                 look(8, 6.0),
@@ -1060,7 +1031,10 @@ fn aquatic(species: Species) -> (Vec<Slot>, Vec<Slot>) {
             ],
             vec![hunt(1, FROG_PREY, &[], true, false)],
         ),
-        Tadpole => (vec![bolt(1, 1.25), tempt(2, 1.25), swim(3, 1.0, 40)], vec![]),
+        Tadpole => (
+            vec![bolt(1, 1.25), tempt(2, 1.25), swim(3, 1.0, 40)],
+            vec![],
+        ),
         Guardian | ElderGuardian => {
             let duration = if species == ElderGuardian { 60 } else { 80 };
             (
@@ -1090,10 +1064,7 @@ fn aquatic(species: Species) -> (Vec<Slot>, Vec<Slot>) {
                 follow_parent(4, 1.1),
                 swim(5, 1.0, 40),
             ],
-            vec![
-                hurt_by(1, false),
-                hunt(2, PUFFERFISH, &[], false, true),
-            ],
+            vec![hurt_by(1, false), hunt(2, PUFFERFISH, &[], false, true)],
         ),
         _ => (vec![], vec![]),
     }

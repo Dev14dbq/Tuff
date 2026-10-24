@@ -333,7 +333,10 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             v.push((a + 1, MetadataValue::OptUuid(m.owner)));
             v.push((a + 2, MetadataValue::Boolean(m.quirks.aqua.dashing > 0)));
             if m.species == ZombieNautilus {
-                v.push((a + 3, MetadataValue::Holder(holder::ZOMBIE_NAUTILUS, m.variant)));
+                v.push((
+                    a + 3,
+                    MetadataValue::Holder(holder::ZOMBIE_NAUTILUS, m.variant),
+                ));
             }
         }
         _ => {}

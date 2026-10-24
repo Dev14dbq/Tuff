@@ -606,7 +606,11 @@ pub fn use_item_on(
             .and_then(crate::menus::Menu::of_block)
     {
         outcome.open_menu = Some((clicked, menu));
-        crate::stats::opened(ctx, actor.uuid, block_at(clicked).and_then(|s| blocks.block_name(s)));
+        crate::stats::opened(
+            ctx,
+            actor.uuid,
+            block_at(clicked).and_then(|s| blocks.block_name(s)),
+        );
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,
             entity_id: actor.entity_id,
@@ -621,7 +625,11 @@ pub fn use_item_on(
             .and_then(crate::containers::kind_of)
     {
         outcome.open = Some((clicked, kind));
-        crate::stats::opened(ctx, actor.uuid, block_at(clicked).and_then(|s| blocks.block_name(s)));
+        crate::stats::opened(
+            ctx,
+            actor.uuid,
+            block_at(clicked).and_then(|s| blocks.block_name(s)),
+        );
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,
             entity_id: actor.entity_id,
@@ -692,7 +700,13 @@ pub fn use_item_on(
         let changes = level.into_changes();
         outcome.updates.extend(changes.iter().copied());
         outcome.events.push(Event::BlocksChanged { by: 0, changes });
-        crate::stats::item(ctx, actor.uuid, crate::stats::USED, ctx.items.id("minecraft:ender_eye").unwrap_or(0), 1);
+        crate::stats::item(
+            ctx,
+            actor.uuid,
+            crate::stats::USED,
+            ctx.items.id("minecraft:ender_eye").unwrap_or(0),
+            1,
+        );
         if actor.game_mode != CREATIVE {
             replace_held(ctx, &mut outcome, actor, hand, None);
         }
@@ -1162,7 +1176,10 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
         if let Some(h) = thrown
             && !matches!(
                 h.name.as_str(),
-                "minecraft:bow" | "minecraft:crossbow" | "minecraft:trident" | "minecraft:fishing_rod"
+                "minecraft:bow"
+                    | "minecraft:crossbow"
+                    | "minecraft:trident"
+                    | "minecraft:fishing_rod"
             )
             && !done.events.is_empty()
         {
@@ -1187,12 +1204,18 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
         .expect("inventories lock")
         .get(&actor.uuid)
         .and_then(|h| h.held(hand).cloned());
-    let Some(name) = held.and_then(|h| ctx.items.name(h.item)).map(str::to_owned) else {
+    let Some(name) = held
+        .as_ref()
+        .and_then(|h| ctx.items.name(h.item))
+        .map(str::to_owned)
+    else {
         return outcome;
     };
     let fluid = match name.as_str() {
         "minecraft:bucket" => None,
         "minecraft:water_bucket" => Some("minecraft:water"),
+        // Aquatic (Claude): a bucket with a creature in it pours water.
+        n if crate::mobs::aqua::bucket_species(n).is_some() => Some("minecraft:water"),
         "minecraft:lava_bucket" => Some("minecraft:lava"),
         _ => return outcome,
     };
@@ -1202,6 +1225,7 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
     let blocks = &ctx.data.blocks;
     let state_at = |p: Position| ctx.world.block(p, blocks).unwrap_or(0);
     let mut level = WorldLevel::new(ctx);
+    let mut poured: Option<Position> = None;
     let (changed, result) = match fluid {
         // Scooping up a source, water out of a waterlogged block, or powder snow.
         None => {
@@ -1230,6 +1254,7 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
             let placed = if fluid == "minecraft:water"
                 && blocks.property(state, "waterlogged") == Some("false")
             {
+                poured = Some(hit);
                 level.set_block(hit, crate::campfires::waterlogged(ctx, hit, state))
             } else {
                 let fits = |s: u32| ctx.shapes.is_air(s) || ctx.rules.is_replaceable(s);
@@ -1240,6 +1265,7 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
                 if !fits(there) || same {
                     false
                 } else {
+                    poured = Some(at);
                     level.set_block(at, source)
                 }
             };
@@ -1252,6 +1278,10 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
     let changes = level.into_changes();
     outcome.updates.extend(changes.iter().copied());
     outcome.events.push(Event::BlocksChanged { by: 0, changes });
+    // Aquatic (Claude): the creature swims out.
+    if let (Some(at), Some(stack)) = (poured, held.as_ref()) {
+        crate::mobs::aqua::release(ctx, &name, stack, at);
+    }
     if actor.game_mode != CREATIVE {
         replace_held(ctx, &mut outcome, actor, hand, result);
     }

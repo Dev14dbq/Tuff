@@ -70,6 +70,12 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
         m.baby_age += 1;
         if m.baby_age == 0 {
             m.dirty = true;
+            // Aquatic (Claude): a turtle that grows up drops a scute.
+            if m.species == Species::Turtle {
+                out.push(MobEvent::Lay {
+                    item: "minecraft:turtle_scute",
+                });
+            }
         }
     } else if m.baby_age > 0 {
         m.baby_age -= 1;
@@ -530,7 +536,8 @@ pub(super) fn physics(
                 };
                 // A strider out of lava is slowed (-0.34 of its speed).
                 let chill = if m.cold { 0.66 } else { 1.0 };
-                let speed = (m.movement_speed() + bonus) * i.speed * chill * super::aqua::land_factor(m);
+                let speed =
+                    (m.movement_speed() + bonus) * i.speed * chill * super::aqua::land_factor(m);
                 let want = speed * speed * GROUND;
                 let control = if b.on_ground || wet { 0.5 } else { 0.1 };
                 b.vel[0] += (i.dir[0] * want - b.vel[0]) * control;

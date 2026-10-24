@@ -1217,3 +1217,6 @@ mod chore_tests;
 
 #[cfg(test)]
 mod critter_tests;
+
+#[cfg(test)]
+mod aqua_tests;

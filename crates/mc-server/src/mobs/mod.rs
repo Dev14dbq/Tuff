@@ -10,6 +10,7 @@
 //! - [`meta`]: metadata and equipment for clients;
 //! - [`nbt`]: mobs as `/summon` and `/data` see them.
 
+pub mod aqua;
 pub(crate) mod blocks;
 pub mod chest;
 mod crowd;
@@ -20,7 +21,6 @@ pub mod hurt;
 pub mod infest;
 pub mod interact;
 mod land;
-mod aqua;
 pub mod meta;
 pub mod nbt;
 pub mod ride;
@@ -336,6 +336,21 @@ fn players(ctx: &ServerContext) -> Vec<Target> {
             t.gold = gold;
             t.yaw = pose.yaw;
             t.pitch = pose.pitch;
+            // Aquatic (Claude): dolphins come to swimmers and boats.
+            let wet = ctx
+                .world
+                .block(
+                    mc_protocol::Position::new(
+                        pose.x.floor() as i32,
+                        (pose.y + 0.4).floor() as i32,
+                        pose.z.floor() as i32,
+                    ),
+                    &ctx.data.blocks,
+                )
+                .and_then(|s| ctx.data.blocks.block_name(s))
+                == Some("minecraft:water");
+            t.swimming = wet && crate::stats::is_sprinting(ctx, t.uuid);
+            t.boating = crate::stats::in_boat(ctx, t.id);
             Some(t)
         })
         .collect();
@@ -922,7 +937,9 @@ fn handle(
             target,
             damage,
             poison,
-        } => aqua::sting(ctx, entities, i, target, damage, poison, targets, difficulty),
+        } => aqua::sting(
+            ctx, entities, i, target, damage, poison, targets, difficulty,
+        ),
         MobEvent::MagicAttack { target, damage } => {
             aqua::magic(ctx, entities, i, target, damage, targets, difficulty);
         }

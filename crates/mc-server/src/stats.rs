@@ -311,6 +311,19 @@ pub fn set_sprinting(ctx: &ServerContext, uuid: u128, on: bool) {
     }
 }
 
+/// Whether the player is sprinting (dolphins watch for swimmers).
+pub fn is_sprinting(ctx: &ServerContext, uuid: u128) -> bool {
+    lock(&ctx.stats)
+        .watch
+        .get(&uuid)
+        .is_some_and(|w| w.sprinting)
+}
+
+/// Whether the player sits in a boat.
+pub fn in_boat(ctx: &ServerContext, entity_id: i32) -> bool {
+    vehicle_of(ctx, entity_id).is_some_and(|v| v.ends_with("boat") || v.ends_with("raft"))
+}
+
 /// `registry:` name of the entity type of `e`, for `killed` and `killed_by`.
 pub fn entity_type(e: &mc_entity::Entity) -> Option<String> {
     use mc_entity::Kind;

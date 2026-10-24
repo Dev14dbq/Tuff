@@ -58,10 +58,7 @@ impl Species {
 
     /// Fish that swim in schools.
     pub fn schooling(self) -> bool {
-        matches!(
-            self,
-            Species::Cod | Species::Salmon | Species::TropicalFish
-        )
+        matches!(self, Species::Cod | Species::Salmon | Species::TropicalFish)
     }
 
     /// Blocks a tick it swims at a goal speed of 1.
@@ -218,8 +215,8 @@ pub(super) fn init(m: &mut Mob) {
 /// variant number.
 pub const TROPICAL_KINDS: [i32; 22] = [
     65536, 459008, 917504, 918273, 918529, 16778497, 50660352, 50726144, 67108865, 67110144,
-    67371009, 67699456, 67764993, 101253888, 117441025, 117441793, 117506305, 117899265,
-    118161664, 185008129, 234882305, 235340288,
+    67371009, 67699456, 67764993, 101253888, 117441025, 117441793, 117506305, 117899265, 118161664,
+    185008129, 234882305, 235340288,
 ];
 
 /// A wild tropical fish: nine in ten are one of the common kinds.
@@ -263,7 +260,11 @@ pub(super) fn land_factor(m: &Mob) -> f64 {
 /// Blocks a tick it swims at a goal speed of 1, with its effects.
 pub(super) fn pace(m: &Mob) -> f64 {
     let base = m.species.swim_pace();
-    let attr = if m.speed_attr > 0.0 { m.speed_attr } else { 1.0 };
+    let attr = if m.speed_attr > 0.0 {
+        m.speed_attr
+    } else {
+        1.0
+    };
     let own = m.species.land_speed().unwrap_or_else(|| m.species.speed());
     let scale = if own > 0.0 { attr / own } else { 1.0 };
     // Effects (speed, slowness) scale the attribute: carry them over.
@@ -443,10 +444,7 @@ pub(super) fn can_use(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses) -> b
             to.is_some()
         }
         Act::Flee {
-            range,
-            to,
-            from,
-            ..
+            range, to, from, ..
         } => {
             if !wet {
                 return false;
@@ -653,7 +651,11 @@ fn hunt(
                     }
                 })
                 && (!small || o.width <= 0.53)
-                && line_clear(s.world, eye, [o.pos[0], o.pos[1] + o.height * 0.5, o.pos[2]])
+                && line_clear(
+                    s.world,
+                    eye,
+                    [o.pos[0], o.pos[1] + o.height * 0.5, o.pos[2]],
+                )
         })
         .map(|o| o.id)
     };
@@ -680,19 +682,21 @@ pub(super) fn can_continue(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses)
             *left > 0 && to.is_some_and(|p| dist_sq(b.pos, p) > 1.5) && in_water(b, s)
         }
         Act::Flee { to, from, .. } => {
-            let near = from.and_then(|id| s.player(id)).is_some_and(|p| {
-                p.present && dist_sq(b.pos, p.pos) < 100.0
-            });
+            let near = from
+                .and_then(|id| s.player(id))
+                .is_some_and(|p| p.present && dist_sq(b.pos, p.pos) < 100.0);
             near && to.is_some_and(|p| dist_sq(b.pos, p) > 1.5) && in_water(b, s)
         }
-        Act::School { leader } => leader
-            .and_then(|id| s.mob(id))
-            .is_some_and(|o| o.alive && dist_sq(b.pos, o.pos) > 4.0)
-            && in_water(b, s),
+        Act::School { leader } => {
+            leader
+                .and_then(|id| s.mob(id))
+                .is_some_and(|o| o.alive && dist_sq(b.pos, o.pos) > 4.0)
+                && in_water(b, s)
+        }
         Act::Squid { .. } => in_water(b, s),
-        Act::Escort { player, .. } => player
-            .and_then(|id| s.player(id))
-            .is_some_and(|p| p.present && (p.swimming || p.boating) && dist_sq(b.pos, p.pos) < 400.0),
+        Act::Escort { player, .. } => player.and_then(|id| s.player(id)).is_some_and(|p| {
+            p.present && (p.swimming || p.boating) && dist_sq(b.pos, p.pos) < 400.0
+        }),
         Act::Treasure { left } => *left > 0 && m.quirks.aqua.treasure.is_some(),
         Act::Breathe { .. } => in_water(b, s) && m.quirks.aqua.breath < 4000,
         Act::Home { to, left } => {
@@ -701,7 +705,11 @@ pub(super) fn can_continue(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses)
                 && to.is_some_and(|h| {
                     dist_sq(
                         b.pos,
-                        [f64::from(h[0]) + 0.5, f64::from(h[1]), f64::from(h[2]) + 0.5],
+                        [
+                            f64::from(h[0]) + 0.5,
+                            f64::from(h[1]),
+                            f64::from(h[2]) + 0.5,
+                        ],
                     ) > 9.0
                 })
         }
@@ -720,10 +728,9 @@ pub(super) fn can_continue(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses)
             };
             s.seen(id).is_some() && dist_sq(b.pos, s.seen(id).map_or(b.pos, |t| t.pos)) < 400.0
         }
-        Act::Tongue { .. } | Act::Beam { .. } | Act::Dash { .. } => m
-            .target
-            .and_then(|id| s.seen(id))
-            .is_some(),
+        Act::Tongue { .. } | Act::Beam { .. } | Act::Dash { .. } => {
+            m.target.and_then(|id| s.seen(id)).is_some()
+        }
     }
 }
 
@@ -789,7 +796,11 @@ pub(super) fn tick(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses, out: &m
             }
         }
         Act::Flee {
-            walk, sprint, to, from, ..
+            walk,
+            sprint,
+            to,
+            from,
+            ..
         } => {
             let close = from
                 .and_then(|id| s.player(id))
@@ -843,7 +854,11 @@ pub(super) fn tick(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses, out: &m
         Act::Home { to, .. } => {
             if let Some(h) = *to {
                 m.goto = Some((
-                    [f64::from(h[0]) + 0.5, f64::from(h[1]), f64::from(h[2]) + 0.5],
+                    [
+                        f64::from(h[0]) + 0.5,
+                        f64::from(h[1]),
+                        f64::from(h[2]) + 0.5,
+                    ],
                     1.0,
                 ));
             }
@@ -944,8 +959,14 @@ fn squid_tick(time: &mut i32, m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<M
             })
             .unwrap_or(b.pos);
         let d = [b.pos[0] - from[0], b.pos[1] - from[1], b.pos[2] - from[2]];
-        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
-        m.quirks.aqua.drift = [d[0] / len, d[1] / len, d[2] / len];
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        m.quirks.aqua.drift = if len < 1e-3 {
+            // Hurt by something it cannot place: any way will do.
+            let angle = m.next_f64() * std::f64::consts::TAU;
+            [angle.cos(), 0.0, angle.sin()]
+        } else {
+            [d[0] / len, d[1] / len, d[2] / len]
+        };
         *time = 0;
     }
     let drift = m.quirks.aqua.drift;
@@ -967,7 +988,11 @@ fn squid_tick(time: &mut i32, m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<M
         }
     }
     let d = m.quirks.aqua.drift;
-    let go = [b.pos[0] + d[0] * 10.0, b.pos[1] + d[1] * 10.0, b.pos[2] + d[2] * 10.0];
+    let go = [
+        b.pos[0] + d[0] * 10.0,
+        b.pos[1] + d[1] * 10.0,
+        b.pos[2] + d[2] * 10.0,
+    ];
     let speed = if fleeing { 2.5 } else { 0.6 };
     m.goto = Some((go, speed));
 }
@@ -1015,14 +1040,7 @@ fn tongue_tick(range: f64, m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<MobE
 
 /// A guardian charges its beam for `duration` ticks while the target stays
 /// in sight, and hits when the charge is full.
-fn beam_tick(
-    duration: i32,
-    hold: f64,
-    m: &mut Mob,
-    b: &Body,
-    s: &Senses,
-    out: &mut Vec<MobEvent>,
-) {
+fn beam_tick(duration: i32, hold: f64, m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<MobEvent>) {
     let Some(t) = m.target.and_then(|id| s.seen(id)) else {
         return;
     };
@@ -1187,11 +1205,13 @@ fn breathing(m: &mut Mob, b: &Body, s: &Senses, wet: bool, out: &mut Vec<MobEven
         }
     }
     if sp == Species::Dolphin {
-        let wet_or_rain = wet || s.raining && s.world.sky_light(
-            cell_of(b.pos)[0],
-            (b.pos[1] + m.size().1).floor() as i32,
-            cell_of(b.pos)[2],
-        ) >= 15;
+        let wet_or_rain = wet
+            || s.raining
+                && s.world.sky_light(
+                    cell_of(b.pos)[0],
+                    (b.pos[1] + m.size().1).floor() as i32,
+                    cell_of(b.pos)[2],
+                ) >= 15;
         let head = {
             let eye = b.pos[1] + m.eye_height();
             let c = cell_of(b.pos);
@@ -1298,9 +1318,13 @@ fn puff(m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<MobEvent>) {
     let width = m.size().0;
     let reach = |other_width: f64| 2.0 + width / 2.0 + other_width / 2.0;
     let threatened = s.players.iter().any(|p| {
-        p.targetable && dist_sq(b.pos, p.pos) <= reach(0.6).powi(2) && (b.pos[1] - p.pos[1]).abs() < 2.5
+        p.targetable
+            && dist_sq(b.pos, p.pos) <= reach(0.6).powi(2)
+            && (b.pos[1] - p.pos[1]).abs() < 2.5
     }) || s.mobs.iter().any(|o| {
-        scary(o) && o.id != b.id && dist_sq(b.pos, o.pos) <= reach(o.width).powi(2)
+        scary(o)
+            && o.id != b.id
+            && dist_sq(b.pos, o.pos) <= reach(o.width).powi(2)
             && (b.pos[1] - o.pos[1]).abs() < 2.5
     });
     let a = &mut m.quirks.aqua;
@@ -1343,7 +1367,9 @@ fn puff(m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<MobEvent>) {
             }
         }
         for o in s.mobs.iter().filter(|o| scary(o) && o.id != b.id) {
-            if o.species.is_some_and(|k| matches!(k, Species::Creeper | Species::Ghast)) {
+            if o.species
+                .is_some_and(|k| matches!(k, Species::Creeper | Species::Ghast))
+            {
                 continue;
             }
             if dist_sq(b.pos, o.pos) <= touch(o.width).powi(2) && (b.pos[1] - o.pos[1]).abs() < 1.8

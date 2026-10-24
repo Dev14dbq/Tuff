@@ -126,6 +126,19 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         swing(ctx, by);
         return;
     }
+    // Aquatic (Claude): buckets, tadpoles, dolphins, nautiluses, axolotls.
+    if let Kind::Mob(m0) = &e.kind
+        && m0.species.swims()
+    {
+        let food = m0
+            .species
+            .food_tag()
+            .is_some_and(|t| ctx.commands.env.tag("minecraft:item", t).contains(&name));
+        if super::aqua::used(ctx, e, by, &name, hslot, food) {
+            send_now(ctx, e);
+            return;
+        }
+    }
     let Kind::Mob(m) = &mut e.kind else {
         return;
     };
@@ -303,6 +316,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
     }
     let owner = m.owner == Some(by.uuid);
     let food = tagged(species.food_tag());
+
     // Taming.
     let taming = match species {
         Species::Wolf => name == "minecraft:bone",

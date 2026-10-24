@@ -140,6 +140,12 @@ impl Entity {
             Kind::Item { .. } => (0.25, 0.25),
             Kind::Merchant(m) if m.is_baby() => (0.3, 0.975),
             Kind::Merchant(_) => (0.6, 1.95),
+            // Aquatic (Claude): these change size.
+            Kind::Mob(m)
+                if matches!(m.species, mob::Species::Pufferfish | mob::Species::Salmon) =>
+            {
+                m.size()
+            }
             Kind::Mob(m) => m.species.size(),
             Kind::ExperienceOrb { .. } => (0.5, 0.5),
             Kind::Crystal(_) => (2.0, 2.0),

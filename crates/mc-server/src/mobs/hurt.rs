@@ -254,6 +254,9 @@ pub fn player_blow(
     if !landed {
         return;
     }
+    // Aquatic (Claude): a guardian's spikes, and the axolotls' thanks.
+    super::aqua::thorns(ctx, &entities[i], by.uuid);
+    super::aqua::reward(ctx, entities, i, by.uuid);
     let (target, on_ground) = (entities[i].id, entities[i].on_ground);
     crate::combat::after_blow(ctx, by.uuid, blow, target, target_pos, on_ground, entities);
     crate::combat::note_hit(ctx, by.uuid, entities[i].id);
@@ -933,10 +936,40 @@ pub fn breed(
         [ma.quirks.land.main_gene, ma.quirks.land.hidden_gene],
         [mb.quirks.land.main_gene, mb.quirks.land.hidden_gene],
     ];
+    // Aquatic (Claude): a turtle carries an egg and a frog frogspawn, to lay
+    // where they go; no baby yet.
+    if matches!(kind, Species::Turtle | Species::Frog) {
+        for k in [i, j] {
+            if let Kind::Mob(m) = &mut entities[k].kind {
+                m.love = 0;
+                m.love_by = None;
+                m.baby_age = 6000;
+            }
+        }
+        if let Kind::Mob(m) = &mut entities[i].kind {
+            if kind == Species::Turtle {
+                m.quirks.aqua.has_egg = true;
+            } else {
+                m.quirks.aqua.pregnant = true;
+            }
+            m.dirty = true;
+        }
+        fx::status(ctx, entities[i].id, 18);
+        if let Some(p) = by {
+            crate::stats::custom(ctx, p, "animals_bred", 1);
+            let xp = 1 + (crate::util::random_u64() % 7) as i32;
+            crate::xp::spawn(ctx, pos, xp);
+        }
+        return None;
+    }
     let mut baby = super::new_mob(ctx, kind, pos);
     if let Kind::Mob(m) = &mut baby.kind {
         m.set_baby(true);
         m.variant = if m.below(2) == 0 { va } else { vb };
+        // Aquatic (Claude): one axolotl in 1200 is blue.
+        if kind == Species::Axolotl && m.below(1200) == 0 {
+            m.variant = 4;
+        }
         if kind.llama() {
             // The mean of the parents' strengths, now and then one more.
             let both = ma.strength + mb.strength;
@@ -1030,7 +1063,13 @@ pub fn convert(ctx: &ServerContext, e: &mut Entity, to: Species) -> Option<Entit
     let Kind::Mob(old) = &e.kind else {
         return None;
     };
-    let mut new = super::new_mob(ctx, to, e.pos);
+    // Aquatic (Claude): a tadpole grows into the frog of the place.
+    let biome = if to == Species::Frog {
+        super::aqua::biome_at(ctx, e.pos)
+    } else {
+        None
+    };
+    let mut new = super::new_mob_in(ctx, to, e.pos, biome.as_deref());
     let Kind::Mob(m) = &mut new.kind else {
         return None;
     };
