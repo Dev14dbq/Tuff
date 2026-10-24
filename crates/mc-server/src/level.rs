@@ -399,6 +399,10 @@ impl Level for WorldLevel<'_> {
         crate::command_blocks::tick(self, to_position(p));
     }
 
+    fn jukebox_playing(&self, p: BlockPos) -> bool {
+        crate::jukeboxes::playing(self.ctx, to_position(p))
+    }
+
     fn viewers(&self, p: BlockPos) -> u8 {
         self.ctx
             .containers

@@ -45,6 +45,7 @@ mod hits;
 mod hoppers;
 mod interact;
 mod items;
+mod jukeboxes;
 mod level;
 mod lists;
 pub mod logs;

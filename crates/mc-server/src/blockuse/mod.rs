@@ -95,20 +95,7 @@ pub fn comparator_signal(ctx: &ServerContext, p: Position) -> Option<u8> {
             let Some(Tag::String(id)) = record.get("id") else {
                 return Some(0);
             };
-            let song = ctx
-                .items
-                .id(id)
-                .and_then(|i| ctx.items.get(i))
-                .and_then(|i| i.jukebox_song.clone())?;
-            let file = ctx
-                .data
-                .data_pack()
-                .root
-                .join("minecraft/jukebox_song")
-                .join(format!("{}.json", song.trim_start_matches("minecraft:")));
-            let json: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
-            json["comparator_output"].as_u64().unwrap_or(0).min(15) as u8
+            crate::jukeboxes::song_of(ctx, id)?.comparator
         }
     })
 }

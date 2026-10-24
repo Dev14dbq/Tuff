@@ -233,7 +233,17 @@ fn emitted(level: &dyn Level, ctx: Ctx, at: BlockPos, state: u32, toward: Dir, w
         _ => crate::rails::emits(ctx, state, toward, false)
             .max(crate::tripwire::emits(ctx, state, toward, false))
             .max(other_power(ctx, state))
+            .max(jukebox_power(level, ctx, at, state))
             .max(trapped_chest(level, ctx, at, state)),
+    }
+}
+
+/// A jukebox gives 15, weakly, while a song plays.
+fn jukebox_power(level: &dyn Level, ctx: Ctx, at: BlockPos, state: u32) -> u8 {
+    if ctx.shapes.block_name(state) == Some("minecraft:jukebox") && level.jukebox_playing(at) {
+        15
+    } else {
+        0
     }
 }
 
@@ -351,7 +361,9 @@ pub fn power_from(level: &dyn Level, ctx: Ctx, p: BlockPos, from: Dir, wires: bo
     if ctx.shapes.conducts(state) {
         // A target conducts, and gives its own signal on top of what it
         // is powered with.
-        conductor_power(level, ctx, n, wires).max(other_power(ctx, state))
+        conductor_power(level, ctx, n, wires)
+            .max(other_power(ctx, state))
+            .max(jukebox_power(level, ctx, n, state))
     } else {
         emitted(level, ctx, n, state, from.opposite(), wires)
     }

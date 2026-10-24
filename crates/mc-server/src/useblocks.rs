@@ -327,6 +327,8 @@ fn jukebox(
                     },
                     _ => None,
                 });
+        // The music stops before the disc is out.
+        crate::jukeboxes::stop(ctx, p);
         if let Some(id) = record.and_then(|id| ctx.items.id(&id)) {
             crate::tick::drop_item(
                 ctx,
@@ -351,7 +353,6 @@ fn jukebox(
         if let Some(new) = set_record(false) {
             set(ctx, outcome, p, new);
         }
-        fx::level_event(ctx, 1011, centre(p), 0);
         return true;
     }
     let Some(name) = held.filter(|n| n.starts_with("minecraft:music_disc_")) else {
@@ -372,25 +373,11 @@ fn jukebox(
         },
         blocks,
     );
+    // Event 1010 plays the song, named by its place in the jukebox_song
+    // registry as clients were told; the signal starts with the block.
+    crate::jukeboxes::start(ctx, p);
     if let Some(new) = set_record(true) {
         set(ctx, outcome, p, new);
-    }
-    // Event 1010 plays the song, named by its place in the jukebox_song
-    // registry as clients were told.
-    let song = ctx
-        .items
-        .get(ctx.items.id(name).unwrap_or(-1))
-        .and_then(|i| i.jukebox_song.clone())
-        .and_then(|song| {
-            ctx.data
-                .data_pack()
-                .registry_entries("minecraft:jukebox_song")
-                .ok()?
-                .iter()
-                .position(|e| *e == song)
-        });
-    if let Some(song) = song {
-        fx::level_event(ctx, 1010, centre(p), song as i32);
     }
     if actor.game_mode != CREATIVE {
         consume_held(ctx, actor, hand);

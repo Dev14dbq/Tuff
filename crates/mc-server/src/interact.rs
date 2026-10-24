@@ -458,7 +458,7 @@ pub fn dig(
                 components: mc_nbt::Compound::new(),
             },
         ));
-        crate::fx::level_event(ctx, 1011, centre(position), 0);
+        crate::jukeboxes::stop(ctx, position);
     }
     if actor.game_mode != CREATIVE
         && ctx.game_rule_bool("block_drops")

@@ -513,6 +513,8 @@ pub struct ServerContext {
     pub brewers: Mutex<crate::brewing::Active>,
     /// Campfires with food on them (tick thread).
     pub campfires: Mutex<crate::campfires::Active>,
+    /// Jukeboxes with a song playing (tick thread).
+    pub jukeboxes: Mutex<crate::jukeboxes::Playing>,
     /// Crafters showing `crafting` (tick thread).
     pub crafters: Mutex<crate::crafter::Active>,
     /// Explosions waiting for the next tick (beds and anchors used where
@@ -783,6 +785,7 @@ impl ServerContext {
             furnaces: Mutex::new(HashMap::new()),
             brewers: Mutex::new(HashMap::new()),
             campfires: Mutex::new(Default::default()),
+            jukeboxes: Mutex::new(Default::default()),
             crafters: Mutex::new(HashMap::new()),
             pending_blasts: Mutex::new(Vec::new()),
             hoppers: Mutex::new(Default::default()),
@@ -1102,6 +1105,7 @@ impl ServerContext {
             furnaces: Mutex::new(HashMap::new()),
             brewers: Mutex::new(HashMap::new()),
             campfires: Mutex::new(Default::default()),
+            jukeboxes: Mutex::new(Default::default()),
             crafters: Mutex::new(HashMap::new()),
             pending_blasts: Mutex::new(Vec::new()),
             block_events: Mutex::new(Vec::new()),
