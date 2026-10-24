@@ -145,10 +145,6 @@ fn block_nbt(ctx: &ServerContext, p: Position) -> Option<Compound> {
     Some(c)
 }
 
-fn item_entry(ctx: &ServerContext, stack: &mc_protocol::packets::play::ItemStack) -> Compound {
-    stack.to_nbt_with(&crate::containers::item_name(ctx, stack.item).unwrap_or_default())
-}
-
 /// An entity's data as vanilla shows it.
 pub fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
     let uuid = Tag::IntArray(target::uuid_ints(t.uuid()));
@@ -194,81 +190,16 @@ pub fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
         }
         return in_order(&root, PLAYER);
     }
-    let mut c = Compound::new();
-    let entities = lock(&ctx.entities);
-    let Some(e) = entities.iter().find(|e| e.uuid == t.uuid()) else {
-        return c;
+    // Other entities show what their chunk keeps of them, without `id`.
+    let entities = lock(&ctx.entities).clone();
+    let Some(mut c) = entities
+        .iter()
+        .find(|e| e.uuid == t.uuid())
+        .and_then(|e| crate::persist::write(ctx, e, &entities))
+    else {
+        return Compound::new();
     };
-    c.insert(
-        "Pos",
-        Tag::List(e.pos.iter().map(|v| Tag::Double(*v)).collect()),
-    );
-    c.insert(
-        "Motion",
-        Tag::List(e.vel.iter().map(|v| Tag::Double(*v)).collect()),
-    );
-    c.insert(
-        "Rotation",
-        Tag::List(vec![Tag::Float(0.0), Tag::Float(0.0)]),
-    );
-    c.insert("OnGround", Tag::Byte(i8::from(e.on_ground)));
-    c.insert("UUID", uuid);
-    c.insert("Fire", Tag::Short(-1));
-    c.insert("Air", Tag::Short(300));
-    c.insert("fall_distance", Tag::Double(0.0));
-    c.insert("Invulnerable", Tag::Byte(0));
-    c.insert("PortalCooldown", Tag::Int(0));
-    if !e.tags.is_empty() {
-        c.insert(
-            "Tags",
-            Tag::List(e.tags.iter().map(|s| Tag::String(s.clone())).collect()),
-        );
-    }
-    match &e.kind {
-        mc_entity::Kind::Item {
-            pickup_delay,
-            health,
-            ..
-        } => {
-            if let Some(stack) = e.kind.as_stack() {
-                c.insert("Item", Tag::Compound(item_entry(ctx, &stack)));
-            }
-            c.insert("PickupDelay", Tag::Short(*pickup_delay as i16));
-            c.insert("Age", Tag::Short(e.age.min(i16::MAX as u32) as i16));
-            c.insert("Health", Tag::Short(*health as i16));
-        }
-        mc_entity::Kind::Tnt { fuse, owner } => {
-            c.insert("fuse", Tag::Short(*fuse as i16));
-            if let Some(owner) = owner {
-                c.insert("owner", Tag::IntArray(target::uuid_ints(*owner)));
-            }
-        }
-        mc_entity::Kind::ExperienceOrb { value, count } => {
-            c.insert("Value", Tag::Short(*value as i16));
-            c.insert("Count", Tag::Int(*count));
-            c.insert("Age", Tag::Short(e.age.min(i16::MAX as u32) as i16));
-        }
-        mc_entity::Kind::FallingBlock { .. } => {}
-        mc_entity::Kind::Crystal(crystal) => crate::bosses::crystal::to_nbt(crystal, &mut c),
-        mc_entity::Kind::Merchant(m) => {
-            if !m.wandering {
-                let mut data = Compound::new();
-                data.insert("level", Tag::Int(m.level));
-                data.insert(
-                    "profession",
-                    Tag::String(format!(
-                        "minecraft:{}",
-                        m.profession.as_deref().unwrap_or("none")
-                    )),
-                );
-                data.insert("type", Tag::String(m.variant.clone()));
-                c.insert("VillagerData", Tag::Compound(data));
-                c.insert("Xp", Tag::Int(m.xp));
-            }
-        }
-        mc_entity::Kind::Mob(m) => crate::mobs::nbt::write(ctx, m, &mut c),
-        _ => {}
-    }
+    c.remove("id");
     c
 }
 

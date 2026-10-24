@@ -648,7 +648,7 @@ pub fn die(
                     damage = damage.max(worn.min(max - 1));
                 }
             }
-            gear_drops.push((g.item, g.count, damage));
+            gear_drops.push((g.item, g.count, damage, g.components));
             m.gear[s] = None;
         }
     }
@@ -667,8 +667,8 @@ pub fn die(
     if drops_on && path == "wither" {
         crate::bosses::wither::drop_star(ctx, pos);
     }
-    for (item, count, damage) in gear_drops {
-        spawn_stack(ctx, pos, item, count, damage);
+    for (item, count, damage, components) in gear_drops {
+        spawn_stack(ctx, pos, item, count, damage, components);
     }
     // A chest on its back spills.
     if let Kind::Mob(m) = &e.kind
@@ -686,7 +686,7 @@ pub fn die(
             .block_name(state)
             .and_then(|n| ctx.items.id(n))
     {
-        spawn_stack(ctx, pos, item, 1, 0);
+        spawn_stack(ctx, pos, item, 1, 0, Default::default());
     }
     // Big slimes split into smaller ones.
     let Kind::Mob(m) = &mut e.kind else {
@@ -708,11 +708,24 @@ pub fn die(
     }
 }
 
-fn spawn_stack(ctx: &ServerContext, pos: [f64; 3], item: i32, count: i32, damage: i32) {
+fn spawn_stack(
+    ctx: &ServerContext,
+    pos: [f64; 3],
+    item: i32,
+    count: i32,
+    damage: i32,
+    components: mc_protocol::components::Components,
+) {
+    let stack = mc_protocol::components::ItemStack {
+        count,
+        item,
+        damage,
+        components,
+    };
     let mut e = Entity {
         id: ctx.next_entity_id(),
         uuid: crate::util::random_uuid(),
-        kind: Kind::item(item, count, damage, 10),
+        kind: Kind::stack(&stack, 10),
         pos: [pos[0], pos[1] + 0.3, pos[2]],
         vel: [0.0, 0.2, 0.0],
         on_ground: false,

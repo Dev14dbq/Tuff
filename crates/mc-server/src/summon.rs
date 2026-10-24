@@ -34,7 +34,7 @@ fn angles(nbt: Option<&Tag>) -> Option<[f32; 3]> {
     Some([f(0)?, f(1)?, f(2)?])
 }
 
-/// The item of an `Item` compound: id and damage.
+/// The item of an `Item` compound.
 fn stack(ctx: &ServerContext, tag: Option<&Tag>) -> Option<mc_protocol::packets::play::ItemStack> {
     let Some(Tag::Compound(c)) = tag else {
         return None;
@@ -43,9 +43,10 @@ fn stack(ctx: &ServerContext, tag: Option<&Tag>) -> Option<mc_protocol::packets:
         return None;
     };
     let item = ctx.items.id(&mc_command::args::full_id(id))?;
-    Some(mc_protocol::packets::play::ItemStack::from_nbt_with(
-        c, item,
-    ))
+    Some(mc_protocol::packets::play::ItemStack {
+        count: 1,
+        ..mc_protocol::packets::play::ItemStack::from_nbt_with(c, item)
+    })
 }
 
 /// What to summon for `name` (`minecraft:arrow`): its kind, and the place
@@ -147,7 +148,7 @@ pub fn build(
             }
             Some((
                 Kind::Hung(Hung {
-                    decor: Decor::Stand(s),
+                    decor: Decor::Stand(Box::new(s)),
                     facing: 0,
                     yaw,
                     anchor: at.map(|v| v.floor() as i32),

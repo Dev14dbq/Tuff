@@ -54,7 +54,7 @@ const SEARCH_HEIGHT: i32 = 6;
 /// Ticks between a trade that earned a level and the level.
 const LEVEL_UP_DELAY: i32 = 40;
 /// A wandering trader stays this long.
-const TRADER_STAY: u32 = 48000;
+pub const TRADER_STAY: u32 = 48000;
 
 /// One trade of the data pack.
 #[derive(Clone, Debug)]

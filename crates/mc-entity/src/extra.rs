@@ -170,8 +170,8 @@ pub struct Projectile {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
     pub glow: bool,
-    /// Item shown, with its components.
-    pub item: Option<mc_protocol::packets::play::ItemStack>,
+    /// Item shown (one).
+    pub item: Option<mc_protocol::components::ItemStack>,
     /// Quarter turns... eighths of a turn, 0..8.
     pub rotation: u8,
     pub invisible: bool,
@@ -188,7 +188,7 @@ pub struct Stand {
     /// Head, body, left arm, right arm, left leg, right leg (degrees).
     pub pose: [[f32; 3]; 6],
     /// Main hand, off hand, feet, legs, chest, head.
-    pub gear: Box<[Option<mc_protocol::packets::play::ItemStack>; 6]>,
+    pub gear: [Option<mc_protocol::components::ItemStack>; 6],
     pub health: f32,
     /// World age of the last punch, for the second one that breaks it.
     pub last_hit: i64,
@@ -225,7 +225,7 @@ pub enum Decor {
         variant: String,
         size: (i32, i32),
     },
-    Stand(Stand),
+    Stand(Box<Stand>),
     /// The knot a lead is tied to on a fence.
     LeashKnot,
 }

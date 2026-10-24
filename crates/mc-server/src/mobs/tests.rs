@@ -628,6 +628,7 @@ fn a_carrot_on_a_stick_boosts_the_pig_and_wears_to_a_rod() {
             item: saddle,
             count: 1,
             damage: 0,
+            components: Default::default(),
         });
         m.riders.push(7000);
     }
@@ -705,6 +706,17 @@ fn a_lead_ties_leads_and_snaps() {
     crate::decor::leash::tick(&ctx);
     assert!(!lock(&ctx.leashes).links.contains_key(&cow));
     assert_eq!(items_of(&ctx, "minecraft:lead"), 1);
+}
+
+/// Steve at `x` on the row the lead tests use, sneaking or not.
+fn steve_at(ctx: &ServerContext, x: f64, sneaking: bool) -> Actor {
+    if let Some(p) = lock(&ctx.players).get_mut(&STEVE) {
+        p.pose.as_mut().unwrap().x = x;
+    }
+    Actor {
+        sneaking,
+        ..steve([x, -60.0, 0.5])
+    }
 }
 
 #[test]
@@ -1138,6 +1150,7 @@ fn a_warped_fungus_on_a_stick_boosts_the_strider_and_wears_by_one() {
             item: saddle,
             count: 1,
             damage: 0,
+            components: Default::default(),
         });
         m.riders.push(7000);
     }
@@ -1413,4 +1426,98 @@ fn a_falling_mob_tramples_farmland() {
         "cow never landed"
     );
     assert_eq!(block_name(&ctx, 8, -61, 4), "minecraft:farmland");
+}
+
+#[test]
+fn a_lead_ties_an_animal_pulls_it_and_lets_go() {
+    use crate::decor::leash::Holder;
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let cow = put(&ctx, Species::Cow, [2.5, -60.0, 0.5]);
+    let zombie = put(&ctx, Species::Zombie, [0.5, -60.0, 2.5]);
+    let leashes = |ctx: &ServerContext| lock(&ctx.leashes).links.clone();
+    // Monsters take no lead.
+    hold(&ctx, "minecraft:lead", 2);
+    ctx.mobs
+        .use_on(ctx.dim, zombie, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert!(leashes(&ctx).is_empty());
+    ctx.mobs.use_on(ctx.dim, cow, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert_eq!(leashes(&ctx).get(&cow), Some(&Holder::Player(STEVE)));
+    let left = lock(&ctx.inventories)[&STEVE].slots[36]
+        .as_ref()
+        .map(|s| s.count);
+    assert_eq!(left, Some(1), "the lead was used");
+    // Walking off: past six blocks the cow is drawn along and faces the
+    // player; it never runs away.
+    let _ = steve_at(&ctx, 11.0, false);
+    let before = mob_of(&ctx, cow).unwrap().pos[0];
+    for _ in 0..20 {
+        crate::decor::leash::tick(&ctx);
+        run(&ctx, 1);
+        let e = mob_of(&ctx, cow).unwrap();
+        assert!(e.vel[0] >= 0.0, "pulled, not pushed: {:?}", e.vel);
+    }
+    let e = mob_of(&ctx, cow).unwrap();
+    assert!(e.pos[0] > before + 0.5, "{} -> {}", before, e.pos[0]);
+    assert!(
+        matches!(&e.kind, Kind::Mob(m) if (m.yaw + 90.0).abs() < 30.0),
+        "faces east"
+    );
+    assert_eq!(leashes(&ctx).len(), 1, "still on at under twelve blocks");
+    // Using it again lets go, and the lead drops.
+    let at = mob_of(&ctx, cow).unwrap().pos[0];
+    ctx.mobs.use_on(ctx.dim, cow, steve_at(&ctx, at, false), 0);
+    run(&ctx, 1);
+    assert!(leashes(&ctx).is_empty());
+    assert_eq!(items_of(&ctx, "minecraft:lead"), 1);
+}
+
+#[test]
+fn leads_snap_at_twelve_blocks_and_move_between_mobs() {
+    use crate::decor::leash::Holder;
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let cow = put(&ctx, Species::Cow, [2.5, -60.0, 0.5]);
+    let pig = put(&ctx, Species::Pig, [1.5, -60.0, 3.5]);
+    let leashes = |ctx: &ServerContext| lock(&ctx.leashes).links.clone();
+    // Eleven blocks hold; past twelve it snaps (centres of the boxes).
+    lock(&ctx.leashes).links.insert(cow, Holder::Player(STEVE));
+    let _ = steve_at(&ctx, 13.5, false);
+    crate::decor::leash::tick(&ctx);
+    assert_eq!(leashes(&ctx).len(), 1);
+    let _ = steve_at(&ctx, 15.0, false);
+    crate::decor::leash::tick(&ctx);
+    assert!(leashes(&ctx).is_empty(), "snapped");
+    assert_eq!(items_of(&ctx, "minecraft:lead"), 1);
+    // Sneaking at the pig ties the cow to it.
+    lock(&ctx.leashes).links.insert(cow, Holder::Player(STEVE));
+    ctx.mobs.use_on(ctx.dim, pig, steve_at(&ctx, 0.5, true), 0);
+    run(&ctx, 1);
+    assert_eq!(leashes(&ctx).get(&cow), Some(&Holder::Knot(pig)));
+    // A lead from the pig to the cow is the cow's to keep: taking it with a
+    // lead in hand moves it to the player.
+    hold(&ctx, "minecraft:lead", 1);
+    ctx.mobs.use_on(ctx.dim, cow, steve_at(&ctx, 0.5, false), 0);
+    run(&ctx, 1);
+    assert_eq!(leashes(&ctx).get(&cow), Some(&Holder::Player(STEVE)));
+    // Nobody takes another player's: another holder leaves it be.
+    lock(&ctx.leashes).links.insert(pig, Holder::Player(0xbeef));
+    hold(&ctx, "minecraft:lead", 1);
+    ctx.mobs.use_on(ctx.dim, pig, steve_at(&ctx, 0.5, false), 0);
+    run(&ctx, 1);
+    assert_eq!(leashes(&ctx).get(&pig), Some(&Holder::Player(0xbeef)));
+    // Shears snip every lead of the pig.
+    lock(&ctx.leashes).links.insert(cow, Holder::Knot(pig));
+    hold(&ctx, "minecraft:shears", 1);
+    ctx.mobs.use_on(ctx.dim, pig, steve_at(&ctx, 0.5, false), 0);
+    run(&ctx, 1);
+    assert!(leashes(&ctx).is_empty(), "{:?}", leashes(&ctx));
 }

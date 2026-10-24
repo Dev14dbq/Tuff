@@ -214,6 +214,27 @@ pub fn entity_gone_skipping(
     (slots.into_iter().skip(skip).flatten().collect(), viewers)
 }
 
+/// What the entity `id` holds as it would be saved now (`Items`, and a
+/// loot table not rolled yet), the open window's slots included.
+pub fn entity_contents(ctx: &ServerContext, id: i32) -> Option<Compound> {
+    let mut data = ctx
+        .entity_items
+        .lock()
+        .expect("entity items lock")
+        .get(&id)
+        .cloned();
+    if let Some(open) = ctx
+        .containers
+        .lock()
+        .expect("containers lock")
+        .get(&key(entity_key(id)))
+    {
+        data.get_or_insert_with(Compound::new)
+            .insert("Items", write_items(ctx, &open.slots));
+    }
+    data
+}
+
 pub fn item_name(ctx: &ServerContext, item: i32) -> Option<String> {
     ctx.items.name(item).map(str::to_owned)
 }

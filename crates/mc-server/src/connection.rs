@@ -64,6 +64,16 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
                 let ctx = ctx.clone();
                 tokio::task::spawn_blocking(move || crate::save_player(&ctx, uuid)).await?;
             }
+            // What they rode leaves with them (their file keeps it).
+            let dimension = ctx
+                .players
+                .lock()
+                .expect("players lock")
+                .get(&uuid)
+                .map(|p| p.dimension.clone());
+            if let Some(d) = dimension.and_then(|d| ctx.in_dimension(&d)) {
+                crate::persist::left_with(&d, player.player.entity_id);
+            }
             crate::containers::player_left(&ctx, uuid);
             ctx.players.lock().expect("players lock").remove(&uuid);
             ctx.inventories
@@ -675,6 +685,10 @@ async fn play(
     let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
     // Non-player entities this client has been told about.
     let mut seen_entities: HashSet<i32> = HashSet::new();
+    // Back on what they rode when they left.
+    if let Some(vehicle) = &me.extra.root_vehicle {
+        crate::persist::ride_again(&ctx, entity_id, vehicle);
+    }
     let existing: Vec<mc_entity::Entity> = ctx.entities.lock().expect("entities lock").clone();
     for entity in existing {
         let (x, _, z) = entity.block_pos();
@@ -685,205 +699,893 @@ async fn play(
     }
     loop {
         tokio::select! {
-            Some(mut outcome) = replies.recv() => {
-                if let Some((position, kind)) = outcome.open.take() {
-                    windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
+                Some(mut outcome) = replies.recv() => {
+                    if let Some((position, kind)) = outcome.open.take() {
+                        windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
+                    }
+                    if let Some((mount, columns)) = outcome.open_mount.take() {
+                        windows.open_mount(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, mount, columns)?;
+                    }
+                    if let Some((position, front)) = outcome.open_sign.take() {
+                        writer.queue(&play::OpenSignEditor { position, front })?;
+                    }
+                    if let Some((position, menu)) = outcome.open_menu.take() {
+                        windows.open_menu(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, menu)?;
+                    }
+                    if std::mem::take(&mut outcome.open_crafting) {
+                        windows.open_crafting(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose })?;
+                    }
+                    answer(writer, &ctx, outcome)?;
                 }
-                if let Some((mount, columns)) = outcome.open_mount.take() {
-                    windows.open_mount(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, mount, columns)?;
-                }
-                if let Some((position, front)) = outcome.open_sign.take() {
-                    writer.queue(&play::OpenSignEditor { position, front })?;
-                }
-                if let Some((position, menu)) = outcome.open_menu.take() {
-                    windows.open_menu(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, menu)?;
-                }
-                if std::mem::take(&mut outcome.open_crafting) {
-                    windows.open_crafting(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose })?;
-                }
-                answer(writer, &ctx, outcome)?;
-            }
-            packet = reader.next(State::Play) => {
-                let Packet::Play(packet) = packet? else {
-                    unreachable!("play state decodes play packets")
-                };
-                // Movement sent before the client saw our teleport is stale.
-                let settled = awaiting_teleport.is_none() && riding.is_none();
-                let mut moved = false;
-                let before = pose;
-                match packet {
-                    play::Serverbound::AcceptTeleportation { teleport_id, .. } => {
-                        if awaiting_teleport == Some(teleport_id) {
-                            awaiting_teleport = None;
-                        }
-                    }
-                    play::Serverbound::MovePlayerPos { x, y, z, flags } if settled => {
-                        moved = set_position(&mut pose, x, y, z, flags);
-                    }
-                    play::Serverbound::MovePlayerPosRot { x, y, z, yaw, pitch, flags } if settled => {
-                        moved = set_position(&mut pose, x, y, z, flags);
-                        if moved && yaw.is_finite() && pitch.is_finite() {
-                            (pose.yaw, pose.pitch) = (yaw, pitch);
-                        }
-                    }
-                    play::Serverbound::MovePlayerRot { yaw, pitch, flags } if settled => {
-                        if yaw.is_finite() && pitch.is_finite() {
-                            (pose.yaw, pose.pitch, pose.on_ground) = (yaw, pitch, flags & 1 != 0);
-                            moved = true;
-                        }
-                    }
-                    play::Serverbound::KeepAlive(id) => {
-                        if pending_keep_alive.is_some_and(|(expected, _)| expected == id) {
-                            pending_keep_alive = None;
-                        }
-                    }
-                    play::Serverbound::Chat { message } => {
-                        info!("<{}> {}", me.profile.name, message);
-                        let line = text::translate("chat.type.text", vec![text::plain(&me.profile.name), text::plain(&message)]);
-                        let _ = ctx.events.send(Event::Chat(line));
-                    }
-                    play::Serverbound::ChatCommand { command } => {
-                        info!("{} issued server command: /{command}", me.profile.name);
-                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                        let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
-                        let action = Action::Command { line: command, source };
-                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
-                    }
-                    play::Serverbound::CommandSuggestion { id, text } => {
-                        let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
-                        if let Some(answer) = crate::commands::suggest(&ctx, &source, id, &text) {
-                            writer.queue(&answer)?;
-                        }
-                    }
-                    play::Serverbound::SetCreativeModeSlot { slot: -1, item: Some(stack) } if game_mode == CREATIVE => {
-                        // Dropped out of the creative inventory.
-                        if stack.count > 0 {
-                            crate::tick::throw_item_aged(&ctx, pose, stack, crate::dropped::LIFETIME - 1200);
-                        }
-                    }
-                    play::Serverbound::SetCreativeModeSlot { slot, item } if game_mode == CREATIVE => {
-                        if let Ok(slot) = usize::try_from(slot) {
-                            change_hands(&ctx, uuid, entity_id, |hands| {
-                                if let Some(s) = hands.slots.get_mut(slot) {
-                                    *s = item;
-                                }
-                            });
-                        }
-                    }
-                    play::Serverbound::SetCarriedItem { slot } => {
-                        crate::vitals::stop_using(&ctx, uuid);
-                        crate::combat::shield(&ctx, uuid, false);
-                        crate::combat::reset_strength(&ctx, uuid);
-                        if let Ok(slot @ 0..=8) = usize::try_from(slot) {
-                            change_hands(&ctx, uuid, entity_id, |hands| hands.selected = slot);
-                        }
-                    }
-                    play::Serverbound::ContainerClick { window, slot, button, mode, changed, carried, .. } => {
-                        let click = windows::Click { window, slot, button, mode, changed, carried };
-                        windows.click(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, click)?;
-                    }
-                    play::Serverbound::ContainerButtonClick { window, button } => {
-                        windows.button(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, button)?;
-                    }
-                    play::Serverbound::EditBook { slot, pages, title } => {
-                        let index = match slot {
-                            0..=8 => 36 + slot as usize,
-                            40 => 45,
-                            _ => usize::MAX,
-                        };
-                        let mut changed = None;
-                        change_hands(&ctx, uuid, entity_id, |hands| {
-                            let Some(Some(stack)) = hands.slots.get_mut(index) else { return };
-                            if crate::books::edit(&ctx, stack, &me.profile.name, pages, title) {
-                                changed = Some(stack.clone());
+                packet = reader.next(State::Play) => {
+                    let Packet::Play(packet) = packet? else {
+                        unreachable!("play state decodes play packets")
+                    };
+                    // Movement sent before the client saw our teleport is stale.
+                    let settled = awaiting_teleport.is_none() && riding.is_none();
+                    let mut moved = false;
+                    let before = pose;
+                    match packet {
+                        play::Serverbound::AcceptTeleportation { teleport_id, .. } => {
+                            if awaiting_teleport == Some(teleport_id) {
+                                awaiting_teleport = None;
                             }
-                        });
-                        if let Some(stack) = changed {
-                            windows.inventory_slot(writer, index as i16, Some(stack))?;
                         }
-                    }
-                    play::Serverbound::RenameItem { name } => {
-                        windows.rename(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, &name)?;
-                    }
-                    play::Serverbound::SetBeacon { primary, secondary } => {
-                        windows.set_beacon(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, primary, secondary)?;
-                    }
-                    play::Serverbound::Interact { entity_id: target, .. }
-                        if game_mode != 3 && crate::trading::is_merchant(&ctx, target) =>
-                    {
-                        let near = ctx.entities.lock().expect("entities lock").iter()
-                            .find(|e| e.id == target)
-                            .is_some_and(|e| {
-                                let (dx, dy, dz) = (e.pos[0] - pose.x, e.pos[1] - pose.y, e.pos[2] - pose.z);
-                                dx * dx + dy * dy + dz * dz <= 36.0
-                            });
-                        if near {
-                            windows.open_merchant(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, target)?;
+                        play::Serverbound::MovePlayerPos { x, y, z, flags } if settled => {
+                            moved = set_position(&mut pose, x, y, z, flags);
                         }
-                    }
-                    play::Serverbound::SelectTrade { index } => {
-                        windows.select_trade(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, index)?;
-                    }
-                    play::Serverbound::ContainerClose { window } => {
-                        windows.close(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window)?;
-                    }
-                    play::Serverbound::PlayerAction { status: 5, .. } => {
-                        crate::vitals::stop_using(&ctx, uuid);
-                        crate::combat::shield(&ctx, uuid, false);
-                    }
-                    play::Serverbound::PlayerCommand { action: 5, .. } => {
-                        // The inventory key while riding: a boat's chest, or a mount's.
-                        if let Some((position, kind)) = crate::vehicles::ridden_inventory(&ctx, entity_id) {
-                            windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
-                        } else {
+                        play::Serverbound::MovePlayerPosRot { x, y, z, yaw, pitch, flags } if settled => {
+                            moved = set_position(&mut pose, x, y, z, flags);
+                            if moved && yaw.is_finite() && pitch.is_finite() {
+                                (pose.yaw, pose.pitch) = (yaw, pitch);
+                            }
+                        }
+                        play::Serverbound::MovePlayerRot { yaw, pitch, flags } if settled => {
+                            if yaw.is_finite() && pitch.is_finite() {
+                                (pose.yaw, pose.pitch, pose.on_ground) = (yaw, pitch, flags & 1 != 0);
+                                moved = true;
+                            }
+                        }
+                        play::Serverbound::KeepAlive(id) => {
+                            if pending_keep_alive.is_some_and(|(expected, _)| expected == id) {
+                                pending_keep_alive = None;
+                            }
+                        }
+                        play::Serverbound::Chat { message } => {
+                            info!("<{}> {}", me.profile.name, message);
+                            let line = text::translate("chat.type.text", vec![text::plain(&me.profile.name), text::plain(&message)]);
+                            let _ = ctx.events.send(Event::Chat(line));
+                        }
+                        play::Serverbound::ChatCommand { command } => {
+                            info!("{} issued server command: /{command}", me.profile.name);
                             let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action: Action::MountInventory, reply: replies_tx.clone() });
+                            let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
+                            let action = Action::Command { line: command, source };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
-                    }
-                    play::Serverbound::PlayerCommand { action: action @ (1 | 2), .. } => {
-                        crate::combat::set_sprinting(&ctx, uuid, action == 1);
-                    }
-                    play::Serverbound::PlayerCommand { action: 6, .. } => {
-                        crate::worn::start_gliding(&ctx, uuid);
-                    }
-                    play::Serverbound::PlayerAction { status: status @ (3 | 4), .. } => {
-                        // Q: drop one (4) or the whole stack (3) from the main hand.
-                        let mut thrown = None;
-                        let mut changed_slot = None;
-                        change_hands(&ctx, uuid, entity_id, |hands| {
-                            let slot = hands.hand_slot(0);
-                            if let Some(stack) = &mut hands.slots[slot] {
-                                let n = if status == 3 { stack.count } else { 1 };
-                                thrown = Some(play::ItemStack { count: n, ..stack.clone() });
-                                stack.count -= n;
-                                if stack.count <= 0 {
-                                    hands.slots[slot] = None;
-                                }
-                                changed_slot = Some((slot, hands.slots[slot].clone()));
+                        play::Serverbound::CommandSuggestion { id, text } => {
+                            let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
+                            if let Some(answer) = crate::commands::suggest(&ctx, &source, id, &text) {
+                                writer.queue(&answer)?;
                             }
-                        });
-                        if let Some(stack) = thrown {
-                            crate::tick::throw_item(&ctx, pose, stack);
                         }
-                        if let Some((slot, item)) = changed_slot {
-                            windows.inventory_slot(writer, slot as i16, item)?;
+                        play::Serverbound::SetCreativeModeSlot { slot: -1, item: Some(stack) } if game_mode == CREATIVE => {
+                            // Dropped out of the creative inventory.
+                            if stack.count > 0 {
+                                crate::tick::throw_item_aged(&ctx, pose, stack, crate::dropped::LIFETIME - 1200);
+                            }
                         }
-                    }
-                    play::Serverbound::ClientCommand { action: 0 } => {
-                        let dead = ctx.vitals.lock().expect("vitals lock").get(&uuid).is_some_and(|v| v.dead);
-                        if dead {
-                            let health = crate::vitals::respawn(&ctx, uuid);
-                            let (dimension, target) = respawn_target(&ctx, uuid);
-                            if dimension != ctx.world.dimension {
-                                // Another dimension: the switch sends it all.
-                                let _ = ctx.events.send(Event::ChangeDimension {
-                                    uuid,
-                                    dimension,
-                                    pose: target,
-                                    after_death: true,
+                        play::Serverbound::SetCreativeModeSlot { slot, item } if game_mode == CREATIVE => {
+                            if let Ok(slot) = usize::try_from(slot) {
+                                change_hands(&ctx, uuid, entity_id, |hands| {
+                                    if let Some(s) = hands.slots.get_mut(slot) {
+                                        *s = item;
+                                    }
                                 });
-                                continue;
                             }
+                        }
+                        play::Serverbound::SetCarriedItem { slot } => {
+                            crate::vitals::stop_using(&ctx, uuid);
+                            crate::combat::shield(&ctx, uuid, false);
+                            crate::combat::reset_strength(&ctx, uuid);
+                            if let Ok(slot @ 0..=8) = usize::try_from(slot) {
+                                change_hands(&ctx, uuid, entity_id, |hands| hands.selected = slot);
+                            }
+                        }
+                        play::Serverbound::ContainerClick { window, slot, button, mode, changed, carried, .. } => {
+                            let click = windows::Click { window, slot, button, mode, changed, carried };
+                            windows.click(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, click)?;
+                        }
+                        play::Serverbound::ContainerButtonClick { window, button } => {
+                            windows.button(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, button)?;
+                        }
+                        play::Serverbound::EditBook { slot, pages, title } => {
+                            let index = match slot {
+                                0..=8 => 36 + slot as usize,
+                                40 => 45,
+                                _ => usize::MAX,
+                            };
+                            let mut changed = None;
+                            change_hands(&ctx, uuid, entity_id, |hands| {
+                                let Some(Some(stack)) = hands.slots.get_mut(index) else { return };
+                                if crate::books::edit(&ctx, stack, &me.profile.name, pages, title) {
+                                    changed = Some(stack.clone());
+                                }
+                            });
+                            if let Some(stack) = changed {
+                                windows.inventory_slot(writer, index as i16, Some(stack))?;
+                            }
+                        }
+                        play::Serverbound::RenameItem { name } => {
+                            windows.rename(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, &name)?;
+                        }
+                        play::Serverbound::SetBeacon { primary, secondary } => {
+                            windows.set_beacon(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, primary, secondary)?;
+                        }
+                        play::Serverbound::Interact { entity_id: target, .. }
+                            if game_mode != 3 && crate::trading::is_merchant(&ctx, target) =>
+                        {
+                            let near = ctx.entities.lock().expect("entities lock").iter()
+                                .find(|e| e.id == target)
+                                .is_some_and(|e| {
+                                    let (dx, dy, dz) = (e.pos[0] - pose.x, e.pos[1] - pose.y, e.pos[2] - pose.z);
+                                    dx * dx + dy * dy + dz * dz <= 36.0
+                                });
+                            if near {
+                                windows.open_merchant(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, target)?;
+                            }
+                        }
+                        play::Serverbound::SelectTrade { index } => {
+                            windows.select_trade(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, index)?;
+                        }
+                        play::Serverbound::ContainerClose { window } => {
+                            windows.close(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window)?;
+                        }
+                        play::Serverbound::PlayerAction { status: 5, .. } => {
+                            crate::vitals::stop_using(&ctx, uuid);
+                            crate::combat::shield(&ctx, uuid, false);
+                        }
+                        play::Serverbound::PlayerCommand { action: 5, .. } => {
+                            // The inventory key while riding: a boat's chest, or a mount's.
+                            if let Some((position, kind)) = crate::vehicles::ridden_inventory(&ctx, entity_id) {
+                                windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
+                            } else {
+                                let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                                let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action: Action::MountInventory, reply: replies_tx.clone() });
+                            }
+                        }
+                        play::Serverbound::PlayerCommand { action: action @ (1 | 2), .. } => {
+                            crate::combat::set_sprinting(&ctx, uuid, action == 1);
+                        }
+                        play::Serverbound::PlayerCommand { action: 6, .. } => {
+                            crate::worn::start_gliding(&ctx, uuid);
+                        }
+                        play::Serverbound::PlayerAction { status: status @ (3 | 4), .. } => {
+                            // Q: drop one (4) or the whole stack (3) from the main hand.
+                            let mut thrown = None;
+                            let mut changed_slot = None;
+                            change_hands(&ctx, uuid, entity_id, |hands| {
+                                let slot = hands.hand_slot(0);
+                                if let Some(stack) = &mut hands.slots[slot] {
+                                    let n = if status == 3 { stack.count } else { 1 };
+                                    thrown = Some(play::ItemStack { count: n, ..stack.clone() });
+                                    stack.count -= n;
+                                    if stack.count <= 0 {
+                                        hands.slots[slot] = None;
+                                    }
+                                    changed_slot = Some((slot, hands.slots[slot].clone()));
+                                }
+                            });
+                            if let Some(stack) = thrown {
+                                crate::tick::throw_item(&ctx, pose, stack);
+                            }
+                            if let Some((slot, item)) = changed_slot {
+                                windows.inventory_slot(writer, slot as i16, item)?;
+                            }
+                        }
+                        play::Serverbound::ClientCommand { action: 0 } => {
+                            let dead = ctx.vitals.lock().expect("vitals lock").get(&uuid).is_some_and(|v| v.dead);
+                            if dead {
+                                let health = crate::vitals::respawn(&ctx, uuid);
+                                let (dimension, target) = respawn_target(&ctx, uuid);
+                                if dimension != ctx.world.dimension {
+                                    // Another dimension: the switch sends it all.
+                                    let _ = ctx.events.send(Event::ChangeDimension {
+                                        uuid,
+                                        dimension,
+                                        pose: target,
+                                        after_death: true,
+                                    });
+                                    continue;
+                                }
+                                writer.queue(&play::Respawn {
+                                    dimension_type: ctx.world.dimension_type_id,
+                                    dimension: ctx.world.dimension.clone(),
+                                    hashed_seed: 0,
+                                    game_mode,
+                                    previous_game_mode: None,
+                                    is_debug: false,
+                                    is_flat: ctx.world.is_flat,
+                                    death_location: None,
+                                    portal_cooldown: 0,
+                                    sea_level: ctx.world.sea_level,
+                                    data_kept: 0,
+                                })?;
+                                flying = game_mode == 3;
+                                update_player(&ctx, uuid, |p| p.flying = flying);
+                                writer.queue(&abilities(game_mode, flying))?;
+                                writer.queue(&health)?;
+                                if let Some(xp) = ctx.vitals.lock().expect("vitals lock").get(&uuid).map(crate::vitals::Vitals::experience_packet) {
+                                    writer.queue(&xp)?;
+                                }
+                                pose = target;
+                                next_teleport += 1;
+                                awaiting_teleport = Some(next_teleport);
+                                writer.queue(&play::PlayerPosition {
+                                    teleport_id: next_teleport,
+                                    x: pose.x,
+                                    y: pose.y,
+                                    z: pose.z,
+                                    velocity: [0.0; 3],
+                                    yaw: pose.yaw,
+                                    pitch: pose.pitch,
+                                    flags: 0,
+                                })?;
+                                writer.queue(&play::GameEvent {
+                                    event: play::game_event::START_WAITING_FOR_CHUNKS,
+                                    value: 0.0,
+                                })?;
+                                // The client starts a fresh world: everything again.
+                                view = ChunkView::new(session.view_distance, ctx.clone());
+                                seen_entities.clear();
+                                view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                                let hands = ctx.inventories.lock().expect("inventories lock").get(&uuid).cloned().unwrap_or_default();
+                                windows.state_id += 1;
+                                writer.queue(&play::ContainerSetContent {
+                                    window: 0,
+                                    state_id: windows.state_id,
+                                    slots: hands.slots.clone(),
+                                    carried: None,
+                                })?;
+                                writer.queue(&skin_parts_metadata(entity_id, session.skin_parts))?;
+                                update_player(&ctx, uuid, |p| p.pose = Some(pose));
+                                let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
+                            }
+                        }
+                        play::Serverbound::PlayerInput { flags } => {
+                            sneaking = flags & 0x20 != 0;
+                            if sneaking && riding.is_some() {
+                                let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                                let action = Action::Vehicle(crate::vehicles::Act::Dismount);
+                                let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                            }
+                        }
+                        play::Serverbound::PaddleBoat { left, right } if riding.is_some() => {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::Vehicle(crate::vehicles::Act::Paddle { left, right });
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                        }
+                        play::Serverbound::MoveVehicle { x, y, z, yaw, pitch } if riding.is_some() && awaiting_teleport.is_none() => {
+                            if [x, y, z].iter().all(|c| c.is_finite()) {
+                                pose = Pose { x, y, z, yaw, pitch, on_ground: false };
+                                update_player(&ctx, uuid, |p| p.pose = Some(pose));
+                                view.move_to(writer, chunk_of(x), chunk_of(z)).await?;
+                                let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                                let action = Action::Vehicle(crate::vehicles::Act::Move { pos: [x, y, z], yaw });
+                                let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                            }
+                        }
+                        play::Serverbound::PlayerAbilities { flags } if matches!(game_mode, 1 | 3) => {
+                            flying = flags & play::abilities::FLYING != 0 || game_mode == 3;
+                            update_player(&ctx, uuid, |p| p.flying = flying);
+                        }
+                        play::Serverbound::Attack { entity_id: target } if game_mode != 3 => {
+                            let victim = ctx.players.lock().expect("players lock").values()
+                                .find(|p| p.entity_id == target && p.dimension == ctx.world.dimension)
+                                .and_then(|p| p.pose.map(|at| (p.profile.uuid, at)));
+                            if let Some((victim, at)) = victim {
+                                let (dx, dy, dz) = (at.x - pose.x, at.y - pose.y, at.z - pose.z);
+                                // Reach 3 from the docs, with some room for lag.
+                                if dx * dx + dy * dy + dz * dz <= 36.0 {
+                                    let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                                    crate::combat::player_hits_player(&ctx, &actor, &me.profile.name, victim);
+                                }
+                            } else {
+                                let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                                let action = Action::UseEntity { entity_id: target, hand: 0, attack: true, at: None };
+                                let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                            }
+                        }
+                        play::Serverbound::Interact { entity_id: target, hand, location } if game_mode != 3 => {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::UseEntity { entity_id: target, hand, attack: false, at: location };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                        }
+                        play::Serverbound::Punch => {
+                            let _ = ctx.events.send(Event::Swing { uuid, entity_id, times: 1 });
+                        }
+                        // Block changes happen on the tick thread; the answer comes back
+                        // through `replies`.
+                        play::Serverbound::PlayerAction { status, position, face, sequence } => {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::Dig { status, position, face, sequence };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                        }
+                        play::Serverbound::UseItemOn { hand, position, face, cursor, sequence, .. } => {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::UseItemOn { hand, position, face, cursor, sequence };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                        }
+                        play::Serverbound::UseItem { hand, sequence, yaw, pitch } => {
+                            writer.queue(&play::BlockChangedAck { sequence })?;
+                            let held = ctx.inventories.lock().expect("inventories lock")
+                                .get(&uuid).and_then(|h| h.held(hand).map(|s| s.item));
+                            if held.is_some_and(|i| ctx.items.name(i) == Some("minecraft:written_book")) {
+                                writer.queue(&play::OpenBook { hand })?;
+                            }
+                            crate::vitals::start_using(&ctx, uuid, entity_id, hand, game_mode);
+                            if crate::combat::holds_shield(&ctx, uuid, hand) {
+                                crate::combat::shield(&ctx, uuid, true);
+                            }
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::UseItem { hand, yaw, pitch };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                        }
+                        play::Serverbound::ChangeGameMode { mode: mode @ 0..=3 } => {
+                            // As `/gamemode`, for those allowed to use it; the
+                            // others are ignored.
+                            if crate::commands::level(&ctx, uuid, &me.profile.name) >= 2 {
+                                let name = ["survival", "creative", "adventure", "spectator"][mode as usize];
+                                let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                                let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
+                                let action = Action::Command { line: format!("gamemode {name}"), source };
+                                let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                            } else {
+                                warn!("Player {} tried to change game mode without required permissions", me.profile.name);
+                            }
+                        }
+                        play::Serverbound::PickItemFromBlock { position, .. } if game_mode != 3 => {
+                            let reach = if game_mode == CREATIVE { 5.0 } else { 4.5 } + 1.0 + 0.87;
+                            let (dx, dy, dz) = (
+                                f64::from(position.x) + 0.5 - pose.x,
+                                f64::from(position.y) + 0.5 - pose.y - 1.62,
+                                f64::from(position.z) + 0.5 - pose.z,
+                            );
+                            let item = (dx * dx + dy * dy + dz * dz <= reach * reach)
+                                .then(|| ctx.world.block(position, &ctx.data.blocks))
+                                .flatten()
+                                .and_then(|state| ctx.data.blocks.block_name(state))
+                                .and_then(|name| crate::interact::clone_item(name, &ctx.items));
+                            if let Some(item) = item {
+                                let mut changed = Vec::new();
+                                let mut selected = None;
+                                change_hands(&ctx, uuid, entity_id, |hands| {
+                                    let was = hands.selected;
+                                    changed = hands
+                                        .pick(item, game_mode == CREATIVE)
+                                        .into_iter()
+                                        .map(|i| (i, hands.slots[i].clone()))
+                                        .collect();
+                                    if hands.selected != was {
+                                        selected = Some(hands.selected);
+                                    }
+                                });
+                                for (slot, stack) in changed {
+                                    windows.inventory_slot(writer, slot as i16, stack)?;
+                                }
+                                if let Some(slot) = selected {
+                                    writer.queue(&play::SetHeldSlot { slot: slot as i32 })?;
+                                }
+                            }
+                        }
+                        play::Serverbound::PickItemFromEntity { entity_id: target, .. } if game_mode != 3 => {
+                            // The tick thread has the entities out while it moves
+                            // them: look again a little later.
+                            let mut item = None;
+                            for _ in 0..5 {
+                                let found = ctx.entities.lock().expect("entities lock").iter()
+                                    .find(|e| e.id == target && !e.removed)
+                                    .map(|e| {
+                                        let (dx, dy, dz) = (e.pos[0] - pose.x, e.pos[1] - pose.y, e.pos[2] - pose.z);
+                                        (dx * dx + dy * dy + dz * dz <= 64.0, crate::mobs::eggs::pick(&ctx, e))
+                                    });
+                                if let Some((near, egg)) = found {
+                                    item = egg.filter(|_| near);
+                                    break;
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                            }
+                            if let Some(item) = item {
+                                let mut changed = Vec::new();
+                                let mut selected = None;
+                                change_hands(&ctx, uuid, entity_id, |hands| {
+                                    let was = hands.selected;
+                                    changed = hands
+                                        .pick(item, game_mode == CREATIVE)
+                                        .into_iter()
+                                        .map(|i| (i, hands.slots[i].clone()))
+                                        .collect();
+                                    if hands.selected != was {
+                                        selected = Some(hands.selected);
+                                    }
+                                });
+                                for (slot, stack) in changed {
+                                    windows.inventory_slot(writer, slot as i16, stack)?;
+                                }
+                                if let Some(slot) = selected {
+                                    writer.queue(&play::SetHeldSlot { slot: slot as i32 })?;
+                                }
+                            }
+                        }
+                        play::Serverbound::ClientCommand { action: 1 } => {
+                            // No statistics are kept yet: an empty list, so the
+                            // menu opens instead of waiting.
+                            writer.queue(&play::AwardStats::default())?;
+                        }
+                        play::Serverbound::BlockEntityTagQuery { transaction, position } => {
+                            if crate::commands::level(&ctx, uuid, &me.profile.name) >= 2 {
+                                let data = ctx.world.block_entity(position, &ctx.data.blocks).map(|be| be.data);
+                                writer.queue(&play::TagQuery { transaction, data })?;
+                            }
+                        }
+                        play::Serverbound::TeleportToEntity { target } if game_mode == 3 => {
+                            let to = ctx.players.lock().expect("players lock").get(&target).and_then(|p| p.pose);
+                            if let Some(to) = to {
+                                let _ = ctx.events.send(Event::Teleport { uuid, pose: to });
+                            }
+                        }
+                        play::Serverbound::SetCommandBlock { position, command, mode, flags } => {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::CommandBlock { position, command, mode, flags };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                        }
+                        play::Serverbound::SetCommandMinecart { entity_id: cart, command, track_output } => {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::CommandMinecart { entity_id: cart, command, track_output };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                        }
+                        play::Serverbound::SignUpdate { position, front, lines } => {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            if let Some(event) = crate::interact::sign_update(&ctx, actor, position, front, lines) {
+                                let _ = ctx.events.send(event);
+                            }
+                        }
+                        play::Serverbound::ClientInformation(info) => {
+                            writer.queue(&skin_parts_metadata(entity_id, info.skin_parts))?;
+                            update_player(&ctx, uuid, |p| p.skin_parts = info.skin_parts);
+                            let _ = ctx.events.send(Event::SkinParts {
+                                uuid,
+                                entity_id,
+                                parts: info.skin_parts,
+                            });
+                        }
+                        other => trace!("play: {other:?}"),
+                    }
+                    if moved {
+                        let feet = Position::new(pose.x.floor() as i32, pose.y.floor() as i32, pose.z.floor() as i32);
+                        let in_water = ctx
+                            .world
+                            .block(feet, &ctx.data.blocks)
+                            .is_some_and(|s| ctx.data.blocks.is_fluid(s));
+                        crate::vitals::moved(&ctx, uuid, before, pose, in_water);
+                        view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                        sync_entities(writer, &ctx, &view, &mut seen_entities)?;
+                        update_player(&ctx, uuid, |p| p.pose = Some(pose));
+                        let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
+                    }
+                }
+                _ = keep_alive.tick() => {
+                    if let Some((_, sent)) = pending_keep_alive {
+                        if sent.elapsed() > KEEP_ALIVE_TIMEOUT {
+                            let disconnect = play::Disconnect { reason: text::plain("Timed out") };
+                            writer.send(&disconnect).await?;
+                            bail!("keep-alive timeout");
+                        }
+                    } else {
+                        let id = (random_u64() >> 1) as i64;
+                        pending_keep_alive = Some((id, Instant::now()));
+                        writer.queue(&play::KeepAlive { id })?;
+                    }
+                }
+                event = events.recv() => {
+                    match event {
+                        Ok(Event::Chat(content)) => {
+                            writer.queue(&play::SystemChat { content, overlay: false })?;
+                        }
+                        Ok(Event::Time(packet)) => writer.queue(&packet)?,
+                        Ok(Event::LightChanged(chunks)) => {
+                            for (x, z) in chunks {
+                                if view.has_block(Position::new(x * 16, 0, z * 16))
+                                    && let Some(light) = ctx.world.light_data(x, z)
+                                {
+                                    writer.queue(&play::LightUpdate { x, z, light })?;
+                                }
+                            }
+                        }
+                        Ok(Event::EntitySpawned(entity)) => {
+                            let (x, _, z) = entity.block_pos();
+                            if view.has_block(Position::new(x, 0, z)) && !seen_entities.contains(&entity.id) {
+                                spawn_entity(writer, &ctx, &entity)?;
+                                seen_entities.insert(entity.id);
+                            }
+                        }
+                        Ok(Event::EntitiesMoved(moves)) => {
+                            for (id, pos, on_ground) in moves {
+                                if seen_entities.contains(&id) {
+                                    writer.queue(&play::EntityPositionSync {
+                                        entity_id: id,
+                                        x: pos[0],
+                                        y: pos[1],
+                                        z: pos[2],
+                                        yaw: 0.0,
+                                        pitch: 0.0,
+                                        on_ground,
+                                    })?;
+                                }
+                            }
+                        }
+                        Ok(Event::MobsMoved(moves)) => {
+                            for m in moves {
+                                let at = Position::new(m.pos[0].floor() as i32, 0, m.pos[2].floor() as i32);
+                                let in_view = view.has_block(at);
+                                if seen_entities.contains(&m.id) {
+                                    if !in_view {
+                                        seen_entities.remove(&m.id);
+                                        writer.queue(&play::RemoveEntities { entity_ids: vec![m.id] })?;
+                                        continue;
+                                    }
+                                    writer.queue(&play::EntityPositionSync {
+                                        entity_id: m.id,
+                                        x: m.pos[0],
+                                        y: m.pos[1],
+                                        z: m.pos[2],
+                                        yaw: m.yaw,
+                                        pitch: m.pitch,
+                                        on_ground: m.on_ground,
+                                    })?;
+                                    writer.queue(&play::RotateHead { entity_id: m.id, head_yaw: m.head_yaw })?;
+                                } else if in_view {
+                                    // A mob walked into view.
+                                    let found = ctx.entities.lock().expect("entities lock").iter().find(|e| e.id == m.id).cloned();
+                                    if let Some(entity) = found {
+                                        spawn_entity(writer, &ctx, &entity)?;
+                                        seen_entities.insert(entity.id);
+                                    }
+                                }
+                            }
+                        }
+                        Ok(Event::MobsStatus(statuses)) => {
+                            for (id, status) in statuses {
+                                if seen_entities.contains(&id) {
+                                    writer.queue(&play::EntityEvent { entity_id: id, status: status as i8 })?;
+                                }
+                            }
+                        }
+                        Ok(Event::EntitySync(rows)) => {
+                            for r in rows {
+                                // The vehicle carries the player along.
+                                if riding == Some(r.id) && (pose.x, pose.y, pose.z) != (r.pos[0], r.pos[1], r.pos[2]) {
+                                    pose = Pose { x: r.pos[0], y: r.pos[1], z: r.pos[2], ..pose };
+                                    update_player(&ctx, uuid, |p| p.pose = Some(pose));
+                                    view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                                }
+                                if seen_entities.contains(&r.id) {
+                                    writer.queue(&play::EntityPositionSync {
+                                        entity_id: r.id,
+                                        x: r.pos[0],
+                                        y: r.pos[1],
+                                        z: r.pos[2],
+                                        yaw: r.yaw,
+                                        pitch: r.pitch,
+                                        on_ground: r.on_ground,
+                                    })?;
+                                    writer.queue(&play::SetEntityMotion {
+                                        entity_id: r.id,
+                                        velocity: r.vel,
+                                    })?;
+                                }
+                            }
+                        }
+                        Ok(Event::Fx(fx)) => {
+                            use crate::fx::Fx;
+                            if let Fx::Passengers(p) = &fx {
+                                if p.passengers.contains(&entity_id) {
+                                    riding = Some(p.vehicle);
+                                } else if riding == Some(p.vehicle) {
+                                    riding = None;
+                                }
+                            }
+                            let wanted = match (fx.entity(), fx.at()) {
+                                (Some(id), _) => seen_entities.contains(&id) || visible_entity(&ctx, id, &visible),
+                                (None, Some(at)) => {
+                                    let (dx, dy, dz) = (pose.x - at[0], pose.y - at[1], pose.z - at[2]);
+                                    dx * dx + dy * dy + dz * dz < 4096.0
+                                }
+                                _ => true,
+                            };
+                            if wanted {
+                                match fx {
+                                    Fx::Sound(p) => writer.queue(&p)?,
+                                    Fx::Level(p) => writer.queue(&p)?,
+                                    Fx::Particles(p) => writer.queue(&p)?,
+                                    Fx::Status(p) => writer.queue(&p)?,
+                                    Fx::Equip(p) => writer.queue(&p)?,
+                                    Fx::Link(p) => writer.queue(&p)?,
+                                    Fx::Cracks(p) => writer.queue(&p)?,
+                                    Fx::Passengers(p) => writer.queue(&p)?,
+                                    Fx::Motion(p) => writer.queue(&p)?,
+                                    Fx::Damage(p) => writer.queue(&p)?,
+                                    Fx::Swing(p) => writer.queue(&p)?,
+                                    Fx::Data(p) => writer.queue(&p)?,
+                                }
+                            }
+                        }
+                        Ok(Event::EntitiesRemoved(ids)) => {
+                            let gone: Vec<i32> = ids.into_iter().filter(|id| seen_entities.remove(id)).collect();
+                            if !gone.is_empty() {
+                                writer.queue(&play::RemoveEntities { entity_ids: gone })?;
+                            }
+                        }
+                        Ok(Event::TickingState(packet)) => writer.queue(&packet)?,
+                        Ok(Event::Health { uuid: who, health }) if who == uuid => writer.queue(&health)?,
+                        Ok(Event::EntityData { uuid: who, packet })
+                            if who == uuid || visible.contains(&who) =>
+                        {
+                            writer.queue(&packet)?;
+                        }
+                        Ok(Event::Attributes { uuid: who, packet })
+                            if who == uuid || visible.contains(&who) =>
+                        {
+                            writer.queue(&packet)?;
+                        }
+                        Ok(Event::Hurt { uuid: who, entity_id: hurt, damage_type, direct }) if who == uuid || visible.contains(&who) => {
+                            writer.queue(&play::DamageEvent { entity_id: hurt, damage_type, direct, cause: direct })?;
+                        }
+                        Ok(Event::WorldSound { pos, sound, category, volume, pitch }) => {
+                            let reach = 16.0 * f64::from(volume.max(1.0));
+                            let (dx, dy, dz) = (pose.x - pos[0], pose.y - pos[1], pose.z - pos[2]);
+                            if dx * dx + dy * dy + dz * dz <= reach * reach
+                                && let Some(id) = ctx.data.builtin.id("minecraft:sound_event", sound)
+                            {
+                                writer.queue(&play::Sound {
+                                    id: Some(id),
+                                    name: String::new(),
+                                    category,
+                                    x: pos[0],
+                                    y: pos[1],
+                                    z: pos[2],
+                                    volume,
+                                    pitch,
+                                    seed: crate::util::random_u64() as i64,
+                                })?;
+                            }
+                        }
+                        Ok(Event::EntitiesData(packets)) => {
+                            for packet in packets {
+                                if seen_entities.contains(&packet.entity_id) {
+                                    writer.queue(&packet)?;
+                                }
+                            }
+                        }
+                        Ok(Event::HandBroke { uuid: who, entity_id: id, status })
+                            if who == uuid || visible.contains(&who) =>
+                        {
+                            writer.queue(&play::EntityEvent { entity_id: id, status })?;
+                        }
+                        Ok(Event::Explosion { center, radius, block_count, particle, sound, knockback }) => {
+                            let (dx, dy, dz) = (pose.x - center[0], pose.y - center[1], pose.z - center[2]);
+                            if dx * dx + dy * dy + dz * dz < 4096.0 {
+                                writer.queue(&play::Explode {
+                                    center,
+                                    radius,
+                                    block_count,
+                                    knockback: knockback.iter().find(|(who, _)| *who == uuid).map(|&(_, v)| v),
+                                    particle,
+                                    sound,
+                                })?;
+                            }
+                        }
+                        Ok(Event::Died { uuid: who, entity_id: dead, message }) => {
+                            if who == uuid {
+                                let shown = ctx.game_rule_bool("show_death_messages");
+                                let screen = if shown { message.clone() } else { mc_nbt::Tag::String(String::new()) };
+                                writer.queue(&play::PlayerCombatKill { player: entity_id, message: screen })?;
+                                // Everything carried falls out where the player died.
+                                let keep = ctx.game_rule_bool("keep_inventory");
+                                let lost: Vec<play::ItemStack> = if keep { Vec::new() } else {
+                                    let mut inventories = ctx.inventories.lock().expect("inventories lock");
+                                    inventories.get_mut(&uuid).map_or_else(Vec::new, |hands| {
+                                        let mut all: Vec<play::ItemStack> = hands.slots.iter_mut().filter_map(Option::take).collect();
+                                        all.extend(hands.carried.take());
+                                        all
+                                    })
+                                };
+                                // Curse of vanishing: gone with the death.
+                                let lost = lost.into_iter()
+                                    .filter(|s| !crate::enchant_effects::has_effect(&ctx, s, "minecraft:prevent_equipment_drop"));
+                                for stack in lost {
+                                    crate::tick::scatter_item(&ctx, pose, stack);
+                                }
+                                if !keep {
+                                    update_player(&ctx, uuid, |p| p.main_hand = None);
+                                    crate::vitals::drop_death_xp(&ctx, uuid, game_mode, [pose.x, pose.y, pose.z]);
+                                }
+                                if shown {
+                                    crate::vitals::announce_death(&ctx, uuid, message);
+                                }
+                                crate::vitals::drop_pearls(&ctx, uuid);
+                            } else if visible.remove(&who) {
+                                writer.queue(&play::RemoveEntities { entity_ids: vec![dead] })?;
+                            }
+                        }
+                        Ok(Event::GameMode { uuid: who, mode }) => {
+                            if who == uuid {
+                                game_mode = mode;
+                                writer.queue(&play::GameEvent {
+                                    event: play::game_event::CHANGE_GAME_MODE,
+                                    value: mode as f32,
+                                })?;
+                                // Creative keeps flying, spectators always fly,
+                                // the other modes land.
+                                flying = match mode {
+                                    1 => flying,
+                                    3 => true,
+                                    _ => false,
+                                };
+                                update_player(&ctx, uuid, |p| p.flying = flying);
+                                writer.queue(&abilities(mode, flying))?;
+                            }
+                            let known = ctx.players.lock().expect("players lock").get(&who).cloned();
+                            if let Some(player) = known {
+                                writer.queue(&play::PlayerInfoUpdate {
+                                    actions: play::player_info::UPDATE_GAME_MODE,
+                                    players: vec![player.info_entry()],
+                                })?;
+                            }
+                        }
+                        Ok(Event::ContainerSlots { position, viewers, slots }) if viewers.contains(&uuid) => {
+                            windows.container_slots(writer, position, slots)?;
+                        }
+                        Ok(Event::ContainerGone { position }) => windows.container_gone(writer, position)?,
+                        Ok(Event::BlockEntity { position, kind, data }) if view.has_block(position) => {
+                            writer.queue(&play::BlockEntityData { position, kind, data })?;
+                        }
+                        Ok(Event::BlockAction { position, action, param, block }) if view.has_block(position) => {
+                            writer.queue(&play::BlockEvent { position, action, param, block })?;
+                        }
+                        Ok(Event::FurnaceProgress { position, values }) => {
+                            windows.container_data(writer, position, &values)?;
+                        }
+                        Ok(Event::InventorySlot { uuid: who, slot, item }) if who == uuid => {
+                            windows.inventory_slot(writer, slot, item)?;
+                        }
+                        Ok(Event::ItemTaken { item_entity, collector, count, slots }) => {
+                            if seen_entities.contains(&item_entity) {
+                                writer.queue(&play::TakeItemEntity {
+                                    collected: item_entity,
+                                    collector,
+                                    count,
+                                })?;
+                            }
+                            if collector == entity_id {
+                                for (slot, item) in slots {
+                                    windows.inventory_slot(writer, slot, item)?;
+                                }
+                            }
+                        }
+                        Ok(Event::TickingStep(packet)) => writer.queue(&packet)?,
+                        Ok(Event::Permissions { uuid: who }) if who == uuid => {
+                            send_permissions(writer, &ctx, uuid, &me.profile.name, entity_id)?;
+                        }
+                        Ok(Event::Message { uuid: who, line, overlay }) if who == uuid => {
+                            writer.queue(&play::SystemChat { content: line, overlay })?;
+                        }
+                        Ok(Event::AdminFeedback { from, line }) if from != uuid => {
+                            if crate::commands::level(&ctx, uuid, &me.profile.name) >= 2 {
+                                writer.queue(&play::SystemChat { content: line, overlay: false })?;
+                            }
+                        }
+                        Ok(Event::Weather(changes)) => send_weather(writer, &changes)?,
+                        Ok(Event::BiomesChanged { chunks }) => {
+                            let chunks: Vec<(i32, i32, Vec<u8>)> = chunks
+                                .into_iter()
+                                // Not to the chunks on the edge of the view.
+                                .filter(|c| view.inside(*c))
+                                .filter_map(|(x, z)| {
+                                    Some((x, z, ctx.world.biome_data(x, z, &ctx.data.blocks)?))
+                                })
+                                .collect();
+                            if !chunks.is_empty() {
+                                writer.queue(&play::ChunksBiomes { chunks })?;
+                            }
+                        }
+                        Ok(Event::Direct { uuid: who, packet }) if who == uuid => {
+                            use crate::context::Direct;
+                            match packet {
+                                Direct::Title(p) => writer.queue(&p)?,
+                                Direct::Subtitle(p) => writer.queue(&p)?,
+                                Direct::ActionBar(p) => writer.queue(&p)?,
+                                Direct::Times(p) => writer.queue(&p)?,
+                                Direct::Clear(p) => writer.queue(&p)?,
+                                Direct::Sound(p) => writer.queue(&p)?,
+                                Direct::Experience(p) => writer.queue(&p)?,
+                                Direct::StopSound(p) => writer.queue(&p)?,
+                                Direct::MobEffect(p) => writer.queue(&p)?,
+                                Direct::RemoveMobEffect(p) => writer.queue(&p)?,
+                                Direct::DefaultSpawn(p) => writer.queue(&p)?,
+                                Direct::Particles(p) => writer.queue(&p)?,
+                                Direct::Camera(p) => writer.queue(&p)?,
+                                Direct::Boss(p) => writer.queue(&p)?,
+                                Direct::Transfer(p) => writer.queue(&p)?,
+                                Direct::DisguisedChat(p) => writer.queue(&p)?,
+                                Direct::ShowDialog(p) => writer.queue(&p)?,
+                                Direct::ClearDialog(p) => writer.queue(&p)?,
+                                Direct::PostEffects(p) => writer.queue(&p)?,
+                                Direct::GameEvent(p) => writer.queue(&p)?,
+                                Direct::BlockEntityData(p) => writer.queue(&p)?,
+                                Direct::EntityEvent(p) => writer.queue(&p)?,
+                                Direct::Motion(p) => writer.queue(&p)?,
+                            }
+                        }
+                        Ok(Event::Scoreboard(p)) => send_scoreboard(writer, &p)?,
+                        Ok(Event::Border) => {
+                            let packet = ctx.border.lock().expect("border lock").packet();
+                            writer.queue(&packet)?;
+                        }
+                        Ok(Event::Difficulty(d)) => {
+                            writer.queue(&play::ChangeDifficulty { difficulty: d as u8, locked: false })?;
+                        }
+                        Ok(Event::Kick { uuid: who, reason }) if who == uuid => {
+                            let said = match &reason {
+                                mc_nbt::Tag::String(s) => s.clone(),
+                                mc_nbt::Tag::Compound(c) => match c.get("translate") {
+                                    Some(mc_nbt::Tag::String(k)) => k.clone(),
+                                    _ => String::new(),
+                                },
+                                _ => String::new(),
+                            };
+                            writer.send(&play::Disconnect { reason }).await?;
+                            bail!("{said}");
+                        }
+                        Ok(Event::Teleport { uuid: who, pose: to }) if who == uuid => {
+                            next_teleport += 1;
+                            awaiting_teleport = Some(next_teleport);
+                            pose = Pose { on_ground: false, ..to };
+                            writer.queue(&play::PlayerPosition {
+                                teleport_id: next_teleport,
+                                x: pose.x,
+                                y: pose.y,
+                                z: pose.z,
+                                velocity: [0.0; 3],
+                                yaw: pose.yaw,
+                                pitch: pose.pitch,
+                                flags: 0,
+                            })?;
+                            view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                            update_player(&ctx, uuid, |p| p.pose = Some(pose));
+                            let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
+                        }
+                        Ok(Event::PlayerGone { uuid: other, entity_id: other_entity }) if other != uuid => {
+                            if visible.remove(&other) {
+                                writer.queue(&play::RemoveEntities { entity_ids: vec![other_entity] })?;
+                            }
+                        }
+                        Ok(Event::ChangeDimension { uuid: who, dimension, pose: to, after_death }) if who == uuid => {
+                            let Some(next) = ctx.in_dimension(&dimension) else {
+                                continue;
+                            };
+                            // Others here stop seeing us; the new place starts afresh.
+                            let _ = ctx.events.send(Event::PlayerGone { uuid, entity_id });
+                            ctx = next;
+                            events = ctx.events.subscribe();
+                            visible.clear();
+                            seen_entities.clear();
+                            pose = Pose { on_ground: false, ..to };
+                            update_player(&ctx, uuid, |p| {
+                                p.dimension = ctx.world.dimension.clone();
+                                p.pose = Some(pose);
+                            });
+                            crate::vitals::stop_using(&ctx, uuid);
                             writer.queue(&play::Respawn {
                                 dimension_type: ctx.world.dimension_type_id,
                                 dimension: ctx.world.dimension.clone(),
@@ -895,16 +1597,14 @@ async fn play(
                                 death_location: None,
                                 portal_cooldown: 0,
                                 sea_level: ctx.world.sea_level,
-                                data_kept: 0,
+                                // Attributes and entity data stay, as through a portal.
+                                data_kept: if after_death { 0 } else { 3 },
                             })?;
-                            flying = game_mode == 3;
-                            update_player(&ctx, uuid, |p| p.flying = flying);
-                            writer.queue(&abilities(game_mode, flying))?;
-                            writer.queue(&health)?;
-                            if let Some(xp) = ctx.vitals.lock().expect("vitals lock").get(&uuid).map(crate::vitals::Vitals::experience_packet) {
-                                writer.queue(&xp)?;
+                            if after_death {
+                                flying = game_mode == 3;
+                                update_player(&ctx, uuid, |p| p.flying = flying);
                             }
-                            pose = target;
+                            writer.queue(&abilities(game_mode, flying))?;
                             next_teleport += 1;
                             awaiting_teleport = Some(next_teleport);
                             writer.queue(&play::PlayerPosition {
@@ -917,14 +1617,44 @@ async fn play(
                                 pitch: pose.pitch,
                                 flags: 0,
                             })?;
+                            let time = ctx.time.lock().expect("time lock").packet(true);
+                            writer.queue(&time)?;
+                            writer.queue(&spawn_packet(&ctx))?;
+                            writer.queue(&ctx.border.lock().expect("border lock").packet())?;
+                            {
+                                let w = ctx.weather.lock().expect("weather lock");
+                                if w.rain_level > 0.0 {
+                                    let changes = crate::weather::Changes {
+                                        raining: Some(true),
+                                        rain_level: Some(w.rain_level),
+                                        thunder_level: Some(w.thunder_level),
+                                    };
+                                    send_weather(writer, &changes)?;
+                                }
+                            }
                             writer.queue(&play::GameEvent {
                                 event: play::game_event::START_WAITING_FOR_CHUNKS,
                                 value: 0.0,
                             })?;
-                            // The client starts a fresh world: everything again.
+                            writer.queue(&skin_parts_metadata(entity_id, session.skin_parts))?;
+                            writer.flush().await?;
                             view = ChunkView::new(session.view_distance, ctx.clone());
-                            seen_entities.clear();
                             view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                            // What the client forgot with the old dimension.
+                            let state = ctx.vitals.lock().expect("vitals lock").get(&uuid).cloned().unwrap_or_default();
+                            writer.queue(&state.packet())?;
+                            writer.queue(&state.experience_packet())?;
+                            let (effects, effect_data, attributes) =
+                                crate::effects::join_packets(&ctx, &state, entity_id);
+                            for p in effects {
+                                writer.queue(&p)?;
+                            }
+                            if let Some(p) = effect_data {
+                                writer.queue(&p)?;
+                            }
+                            if let Some(p) = attributes {
+                                writer.queue(&p)?;
+                            }
                             let hands = ctx.inventories.lock().expect("inventories lock").get(&uuid).cloned().unwrap_or_default();
                             windows.state_id += 1;
                             writer.queue(&play::ContainerSetContent {
@@ -933,846 +1663,134 @@ async fn play(
                                 slots: hands.slots.clone(),
                                 carried: None,
                             })?;
-                            writer.queue(&skin_parts_metadata(entity_id, session.skin_parts))?;
-                            update_player(&ctx, uuid, |p| p.pose = Some(pose));
-                            let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
-                        }
-                    }
-                    play::Serverbound::PlayerInput { flags } => {
-                        sneaking = flags & 0x20 != 0;
-                        if sneaking && riding.is_some() {
-                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                            let action = Action::Vehicle(crate::vehicles::Act::Dismount);
-                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
-                        }
-                    }
-                    play::Serverbound::PaddleBoat { left, right } if riding.is_some() => {
-                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                        let action = Action::Vehicle(crate::vehicles::Act::Paddle { left, right });
-                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
-                    }
-                    play::Serverbound::MoveVehicle { x, y, z, yaw, pitch } if riding.is_some() && awaiting_teleport.is_none() => {
-                        if [x, y, z].iter().all(|c| c.is_finite()) {
-                            pose = Pose { x, y, z, yaw, pitch, on_ground: false };
-                            update_player(&ctx, uuid, |p| p.pose = Some(pose));
-                            view.move_to(writer, chunk_of(x), chunk_of(z)).await?;
-                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                            let action = Action::Vehicle(crate::vehicles::Act::Move { pos: [x, y, z], yaw });
-                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
-                        }
-                    }
-                    play::Serverbound::PlayerAbilities { flags } if matches!(game_mode, 1 | 3) => {
-                        flying = flags & play::abilities::FLYING != 0 || game_mode == 3;
-                        update_player(&ctx, uuid, |p| p.flying = flying);
-                    }
-                    play::Serverbound::Attack { entity_id: target } if game_mode != 3 => {
-                        let victim = ctx.players.lock().expect("players lock").values()
-                            .find(|p| p.entity_id == target && p.dimension == ctx.world.dimension)
-                            .and_then(|p| p.pose.map(|at| (p.profile.uuid, at)));
-                        if let Some((victim, at)) = victim {
-                            let (dx, dy, dz) = (at.x - pose.x, at.y - pose.y, at.z - pose.z);
-                            // Reach 3 from the docs, with some room for lag.
-                            if dx * dx + dy * dy + dz * dz <= 36.0 {
-                                let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                                crate::combat::player_hits_player(&ctx, &actor, &me.profile.name, victim);
-                            }
-                        } else {
-                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                            let action = Action::UseEntity { entity_id: target, hand: 0, attack: true, at: None };
-                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
-                        }
-                    }
-                    play::Serverbound::Interact { entity_id: target, hand, location } if game_mode != 3 => {
-                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                        let action = Action::UseEntity { entity_id: target, hand, attack: false, at: location };
-                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
-                    }
-                    play::Serverbound::Punch => {
-                        let _ = ctx.events.send(Event::Swing { uuid, entity_id, times: 1 });
-                    }
-                    // Block changes happen on the tick thread; the answer comes back
-                    // through `replies`.
-                    play::Serverbound::PlayerAction { status, position, face, sequence } => {
-                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                        let action = Action::Dig { status, position, face, sequence };
-                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
-                    }
-                    play::Serverbound::UseItemOn { hand, position, face, cursor, sequence, .. } => {
-                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                        let action = Action::UseItemOn { hand, position, face, cursor, sequence };
-                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
-                    }
-                    play::Serverbound::UseItem { hand, sequence, yaw, pitch } => {
-                        writer.queue(&play::BlockChangedAck { sequence })?;
-                        let held = ctx.inventories.lock().expect("inventories lock")
-                            .get(&uuid).and_then(|h| h.held(hand).map(|s| s.item));
-                        if held.is_some_and(|i| ctx.items.name(i) == Some("minecraft:written_book")) {
-                            writer.queue(&play::OpenBook { hand })?;
-                        }
-                        crate::vitals::start_using(&ctx, uuid, entity_id, hand, game_mode);
-                        if crate::combat::holds_shield(&ctx, uuid, hand) {
-                            crate::combat::shield(&ctx, uuid, true);
-                        }
-                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                        let action = Action::UseItem { hand, yaw, pitch };
-                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
-                    }
-                    play::Serverbound::ChangeGameMode { mode: mode @ 0..=3 } => {
-                        // As `/gamemode`, for those allowed to use it; the
-                        // others are ignored.
-                        if crate::commands::level(&ctx, uuid, &me.profile.name) >= 2 {
-                            let name = ["survival", "creative", "adventure", "spectator"][mode as usize];
-                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                            let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
-                            let action = Action::Command { line: format!("gamemode {name}"), source };
-                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
-                        } else {
-                            warn!("Player {} tried to change game mode without required permissions", me.profile.name);
-                        }
-                    }
-                    play::Serverbound::PickItemFromBlock { position, .. } if game_mode != 3 => {
-                        let reach = if game_mode == CREATIVE { 5.0 } else { 4.5 } + 1.0 + 0.87;
-                        let (dx, dy, dz) = (
-                            f64::from(position.x) + 0.5 - pose.x,
-                            f64::from(position.y) + 0.5 - pose.y - 1.62,
-                            f64::from(position.z) + 0.5 - pose.z,
-                        );
-                        let item = (dx * dx + dy * dy + dz * dz <= reach * reach)
-                            .then(|| ctx.world.block(position, &ctx.data.blocks))
-                            .flatten()
-                            .and_then(|state| ctx.data.blocks.block_name(state))
-                            .and_then(|name| crate::interact::clone_item(name, &ctx.items));
-                        if let Some(item) = item {
-                            let mut changed = Vec::new();
-                            let mut selected = None;
-                            change_hands(&ctx, uuid, entity_id, |hands| {
-                                let was = hands.selected;
-                                changed = hands
-                                    .pick(item, game_mode == CREATIVE)
-                                    .into_iter()
-                                    .map(|i| (i, hands.slots[i].clone()))
-                                    .collect();
-                                if hands.selected != was {
-                                    selected = Some(hands.selected);
+                            writer.queue(&play::SetHeldSlot { slot: hands.selected as i32 })?;
+                            let others: Vec<OnlinePlayer> = ctx.players.lock().expect("players lock").values()
+                                .filter(|p| p.profile.uuid != uuid && p.dimension == ctx.world.dimension)
+                                .cloned()
+                                .collect();
+                            for other in others {
+                                if let Some(other_pose) = other.pose {
+                                    spawn_player(writer, &ctx, &other, other_pose)?;
+                                    visible.insert(other.profile.uuid);
                                 }
-                            });
-                            for (slot, stack) in changed {
-                                windows.inventory_slot(writer, slot as i16, stack)?;
                             }
-                            if let Some(slot) = selected {
-                                writer.queue(&play::SetHeldSlot { slot: slot as i32 })?;
-                            }
-                        }
-                    }
-                    play::Serverbound::PickItemFromEntity { entity_id: target, .. } if game_mode != 3 => {
-                        // The tick thread has the entities out while it moves
-                        // them: look again a little later.
-                        let mut item = None;
-                        for _ in 0..5 {
-                            let found = ctx.entities.lock().expect("entities lock").iter()
-                                .find(|e| e.id == target && !e.removed)
-                                .map(|e| {
-                                    let (dx, dy, dz) = (e.pos[0] - pose.x, e.pos[1] - pose.y, e.pos[2] - pose.z);
-                                    (dx * dx + dy * dy + dz * dz <= 64.0, crate::mobs::eggs::pick(&ctx, e))
-                                });
-                            if let Some((near, egg)) = found {
-                                item = egg.filter(|_| near);
-                                break;
-                            }
-                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                        }
-                        if let Some(item) = item {
-                            let mut changed = Vec::new();
-                            let mut selected = None;
-                            change_hands(&ctx, uuid, entity_id, |hands| {
-                                let was = hands.selected;
-                                changed = hands
-                                    .pick(item, game_mode == CREATIVE)
-                                    .into_iter()
-                                    .map(|i| (i, hands.slots[i].clone()))
-                                    .collect();
-                                if hands.selected != was {
-                                    selected = Some(hands.selected);
-                                }
-                            });
-                            for (slot, stack) in changed {
-                                windows.inventory_slot(writer, slot as i16, stack)?;
-                            }
-                            if let Some(slot) = selected {
-                                writer.queue(&play::SetHeldSlot { slot: slot as i32 })?;
-                            }
-                        }
-                    }
-                    play::Serverbound::ClientCommand { action: 1 } => {
-                        // No statistics are kept yet: an empty list, so the
-                        // menu opens instead of waiting.
-                        writer.queue(&play::AwardStats::default())?;
-                    }
-                    play::Serverbound::BlockEntityTagQuery { transaction, position } => {
-                        if crate::commands::level(&ctx, uuid, &me.profile.name) >= 2 {
-                            let data = ctx.world.block_entity(position, &ctx.data.blocks).map(|be| be.data);
-                            writer.queue(&play::TagQuery { transaction, data })?;
-                        }
-                    }
-                    play::Serverbound::TeleportToEntity { target } if game_mode == 3 => {
-                        let to = ctx.players.lock().expect("players lock").get(&target).and_then(|p| p.pose);
-                        if let Some(to) = to {
-                            let _ = ctx.events.send(Event::Teleport { uuid, pose: to });
-                        }
-                    }
-                    play::Serverbound::SetCommandBlock { position, command, mode, flags } => {
-                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                        let action = Action::CommandBlock { position, command, mode, flags };
-                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
-                    }
-                    play::Serverbound::SetCommandMinecart { entity_id: cart, command, track_output } => {
-                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                        let action = Action::CommandMinecart { entity_id: cart, command, track_output };
-                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
-                    }
-                    play::Serverbound::SignUpdate { position, front, lines } => {
-                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                        if let Some(event) = crate::interact::sign_update(&ctx, actor, position, front, lines) {
-                            let _ = ctx.events.send(event);
-                        }
-                    }
-                    play::Serverbound::ClientInformation(info) => {
-                        writer.queue(&skin_parts_metadata(entity_id, info.skin_parts))?;
-                        update_player(&ctx, uuid, |p| p.skin_parts = info.skin_parts);
-                        let _ = ctx.events.send(Event::SkinParts {
-                            uuid,
-                            entity_id,
-                            parts: info.skin_parts,
-                        });
-                    }
-                    other => trace!("play: {other:?}"),
-                }
-                if moved {
-                    let feet = Position::new(pose.x.floor() as i32, pose.y.floor() as i32, pose.z.floor() as i32);
-                    let in_water = ctx
-                        .world
-                        .block(feet, &ctx.data.blocks)
-                        .is_some_and(|s| ctx.data.blocks.is_fluid(s));
-                    crate::vitals::moved(&ctx, uuid, before, pose, in_water);
-                    view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
-                    sync_entities(writer, &ctx, &view, &mut seen_entities)?;
-                    update_player(&ctx, uuid, |p| p.pose = Some(pose));
-                    let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
-                }
-            }
-            _ = keep_alive.tick() => {
-                if let Some((_, sent)) = pending_keep_alive {
-                    if sent.elapsed() > KEEP_ALIVE_TIMEOUT {
-                        let disconnect = play::Disconnect { reason: text::plain("Timed out") };
-                        writer.send(&disconnect).await?;
-                        bail!("keep-alive timeout");
-                    }
-                } else {
-                    let id = (random_u64() >> 1) as i64;
-                    pending_keep_alive = Some((id, Instant::now()));
-                    writer.queue(&play::KeepAlive { id })?;
-                }
-            }
-            event = events.recv() => {
-                match event {
-                    Ok(Event::Chat(content)) => {
-                        writer.queue(&play::SystemChat { content, overlay: false })?;
-                    }
-                    Ok(Event::Time(packet)) => writer.queue(&packet)?,
-                    Ok(Event::LightChanged(chunks)) => {
-                        for (x, z) in chunks {
-                            if view.has_block(Position::new(x * 16, 0, z * 16))
-                                && let Some(light) = ctx.world.light_data(x, z)
-                            {
-                                writer.queue(&play::LightUpdate { x, z, light })?;
-                            }
-                        }
-                    }
-                    Ok(Event::EntitySpawned(entity)) => {
-                        let (x, _, z) = entity.block_pos();
-                        if view.has_block(Position::new(x, 0, z)) {
-                            spawn_entity(writer, &ctx, &entity)?;
-                            seen_entities.insert(entity.id);
-                        }
-                    }
-                    Ok(Event::EntitiesMoved(moves)) => {
-                        for (id, pos, on_ground) in moves {
-                            if seen_entities.contains(&id) {
-                                writer.queue(&play::EntityPositionSync {
-                                    entity_id: id,
-                                    x: pos[0],
-                                    y: pos[1],
-                                    z: pos[2],
-                                    yaw: 0.0,
-                                    pitch: 0.0,
-                                    on_ground,
-                                })?;
-                            }
-                        }
-                    }
-                    Ok(Event::MobsMoved(moves)) => {
-                        for m in moves {
-                            let at = Position::new(m.pos[0].floor() as i32, 0, m.pos[2].floor() as i32);
-                            let in_view = view.has_block(at);
-                            if seen_entities.contains(&m.id) {
-                                if !in_view {
-                                    seen_entities.remove(&m.id);
-                                    writer.queue(&play::RemoveEntities { entity_ids: vec![m.id] })?;
-                                    continue;
-                                }
-                                writer.queue(&play::EntityPositionSync {
-                                    entity_id: m.id,
-                                    x: m.pos[0],
-                                    y: m.pos[1],
-                                    z: m.pos[2],
-                                    yaw: m.yaw,
-                                    pitch: m.pitch,
-                                    on_ground: m.on_ground,
-                                })?;
-                                writer.queue(&play::RotateHead { entity_id: m.id, head_yaw: m.head_yaw })?;
-                            } else if in_view {
-                                // A mob walked into view.
-                                let found = ctx.entities.lock().expect("entities lock").iter().find(|e| e.id == m.id).cloned();
-                                if let Some(entity) = found {
+                            // Back on what they rode when they left.
+        if let Some(vehicle) = &me.extra.root_vehicle {
+            crate::persist::ride_again(&ctx, entity_id, vehicle);
+        }
+        let existing: Vec<mc_entity::Entity> = ctx.entities.lock().expect("entities lock").clone();
+                            for entity in existing {
+                                let (x, _, z) = entity.block_pos();
+                                if view.has_block(Position::new(x, 0, z)) {
                                     spawn_entity(writer, &ctx, &entity)?;
                                     seen_entities.insert(entity.id);
                                 }
                             }
+                            let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
                         }
-                    }
-                    Ok(Event::MobsStatus(statuses)) => {
-                        for (id, status) in statuses {
-                            if seen_entities.contains(&id) {
-                                writer.queue(&play::EntityEvent { entity_id: id, status: status as i8 })?;
-                            }
-                        }
-                    }
-                    Ok(Event::EntitySync(rows)) => {
-                        for r in rows {
-                            // The vehicle carries the player along.
-                            if riding == Some(r.id) && (pose.x, pose.y, pose.z) != (r.pos[0], r.pos[1], r.pos[2]) {
-                                pose = Pose { x: r.pos[0], y: r.pos[1], z: r.pos[2], ..pose };
-                                update_player(&ctx, uuid, |p| p.pose = Some(pose));
-                                view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
-                            }
-                            if seen_entities.contains(&r.id) {
-                                writer.queue(&play::EntityPositionSync {
-                                    entity_id: r.id,
-                                    x: r.pos[0],
-                                    y: r.pos[1],
-                                    z: r.pos[2],
-                                    yaw: r.yaw,
-                                    pitch: r.pitch,
-                                    on_ground: r.on_ground,
-                                })?;
-                                writer.queue(&play::SetEntityMotion {
-                                    entity_id: r.id,
-                                    velocity: r.vel,
-                                })?;
-                            }
-                        }
-                    }
-                    Ok(Event::Fx(fx)) => {
-                        use crate::fx::Fx;
-                        if let Fx::Passengers(p) = &fx {
-                            if p.passengers.contains(&entity_id) {
-                                riding = Some(p.vehicle);
-                            } else if riding == Some(p.vehicle) {
-                                riding = None;
-                            }
-                        }
-                        let wanted = match (fx.entity(), fx.at()) {
-                            (Some(id), _) => seen_entities.contains(&id) || visible_entity(&ctx, id, &visible),
-                            (None, Some(at)) => {
-                                let (dx, dy, dz) = (pose.x - at[0], pose.y - at[1], pose.z - at[2]);
-                                dx * dx + dy * dy + dz * dz < 4096.0
-                            }
-                            _ => true,
-                        };
-                        if wanted {
-                            match fx {
-                                Fx::Sound(p) => writer.queue(&p)?,
-                                Fx::Level(p) => writer.queue(&p)?,
-                                Fx::Particles(p) => writer.queue(&p)?,
-                                Fx::Status(p) => writer.queue(&p)?,
-                                Fx::Equip(p) => writer.queue(&p)?,
-                                Fx::Link(p) => writer.queue(&p)?,
-                                Fx::Cracks(p) => writer.queue(&p)?,
-                                Fx::Passengers(p) => writer.queue(&p)?,
-                                Fx::Motion(p) => writer.queue(&p)?,
-                                Fx::Damage(p) => writer.queue(&p)?,
-                                Fx::Swing(p) => writer.queue(&p)?,
-                                Fx::Data(p) => writer.queue(&p)?,
-                            }
-                        }
-                    }
-                    Ok(Event::EntitiesRemoved(ids)) => {
-                        let gone: Vec<i32> = ids.into_iter().filter(|id| seen_entities.remove(id)).collect();
-                        if !gone.is_empty() {
-                            writer.queue(&play::RemoveEntities { entity_ids: gone })?;
-                        }
-                    }
-                    Ok(Event::TickingState(packet)) => writer.queue(&packet)?,
-                    Ok(Event::Health { uuid: who, health }) if who == uuid => writer.queue(&health)?,
-                    Ok(Event::EntityData { uuid: who, packet })
-                        if who == uuid || visible.contains(&who) =>
-                    {
-                        writer.queue(&packet)?;
-                    }
-                    Ok(Event::Attributes { uuid: who, packet })
-                        if who == uuid || visible.contains(&who) =>
-                    {
-                        writer.queue(&packet)?;
-                    }
-                    Ok(Event::Hurt { uuid: who, entity_id: hurt, damage_type, direct }) if who == uuid || visible.contains(&who) => {
-                        writer.queue(&play::DamageEvent { entity_id: hurt, damage_type, direct, cause: direct })?;
-                    }
-                    Ok(Event::WorldSound { pos, sound, category, volume, pitch }) => {
-                        let reach = 16.0 * f64::from(volume.max(1.0));
-                        let (dx, dy, dz) = (pose.x - pos[0], pose.y - pos[1], pose.z - pos[2]);
-                        if dx * dx + dy * dy + dz * dz <= reach * reach
-                            && let Some(id) = ctx.data.builtin.id("minecraft:sound_event", sound)
-                        {
-                            writer.queue(&play::Sound {
-                                id: Some(id),
-                                name: String::new(),
-                                category,
-                                x: pos[0],
-                                y: pos[1],
-                                z: pos[2],
-                                volume,
-                                pitch,
-                                seed: crate::util::random_u64() as i64,
-                            })?;
-                        }
-                    }
-                    Ok(Event::EntitiesData(packets)) => {
-                        for packet in packets {
-                            if seen_entities.contains(&packet.entity_id) {
-                                writer.queue(&packet)?;
-                            }
-                        }
-                    }
-                    Ok(Event::HandBroke { uuid: who, entity_id: id, status })
-                        if who == uuid || visible.contains(&who) =>
-                    {
-                        writer.queue(&play::EntityEvent { entity_id: id, status })?;
-                    }
-                    Ok(Event::Explosion { center, radius, block_count, particle, sound, knockback }) => {
-                        let (dx, dy, dz) = (pose.x - center[0], pose.y - center[1], pose.z - center[2]);
-                        if dx * dx + dy * dy + dz * dz < 4096.0 {
-                            writer.queue(&play::Explode {
-                                center,
-                                radius,
-                                block_count,
-                                knockback: knockback.iter().find(|(who, _)| *who == uuid).map(|&(_, v)| v),
-                                particle,
-                                sound,
-                            })?;
-                        }
-                    }
-                    Ok(Event::Died { uuid: who, entity_id: dead, message }) => {
-                        if who == uuid {
-                            let shown = ctx.game_rule_bool("show_death_messages");
-                            let screen = if shown { message.clone() } else { mc_nbt::Tag::String(String::new()) };
-                            writer.queue(&play::PlayerCombatKill { player: entity_id, message: screen })?;
-                            // Everything carried falls out where the player died.
-                            let keep = ctx.game_rule_bool("keep_inventory");
-                            let lost: Vec<play::ItemStack> = if keep { Vec::new() } else {
-                                let mut inventories = ctx.inventories.lock().expect("inventories lock");
-                                inventories.get_mut(&uuid).map_or_else(Vec::new, |hands| {
-                                    let mut all: Vec<play::ItemStack> = hands.slots.iter_mut().filter_map(Option::take).collect();
-                                    all.extend(hands.carried.take());
-                                    all
-                                })
-                            };
-                            // Curse of vanishing: gone with the death.
-                            let lost = lost.into_iter()
-                                .filter(|s| !crate::enchant_effects::has_effect(&ctx, s, "minecraft:prevent_equipment_drop"));
-                            for stack in lost {
-                                crate::tick::scatter_item(&ctx, pose, stack);
-                            }
-                            if !keep {
-                                update_player(&ctx, uuid, |p| p.main_hand = None);
-                                crate::vitals::drop_death_xp(&ctx, uuid, game_mode, [pose.x, pose.y, pose.z]);
-                            }
-                            if shown {
-                                crate::vitals::announce_death(&ctx, uuid, message);
-                            }
-                            crate::vitals::drop_pearls(&ctx, uuid);
-                        } else if visible.remove(&who) {
-                            writer.queue(&play::RemoveEntities { entity_ids: vec![dead] })?;
-                        }
-                    }
-                    Ok(Event::GameMode { uuid: who, mode }) => {
-                        if who == uuid {
-                            game_mode = mode;
-                            writer.queue(&play::GameEvent {
-                                event: play::game_event::CHANGE_GAME_MODE,
-                                value: mode as f32,
-                            })?;
-                            // Creative keeps flying, spectators always fly,
-                            // the other modes land.
-                            flying = match mode {
-                                1 => flying,
-                                3 => true,
-                                _ => false,
-                            };
-                            update_player(&ctx, uuid, |p| p.flying = flying);
-                            writer.queue(&abilities(mode, flying))?;
-                        }
-                        let known = ctx.players.lock().expect("players lock").get(&who).cloned();
-                        if let Some(player) = known {
+                        Ok(Event::PlayerJoined(other)) if other.profile.uuid != uuid => {
                             writer.queue(&play::PlayerInfoUpdate {
-                                actions: play::player_info::UPDATE_GAME_MODE,
-                                players: vec![player.info_entry()],
+                                actions: play::player_info::ALL,
+                                players: vec![other.info_entry()],
                             })?;
                         }
-                    }
-                    Ok(Event::ContainerSlots { position, viewers, slots }) if viewers.contains(&uuid) => {
-                        windows.container_slots(writer, position, slots)?;
-                    }
-                    Ok(Event::ContainerGone { position }) => windows.container_gone(writer, position)?,
-                    Ok(Event::BlockEntity { position, kind, data }) if view.has_block(position) => {
-                        writer.queue(&play::BlockEntityData { position, kind, data })?;
-                    }
-                    Ok(Event::BlockAction { position, action, param, block }) if view.has_block(position) => {
-                        writer.queue(&play::BlockEvent { position, action, param, block })?;
-                    }
-                    Ok(Event::FurnaceProgress { position, values }) => {
-                        windows.container_data(writer, position, &values)?;
-                    }
-                    Ok(Event::InventorySlot { uuid: who, slot, item }) if who == uuid => {
-                        windows.inventory_slot(writer, slot, item)?;
-                    }
-                    Ok(Event::ItemTaken { item_entity, collector, count, slots }) => {
-                        if seen_entities.contains(&item_entity) {
-                            writer.queue(&play::TakeItemEntity {
-                                collected: item_entity,
-                                collector,
-                                count,
-                            })?;
-                        }
-                        if collector == entity_id {
-                            for (slot, item) in slots {
-                                windows.inventory_slot(writer, slot, item)?;
-                            }
-                        }
-                    }
-                    Ok(Event::TickingStep(packet)) => writer.queue(&packet)?,
-                    Ok(Event::Permissions { uuid: who }) if who == uuid => {
-                        send_permissions(writer, &ctx, uuid, &me.profile.name, entity_id)?;
-                    }
-                    Ok(Event::Message { uuid: who, line, overlay }) if who == uuid => {
-                        writer.queue(&play::SystemChat { content: line, overlay })?;
-                    }
-                    Ok(Event::AdminFeedback { from, line }) if from != uuid => {
-                        if crate::commands::level(&ctx, uuid, &me.profile.name) >= 2 {
-                            writer.queue(&play::SystemChat { content: line, overlay: false })?;
-                        }
-                    }
-                    Ok(Event::Weather(changes)) => send_weather(writer, &changes)?,
-                    Ok(Event::BiomesChanged { chunks }) => {
-                        let chunks: Vec<(i32, i32, Vec<u8>)> = chunks
-                            .into_iter()
-                            // Not to the chunks on the edge of the view.
-                            .filter(|c| view.inside(*c))
-                            .filter_map(|(x, z)| {
-                                Some((x, z, ctx.world.biome_data(x, z, &ctx.data.blocks)?))
-                            })
-                            .collect();
-                        if !chunks.is_empty() {
-                            writer.queue(&play::ChunksBiomes { chunks })?;
-                        }
-                    }
-                    Ok(Event::Direct { uuid: who, packet }) if who == uuid => {
-                        use crate::context::Direct;
-                        match packet {
-                            Direct::Title(p) => writer.queue(&p)?,
-                            Direct::Subtitle(p) => writer.queue(&p)?,
-                            Direct::ActionBar(p) => writer.queue(&p)?,
-                            Direct::Times(p) => writer.queue(&p)?,
-                            Direct::Clear(p) => writer.queue(&p)?,
-                            Direct::Sound(p) => writer.queue(&p)?,
-                            Direct::Experience(p) => writer.queue(&p)?,
-                            Direct::StopSound(p) => writer.queue(&p)?,
-                            Direct::MobEffect(p) => writer.queue(&p)?,
-                            Direct::RemoveMobEffect(p) => writer.queue(&p)?,
-                            Direct::DefaultSpawn(p) => writer.queue(&p)?,
-                            Direct::Particles(p) => writer.queue(&p)?,
-                            Direct::Camera(p) => writer.queue(&p)?,
-                            Direct::Boss(p) => writer.queue(&p)?,
-                            Direct::Transfer(p) => writer.queue(&p)?,
-                            Direct::DisguisedChat(p) => writer.queue(&p)?,
-                            Direct::ShowDialog(p) => writer.queue(&p)?,
-                            Direct::ClearDialog(p) => writer.queue(&p)?,
-                            Direct::PostEffects(p) => writer.queue(&p)?,
-                            Direct::GameEvent(p) => writer.queue(&p)?,
-                            Direct::BlockEntityData(p) => writer.queue(&p)?,
-                            Direct::EntityEvent(p) => writer.queue(&p)?,
-                            Direct::Motion(p) => writer.queue(&p)?,
-                        }
-                    }
-                    Ok(Event::Scoreboard(p)) => send_scoreboard(writer, &p)?,
-                    Ok(Event::Border) => {
-                        let packet = ctx.border.lock().expect("border lock").packet();
-                        writer.queue(&packet)?;
-                    }
-                    Ok(Event::Difficulty(d)) => {
-                        writer.queue(&play::ChangeDifficulty { difficulty: d as u8, locked: false })?;
-                    }
-                    Ok(Event::Kick { uuid: who, reason }) if who == uuid => {
-                        let said = match &reason {
-                            mc_nbt::Tag::String(s) => s.clone(),
-                            mc_nbt::Tag::Compound(c) => match c.get("translate") {
-                                Some(mc_nbt::Tag::String(k)) => k.clone(),
-                                _ => String::new(),
-                            },
-                            _ => String::new(),
-                        };
-                        writer.send(&play::Disconnect { reason }).await?;
-                        bail!("{said}");
-                    }
-                    Ok(Event::Teleport { uuid: who, pose: to }) if who == uuid => {
-                        next_teleport += 1;
-                        awaiting_teleport = Some(next_teleport);
-                        pose = Pose { on_ground: false, ..to };
-                        writer.queue(&play::PlayerPosition {
-                            teleport_id: next_teleport,
-                            x: pose.x,
-                            y: pose.y,
-                            z: pose.z,
-                            velocity: [0.0; 3],
-                            yaw: pose.yaw,
-                            pitch: pose.pitch,
-                            flags: 0,
-                        })?;
-                        view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
-                        update_player(&ctx, uuid, |p| p.pose = Some(pose));
-                        let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
-                    }
-                    Ok(Event::PlayerGone { uuid: other, entity_id: other_entity }) if other != uuid => {
-                        if visible.remove(&other) {
-                            writer.queue(&play::RemoveEntities { entity_ids: vec![other_entity] })?;
-                        }
-                    }
-                    Ok(Event::ChangeDimension { uuid: who, dimension, pose: to, after_death }) if who == uuid => {
-                        let Some(next) = ctx.in_dimension(&dimension) else {
-                            continue;
-                        };
-                        // Others here stop seeing us; the new place starts afresh.
-                        let _ = ctx.events.send(Event::PlayerGone { uuid, entity_id });
-                        ctx = next;
-                        events = ctx.events.subscribe();
-                        visible.clear();
-                        seen_entities.clear();
-                        pose = Pose { on_ground: false, ..to };
-                        update_player(&ctx, uuid, |p| {
-                            p.dimension = ctx.world.dimension.clone();
-                            p.pose = Some(pose);
-                        });
-                        crate::vitals::stop_using(&ctx, uuid);
-                        writer.queue(&play::Respawn {
-                            dimension_type: ctx.world.dimension_type_id,
-                            dimension: ctx.world.dimension.clone(),
-                            hashed_seed: 0,
-                            game_mode,
-                            previous_game_mode: None,
-                            is_debug: false,
-                            is_flat: ctx.world.is_flat,
-                            death_location: None,
-                            portal_cooldown: 0,
-                            sea_level: ctx.world.sea_level,
-                            // Attributes and entity data stay, as through a portal.
-                            data_kept: if after_death { 0 } else { 3 },
-                        })?;
-                        if after_death {
-                            flying = game_mode == 3;
-                            update_player(&ctx, uuid, |p| p.flying = flying);
-                        }
-                        writer.queue(&abilities(game_mode, flying))?;
-                        next_teleport += 1;
-                        awaiting_teleport = Some(next_teleport);
-                        writer.queue(&play::PlayerPosition {
-                            teleport_id: next_teleport,
-                            x: pose.x,
-                            y: pose.y,
-                            z: pose.z,
-                            velocity: [0.0; 3],
-                            yaw: pose.yaw,
-                            pitch: pose.pitch,
-                            flags: 0,
-                        })?;
-                        let time = ctx.time.lock().expect("time lock").packet(true);
-                        writer.queue(&time)?;
-                        writer.queue(&spawn_packet(&ctx))?;
-                        writer.queue(&ctx.border.lock().expect("border lock").packet())?;
+                        Ok(Event::PlayerMoved { uuid: other, entity_id: other_entity, pose: other_pose })
+                            if other != uuid =>
                         {
-                            let w = ctx.weather.lock().expect("weather lock");
-                            if w.rain_level > 0.0 {
-                                let changes = crate::weather::Changes {
-                                    raining: Some(true),
-                                    rain_level: Some(w.rain_level),
-                                    thunder_level: Some(w.thunder_level),
-                                };
-                                send_weather(writer, &changes)?;
+                            if visible.contains(&other) {
+                                writer.queue(&play::EntityPositionSync {
+                                    entity_id: other_entity,
+                                    x: other_pose.x,
+                                    y: other_pose.y,
+                                    z: other_pose.z,
+                                    yaw: other_pose.yaw,
+                                    pitch: other_pose.pitch,
+                                    on_ground: other_pose.on_ground,
+                                })?;
+                                writer.queue(&play::RotateHead {
+                                    entity_id: other_entity,
+                                    head_yaw: other_pose.yaw,
+                                })?;
+                            } else {
+                                let known = ctx.players.lock().expect("players lock").get(&other).cloned();
+                                if let Some(player) = known {
+                                    spawn_player(writer, &ctx, &player, other_pose)?;
+                                    visible.insert(other);
+                                }
                             }
                         }
-                        writer.queue(&play::GameEvent {
-                            event: play::game_event::START_WAITING_FOR_CHUNKS,
-                            value: 0.0,
-                        })?;
-                        writer.queue(&skin_parts_metadata(entity_id, session.skin_parts))?;
-                        writer.flush().await?;
-                        view = ChunkView::new(session.view_distance, ctx.clone());
-                        view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
-                        // What the client forgot with the old dimension.
-                        let state = ctx.vitals.lock().expect("vitals lock").get(&uuid).cloned().unwrap_or_default();
-                        writer.queue(&state.packet())?;
-                        writer.queue(&state.experience_packet())?;
-                        let (effects, effect_data, attributes) =
-                            crate::effects::join_packets(&ctx, &state, entity_id);
-                        for p in effects {
-                            writer.queue(&p)?;
+                        Ok(Event::SkinParts { uuid: other, entity_id: other_entity, parts })
+                            if other != uuid && visible.contains(&other) =>
+                        {
+                            writer.queue(&skin_parts_metadata(other_entity, parts))?;
                         }
-                        if let Some(p) = effect_data {
-                            writer.queue(&p)?;
+                        Ok(Event::BlocksChanged { by, changes }) if by != uuid => {
+                            send_block_changes(writer, &view, changes)?;
                         }
-                        if let Some(p) = attributes {
-                            writer.queue(&p)?;
-                        }
-                        let hands = ctx.inventories.lock().expect("inventories lock").get(&uuid).cloned().unwrap_or_default();
-                        windows.state_id += 1;
-                        writer.queue(&play::ContainerSetContent {
-                            window: 0,
-                            state_id: windows.state_id,
-                            slots: hands.slots.clone(),
-                            carried: None,
-                        })?;
-                        writer.queue(&play::SetHeldSlot { slot: hands.selected as i32 })?;
-                        let others: Vec<OnlinePlayer> = ctx.players.lock().expect("players lock").values()
-                            .filter(|p| p.profile.uuid != uuid && p.dimension == ctx.world.dimension)
-                            .cloned()
-                            .collect();
-                        for other in others {
-                            if let Some(other_pose) = other.pose {
-                                spawn_player(writer, &ctx, &other, other_pose)?;
-                                visible.insert(other.profile.uuid);
-                            }
-                        }
-                        let existing: Vec<mc_entity::Entity> = ctx.entities.lock().expect("entities lock").clone();
-                        for entity in existing {
-                            let (x, _, z) = entity.block_pos();
-                            if view.has_block(Position::new(x, 0, z)) {
-                                spawn_entity(writer, &ctx, &entity)?;
-                                seen_entities.insert(entity.id);
-                            }
-                        }
-                        let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
-                    }
-                    Ok(Event::PlayerJoined(other)) if other.profile.uuid != uuid => {
-                        writer.queue(&play::PlayerInfoUpdate {
-                            actions: play::player_info::ALL,
-                            players: vec![other.info_entry()],
-                        })?;
-                    }
-                    Ok(Event::PlayerMoved { uuid: other, entity_id: other_entity, pose: other_pose })
-                        if other != uuid =>
-                    {
-                        if visible.contains(&other) {
-                            writer.queue(&play::EntityPositionSync {
-                                entity_id: other_entity,
-                                x: other_pose.x,
-                                y: other_pose.y,
-                                z: other_pose.z,
-                                yaw: other_pose.yaw,
-                                pitch: other_pose.pitch,
-                                on_ground: other_pose.on_ground,
+                        Ok(Event::BlockBroken { by, position, state }) if by != uuid && view.has_block(position) => {
+                            writer.queue(&play::LevelEvent {
+                                event: play::level_event::BLOCK_BROKEN,
+                                position,
+                                data: state as i32,
+                                global: false,
                             })?;
-                            writer.queue(&play::RotateHead {
+                        }
+                        Ok(Event::UsingItem { uuid: other, entity_id: other_entity, hand })
+                            if other == uuid || visible.contains(&other) =>
+                        {
+                            let flags = hand.map_or(0, |h| 1 | if h == 1 { 2 } else { 0 });
+                            writer.queue(&play::SetEntityData {
                                 entity_id: other_entity,
-                                head_yaw: other_pose.yaw,
+                                entries: vec![(play::metadata::HAND_STATES, play::MetadataValue::Byte(flags))],
                             })?;
-                        } else {
-                            let known = ctx.players.lock().expect("players lock").get(&other).cloned();
-                            if let Some(player) = known {
-                                spawn_player(writer, &ctx, &player, other_pose)?;
-                                visible.insert(other);
+                        }
+                        Ok(Event::UsedItem { uuid: other, entity_id: other_entity }) if other == uuid => {
+                            writer.queue(&play::EntityEvent { entity_id: other_entity, status: 9 })?;
+                        }
+                        Ok(Event::Swing { uuid: other, entity_id: other_entity, times })
+                            if other != uuid && visible.contains(&other) =>
+                        {
+                            for _ in 0..times {
+                                writer.queue(&play::SwingAnimation {
+                                    entity_id: other_entity,
+                                    hand: 0,
+                                    kind: 1,
+                                    duration: 6,
+                                })?;
                             }
                         }
-                    }
-                    Ok(Event::SkinParts { uuid: other, entity_id: other_entity, parts })
-                        if other != uuid && visible.contains(&other) =>
-                    {
-                        writer.queue(&skin_parts_metadata(other_entity, parts))?;
-                    }
-                    Ok(Event::BlocksChanged { by, changes }) if by != uuid => {
-                        send_block_changes(writer, &view, changes)?;
-                    }
-                    Ok(Event::BlockBroken { by, position, state }) if by != uuid && view.has_block(position) => {
-                        writer.queue(&play::LevelEvent {
-                            event: play::level_event::BLOCK_BROKEN,
-                            position,
-                            data: state as i32,
-                            global: false,
-                        })?;
-                    }
-                    Ok(Event::UsingItem { uuid: other, entity_id: other_entity, hand })
-                        if other == uuid || visible.contains(&other) =>
-                    {
-                        let flags = hand.map_or(0, |h| 1 | if h == 1 { 2 } else { 0 });
-                        writer.queue(&play::SetEntityData {
-                            entity_id: other_entity,
-                            entries: vec![(play::metadata::HAND_STATES, play::MetadataValue::Byte(flags))],
-                        })?;
-                    }
-                    Ok(Event::UsedItem { uuid: other, entity_id: other_entity }) if other == uuid => {
-                        writer.queue(&play::EntityEvent { entity_id: other_entity, status: 9 })?;
-                    }
-                    Ok(Event::Swing { uuid: other, entity_id: other_entity, times })
-                        if other != uuid && visible.contains(&other) =>
-                    {
-                        for _ in 0..times {
+                        Ok(Event::Animate { uuid: other, entity_id: other_entity, hand, kind, duration })
+                            if other == uuid || visible.contains(&other) =>
+                        {
                             writer.queue(&play::SwingAnimation {
                                 entity_id: other_entity,
-                                hand: 0,
-                                kind: 1,
-                                duration: 6,
+                                hand,
+                                kind,
+                                duration,
                             })?;
                         }
-                    }
-                    Ok(Event::Animate { uuid: other, entity_id: other_entity, hand, kind, duration })
-                        if other == uuid || visible.contains(&other) =>
-                    {
-                        writer.queue(&play::SwingAnimation {
-                            entity_id: other_entity,
-                            hand,
-                            kind,
-                            duration,
-                        })?;
-                    }
-                    Ok(Event::Equipment { uuid: other, entity_id: other_entity, slots })
-                        if other != uuid && visible.contains(&other) =>
-                    {
-                        writer.queue(&play::SetEquipment {
-                            entity_id: other_entity,
-                            slots,
-                        })?;
-                    }
-                    Ok(Event::PlayerLeft { uuid: other, entity_id: other_entity }) if other != uuid => {
-                        if visible.remove(&other) {
-                            writer.queue(&play::RemoveEntities { entity_ids: vec![other_entity] })?;
+                        Ok(Event::Equipment { uuid: other, entity_id: other_entity, slots })
+                            if other != uuid && visible.contains(&other) =>
+                        {
+                            writer.queue(&play::SetEquipment {
+                                entity_id: other_entity,
+                                slots,
+                            })?;
                         }
-                        writer.queue(&play::PlayerInfoRemove { uuids: vec![other] })?;
+                        Ok(Event::PlayerLeft { uuid: other, entity_id: other_entity }) if other != uuid => {
+                            if visible.remove(&other) {
+                                writer.queue(&play::RemoveEntities { entity_ids: vec![other_entity] })?;
+                            }
+                            writer.queue(&play::PlayerInfoRemove { uuids: vec![other] })?;
+                        }
+                        Ok(_) => {}
+                        Err(broadcast::error::RecvError::Lagged(missed)) => {
+                            debug!("{} missed {missed} events", me.profile.name);
+                        }
+                        Err(broadcast::error::RecvError::Closed) => bail!("server shutting down"),
                     }
-                    Ok(_) => {}
-                    Err(broadcast::error::RecvError::Lagged(missed)) => {
-                        debug!("{} missed {missed} events", me.profile.name);
-                    }
-                    Err(broadcast::error::RecvError::Closed) => bail!("server shutting down"),
                 }
             }
-        }
         writer.flush().await?;
     }
 }

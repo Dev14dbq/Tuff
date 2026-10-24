@@ -94,6 +94,8 @@ pub struct Extra {
     pub ender: Vec<Option<ItemStack>>,
     /// Known recipes (`recipeBook.recipes`).
     pub recipes: Vec<String>,
+    /// What the player rode (`RootVehicle`).
+    pub root_vehicle: Option<Compound>,
 }
 
 /// Container slot of each equipment key.
@@ -294,6 +296,10 @@ impl Store {
                     .collect(),
                 _ => Vec::new(),
             },
+            root_vehicle: match root.get("RootVehicle") {
+                Some(Tag::Compound(c)) => Some(c.clone()),
+                _ => None,
+            },
         };
         let dimension = match root.get("Dimension") {
             Some(Tag::String(d)) => d.clone(),
@@ -408,6 +414,14 @@ impl Store {
                         .collect(),
                 ),
             );
+        }
+        match &saved.extra.root_vehicle {
+            Some(v) => {
+                root.insert("RootVehicle", Tag::Compound(v.clone()));
+            }
+            None => {
+                root.remove("RootVehicle");
+            }
         }
         if saved.vitals.effects.is_empty() {
             root.remove("active_effects");

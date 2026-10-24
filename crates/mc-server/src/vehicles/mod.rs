@@ -399,12 +399,32 @@ pub fn interact(
     ctx: &ServerContext,
     actor: Actor,
     e: &mut Entity,
-    hand: i32,
-    attack: bool,
+    (hand, attack): (i32, bool),
+    leashed: &[Entity],
     outcome: &mut Outcome,
     fresh: &mut Vec<Entity>,
 ) {
     let id = e.id;
+    // Leads: boats take them and hold them.
+    if !attack {
+        let held = crate::held::held(ctx, actor.uuid, hand);
+        let leash_held = held.as_ref().map(|h| (h.name.as_str(), h.slot));
+        if crate::decor::leash::use_on(
+            ctx,
+            e,
+            (actor.uuid, actor.game_mode, actor.sneaking),
+            leash_held,
+            leashed,
+            fresh,
+        ) {
+            outcome.events.push(Event::Swing {
+                uuid: actor.uuid,
+                entity_id: actor.entity_id,
+                times: 1,
+            });
+            return;
+        }
+    }
     if attack {
         let amount = {
             let held = crate::held::held(ctx, actor.uuid, 0);
@@ -695,21 +715,53 @@ mod tests {
             0.0,
         );
         let (mut outcome, mut fresh) = (Outcome::default(), Vec::new());
-        interact(&ctx, actor(0), &mut e, 0, false, &mut outcome, &mut fresh);
+        interact(
+            &ctx,
+            actor(0),
+            &mut e,
+            (0, false),
+            &[],
+            &mut outcome,
+            &mut fresh,
+        );
         let Kind::Vehicle(v) = &e.kind else { panic!() };
         assert_eq!(v.riders, vec![4]);
         // One seat only.
         let mut other = actor(0);
         other.entity_id = 5;
-        interact(&ctx, other, &mut e, 0, false, &mut outcome, &mut fresh);
+        interact(
+            &ctx,
+            other,
+            &mut e,
+            (0, false),
+            &[],
+            &mut outcome,
+            &mut fresh,
+        );
         let Kind::Vehicle(v) = &e.kind else { panic!() };
         assert_eq!(v.riders, vec![4]);
         // Five bare-handed punches (10 each) break it; it drops itself.
         for _ in 0..4 {
-            interact(&ctx, actor(0), &mut e, 0, true, &mut outcome, &mut fresh);
+            interact(
+                &ctx,
+                actor(0),
+                &mut e,
+                (0, true),
+                &[],
+                &mut outcome,
+                &mut fresh,
+            );
             assert!(!e.removed);
         }
-        interact(&ctx, actor(0), &mut e, 0, true, &mut outcome, &mut fresh);
+        interact(
+            &ctx,
+            actor(0),
+            &mut e,
+            (0, true),
+            &[],
+            &mut outcome,
+            &mut fresh,
+        );
         assert!(e.removed);
         assert_eq!(fresh.len(), 1);
         let Kind::Item { item, .. } = fresh[0].kind else {
@@ -768,17 +820,41 @@ mod tests {
         // Sneaking opens the chest.
         let mut sneaker = actor(0);
         sneaker.sneaking = true;
-        interact(&ctx, sneaker, &mut e, 0, false, &mut outcome, &mut fresh);
+        interact(
+            &ctx,
+            sneaker,
+            &mut e,
+            (0, false),
+            &[],
+            &mut outcome,
+            &mut fresh,
+        );
         assert!(outcome.open.take().is_some());
         // Otherwise the player gets in; there is one seat.
-        interact(&ctx, actor(0), &mut e, 0, false, &mut outcome, &mut fresh);
+        interact(
+            &ctx,
+            actor(0),
+            &mut e,
+            (0, false),
+            &[],
+            &mut outcome,
+            &mut fresh,
+        );
         assert!(outcome.open.take().is_none());
         let Kind::Vehicle(v) = &e.kind else { panic!() };
         assert_eq!(v.riders, vec![4]);
         // Full: the next one opens the chest instead.
         let mut other = actor(0);
         other.entity_id = 5;
-        interact(&ctx, other, &mut e, 0, false, &mut outcome, &mut fresh);
+        interact(
+            &ctx,
+            other,
+            &mut e,
+            (0, false),
+            &[],
+            &mut outcome,
+            &mut fresh,
+        );
         let (key, kind) = outcome.open.take().unwrap();
         assert_eq!((key, kind.slots), (crate::containers::entity_key(e.id), 27));
         // The rider's inventory key opens it too.

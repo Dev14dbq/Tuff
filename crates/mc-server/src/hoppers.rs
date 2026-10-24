@@ -374,6 +374,11 @@ fn behavior(
                     leftover: None,
                     wear: 1,
                 }
+            } else if crate::decor::leash::snip_at(ctx, front) {
+                Behavior::Done {
+                    leftover: None,
+                    wear: 1,
+                }
             } else {
                 // Else the sheep, mooshrooms and leads in front.
                 crate::dispense::behavior(level, name, stack, p, facing)

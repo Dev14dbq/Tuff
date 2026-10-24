@@ -682,6 +682,7 @@ fn gear(ctx: &ServerContext, name: &str) -> Option<Gear> {
         item: ctx.items.id(&format!("minecraft:{name}"))?,
         count: 1,
         damage: 0,
+        components: Default::default(),
     })
 }
 
@@ -879,19 +880,47 @@ fn is_monster(e: &Entity) -> bool {
     matches!(&e.kind, Kind::Mob(m) if m.species.category() == Category::Monster)
 }
 
-/// Marks monsters that are too far from every player for removal; returns
-/// their ids.
-pub fn despawn(entities: &mut [Entity], targets: &[Target], difficulty: i32) -> Vec<i32> {
+/// Marks the mobs that despawn (minecraft.wiki, "Mob spawning",
+/// "Despawning") for removal; returns their ids. On peaceful every monster
+/// goes. Otherwise a monster that is not persistent (named, tamed, it picked
+/// something up), not leashed (`leashed` holds those ids) and neither riding
+/// nor ridden goes at once beyond 128 blocks of every player, and beyond 32
+/// blocks with one chance in 800 a tick once it has been idle for 600 ticks;
+/// a player within 32 blocks keeps it from being idle.
+pub fn despawn(
+    entities: &mut [Entity],
+    targets: &[Target],
+    difficulty: i32,
+    leashed: &std::collections::HashSet<i32>,
+) -> Vec<i32> {
+    let riding: std::collections::HashSet<i32> = entities
+        .iter()
+        .flat_map(|e| match &e.kind {
+            Kind::Mob(m) => m.riders.clone(),
+            Kind::Vehicle(v) => v.riders.clone(),
+            _ => Vec::new(),
+        })
+        .collect();
     let mut gone = Vec::new();
     for e in entities.iter_mut() {
-        let Kind::Mob(m) = &e.kind else {
+        let id = e.id;
+        let Kind::Mob(m) = &mut e.kind else {
             continue;
         };
-        if m.species.category() != Category::Monster
-            || m.persistent
+        if m.species.category() != Category::Monster || e.removed {
+            continue;
+        }
+        if difficulty == 0 {
+            e.removed = true;
+            gone.push(id);
+            continue;
+        }
+        if m.persistent
             || m.custom_name.is_some()
+            || m.owner.is_some()
             || !m.riders.is_empty()
-            || e.removed
+            || riding.contains(&id)
+            || leashed.contains(&id)
         {
             continue;
         }
@@ -903,13 +932,13 @@ pub fn despawn(entities: &mut [Entity], targets: &[Target], difficulty: i32) -> 
                     + (t.pos[2] - e.pos[2]).powi(2)
             })
             .fold(f64::MAX, f64::min);
-        // Beyond 128 blocks at once; beyond 32 after half a minute, one
-        // chance in 800 each tick.
-        let go =
-            nearest > 128.0 * 128.0 || (m.age > 600 && nearest > 32.0 * 32.0 && below(800) == 0);
-        if go || difficulty == 0 {
+        if nearest < 32.0 * 32.0 {
+            m.idle = 0;
+            continue;
+        }
+        if nearest > 128.0 * 128.0 || (m.idle > 600 && below(800) == 0) {
             e.removed = true;
-            gone.push(e.id);
+            gone.push(id);
         }
     }
     gone
@@ -993,9 +1022,9 @@ mod tests {
 
     #[test]
     fn far_monsters_go_and_animals_stay() {
-        let mk = |species, pos: [f64; 3], age: u32| {
+        let mk = |species, pos: [f64; 3], idle: i32| {
             let mut m = Mob::new(species, 5);
-            m.age = age;
+            m.idle = idle;
             Entity {
                 id: 1,
                 uuid: 1,
@@ -1014,8 +1043,36 @@ mod tests {
             mk(Species::Zombie, [10.0, 0.0, 0.0], 10),
             mk(Species::Cow, [200.0, 0.0, 0.0], 10),
         ];
-        let gone = despawn(&mut v, &[player], 2);
+        let none = std::collections::HashSet::new();
+        let gone = despawn(&mut v, std::slice::from_ref(&player), 2, &none);
         assert_eq!(gone.len(), 1);
         assert!(v[0].removed && !v[1].removed && !v[2].removed);
+        // Named, leashed or idle-but-near mobs stay; peaceful takes them all.
+        let named = |mut e: Entity| {
+            if let Kind::Mob(m) = &mut e.kind {
+                m.custom_name = Some("Bob".into());
+            }
+            e
+        };
+        let mut v = vec![
+            named(mk(Species::Zombie, [200.0, 0.0, 0.0], 10)),
+            mk(Species::Zombie, [0.0, 0.0, 200.0], 10),
+            mk(Species::Skeleton, [20.0, 0.0, 0.0], 5000),
+        ];
+        v[1].id = 2;
+        v[2].id = 3;
+        let leashed: std::collections::HashSet<i32> = [2].into_iter().collect();
+        for _ in 0..5000 {
+            assert!(despawn(&mut v, std::slice::from_ref(&player), 2, &leashed).is_empty());
+        }
+        assert!(matches!(&v[2].kind, Kind::Mob(m) if m.idle == 0));
+        assert_eq!(despawn(&mut v, &[player], 0, &leashed).len(), 3);
+        // Far and idle: sooner or later.
+        let mut v = vec![mk(Species::Zombie, [50.0, 0.0, 0.0], 601)];
+        let mut ticks = 0;
+        while despawn(&mut v, &[Target::at(9, 9, [0.0; 3])], 2, &none).is_empty() {
+            ticks += 1;
+            assert!(ticks < 100_000);
+        }
     }
 }

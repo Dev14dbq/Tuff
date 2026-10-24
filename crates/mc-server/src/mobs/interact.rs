@@ -85,62 +85,31 @@ fn tame(ctx: &ServerContext, e: &mut Entity, by: &Actor) {
     fx::status(ctx, id, 7);
 }
 
-/// Whether a lead goes on this mob: animals (a wolf only while calm).
-fn leashable(m: &mc_entity::Mob) -> bool {
-    m.species.category() == mc_entity::mob::Category::Creature
-        && !(m.species == Species::Wolf && m.anger > 0)
-        && m.dying.is_none()
-}
-
-/// Leads (minecraft.wiki, "Lead"): the holder's use takes the lead off,
-/// shears cut it, a lead in hand ties the mob to the player. Whether the
-/// use went to a lead.
-fn leads(ctx: &ServerContext, e: &mut Entity, by: &Actor, name: &str, hslot: usize) -> bool {
-    use crate::decor::leash::{self, Holder};
-    let Kind::Mob(m) = &e.kind else {
-        return false;
-    };
-    let holder = lock(&ctx.leashes).links.get(&e.id).copied();
-    let drop = by.game_mode != 1;
-    if holder == Some(Holder::Player(by.uuid)) || holder.is_some() && name == "minecraft:shears" {
-        leash::unleash(ctx, e.id, e.pos, drop);
-        let sound = if name == "minecraft:shears" {
-            "item.shears.snip"
-        } else {
-            "item.lead.untied"
-        };
-        fx::sound(ctx, sound, fx::category::NEUTRAL, e.pos, 1.0, 1.0);
-        return true;
-    }
-    if name != "minecraft:lead" || holder.is_some() || !leashable(m) {
-        return false;
-    }
-    leash::attach(ctx, e.id, Holder::Player(by.uuid));
-    consume(ctx, by, hslot);
-    fx::sound(
-        ctx,
-        "item.lead.tied",
-        fx::category::NEUTRAL,
-        e.pos,
-        1.0,
-        1.0,
-    );
-    true
-}
-
 /// A player used the held item on a mob.
-pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
+pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: &[Entity]) {
     let id = e.id;
     let pos = e.pos;
     let held = crate::held::held(ctx, by.uuid, hand);
     let name = held.as_ref().map_or("", |h| h.name.as_str()).to_owned();
     let hslot = held.as_ref().map_or(0, |h| h.slot);
     let item = held.as_ref().map(|h| h.stack.item);
-    if leads(ctx, e, by, &name, hslot) {
+    if name.ends_with("_spawn_egg") && super::eggs::breed_with_egg(ctx, e, by, &name, hslot) {
         swing(ctx, by);
         return;
     }
-    if name.ends_with("_spawn_egg") && super::eggs::breed_with_egg(ctx, e, by, &name, hslot) {
+    // Leads come first: snipping, tying to it, letting go, tying it.
+    let leash_held = held.as_ref().map(|_| (name.as_str(), hslot));
+    let mut leads = Vec::new();
+    let leashing = crate::decor::leash::use_on(
+        ctx,
+        e,
+        (by.uuid, by.game_mode, by.sneaking),
+        leash_held,
+        others,
+        &mut leads,
+    );
+    crate::decor::spawn_all(ctx, leads);
+    if leashing {
         swing(ctx, by);
         return;
     }
@@ -269,6 +238,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
             item,
             count: 1,
             damage: 0,
+            components: Default::default(),
         });
         m.charge = 120;
         m.nav.stop();
@@ -434,6 +404,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
                 item,
                 count: 1,
                 damage: 0,
+                components: Default::default(),
             });
             consume(ctx, by, hslot);
             fx::sound(
@@ -458,6 +429,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
                 item,
                 count: 1,
                 damage: 0,
+                components: Default::default(),
             });
             consume(ctx, by, hslot);
             fx::sound(
@@ -624,11 +596,13 @@ pub fn pick_up(
             item,
             count,
             damage,
+            ref components,
             ..
         } = entities[j].kind
         else {
             continue;
         };
+        let components = components.clone();
         let item_id = entities[j].id;
         let Kind::Mob(m) = &mut entities[i].kind else {
             continue;
@@ -649,6 +623,7 @@ pub fn pick_up(
                 item,
                 count: 1,
                 damage: 0,
+                components: Default::default(),
             });
             m.charge = 120;
         } else if m.can_pick_up {
@@ -676,6 +651,7 @@ pub fn pick_up(
                 item,
                 count: 1,
                 damage,
+                components,
             });
             m.drop_chance[s] = 2.0;
             m.persistent = true;

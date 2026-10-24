@@ -574,10 +574,10 @@ mod component_tests {
         let mut gear: [Option<ItemStack>; 6] = Default::default();
         gear[1] = Some(shield.clone());
         let stand = entity(Kind::Hung(Hung {
-            decor: Decor::Stand(Stand {
-                gear: Box::new(gear),
+            decor: Decor::Stand(Box::new(Stand {
+                gear,
                 ..Stand::default()
-            }),
+            })),
             facing: 0,
             yaw: 0.0,
             anchor: [0; 3],

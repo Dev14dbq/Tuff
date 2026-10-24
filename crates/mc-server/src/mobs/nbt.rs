@@ -78,14 +78,12 @@ fn gear(ctx: &ServerContext, tag: &Tag) -> Option<Gear> {
         return None;
     };
     let item = ctx.items.id(&mc_command::args::full_id(string(c, "id")?))?;
-    let damage = match c.get("components") {
-        Some(Tag::Compound(comps)) => mc_protocol::components::Components::from_nbt(comps).0,
-        _ => 0,
-    };
+    let stack = mc_protocol::components::ItemStack::from_nbt_with(c, item);
     Some(Gear {
         item,
-        count: int(c, "count").unwrap_or(1),
-        damage,
+        count: int(c, "count").unwrap_or(1).max(1),
+        damage: stack.damage,
+        components: stack.components,
     })
 }
 
@@ -231,27 +229,8 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
             m.conversion = v;
         }
     }
-    if let Some(Tag::Compound(b)) = nbt.get("carriedBlockState")
-        && let Some(name) = string(b, "Name")
-    {
-        let props: Vec<(String, String)> = match b.get("Properties") {
-            Some(Tag::Compound(p)) => p
-                .iter()
-                .filter_map(|(k, v)| match v {
-                    Tag::String(v) => Some((k.to_string(), v.clone())),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        let refs: Vec<(&str, &str)> = props
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-        m.carried = ctx
-            .data
-            .blocks
-            .state_id(&mc_command::args::full_id(name), &refs);
+    if let Some(Tag::Compound(b)) = nbt.get("carriedBlockState") {
+        m.carried = crate::persist::state_from(ctx, b);
     }
     if let Some(Tag::Compound(v)) = nbt.get("VillagerData") {
         m.villager = Some((
@@ -276,6 +255,39 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
             }
         }
     }
+    if let Some(u) = uuid(nbt, "LoveCause") {
+        m.love_by = Some(u);
+    }
+    if let Some(Tag::List(rot)) = nbt.get("Rotation") {
+        let angle = |i: usize| match rot.get(i) {
+            Some(Tag::Float(v)) => Some(*v),
+            _ => None,
+        };
+        if let Some(yaw) = angle(0) {
+            m.yaw = yaw;
+            m.head_yaw = yaw;
+        }
+        if let Some(pitch) = angle(1) {
+            m.pitch = pitch;
+        }
+    }
+    if let Some(Tag::Double(v)) = nbt.get("fall_distance") {
+        m.fall_distance = *v;
+    }
+    if let Some(Tag::List(attrs)) = nbt.get("attributes") {
+        for a in attrs {
+            let Tag::Compound(a) = a else { continue };
+            let (Some(id), Some(Tag::Double(base))) = (string(a, "id"), a.get("base")) else {
+                continue;
+            };
+            match id.trim_start_matches("minecraft:") {
+                "max_health" => m.set_max_health(*base as f32),
+                "movement_speed" => m.speed_attr = *base,
+                "jump_strength" => m.jump_strength = *base,
+                _ => {}
+            }
+        }
+    }
     if let Some(v) = float(nbt, "Health") {
         m.health = v.min(m.max_health).max(0.0);
     }
@@ -285,13 +297,21 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
 /// The mob's own keys, for `/data` (next to the entity's common ones).
 pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
     crate::bosses::save_nbt(m, c);
+    c.insert("fall_distance", Tag::Double(m.fall_distance));
+    c.insert("Fire", Tag::Short(m.burning.max(-1) as i16));
     c.insert("Health", Tag::Float(m.health));
+    c.insert("HurtTime", Tag::Short(m.invulnerable.max(0) as i16));
+    c.insert("HurtByTimestamp", Tag::Int(0));
     c.insert(
         "DeathTime",
         Tag::Short(m.dying.map_or(0, |left| 20 - left) as i16),
     );
-    c.insert("HurtTime", Tag::Short(m.invulnerable.max(0) as i16));
-    c.insert("Fire", Tag::Short(m.burning.max(-1) as i16));
+    c.insert("AbsorptionAmount", Tag::Float(0.0));
+    c.insert("attributes", attributes(m));
+    c.insert("FallFlying", Tag::Byte(0));
+    let mut brain = Compound::new();
+    brain.insert("memories", Tag::Compound(Compound::new()));
+    c.insert("Brain", Tag::Compound(brain));
     c.insert("NoAI", Tag::Byte(i8::from(m.no_ai)));
     c.insert("PersistenceRequired", Tag::Byte(i8::from(m.persistent)));
     c.insert("LeftHanded", Tag::Byte(i8::from(m.left_handed)));
@@ -304,19 +324,36 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
         if let Some(g) = &m.gear[s]
             && let Some(id) = ctx.items.name(g.item)
         {
-            let mut item = Compound::new();
-            item.insert("id", Tag::String(id.to_owned()));
-            item.insert("count", Tag::Int(g.count));
-            eq.insert(name, Tag::Compound(item));
+            let stack = mc_protocol::components::ItemStack {
+                damage: g.damage,
+                components: g.components.clone(),
+                ..mc_protocol::components::ItemStack::new(g.item, g.count)
+            };
+            eq.insert(name, Tag::Compound(stack.to_nbt_with(id)));
         }
     }
     if !eq.is_empty() {
         c.insert("equipment", Tag::Compound(eq));
     }
+    // Only the chances that differ from a new mob's.
+    let usual = Mob::new(m.species, 1).drop_chance;
+    let mut dc = Compound::new();
+    for (name, s) in SLOTS {
+        if m.drop_chance[s] != usual[s] {
+            dc.insert(name, Tag::Float(m.drop_chance[s]));
+        }
+    }
+    if !dc.is_empty() {
+        c.insert("drop_chances", Tag::Compound(dc));
+    }
     let s = m.species;
     if s.ageable() {
         c.insert("Age", Tag::Int(m.baby_age));
+        c.insert("ForcedAge", Tag::Int(0));
         c.insert("InLove", Tag::Int(m.love));
+        if let Some(by) = m.love_by {
+            c.insert("LoveCause", uuid_tag(by));
+        }
     }
     if s.has_babies() && !s.ageable() {
         c.insert("IsBaby", Tag::Byte(i8::from(m.is_baby())));
@@ -405,12 +442,63 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
         }
         Species::ZombieVillager => {
             c.insert("ConversionTime", Tag::Int(m.conversion));
+            let (kind, profession, level) = m
+                .villager
+                .clone()
+                .unwrap_or_else(|| ("minecraft:plains".to_owned(), None, 1));
+            let mut data = Compound::new();
+            data.insert("level", Tag::Int(level));
+            data.insert(
+                "profession",
+                Tag::String(format!(
+                    "minecraft:{}",
+                    profession.as_deref().unwrap_or("none")
+                )),
+            );
+            data.insert("type", Tag::String(kind));
+            c.insert("VillagerData", Tag::Compound(data));
+        }
+        Species::Enderman => {
+            if let Some(state) = m.carried
+                && let Some(b) = crate::persist::state_tag(ctx, state)
+            {
+                c.insert("carriedBlockState", Tag::Compound(b));
+            }
         }
         Species::Skeleton => {
             c.insert("StrayConversionTime", Tag::Int(m.conversion));
         }
         _ => {}
     }
+}
+
+/// The attributes the mob keeps, with their base values.
+fn attributes(m: &Mob) -> Tag {
+    let s = m.species;
+    let mut list = vec![
+        ("max_health", f64::from(m.max_health)),
+        ("movement_speed", m.speed_attr),
+        ("follow_range", s.follow_range()),
+    ];
+    if s.attack_damage() > 0.0 {
+        list.push(("attack_damage", f64::from(s.attack_damage())));
+    }
+    if s.armor() > 0.0 {
+        list.push(("armor", f64::from(s.armor())));
+    }
+    if s.horse() {
+        list.push(("jump_strength", m.jump_strength));
+    }
+    Tag::List(
+        list.into_iter()
+            .map(|(id, base)| {
+                let mut a = Compound::new();
+                a.insert("id", Tag::String(format!("minecraft:{id}")));
+                a.insert("base", Tag::Double(base));
+                Tag::Compound(a)
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

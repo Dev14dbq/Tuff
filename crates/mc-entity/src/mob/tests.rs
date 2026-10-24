@@ -136,6 +136,7 @@ fn a_helmet_keeps_the_sun_off() {
         item: 9,
         count: 1,
         damage: 0,
+        components: Default::default(),
     });
     let out = run(&mut z, &[], 100, true);
     assert!(!out.iter().any(|m| matches!(m, MobEvent::Hurt { .. })));
@@ -234,6 +235,7 @@ fn a_skeleton_with_a_bow_shoots() {
         item: 2,
         count: 1,
         damage: 0,
+        components: Default::default(),
     });
     let p = player([10.5, 0.0, 0.5]);
     let out = run(&mut e, &[p], 200, false);

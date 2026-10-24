@@ -446,6 +446,7 @@ fn horse_armor(ctx: &ServerContext, e: &mut Entity, item: i32) -> bool {
         item,
         count: 1,
         damage: 0,
+        components: Default::default(),
     });
     m.persistent = true;
     fx::sound(
@@ -630,6 +631,7 @@ fn equip(ctx: &ServerContext, name: &str, stack: &ItemStack, front: Position) ->
             item: stack.item,
             count: 1,
             damage: stack.damage,
+            components: stack.components.clone(),
         });
         // Put on by a dispenser: it always drops, and the mob stays.
         m.drop_chance[gear_slot] = 2.0;

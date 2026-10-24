@@ -656,6 +656,15 @@ impl World {
             .extend(list);
     }
 
+    /// Queues entities as if a chunk read had found them.
+    #[cfg(test)]
+    pub fn loaded_entities_for_test(&self, list: Vec<Tag>) {
+        self.loaded_entities
+            .lock()
+            .expect("loaded entities lock")
+            .extend(list);
+    }
+
     /// Entities stored with chunks read since the last call, as NBT.
     pub fn take_loaded_entities(&self) -> Vec<Tag> {
         std::mem::take(&mut *self.loaded_entities.lock().expect("loaded entities lock"))
@@ -690,6 +699,42 @@ impl World {
             warn!("creating {}: {err}", storage.dir().display());
         }
         let mut written = 0;
+        // Entities that went where no chunk was read: added to what that
+        // chunk's file already keeps (in place of their older selves).
+        let strays: Vec<(i32, i32)> = by_chunk
+            .keys()
+            .copied()
+            .filter(|k| !chunks.contains_key(k))
+            .collect();
+        for (x, z) in strays {
+            let ours = by_chunk.remove(&(x, z)).unwrap_or_default();
+            let uuid = |t: &Tag| match t {
+                Tag::Compound(c) => c.get("UUID").cloned(),
+                _ => None,
+            };
+            let mine: Vec<Option<Tag>> = ours.iter().map(uuid).collect();
+            let mut list = match storage.read_chunk(x, z) {
+                Ok(Some(Tag::Compound(root))) => match root.get("Entities") {
+                    Some(Tag::List(l)) => l.clone(),
+                    _ => Vec::new(),
+                },
+                _ => Vec::new(),
+            };
+            list.retain(|t| !mine.contains(&uuid(t)));
+            list.extend(ours);
+            let mut root = mc_nbt::Compound::new();
+            root.insert("DataVersion", Tag::Int(self.data_version));
+            root.insert("Position", Tag::IntArray(vec![x, z]));
+            root.insert("Entities", Tag::List(list));
+            let mut bytes = Vec::new();
+            let result = mc_nbt::write_named("", &Tag::Compound(root), &mut bytes)
+                .map_err(anyhow::Error::from)
+                .and_then(|()| Ok(storage.write_chunk(x, z, &bytes, now)?));
+            match result {
+                Ok(()) => written += 1,
+                Err(err) => warn!("saving entities of chunk {x},{z}: {err:#}"),
+            }
+        }
         for (x, z) in keys {
             let list = by_chunk.remove(&(x, z)).unwrap_or_default();
             if chunks.get(&(x, z)) != Some(&list) {

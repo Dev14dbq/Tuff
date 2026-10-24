@@ -209,6 +209,7 @@ pub fn saddle(ctx: &ServerContext, e: &mut Entity, item: i32) -> bool {
         item,
         count: 1,
         damage: 0,
+        components: Default::default(),
     });
     m.persistent = true;
     let sound = if m.species == Species::Pig {

@@ -272,7 +272,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         if count.is_multiple_of(UNLOAD_EVERY) {
             for d in &dimensions {
                 let dropped = d.world.unload_unused();
-                crate::dropped::unloaded(d, &dropped);
+                crate::persist::unloaded(d, &dropped);
                 if !dropped.is_empty() {
                     debug!(
                         "unloaded {} chunks of {}, {} in memory",
@@ -391,7 +391,7 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
     ctx: &'a ServerContext,
     control: Option<&'a mut TickControl>,
 ) {
-    crate::dropped::load_stored(ctx);
+    crate::persist::load_stored(ctx);
     let now = lock(&ctx.time).age;
     for (p, id) in ctx.world.take_woken() {
         match id.as_str() {
@@ -675,7 +675,7 @@ pub fn throw_item_aged(
     let entity = mc_entity::Entity {
         id: ctx.next_entity_id(),
         uuid: crate::util::random_uuid(),
-        kind: mc_entity::Kind::stack(&stack, 40),
+        kind: thrown_by(ctx, pose, &stack),
         pos: [pose.x, pose.y + 1.62 - 0.3, pose.z],
         vel: [
             -yaw.sin() * pitch.cos() * speed + angle.cos() * spread,
@@ -689,6 +689,23 @@ pub fn throw_item_aged(
     };
     let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
     lock(&ctx.entities).push(entity);
+}
+
+/// A stack a player drops, with them as its `Thrower` (the player standing
+/// where `pose` says).
+fn thrown_by(
+    ctx: &ServerContext,
+    pose: crate::context::Pose,
+    stack: &mc_protocol::packets::play::ItemStack,
+) -> mc_entity::Kind {
+    let mut kind = mc_entity::Kind::stack(stack, 40);
+    if let mc_entity::Kind::Item { thrower, .. } = &mut kind {
+        *thrower = lock(&ctx.players)
+            .values()
+            .find(|p| p.pose == Some(pose))
+            .map(|p| p.profile.uuid);
+    }
+    kind
 }
 
 /// Drops a stack around a player in a random direction (a death scatters the

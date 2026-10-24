@@ -25,6 +25,7 @@ const ARMOR: usize = 1;
 fn gear_stack(g: &Option<Gear>) -> Option<ItemStack> {
     g.as_ref().map(|g| ItemStack {
         damage: g.damage,
+        components: g.components.clone(),
         ..ItemStack::new(g.item, g.count)
     })
 }
@@ -152,6 +153,7 @@ pub fn mirror(ctx: &ServerContext, entities: &mut [Entity]) {
                     item: s.item,
                     count: s.count,
                     damage: s.damage,
+                    components: s.components,
                 });
                 changed = true;
             }

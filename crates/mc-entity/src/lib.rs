@@ -35,6 +35,12 @@ pub enum Kind {
         pickup_delay: i32,
         /// Hit points (5); explosions and fire take them.
         health: f32,
+        /// The only player who may pick it up (`Owner`), if any.
+        owner: Option<u128>,
+        /// Who dropped it (`Thrower`).
+        thrower: Option<u128>,
+        /// An `Age` of -32768: it never ages, so never despawns.
+        ageless: bool,
     },
     /// Arrows, thrown things, fireworks and bobbers.
     Projectile(extra::Projectile),
@@ -68,6 +74,9 @@ impl Kind {
             components: Default::default(),
             pickup_delay,
             health: 5.0,
+            owner: None,
+            thrower: None,
+            ageless: false,
         }
     }
 
@@ -80,6 +89,9 @@ impl Kind {
             components: stack.components.clone(),
             pickup_delay,
             health: 5.0,
+            owner: None,
+            thrower: None,
+            ageless: false,
         }
     }
 

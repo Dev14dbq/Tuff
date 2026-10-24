@@ -142,6 +142,24 @@ impl MobState {
             .or_default()
             .push(Pending::Use { target, by, hand });
     }
+
+    /// Health of the villager or wandering trader with this id.
+    pub fn villager_health(&self, id: i32) -> f32 {
+        lock(&self.villagers).get(&id).copied().unwrap_or(20.0)
+    }
+
+    /// Sets it (`None`: forgets it, the villager left the world).
+    pub fn set_villager_health(&self, id: i32, health: Option<f32>) {
+        let mut all = lock(&self.villagers);
+        match health {
+            Some(h) if h < 20.0 => {
+                all.insert(id, h);
+            }
+            _ => {
+                all.remove(&id);
+            }
+        }
+    }
 }
 
 /// A player clicked a mob: a hit, or a use of the held item.
@@ -434,13 +452,22 @@ fn apply_pending(ctx: &ServerContext, entities: &mut [Entity], pending: Vec<Pend
                 hurt::harm(ctx, e, &h);
             }
             Pending::Use { target, by, hand } => {
+                // Those on leads (and what holds them), for leads to move.
+                let leashed: Vec<Entity> = {
+                    let links = lock(&ctx.leashes);
+                    entities
+                        .iter()
+                        .filter(|e| links.links.contains_key(&e.id))
+                        .cloned()
+                        .collect()
+                };
                 let Some(e) = entities.iter_mut().find(|e| e.id == target) else {
                     continue;
                 };
                 if dist_sq(by.pos, e.pos) > REACH_SQ {
                     continue;
                 }
-                interact::used(ctx, e, &by, hand);
+                interact::used(ctx, e, &by, hand, &leashed);
             }
         }
     }
@@ -638,8 +665,14 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     out.fresh.extend(spawned);
     let made = spawner::tick(ctx, &ground, &entities, &targets, difficulty);
     out.fresh.extend(made);
-    out.removed
-        .extend(spawn::despawn(&mut entities, &targets, difficulty));
+    let leashed: std::collections::HashSet<i32> =
+        lock(&ctx.leashes).links.keys().copied().collect();
+    out.removed.extend(spawn::despawn(
+        &mut entities,
+        &targets,
+        difficulty,
+        &leashed,
+    ));
     drop(ground);
 
     for e in entities.iter().filter(|e| e.removed) {
