@@ -99,6 +99,10 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
         }
         return true;
     }
+    // Flying mobs (flying-mobs): a sulfur cube that holds a block flies off.
+    if let Some(done) = super::cube::hit(ctx, e, h) {
+        return done;
+    }
     let id = e.id;
     let Kind::Mob(m) = &mut e.kind else {
         return false;
@@ -133,6 +137,12 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     {
         super::infest::notify_hurt(m);
     }
+    // Flying mobs (flying-mobs): a snowball takes a tenth off the time a
+    // ghastling has left to grow.
+    if m.species == Species::HappyGhast && m.is_baby() && h.kind == "minecraft:thrown" {
+        m.baby_age -= m.baby_age / 10;
+        m.dirty = true;
+    }
     let (armor, toughness) = armor_of(ctx, m);
     let amount = crate::damage::armor_reduce(h.amount, armor, toughness, h.kind);
     // Land animals (Cursor): a curled armadillo takes what is left after
@@ -143,6 +153,10 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
         amount
     };
     let amount = crate::effects::reduce_damage(&m.effects, amount, h.kind);
+    // Flying mobs (flying-mobs)
+    let Some(amount) = super::air::filter(ctx, m, h, amount) else {
+        return false;
+    };
     if !m.hurt(amount, h.by.or(h.player.map(|_| -1))) {
         return false;
     }
@@ -156,6 +170,7 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
             fx::sound(ctx, "entity.enderman.teleport", 5, e.pos, 1.0, 1.0);
         }
     }
+    super::air::hurt(ctx, e, h);
     let Kind::Mob(m) = &mut e.kind else {
         return false;
     };
@@ -392,7 +407,18 @@ pub fn mob_attacks(
             knockback: 0.0,
             disables_shield: disables,
         };
-        if crate::combat::hurt_player(ctx, t.uuid, &hit).is_some() {
+        let landed = crate::combat::hurt_player(ctx, t.uuid, &hit);
+        // A shield stuns a ravager half the time.
+        if landed == Some(false)
+            && species == Species::Ravager
+            && let Kind::Mob(m) = &mut entities[i].kind
+        {
+            mc_entity::mob::illager::stun(m);
+            if m.quirks.illager.stun_tick > 0 {
+                fx::status(ctx, id, 39);
+            }
+        }
+        if landed.is_some() {
             if throws {
                 let (dx, dz) = (t.pos[0] - pos[0], t.pos[2] - pos[2]);
                 let len = dx.hypot(dz).max(1e-4);
@@ -447,6 +473,8 @@ fn bite_effect(species: Species, difficulty: i32) -> Option<(&'static str, i32)>
         Species::CaveSpider if difficulty >= 2 => ("poison", if difficulty == 3 { 15 } else { 7 }),
         Species::Husk => ("hunger", 7 * difficulty),
         Species::WitherSkeleton => ("wither", 10),
+        // Flying mobs (flying-mobs): a bee's sting.
+        Species::Bee if difficulty >= 2 => ("poison", if difficulty == 3 { 18 } else { 10 }),
         _ => return None,
     };
     (seconds > 0).then_some((effect, seconds))
@@ -837,6 +865,7 @@ pub fn die(
     {
         spawn_stack(ctx, pos, item, 1, 0, Default::default());
     }
+    super::air::died(ctx, e);
     // Big slimes split into smaller ones.
     let Kind::Mob(m) = &mut e.kind else {
         return;

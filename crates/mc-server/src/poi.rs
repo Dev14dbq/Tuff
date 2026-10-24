@@ -55,6 +55,11 @@ const KINDS: &[(&str, i32)] = &[
 ];
 
 /// Tickets a point of this type starts with.
+/// Whether a point is a beehive or a bee nest.
+pub fn is_hive_kind(kind: &str) -> bool {
+    kind == BEEHIVE || kind == BEE_NEST
+}
+
 pub fn tickets_of(kind: &str) -> i32 {
     KINDS
         .iter()

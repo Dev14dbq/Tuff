@@ -2,7 +2,9 @@
 //! section of each mob's page).
 
 use super::aqua::Act as Aq;
+use super::air;
 use super::goals::{Avoidee, Goal, Ranged, Slot};
+use super::illager::{Act as Cast, Spell};
 use super::land::Act;
 use super::{Brain, JUMP, LOOK, MOVE, Species, TARGET};
 
@@ -173,6 +175,11 @@ fn perch(p: u8, bed: bool, speed: f64) -> Slot {
 
 fn leap(p: u8, up: f64) -> Slot {
     slot(p, MOVE | JUMP, Goal::Leap { up })
+}
+
+/// A flyer's wander: float about in the air near itself.
+fn air(p: u8, rise: f64, range: f64) -> Slot {
+    slot(p, MOVE, Goal::Hover { range, rise })
 }
 
 /// The animals of a farm: float, panic, breed, tempt, follow the parents,
@@ -855,6 +862,181 @@ pub(super) fn brain(species: Species) -> Brain {
         | Axolotl | Frog | Tadpole | Guardian | ElderGuardian | Nautilus | ZombieNautilus => {
             aquatic(species)
         }
+        // Flying mobs (flying-mobs)
+        Bat => (
+            vec![
+                slot(0, MOVE | JUMP, Goal::Air(air::Act::Roost { spot: None })),
+                air(1, 0.0, 6.0),
+            ],
+            vec![],
+        ),
+        Bee => (
+            vec![
+                melee(0, 1.4, false),
+                slot(2, MOVE, Goal::Air(air::Act::Errand)),
+                breed(3, 1.0),
+                tempt(4, 1.25),
+                follow_parent(5, 1.25),
+                air(8, 0.0, 8.0),
+                look(9, 6.0),
+            ],
+            vec![hurt_by(1, true)],
+        ),
+        Allay => (
+            vec![slot(0, MOVE, Goal::Air(air::Act::Follow)), air(4, 0.0, 8.0)],
+            vec![],
+        ),
+        Breeze => (
+            vec![
+                slot(1, MOVE | LOOK, Goal::Air(air::Act::Shoot { timer: 60 })),
+                slot(2, MOVE | JUMP, Goal::Air(air::Act::Bounce { timer: 0 })),
+                stroll(5, 0.8),
+                look(10, 4.0),
+                random_look(10),
+            ],
+            vec![hurt_by(1, false), nearest(1, 24.0, false)],
+        ),
+        HappyGhast => (
+            vec![tempt(3, 1.0), follow_parent(4, 1.0), air(5, 0.0, 12.0)],
+            vec![],
+        ),
+        Bogged | Parched => (
+            vec![
+                float(),
+                slot(2, MOVE, Goal::FleeSun { speed: 1.0 }),
+                avoid(3, Avoidee::Kinds(WOLVES), 6.0, 1.0, 1.2),
+                ranged(4, Ranged::Bow, 20, 15.0),
+                melee(4, 1.2, false),
+                stroll(5, 1.0),
+                look(6, 8.0),
+                random_look(6),
+            ],
+            vec![
+                hurt_by(1, false),
+                nearest(2, 16.0, false),
+                prey(3, IRON_GOLEMS, false, false),
+            ],
+        ),
+        Giant => (
+            vec![
+                float(),
+                melee(2, 1.0, false),
+                stroll(7, 1.0),
+                look(8, 8.0),
+                random_look(8),
+            ],
+            vec![hurt_by(1, true), nearest(2, 16.0, false)],
+        ),
+        Shulker => (
+            vec![
+                slot(1, MOVE | LOOK, Goal::Air(air::Act::Peek { left: 0 })),
+                look(10, 8.0),
+            ],
+            vec![hurt_by(1, false), nearest(2, 16.0, false)],
+        ),
+        Creaking => (
+            vec![
+                float(),
+                slot(2, MOVE | LOOK, Goal::Air(air::Act::Freeze)),
+                melee(3, 1.0, false),
+                stroll(5, 0.8),
+                look(8, 8.0),
+                random_look(8),
+            ],
+            vec![nearest(1, 32.0, false)],
+        ),
+        CopperGolem => (
+            vec![
+                float(),
+                slot(2, MOVE, Goal::Air(air::Act::Errand)),
+                stroll(5, 1.0),
+                look(7, 6.0),
+                random_look(8),
+            ],
+            vec![],
+        ),
+        SulfurCube => (
+            vec![slot(1, MOVE | LOOK | JUMP, Goal::Hop { delay: 0 })],
+            vec![],
+        ),
+        // Illagers and their kin
+        Pillager => (
+            vec![
+                float(),
+                cast(
+                    3,
+                    Cast::Crossbow {
+                        stage: 0,
+                        timer: 0,
+                        seen: 0,
+                    },
+                ),
+                stroll(8, 0.6),
+                look(9, 15.0),
+                random_look(10),
+            ],
+            raider_targets(16.0),
+        ),
+        Vindicator => (
+            vec![
+                float(),
+                melee(4, 1.0, false),
+                stroll(8, 0.6),
+                look(9, 3.0),
+                random_look(10),
+            ],
+            raider_targets(12.0),
+        ),
+        Evoker => (
+            vec![
+                float(),
+                avoid(2, Avoidee::Players, 8.0, 0.6, 1.0),
+                spell(4, Spell::Vexes),
+                spell(5, Spell::Fangs),
+                spell(6, Spell::Wololo),
+                stroll(8, 0.6),
+                look(9, 3.0),
+                random_look(10),
+            ],
+            raider_targets(12.0),
+        ),
+        Illusioner => (
+            vec![
+                float(),
+                spell(4, Spell::Mirror),
+                spell(5, Spell::Blindness),
+                ranged(6, Ranged::Bow, 20, 15.0),
+                stroll(8, 0.6),
+                look(9, 3.0),
+                random_look(10),
+            ],
+            raider_targets(18.0),
+        ),
+        Vex => (
+            vec![
+                float(),
+                cast(4, Cast::Charge),
+                cast(8, Cast::Drift),
+                look(9, 3.0),
+            ],
+            // The evoker's target is set on it by the world.
+            vec![hurt_by(1, true)],
+        ),
+        Ravager => (
+            vec![
+                float(),
+                melee(4, 1.0, true),
+                stroll(5, 0.4),
+                look(6, 6.0),
+                random_look(10),
+            ],
+            vec![
+                hurt_by(2, true),
+                nearest(3, 32.0, false),
+                prey(4, &[], true, false),
+                prey(4, IRON_GOLEMS, false, false),
+            ],
+        ),
     };
     Brain { goals, targets }
 }
@@ -1077,4 +1259,25 @@ fn aquatic(species: Species) -> (Vec<Slot>, Vec<Slot>) {
         ),
         _ => (vec![], vec![]),
     }
+}
+
+fn cast(p: u8, act: Cast) -> Slot {
+    slot(p, MOVE | LOOK, Goal::Illager(act))
+}
+
+/// A spell takes no hold of moving or looking: it starts even while the
+/// caster flees, and the caster stands still while it casts.
+fn spell(p: u8, spell: Spell) -> Slot {
+    slot(p, 0, Goal::Illager(Cast::Cast { spell, left: 0 }))
+}
+
+/// Raiders fight back with their friends and go for players, villagers and
+/// wandering traders, and iron golems.
+fn raider_targets(range: f64) -> Vec<Slot> {
+    vec![
+        hurt_by(1, true),
+        nearest(2, range, false),
+        prey(3, &[], true, false),
+        prey(3, IRON_GOLEMS, false, false),
+    ]
 }

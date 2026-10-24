@@ -135,6 +135,8 @@ fn breaking_an_infested_block_lets_a_silverfish_out_unless_silk_touch() {
         sneaking: false,
     };
     set_state(&ctx, [1, -60, 0], infested);
+    crate::interact::dig(&ctx, actor, 0, at, 1, 1);
+    lock(&ctx.time).age += 200;
     crate::interact::dig(&ctx, actor, 2, at, 1, 1);
     assert_eq!(block(&ctx, [1, -60, 0]), "minecraft:air");
     assert_eq!(count_of(&ctx, Species::Silverfish), 1);
@@ -148,6 +150,8 @@ fn breaking_an_infested_block_lets_a_silverfish_out_unless_silk_touch() {
         let slot = hands.hand_slot(0);
         hands.slots[slot] = Some(pick);
     }
+    crate::interact::dig(&ctx, actor, 0, at, 1, 2);
+    lock(&ctx.time).age += 200;
     crate::interact::dig(&ctx, actor, 2, at, 1, 2);
     assert_eq!(block(&ctx, [1, -60, 0]), "minecraft:air");
     assert_eq!(count_of(&ctx, Species::Silverfish), 0);

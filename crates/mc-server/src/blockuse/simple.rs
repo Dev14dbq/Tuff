@@ -469,6 +469,8 @@ fn hive(c: &Click, outcome: &mut Outcome) -> bool {
         _ => return false,
     }
     set(c.ctx, outcome, c.at, c.with("honey_level", "0"));
+    // Flying mobs (flying-mobs): the bees mind the theft unless smoked.
+    crate::mobs::bees::disturbed(c.ctx, c.at, Some(c.actor.uuid), true);
     true
 }
 

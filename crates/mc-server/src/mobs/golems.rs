@@ -55,6 +55,20 @@ pub fn is_head(name: &str) -> bool {
     )
 }
 
+/// The chest and the weathering stage (0 to 3) a block of copper makes,
+/// waxed or not.
+fn copper_stage(name: &str) -> Option<(&'static str, u8)> {
+    let name = name.strip_prefix("minecraft:")?;
+    let name = name.strip_prefix("waxed_").unwrap_or(name);
+    Some(match name {
+        "copper_block" => ("minecraft:copper_chest", 0),
+        "exposed_copper" => ("minecraft:exposed_copper_chest", 1),
+        "weathered_copper" => ("minecraft:weathered_copper_chest", 2),
+        "oxidized_copper" => ("minecraft:oxidized_copper_chest", 3),
+        _ => return None,
+    })
+}
+
 /// A golem the blocks around a head make.
 #[derive(Debug, PartialEq)]
 pub struct Build {
@@ -63,11 +77,23 @@ pub struct Build {
     pub cells: Vec<Position>,
     /// The block the golem stands at.
     pub foot: Position,
+    /// A copper golem's body becomes this chest (block name) and the golem
+    /// weathers to this stage.
+    pub copper: Option<(&'static str, u8)>,
 }
 
 /// The golem a head at `head` completes with the blocks around it, if any
 /// (the head itself is not looked at, so a dispenser can ask first).
 pub fn find(ctx: &ServerContext, head: Position) -> Option<Build> {
+    // A block of copper under the head: a copper golem on a copper chest.
+    if let Some((chest, stage)) = name_at(ctx, add(head, [0, -1, 0], 1)).and_then(copper_stage) {
+        return Some(Build {
+            species: Species::CopperGolem,
+            cells: vec![head],
+            foot: head,
+            copper: Some((chest, stage)),
+        });
+    }
     for d in DIRS {
         let (body, foot) = (add(head, d, 1), add(head, d, 2));
         // Two snow blocks under it.
@@ -76,6 +102,7 @@ pub fn find(ctx: &ServerContext, head: Position) -> Option<Build> {
                 species: Species::SnowGolem,
                 cells: vec![head, body, foot],
                 foot,
+                copper: None,
             });
         }
         // Or a T: arms across the body, the corners free.
@@ -102,6 +129,7 @@ pub fn find(ctx: &ServerContext, head: Position) -> Option<Build> {
                     species: Species::IronGolem,
                     cells: vec![head, body, foot, left, right],
                     foot,
+                    copper: None,
                 });
             }
         }
@@ -127,6 +155,13 @@ fn raise(ctx: &ServerContext, build: &Build) -> Event {
         }
         level.set_block(c, ctx.shapes.air());
     }
+    if let Some((chest, _)) = build.copper {
+        let below = add(build.foot, [0, -1, 0], 1);
+        if let Some(state) = ctx.data.blocks.default_state(chest) {
+            level.set_block(below, state);
+            crate::containers::placed(ctx, below, state);
+        }
+    }
     let at = [
         f64::from(build.foot.x) + 0.5,
         f64::from(build.foot.y) + 0.05,
@@ -137,6 +172,9 @@ fn raise(ctx: &ServerContext, build: &Build) -> Event {
         m.yaw = 0.0;
         m.head_yaw = 0.0;
         m.quirks.player_made = true;
+        if let Some((_, stage)) = build.copper {
+            m.quirks.air.weather = stage;
+        }
     }
     crate::tick::spawn_entity(ctx, e);
     Event::BlocksChanged {

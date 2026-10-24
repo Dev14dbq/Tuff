@@ -39,6 +39,8 @@ pub fn kind_of(block: &str) -> Option<Kind> {
     match block {
         "minecraft:chest" => Some(kind("minecraft:chest", "Chest")),
         "minecraft:trapped_chest" => Some(kind("minecraft:trapped_chest", "Chest")),
+        // Flying mobs (flying-mobs): a copper golem's chests.
+        b if b.ends_with("copper_chest") => Some(kind("minecraft:copper_chest", "Copper Chest")),
         "minecraft:barrel" => Some(kind("minecraft:barrel", "Barrel")),
         "minecraft:furnace" => Some(other(
             "minecraft:furnace",
@@ -551,7 +553,8 @@ fn lid(ctx: &ServerContext, p: Position, viewers: usize) {
         }
         return;
     }
-    let chest = matches!(name, "minecraft:chest" | "minecraft:trapped_chest");
+    let chest = matches!(name, "minecraft:chest" | "minecraft:trapped_chest")
+        || name.ends_with("copper_chest");
     let shulker = name.ends_with("shulker_box");
     if !chest && !shulker {
         return;

@@ -153,7 +153,20 @@ impl Shapes {
         mark(tagged("minecraft:stairs"), Kind::Stairs);
         mark(tagged("minecraft:beds"), Kind::Bed);
         mark(
-            vec!["minecraft:chest".into(), "minecraft:trapped_chest".into()],
+            [
+                "",
+                "exposed_",
+                "weathered_",
+                "oxidized_",
+                "waxed_",
+                "waxed_exposed_",
+                "waxed_weathered_",
+                "waxed_oxidized_",
+            ]
+            .iter()
+            .map(|p| format!("minecraft:{p}copper_chest"))
+            .chain(["minecraft:chest".into(), "minecraft:trapped_chest".into()])
+            .collect(),
             Kind::Chest,
         );
         let all_names: Vec<String> = registry.keys().cloned().collect();

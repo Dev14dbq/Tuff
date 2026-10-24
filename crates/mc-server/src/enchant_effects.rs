@@ -79,7 +79,7 @@ pub fn full(id: &str) -> String {
 }
 
 /// Whether `id` is `want`: an id, `#tag` or a list of ids.
-fn is(ctx: &ServerContext, registry: &str, want: &Value, id: &str) -> bool {
+pub(crate) fn is(ctx: &ServerContext, registry: &str, want: &Value, id: &str) -> bool {
     match want {
         Value::String(s) => match s.strip_prefix('#') {
             Some(t) => tag(ctx, registry, t).iter().any(|m| *m == id),

@@ -236,7 +236,10 @@ pub fn place(
             if face == 0 { "true" } else { "false" },
         );
     }
-    if matches!(name, "minecraft:chest" | "minecraft:trapped_chest") && !p.sneaking {
+    if (matches!(name, "minecraft:chest" | "minecraft:trapped_chest")
+        || name.ends_with("copper_chest"))
+        && !p.sneaking
+    {
         // Joins a single chest beside it facing the same way: as the left
         // half if that chest is clockwise of its facing, else the right.
         let facing = blocks.property(state, "facing").unwrap_or("north");

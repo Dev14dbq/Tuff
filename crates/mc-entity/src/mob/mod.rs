@@ -15,9 +15,12 @@
 pub mod aqua;
 mod body;
 pub use body::ENDERMITE_LIFE;
+pub mod air;
 mod brains;
 mod chores;
+pub mod cube;
 pub mod goals;
+pub mod illager;
 pub mod land;
 pub mod species;
 
@@ -284,6 +287,15 @@ pub enum Missile {
     Spit,
     /// A snow golem's snowball.
     Snowball,
+    // Flying mobs (flying-mobs)
+    /// An arrow with an effect (name, ticks it lasts on the victim).
+    Tipped(&'static str, i32),
+    /// A breeze's wind charge.
+    WindCharge,
+    /// A shulker's homing bullet.
+    ShulkerBullet,
+    /// A pillager's crossbow bolt (an arrow, shot harder).
+    Bolt,
 }
 
 /// What a mob did that the world must act on.
@@ -445,6 +457,22 @@ pub enum MobEvent {
     Grace {
         player: i32,
     },
+    /// Evoker fangs come up at these spots (facing in degrees, delay).
+    Fangs(Vec<([f64; 3], f32, i32)>),
+    /// An evoker calls up three vexes.
+    SummonVexes,
+    /// An evoker turns this blue sheep red.
+    Wololo {
+        sheep: i32,
+    },
+    /// An illusioner blinds its target.
+    Blind {
+        target: i32,
+    },
+    /// A ravager roars: what stands near is hurt and thrown back.
+    Roar,
+    /// A ravager walked into something: leaves and crops there give way.
+    Crush,
 }
 
 /// State only some kinds keep: the silverfish's call, the endermite's
@@ -468,6 +496,10 @@ pub struct Quirks {
     pub land: land::Land,
     // Aquatic (Claude)
     pub aqua: aqua::Aqua,
+    // Flying mobs (flying-mobs)
+    pub air: air::Air,
+    /// Illagers, vexes and ravagers.
+    pub illager: illager::Illager,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -901,6 +933,8 @@ impl Mob {
                     (w, h)
                 }
             }
+            // Flying mobs (flying-mobs): a ghastling is 0.95 across.
+            Species::HappyGhast if self.is_baby() => (0.95, 0.95),
             _ if self.is_baby() => (w / 2.0, h / 2.0),
             _ => (w, h),
         }
@@ -1119,11 +1153,16 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
     body::life(m, &mut b, s, out);
     land::pulse(m, &b, s, out);
     aqua::pulse(m, &mut b, s, out);
+    air::pulse(m, &b, s, out);
+    illager::pulse(m, &mut b, s, out);
     if m.is_dead() || entity.removed {
         return;
     }
-    if m.no_ai {
+    if m.no_ai || illager::held(m) {
         body::physics(m, &mut b, s, None, out);
+    } else if cube::of(m).is_some() {
+        // A sulfur cube holding a block only rolls.
+        cube::roll(m, &mut b, s, out);
     } else {
         // Goals.
         m.look = None;
@@ -1132,6 +1171,7 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
         goals::run(&mut brain.targets, m, &mut b, s, out);
         goals::run(&mut brain.goals, m, &mut b, s, out);
         m.brain = brain;
+        illager::freeze(m);
         if m.target != target {
             m.target_since = m.age;
             if m.target.is_none() && m.stared {

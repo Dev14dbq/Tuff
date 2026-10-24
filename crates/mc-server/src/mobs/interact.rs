@@ -138,6 +138,11 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
             send_now(ctx, e);
             return;
         }
+}
+
+    if super::air::used(ctx, e, by, &name, hslot, held.as_ref().map(|h| &h.stack)) {
+        swing(ctx, by);
+        return;
     }
     let Kind::Mob(m) = &mut e.kind else {
         return;
@@ -450,7 +455,10 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
             goat_eat(ctx, m, pos);
             return;
         }
-        let may_breed = m.baby_age == 0 && !m.in_love() && (!species.tameable() || m.is_tame());
+        let may_breed = m.baby_age == 0
+            && !m.in_love()
+            && (!species.tameable() || m.is_tame())
+            && species != Species::SulfurCube;
         if may_breed {
             m.fall_in_love(Some(by.uuid));
             consume(ctx, by, hslot);
@@ -461,7 +469,10 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         }
     }
     // Aquatic (Claude): a golden dandelion stops a baby growing, or lets it go on.
-    if name == "minecraft:golden_dandelion" && (m.is_baby() || species == Species::Tadpole) {
+    if name == "minecraft:golden_dandelion"
+        && (m.is_baby() || species == Species::Tadpole)
+        && species != Species::SulfurCube
+    {
         let locked = !m.quirks.aqua.age_locked;
         m.quirks.aqua.age_locked = locked;
         if locked {
@@ -573,6 +584,32 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         }
         return;
     }
+    // A harness on a grown happy ghast.
+    if name.ends_with("_harness")
+        && species == Species::HappyGhast
+        && !m.is_baby()
+        && m.gear[slot::BODY].is_none()
+    {
+        if let Some(item) = item {
+            m.gear[slot::BODY] = Some(Gear {
+                item,
+                count: 1,
+                damage: 0,
+                components: Default::default(),
+            });
+            consume(ctx, by, hslot);
+            fx::sound(
+                ctx,
+                "entity.happy_ghast.equip",
+                fx::category::NEUTRAL,
+                pos,
+                1.0,
+                1.0,
+            );
+            send_equipment(ctx, e);
+        }
+        return;
+    }
     // An owner's empty-handed (or non-food) use: sit or stand.
     if owner && matches!(species, Species::Wolf | Species::Cat | Species::Parrot) && !by.sneaking {
         m.sitting = !m.sitting;
@@ -589,6 +626,8 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         Species::Camel | Species::CamelHusk => m.saddled() && !m.is_baby(),
         Species::Nautilus => m.saddled() && m.is_tame() && !m.is_baby(),
         Species::ZombieNautilus => m.saddled() && m.is_tame() && !m.is_baby(),
+        // Flying mobs (flying-mobs): a harnessed happy ghast.
+        Species::HappyGhast => m.gear[slot::BODY].is_some() && !m.is_baby(),
         Species::Horse | Species::Donkey | Species::Mule => !m.is_baby(),
         _ => false,
     };
@@ -626,6 +665,29 @@ pub fn shear(ctx: &ServerContext, e: &mut Entity) -> bool {
         send_now(ctx, e);
         return true;
     }
+    if super::cube::shear(ctx, e) {
+        return true;
+    }
+    let Kind::Mob(m) = &mut e.kind else {
+        return false;
+    };
+    // Flying mobs (flying-mobs): shears take a happy ghast's harness off.
+    if species == Species::HappyGhast
+        && let Some(g) = m.gear[slot::BODY].take()
+    {
+        m.dirty = true;
+        fx::sound(
+            ctx,
+            "entity.happy_ghast.unequip",
+            fx::category::PLAYERS,
+            pos,
+            1.0,
+            1.0,
+        );
+        crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 2.0, pos[2]], g.item, 1);
+        send_equipment(ctx, e);
+        return true;
+    }
     // Aquatic (Claude): shears take a nautilus's armor off first, then the saddle.
     if matches!(species, Species::Nautilus | Species::ZombieNautilus) {
         let worn = if m.gear[slot::BODY].is_some() {
@@ -652,6 +714,31 @@ pub fn shear(ctx: &ServerContext, e: &mut Entity) -> bool {
             super::ride::eject(ctx, e);
         }
         send_equipment(ctx, e);
+        return true;
+    }
+    // Flying mobs (flying-mobs): a bogged gives up its two mushrooms, once.
+    if species == Species::Bogged && !m.quirks.air.sheared && !m.is_baby() {
+        m.quirks.air.sheared = true;
+        let drops = [m.below(2), m.below(2)];
+        fx::sound(
+            ctx,
+            "entity.bogged.shear",
+            fx::category::PLAYERS,
+            pos,
+            1.0,
+            1.0,
+        );
+        for red in drops {
+            let name = if red == 0 {
+                "minecraft:brown_mushroom"
+            } else {
+                "minecraft:red_mushroom"
+            };
+            if let Some(item) = ctx.items.id(name) {
+                crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 1.4, pos[2]], item, 1);
+            }
+        }
+        send_now(ctx, e);
         return true;
     }
     if m.can_shear() {
@@ -701,14 +788,14 @@ pub fn shear(ctx: &ServerContext, e: &mut Entity) -> bool {
 }
 
 /// Sends the mob's metadata now.
-fn send_now(ctx: &ServerContext, e: &mut Entity) {
+pub(super) fn send_now(ctx: &ServerContext, e: &mut Entity) {
     if let Kind::Mob(m) = &mut e.kind {
         m.dirty = false;
     }
     super::hurt::send_data(ctx, e);
 }
 
-fn send_equipment(ctx: &ServerContext, e: &Entity) {
+pub(super) fn send_equipment(ctx: &ServerContext, e: &Entity) {
     if let Kind::Mob(m) = &e.kind {
         fx::emit(
             ctx,

@@ -1171,7 +1171,10 @@ mod tests {
         ctx.entities.lock().unwrap().push(e);
         crate::stats::load(&ctx, 1);
         let snap = complete(&ctx, 1, id, 0, 1).expect("trade");
-        assert_eq!(crate::stats::get(&ctx, 1, crate::stats::CUSTOM, "traded_with_villager"), 1);
+        assert_eq!(
+            crate::stats::get(&ctx, 1, crate::stats::CUSTOM, "traded_with_villager"),
+            1
+        );
         assert_eq!(snap.offers[0].uses, 1);
         assert_eq!(snap.xp, 10);
         let mut e = ctx.entities.lock().unwrap().pop().unwrap();

@@ -146,9 +146,20 @@ pub enum Shot {
         /// Only seen: no fire, no damage.
         visual: bool,
     },
+    /// Evoker fangs: ticks before they snap, ticks they stay after, and
+    /// whether they have bitten (clients are told once).
+    Fangs {
+        warmup: i32,
+        life: i32,
+        snapped: bool,
+    },
     /// A wind charge: a player's (thrown) or a breeze's.
     WindCharge {
         breeze: bool,
+    },
+    /// A shulker's bullet, homing on the entity with this id.
+    ShulkerBullet {
+        target: i32,
     },
     /// A fishing bobber; `hooked` is the entity it pulls.
     Bobber {

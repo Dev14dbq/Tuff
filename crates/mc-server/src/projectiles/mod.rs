@@ -9,8 +9,10 @@
 //! [`shoot`].
 
 pub mod arrow;
+pub mod bullet;
 pub mod crossbow;
 pub mod eye;
+pub mod fangs;
 pub mod fireball;
 pub mod firework;
 pub mod fishing;
@@ -149,6 +151,7 @@ enum Class {
     Trident,
     Lightning,
     Wind,
+    Bullet,
     Fireball,
     Thrown,
     Eye,
@@ -156,6 +159,7 @@ enum Class {
     Bobber,
     Cloud,
     Boss,
+    Fangs,
 }
 
 /// One tick of a projectile.
@@ -168,11 +172,13 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         Shot::Arrow(_) => Class::Arrow,
         Shot::Lightning { .. } => Class::Lightning,
         Shot::WindCharge { .. } => Class::Wind,
+        Shot::ShulkerBullet { .. } => Class::Bullet,
         Shot::Fireball { .. } => Class::Fireball,
         Shot::Eye { .. } => Class::Eye,
         Shot::Firework(_) => Class::Firework,
         Shot::Bobber { .. } => Class::Bobber,
         Shot::Cloud { .. } => Class::Cloud,
+        Shot::Fangs { .. } => Class::Fangs,
         Shot::WitherSkull { .. } | Shot::DragonFireball | Shot::Breath { .. } => Class::Boss,
         _ => Class::Thrown,
     };
@@ -181,6 +187,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         Class::Trident => trident::tick(t, e),
         Class::Lightning => lightning::tick(t, e),
         Class::Wind => wind::tick(t, e),
+        Class::Bullet => bullet::tick(t, e),
         Class::Fireball => fireball::tick(t, e),
         Class::Thrown => thrown::tick(t, e),
         Class::Eye => eye::tick(t, e),
@@ -188,6 +195,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         Class::Bobber => fishing::tick(t, e),
         Class::Cloud => potions::tick_cloud(t, e),
         Class::Boss => crate::bosses::projectile::tick(t, e),
+        Class::Fangs => fangs::tick(t, e),
     }
     if e.removed {
         return;

@@ -31,6 +31,8 @@ mod holder {
     pub const PIG: i32 = 28;
     pub const CHICKEN: i32 = 30;
     pub const SNIFFER_STATE: i32 = 35;
+    pub const COPPER_GOLEM_STATE: i32 = 37;
+    pub const WEATHERING: i32 = 38;
     pub const ARMADILLO_STATE: i32 = 36;
     // Aquatic (Claude)
     pub const FROG: i32 = 27;
@@ -237,6 +239,76 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             }
         }
         Skeleton => v.push((16, MetadataValue::Boolean(m.conversion >= 0))),
+        // Flying mobs (flying-mobs)
+        Bat => v.push((16, MetadataValue::Byte(i8::from(m.quirks.air.hanging)))),
+        Bee => {
+            let air = &m.quirks.air;
+            v.push((
+                a,
+                MetadataValue::Byte(
+                    if m.anger > 0 { 2 } else { 0 }
+                        | if air.stung { 4 } else { 0 }
+                        | if air.nectar { 8 } else { 0 },
+                ),
+            ));
+            v.push((
+                a + 1,
+                MetadataValue::VarLong(if m.anger > 0 {
+                    now + i64::from(m.anger)
+                } else {
+                    -1
+                }),
+            ));
+        }
+        Allay => {
+            v.push((16, MetadataValue::Boolean(m.quirks.air.dancing)));
+            v.push((17, MetadataValue::Boolean(m.quirks.air.dup_cd == 0)));
+        }
+        HappyGhast => {
+            v.push((a, MetadataValue::Boolean(m.leash.is_some())));
+            v.push((a + 1, MetadataValue::Boolean(m.quirks.air.still > 0)));
+        }
+        Bogged => v.push((16, MetadataValue::Boolean(m.quirks.air.sheared))),
+        Shulker => {
+            v.push((16, MetadataValue::Direction(i32::from(m.quirks.air.face))));
+            v.push((17, MetadataValue::Byte(m.quirks.air.peek as i8)));
+            v.push((18, MetadataValue::Byte(m.quirks.air.color as i8)));
+        }
+        Creaking => {
+            let air = &m.quirks.air;
+            v.push((16, MetadataValue::Boolean(!air.frozen)));
+            v.push((17, MetadataValue::Boolean(air.active)));
+            v.push((18, MetadataValue::Boolean(m.dying.is_some())));
+            v.push((
+                19,
+                MetadataValue::OptPosition(
+                    air.home
+                        .map(|c| mc_protocol::Position::new(c[0], c[1], c[2])),
+                ),
+            ));
+        }
+        CopperGolem => {
+            v.push((
+                16,
+                MetadataValue::Holder(holder::WEATHERING, i32::from(m.quirks.air.weather)),
+            ));
+            v.push((
+                17,
+                MetadataValue::Holder(holder::COPPER_GOLEM_STATE, i32::from(m.quirks.air.state)),
+            ));
+        }
+        SulfurCube => {
+            v.push((17, MetadataValue::Boolean(m.quirks.air.locked)));
+            v.push((
+                19,
+                MetadataValue::VarInt(if m.quirks.air.fuse >= 0 {
+                    mc_entity::mob::cube::FUSE
+                } else {
+                    -1
+                }),
+            ));
+            v.push((20, MetadataValue::Boolean(false)));
+        }
         Creeper => {
             v.push((16, MetadataValue::VarInt(m.swell_dir)));
             v.push((17, MetadataValue::Boolean(m.powered)));
@@ -339,6 +411,21 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
                 ));
             }
         }
+        // Illagers and their kin: 16 is a raider cheering; then a
+        // pillager's loading, a caster's spell. A vex's 16 is its flags
+        // (1: lunging).
+        Pillager | Vindicator | Evoker | Illusioner | Ravager => {
+            let q = &m.quirks.illager;
+            v.push((16, MetadataValue::Boolean(q.celebrating)));
+            match m.species {
+                Pillager => v.push((17, MetadataValue::Boolean(q.charging))),
+                Evoker | Illusioner => {
+                    v.push((17, MetadataValue::Byte(q.spell.map_or(0, |s| s as i8))))
+                }
+                _ => {}
+            }
+        }
+        Vex => v.push((16, MetadataValue::Byte(i8::from(m.quirks.illager.lunging)))),
         _ => {}
     }
     v

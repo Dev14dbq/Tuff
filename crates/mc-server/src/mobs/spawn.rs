@@ -24,6 +24,7 @@ const RANGE: i32 = 8;
 /// Monsters per 289 chunks (17 × 17 around one player), animals likewise.
 const MONSTER_CAP: i32 = 70;
 const CREATURE_CAP: i32 = 10;
+const AMBIENT_CAP: i32 = 15;
 /// Chunks tried for monsters each tick (vanilla tries all of them).
 const MONSTER_TRIES: usize = 3;
 /// Ticks between looks at which chunks are in range.
@@ -52,6 +53,7 @@ struct BiomeSpawns {
     water_ambient: Vec<Entry>,
     underground: Vec<Entry>,
     axolotls: Vec<Entry>,
+    ambient: Vec<Entry>,
     /// Chance of animals when a chunk is generated.
     probability: f64,
 }
@@ -126,6 +128,7 @@ fn load_biomes(ctx: &ServerContext) -> HashMap<String, BiomeSpawns> {
                 water_ambient: entries(&spawns["water_ambient"]),
                 underground: entries(&spawns["underground_water_creature"]),
                 axolotls: entries(&spawns["axolotls"]),
+                ambient: entries(&spawns["ambient"]),
                 probability: attrs["minecraft:gameplay/creature_world_gen_spawn_probability"]
                     .as_f64()
                     .unwrap_or(0.1),
@@ -336,6 +339,14 @@ impl Spots<'_> {
             | Category::WaterAmbient
             | Category::UndergroundWater
             | Category::Axolotls => false,
+            // Bats: in the dark, light 3 or less.
+            Category::Ambient => {
+                self.ctx
+                    .world
+                    .sky_light(p)
+                    .max(self.ctx.world.block_light(p))
+                    <= 3
+            }
             Category::Creature => {
                 // Turtles keep to the beach.
                 if species == Species::Turtle && y >= self.ctx.world.sea_level + 4 {
@@ -367,6 +378,10 @@ impl Spots<'_> {
                 }
                 if species == Species::Slime {
                     return self.slime_fits(x, y, z);
+                }
+                // Sulfur cubes spawn at any light level.
+                if species == Species::SulfurCube {
+                    return true;
                 }
                 if self.ctx.world.block_light(p) > 0 {
                     return false;
@@ -402,6 +417,7 @@ impl Spots<'_> {
             Category::UndergroundWater => &spawns.underground,
             Category::Axolotls => &spawns.axolotls,
             Category::Misc => return,
+            Category::Ambient => &spawns.ambient,
         };
         let x = chunk.0 * 16 + below(16) as i32;
         let z = chunk.1 * 16 + below(16) as i32;
@@ -438,7 +454,10 @@ impl Spots<'_> {
                 let sea = self.ctx.world.sea_level;
                 (sea - 13 + below(14) as i32).min(top)
             }
-            Category::Monster | Category::UndergroundWater | Category::Axolotls => {
+            Category::Monster
+            | Category::Ambient
+            | Category::UndergroundWater
+            | Category::Axolotls => {
                 let min = self.ctx.world.min_y;
                 min + below((top + 2 - min).max(1) as u32) as i32
             }
@@ -572,7 +591,7 @@ fn spawn_round(
     let list = spawner.eligible.clone();
     let chunks: HashSet<(i32, i32)> = list.iter().copied().collect();
     let n = chunks.len() as i32;
-    let (mut creatures, mut monsters) = (0, 0);
+    let (mut creatures, mut monsters, mut bats) = (0, 0, 0);
     let mut water = [0_i32; 4];
     for e in entities.iter() {
         if let Kind::Mob(m) = &e.kind
@@ -585,6 +604,7 @@ fn spawn_round(
             match m.species.category() {
                 Category::Creature => creatures += 1,
                 Category::Monster => monsters += 1,
+                Category::Ambient => bats += 1,
                 Category::Misc => {}
                 c => water[water_slot(c)] += 1,
             }
@@ -667,6 +687,13 @@ fn spawn_round(
             if let Some(b) = in_biome(chunk.0 * 16 + 8, chunk.1 * 16 + 8, biomes) {
                 spots.try_pack(&b, category, chunk, false, &mut out);
             }
+        }
+    }
+    // Bats, every tick like monsters, up to a cap of their own.
+    if bats < AMBIENT_CAP * n / 289 {
+        let chunk = list[below(list.len() as u32) as usize];
+        if let Some(b) = in_biome(chunk.0 * 16 + 8, chunk.1 * 16 + 8, biomes) {
+            spots.try_pack(&b, Category::Ambient, chunk, false, &mut out);
         }
     }
     // Monsters, every tick, in a few chunks picked at random.
@@ -1017,11 +1044,16 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
         }
     }
     let weapon = match species {
-        Skeleton | Stray => Some("bow"),
+        Skeleton | Stray | Bogged | Parched => Some("bow"),
         WitherSkeleton => Some("stone_sword"),
         ZombifiedPiglin => Some("golden_sword"),
         // Land animals (Cursor)
         PiglinBrute => Some("golden_axe"),
+        // Illagers and their kin
+        Pillager => Some("crossbow"),
+        Vindicator => Some("iron_axe"),
+        Vex => Some("iron_sword"),
+        Illusioner => Some("bow"),
         Piglin => Some(if m.below(2) == 0 {
             "crossbow"
         } else {
@@ -1150,10 +1182,13 @@ pub fn despawn(
         };
         // Aquatic (Claude): the water kinds go too, when nobody is about.
         let category = m.species.category();
-        if !(category == Category::Monster || category.water()) || e.removed {
+        if !(matches!(category, Category::Monster | Category::Ambient) || category.water())
+            || e.removed
+        {
             continue;
         }
-        if difficulty == 0 && category == Category::Monster {
+        if difficulty == 0 && category == Category::Monster && m.species != Species::SulfurCube
+        {
             e.removed = true;
             gone.push(id);
             continue;
@@ -1245,7 +1280,7 @@ mod tests {
     fn only_known_species_are_kept() {
         let list = serde_json::json!([
             {"type": "minecraft:cow", "count": 4, "weight": 8},
-            {"type": "minecraft:creaking", "count": 4, "weight": 5},
+            {"type": "minecraft:warden", "count": 4, "weight": 5},
             {"type": "minecraft:zombie", "count": {"min_inclusive": 1, "max_inclusive": 2}, "weight": 90},
         ]);
         let e = entries(&list);

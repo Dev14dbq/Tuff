@@ -19,6 +19,9 @@ pub enum Category {
     UndergroundWater,
     /// Axolotls (`axolotls`).
     Axolotls,
+    /// Bats (flying-mobs): they spawn in the dark to a cap of their own,
+    /// despawn like monsters and give nothing.
+    Ambient,
 }
 
 macro_rules! species {
@@ -120,6 +123,26 @@ species! {
     ElderGuardian => "minecraft:elder_guardian", "Elder Guardian";
     Nautilus => "minecraft:nautilus", "Nautilus";
     ZombieNautilus => "minecraft:zombie_nautilus", "Zombie Nautilus";
+    // Flying mobs (flying-mobs)
+    Bat => "minecraft:bat", "Bat";
+    Bee => "minecraft:bee", "Bee";
+    Allay => "minecraft:allay", "Allay";
+    Breeze => "minecraft:breeze", "Breeze";
+    HappyGhast => "minecraft:happy_ghast", "Happy Ghast";
+    Bogged => "minecraft:bogged", "Bogged";
+    Parched => "minecraft:parched", "Parched";
+    Giant => "minecraft:giant", "Giant";
+    Shulker => "minecraft:shulker", "Shulker";
+    Creaking => "minecraft:creaking", "Creaking";
+    CopperGolem => "minecraft:copper_golem", "Copper Golem";
+    SulfurCube => "minecraft:sulfur_cube", "Sulfur Cube";
+    // Illagers and their kin
+    Pillager => "minecraft:pillager", "Pillager";
+    Vindicator => "minecraft:vindicator", "Vindicator";
+    Evoker => "minecraft:evoker", "Evoker";
+    Illusioner => "minecraft:illusioner", "Illusioner";
+    Vex => "minecraft:vex", "Vex";
+    Ravager => "minecraft:ravager", "Ravager";
 }
 
 /// Which sound of a mob.
@@ -179,6 +202,10 @@ impl Species {
             Cod | Salmon | Pufferfish | TropicalFish => Category::WaterAmbient,
             GlowSquid => Category::UndergroundWater,
             Axolotl => Category::Axolotls,
+            // Flying mobs (flying-mobs)
+            Bee | HappyGhast => Category::Creature,
+            Allay | CopperGolem => Category::Misc,
+            Bat => Category::Ambient,
             _ => Category::Monster,
         }
     }
@@ -246,6 +273,22 @@ impl Species {
             Guardian => (0.85, 0.85),
             ElderGuardian => (1.9975, 1.9975),
             Nautilus | ZombieNautilus => (0.875, 0.95),
+            // Flying mobs (flying-mobs)
+            Bat => (0.5, 0.9),
+            Bee => (0.55, 0.5),
+            Allay => (0.35, 0.6),
+            Breeze => (0.6, 1.77),
+            HappyGhast => (4.0, 4.0),
+            Bogged | Parched => (0.6, 1.99),
+            Giant => (3.6, 12.0),
+            Shulker => (1.0, 1.0),
+            Creaking => (0.9, 2.7),
+            CopperGolem => (0.49, 0.98),
+            SulfurCube => (0.98, 0.98),
+            // Illagers and their kin
+            Pillager | Vindicator | Evoker | Illusioner => (0.6, 1.95),
+            Vex => (0.4, 0.8),
+            Ravager => (1.95, 2.2),
         }
     }
 
@@ -281,6 +324,20 @@ impl Species {
             // Aquatic (Claude)
             Squid | GlowSquid | Dolphin | Cod | Salmon | Pufferfish | TropicalFish => 0.5,
             Guardian | ElderGuardian => 0.5,
+            // Flying mobs (flying-mobs)
+            Bat | Bee | Shulker => 0.5,
+            Allay => 0.6,
+            Breeze => 1.3452 / 1.77,
+            HappyGhast => 0.65,
+            Bogged | Parched => 1.74 / 1.99,
+            Giant => 0.87,
+            Creaking => 2.3 / 2.7,
+            CopperGolem => 0.8125 / 0.98,
+            SulfurCube => 0.625,
+            // Illagers and their kin
+            Pillager | Vindicator | Evoker | Illusioner => 1.62 / 1.95,
+            Vex => 0.51875 / 0.8,
+            Ravager => 2.1 / 2.2,
             _ => 0.85,
         }
     }
@@ -322,6 +379,21 @@ impl Species {
             Tadpole => 6.0,
             ElderGuardian => 80.0,
             Nautilus | ZombieNautilus => 15.0,
+            // Flying mobs (flying-mobs)
+            Bat => 6.0,
+            Bee => 10.0,
+            Allay => 20.0,
+            Breeze | Shulker => 30.0,
+            Bogged | Parched => 16.0,
+            Giant => 100.0,
+            Creaking => 1.0,
+            CopperGolem => 12.0,
+            SulfurCube => 8.0,
+            // Illagers and their kin
+            Pillager | Vindicator | Evoker => 24.0,
+            Illusioner => 32.0,
+            Vex => 14.0,
+            Ravager => 100.0,
             _ => 20.0,
         }
     }
@@ -357,6 +429,21 @@ impl Species {
             Turtle => 0.25,
             Guardian => 0.5,
             ElderGuardian => 0.3,
+            // Flying mobs (flying-mobs)
+            Bee => 0.3,
+            Allay => 0.1,
+            Breeze => 0.63,
+            HappyGhast => 0.05,
+            Giant => 0.5,
+            Shulker => 0.0,
+            Creaking => 0.3,
+            CopperGolem => 0.2,
+            SulfurCube => 0.4,
+            // Illagers and their kin
+            Pillager | Vindicator => 0.35,
+            Evoker | Illusioner => 0.5,
+            Vex => 0.6,
+            Ravager => 0.3,
             _ => 0.25,
         }
     }
@@ -373,6 +460,14 @@ impl Species {
             Wither => 40.0,
             PolarBear => 20.0,
             PiglinBrute => 12.0,
+            // Flying mobs (flying-mobs)
+            Bee | Allay => 48.0,
+            Breeze => 24.0,
+            Creaking => 32.0,
+            // Illagers and their kin
+            Pillager | Ravager => 32.0,
+            Vindicator | Evoker => 12.0,
+            Illusioner => 18.0,
             _ => 16.0,
         }
     }
@@ -405,6 +500,14 @@ impl Species {
             Frog => 10.0,
             Guardian => 6.0,
             ElderGuardian => 8.0,
+            // Flying mobs (flying-mobs)
+            Bee | Allay | Bogged | Parched => 2.0,
+            Giant => 50.0,
+            Creaking => 3.0,
+            // Illagers and their kin
+            Pillager | Vindicator => 5.0,
+            Vex => 4.0,
+            Ravager => 12.0,
             _ => 0.0,
         }
     }
@@ -425,6 +528,9 @@ impl Species {
             Species::IronGolem => 1.0,
             Species::Hoglin | Species::Zoglin => 0.6,
             Species::Squid | Species::GlowSquid => 0.85,
+            // Flying mobs (flying-mobs): a shulker never budges.
+            Species::Shulker => 1.0,
+            Species::Ravager => 0.75,
             _ => 0.0,
         }
     }
@@ -449,6 +555,10 @@ impl Species {
                 | Zoglin
                 | CamelHusk
                 | ZombieNautilus
+                // Flying mobs (flying-mobs)
+                | Bogged
+                | Parched
+                | Giant
         )
     }
 
@@ -457,7 +567,7 @@ impl Species {
         use Species::*;
         matches!(
             self,
-            Zombie | Drowned | ZombieVillager | Skeleton | Stray | Phantom | ZombieNautilus
+            Zombie | Drowned | ZombieVillager | Skeleton | Stray | Phantom | Bogged | ZombieNautilus
         )
     }
 
@@ -487,6 +597,12 @@ impl Species {
                 | Species::Parrot
                 | Species::EnderDragon
                 | Species::Wither
+                // Flying mobs (flying-mobs)
+                | Species::Bat
+                | Species::Bee
+                | Species::Allay
+                | Species::HappyGhast
+                | Species::Vex
         )
     }
 
@@ -504,6 +620,15 @@ impl Species {
                 | Species::SnowGolem
                 | Species::EnderDragon
                 | Species::Wither
+                // Flying mobs (flying-mobs)
+                | Species::Bat
+                | Species::Bee
+                | Species::Allay
+                | Species::HappyGhast
+                | Species::Breeze
+                | Species::Shulker
+                | Species::CopperGolem
+                | Species::Vex
         )
     }
 
@@ -536,6 +661,8 @@ impl Species {
                     | Species::Axolotl
                     | Species::Nautilus
             )
+            // Flying mobs (flying-mobs): small sulfur cubes grow up.
+            || self == Species::SulfurCube
     }
 
     /// Babies of these grow up; zombies and piglins stay babies.
@@ -578,6 +705,9 @@ impl Species {
             Frog => "minecraft:frog_food",
             Nautilus | ZombieNautilus => "minecraft:nautilus_food",
             Dolphin => "minecraft:fishes",
+            // Flying mobs (flying-mobs)
+            Bee => "minecraft:bee_food",
+            SulfurCube => "minecraft:sulfur_cube_food",
             _ => return None,
         })
     }
@@ -591,6 +721,8 @@ impl Species {
             Strider => Some("minecraft:strider_tempt_items"),
             // Land animals (Cursor)
             CamelHusk => Some("minecraft:camel_husk_food"),
+            // Flying mobs (flying-mobs)
+            HappyGhast => Some("minecraft:happy_ghast_tempt_items"),
             Wolf | Parrot => None,
             _ => self.food_tag(),
         }
@@ -643,15 +775,37 @@ impl Species {
     pub fn skeleton(self) -> bool {
         matches!(
             self,
-            Species::Skeleton | Species::Stray | Species::WitherSkeleton
+            Species::Skeleton
+                | Species::Stray
+                | Species::WitherSkeleton
+                // Flying mobs (flying-mobs)
+                | Species::Bogged
+                | Species::Parched
         )
+    }
+
+    /// Illagers: pillagers, vindicators, evokers, illusioners.
+    pub fn illager(self) -> bool {
+        matches!(
+            self,
+            Species::Pillager | Species::Vindicator | Species::Evoker | Species::Illusioner
+        )
+    }
+
+    /// Those that fight in raids: illagers, witches and ravagers.
+    pub fn raider(self) -> bool {
+        self.illager() || matches!(self, Species::Witch | Species::Ravager)
     }
 
     /// Arthropods: Bane of Arthropods hurts them more and slows them.
     pub fn arthropod(self) -> bool {
         matches!(
             self,
-            Species::Spider | Species::CaveSpider | Species::Silverfish | Species::Endermite
+            Species::Spider
+                | Species::CaveSpider
+                | Species::Silverfish
+                | Species::Endermite
+                | Species::Bee
         )
     }
 
@@ -660,7 +814,7 @@ impl Species {
     pub fn xp_reward(self) -> (i32, i32) {
         use Species::*;
         match self.category() {
-            Category::Misc => (0, 0),
+            Category::Misc | Category::Ambient => (0, 0),
             Category::Creature
             | Category::WaterCreature
             | Category::WaterAmbient
@@ -669,7 +823,14 @@ impl Species {
             Category::Monster => match self {
                 Blaze => (10, 10),
                 Endermite => (3, 3),
-                PiglinBrute => (20, 20),
+
+                // Flying mobs (flying-mobs)
+                Breeze => (10, 10),
+                Creaking => (0, 0),
+                SulfurCube => (1, 2),
+                PiglinBrute | Ravager => (20, 20),
+                Evoker => (10, 10),
+                // Aquatic (Claude)
                 Guardian | ElderGuardian => (10, 10),
                 Wither => (50, 50),
                 // The dragon's experience comes out as it dies.
@@ -693,7 +854,10 @@ impl Species {
             _ => self.path(),
         };
         let ok = match which {
-            Sound::Ambient => !matches!(self, Creeper | Slime | MagmaCube | IronGolem),
+            Sound::Ambient => !matches!(
+                self,
+                Creeper | Slime | MagmaCube | IronGolem | Bee | CopperGolem | SulfurCube
+            ),
             Sound::Step => matches!(
                 self,
                 Cow | Mooshroom
@@ -728,6 +892,12 @@ impl Species {
                     | Camel
                     | CamelHusk
                     | Sniffer
+                    // Flying mobs (flying-mobs)
+                    | Bogged
+                    | Parched
+                    | Creaking
+                    | CopperGolem
+                    | Ravager
             ),
             Sound::Hurt | Sound::Death => true,
         };
@@ -767,6 +937,8 @@ impl Species {
             | Species::Llama
             | Species::TraderLlama => 0.8,
             Species::Slime | Species::MagmaCube => 0.4,
+            // Flying mobs (flying-mobs)
+            Species::Bat => 0.1,
             _ => 1.0,
         }
     }

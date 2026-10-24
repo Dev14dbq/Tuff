@@ -126,7 +126,9 @@ fn boxes_of(ctx: &ServerContext, s: u32) -> Option<Vec<Box6>> {
         "soul_sand" | "mud" => vec![px(0.0, 0.0, 0.0, 16.0, 14.0, 16.0)],
         "honey_block" => vec![px(1.0, 0.0, 1.0, 15.0, 15.0, 15.0)],
         "cactus" => vec![px(1.0, 0.0, 1.0, 15.0, 15.0, 15.0)],
-        "chest" | "trapped_chest" | "ender_chest" | "copper_chest" => {
+        n if matches!(n, "chest" | "trapped_chest" | "ender_chest")
+            || n.ends_with("copper_chest") =>
+        {
             vec![px(1.0, 0.0, 1.0, 15.0, 14.0, 15.0)]
         }
         n if n.ends_with("_bed") => vec![px(0.0, 3.0, 0.0, 16.0, 9.0, 16.0)],

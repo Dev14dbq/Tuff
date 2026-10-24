@@ -11,13 +11,19 @@
 //! - [`nbt`]: mobs as `/summon` and `/data` see them.
 
 pub mod aqua;
+pub mod air;
+pub mod bees;
 pub(crate) mod blocks;
 pub mod chest;
+pub mod copper;
+pub mod creaking;
 mod crowd;
+pub mod cube;
 pub mod eggs;
 pub mod endermite;
 pub mod golems;
 pub mod hurt;
+mod illager;
 pub mod infest;
 pub mod interact;
 mod land;
@@ -459,6 +465,7 @@ pub fn category(species: Species) -> i32 {
     match species.category() {
         Category::Monster if species == Species::ZombieNautilus => fx::category::NEUTRAL,
         Category::Monster => 5,
+        Category::Ambient => fx::category::AMBIENT,
         Category::Creature
         | Category::Misc
         | Category::WaterCreature
@@ -582,6 +589,16 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         blocks::free_beds(ctx, level, &entities);
     }
     chest::mirror(ctx, &mut entities);
+    air::tick(ctx, &mut entities, &targets, now);
+    {
+        let home = raining || !bright;
+        bees::bees(ctx, level, &mut entities, now, home);
+        bees::hives(ctx, level, home);
+        creaking::tick(ctx, level, &mut entities, now, day);
+        copper::tick(ctx, level, &mut entities, now);
+        cube::tick(ctx, &mut entities, &targets, now);
+    }
+    illager::tend(&mut entities);
 
     let ground = Ground::new(ctx);
     let items = ItemSense {
@@ -615,6 +632,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         if difficulty == 0
             && m.species.category() == Category::Monster
             && m.species != Species::EnderDragon
+            && m.species != Species::SulfurCube
         {
             e.removed = true;
             out.removed.push(e.id);
@@ -827,6 +845,9 @@ fn handle(
     match ev {
         MobEvent::Attack { target, damage } => {
             hurt::mob_attacks(ctx, entities, i, target, damage, targets, difficulty, now);
+            if species == Species::Bee {
+                air::bee_stung(&mut entities[i]);
+            }
         }
         MobEvent::Shoot {
             target,
@@ -963,6 +984,12 @@ fn handle(
         MobEvent::LayEgg { cell, count } => aqua::lay_egg(ctx, level, cell, count),
         MobEvent::LaySpawn { cell } => aqua::lay_spawn(ctx, level, cell),
         MobEvent::Grace { player } => aqua::grace(ctx, player, targets),
+        MobEvent::Fangs(spots) => illager::fangs(ctx, &entities[i], spots, &mut out.fresh),
+        MobEvent::SummonVexes => illager::summon_vexes(ctx, &entities[i], &mut out.fresh),
+        MobEvent::Wololo { sheep } => illager::wololo(ctx, entities, sheep),
+        MobEvent::Blind { target } => illager::blind(ctx, entities, targets, target),
+        MobEvent::Roar => illager::roar(ctx, entities, i, targets, difficulty),
+        MobEvent::Crush => illager::crush(ctx, level, &entities[i]),
     }
 }
 
@@ -1002,7 +1029,7 @@ fn trample_farmland(
 fn shoot(
     ctx: &ServerContext,
     e: &Entity,
-    _target: i32,
+    target: i32,
     aim: [f64; 3],
     missile: Missile,
     difficulty: i32,
@@ -1021,7 +1048,12 @@ fn shoot(
         crate::projectiles::spawn_by_mob(ctx, shot, me, from, vel)
     };
     match missile {
-        Missile::Arrow { damage, slowness } => {
+        Missile::Arrow { .. } | Missile::Bolt | Missile::Tipped(..) => {
+            let (damage, slowness, tipped) = match missile {
+                Missile::Arrow { damage, slowness } => (damage, slowness, None),
+                Missile::Tipped(effect, ticks) => (2.0, false, Some((effect, ticks))),
+                _ => (2.0, false, None),
+            };
             let Some(item) = ctx.items.id("minecraft:arrow") else {
                 return;
             };
@@ -1031,6 +1063,9 @@ fn shoot(
             a.hit.push(e.id);
             if slowness {
                 a.effects.push(("minecraft:slowness".into(), 0, 600 * 8));
+            }
+            if let Some((effect, ticks)) = tipped {
+                a.effects.push((effect.into(), 0, ticks * 8));
             }
             let from = [eye[0], eye[1] - 0.1, eye[2]];
             let dir = [d[0], aim[1] - 0.6 - from[1] + flat * 0.2, d[2]];
@@ -1119,6 +1154,27 @@ fn shoot(
                 from,
                 dir,
                 1.0,
+                0.0,
+            );
+        }
+        // Flying mobs (flying-mobs)
+        Missile::WindCharge => {
+            let from = [e.pos[0], e.pos[1] + m.size().1 / 2.0, e.pos[2]];
+            spawn(
+                mc_entity::extra::Shot::WindCharge { breeze: true },
+                from,
+                [d[0], aim[1] - from[1], d[2]],
+                0.7,
+                5.0 - f64::from(difficulty),
+            );
+        }
+        Missile::ShulkerBullet => {
+            let from = [e.pos[0], e.pos[1] + 0.5, e.pos[2]];
+            spawn(
+                mc_entity::extra::Shot::ShulkerBullet { target },
+                from,
+                [aim[0] - from[0], aim[1] - from[1], aim[2] - from[2]],
+                0.15,
                 0.0,
             );
         }
