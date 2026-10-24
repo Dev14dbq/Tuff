@@ -51,6 +51,15 @@ pub struct Walk {
     pub asleep: bool,
     /// Ticks to wait before looking for a bed again.
     pub rest: u32,
+    /// Game time it last lay down in a bed (golems come to villagers that
+    /// slept in the last 24000 ticks).
+    pub slept: Option<i64>,
+    /// Consecutive ticks it has been running from a monster.
+    pub panic_ticks: u32,
+    /// Until when it knows of an iron golem nearby (no new one is called).
+    pub golem_seen_until: i64,
+    /// Game time it last gossiped.
+    pub gossiped: Option<i64>,
     rng: u64,
 }
 
@@ -131,6 +140,11 @@ pub fn step(
                 .copied()
         })
         .flatten();
+    walk.panic_ticks = if afraid.is_some() {
+        walk.panic_ticks + 1
+    } else {
+        0
+    };
     // Getting up, from the day or a fright or a customer.
     if walk.asleep && (!env.night || afraid.is_some() || standing) {
         walk.asleep = false;

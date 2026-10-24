@@ -202,7 +202,50 @@ const WOLVES: &[Species] = &[Species::Wolf];
 const LLAMAS: &[Species] = &[Species::Llama, Species::TraderLlama];
 const FOX_PREY: &[Species] = &[Species::Chicken, Species::Rabbit];
 const RABBITS: &[Species] = &[Species::Rabbit];
-const NONE: &[Species] = &[];
+const ENDERMITES: &[Species] = &[Species::Endermite];
+const IRON_GOLEMS: &[Species] = &[Species::IronGolem];
+/// What golems hunt: the monsters that walk (not creepers for the iron
+/// golem, flyers and bosses for neither).
+const GOLEM_PREY: &[Species] = &[
+    Species::Zombie,
+    Species::Husk,
+    Species::Drowned,
+    Species::ZombieVillager,
+    Species::ZombifiedPiglin,
+    Species::Skeleton,
+    Species::Stray,
+    Species::WitherSkeleton,
+    Species::Spider,
+    Species::CaveSpider,
+    Species::Enderman,
+    Species::Witch,
+    Species::Slime,
+    Species::MagmaCube,
+    Species::Piglin,
+    Species::Silverfish,
+    Species::Endermite,
+];
+const SNOW_GOLEM_PREY: &[Species] = &[
+    Species::Zombie,
+    Species::Husk,
+    Species::Drowned,
+    Species::ZombieVillager,
+    Species::ZombifiedPiglin,
+    Species::Skeleton,
+    Species::Stray,
+    Species::WitherSkeleton,
+    Species::Spider,
+    Species::CaveSpider,
+    Species::Enderman,
+    Species::Witch,
+    Species::Slime,
+    Species::MagmaCube,
+    Species::Piglin,
+    Species::Silverfish,
+    Species::Endermite,
+    Species::Creeper,
+    Species::Blaze,
+];
 
 pub(super) fn brain(species: Species) -> Brain {
     use Species::*;
@@ -377,7 +420,7 @@ pub(super) fn brain(species: Species) -> Brain {
             vec![
                 hurt_by(1, true),
                 nearest(2, species.follow_range(), false),
-                prey(3, NONE, true, false),
+                prey(3, IRON_GOLEMS, true, false),
             ],
         ),
         Drowned => (
@@ -392,7 +435,7 @@ pub(super) fn brain(species: Species) -> Brain {
             vec![
                 hurt_by(1, true),
                 nearest(2, species.follow_range(), false),
-                prey(3, NONE, true, false),
+                prey(3, IRON_GOLEMS, true, false),
             ],
         ),
         Skeleton | Stray | WitherSkeleton => (
@@ -406,7 +449,11 @@ pub(super) fn brain(species: Species) -> Brain {
                 look(6, 8.0),
                 random_look(6),
             ],
-            vec![hurt_by(1, false), nearest(2, 16.0, false)],
+            vec![
+                hurt_by(1, false),
+                nearest(2, 16.0, false),
+                prey(3, IRON_GOLEMS, false, false),
+            ],
         ),
         Creeper => (
             vec![
@@ -429,7 +476,11 @@ pub(super) fn brain(species: Species) -> Brain {
                 look(6, 8.0),
                 random_look(6),
             ],
-            vec![hurt_by(1, false), nearest(2, 16.0, true)],
+            vec![
+                hurt_by(1, false),
+                nearest(2, 16.0, true),
+                prey(3, IRON_GOLEMS, false, false),
+            ],
         ),
         Enderman => (
             vec![
@@ -453,6 +504,8 @@ pub(super) fn brain(species: Species) -> Brain {
                     },
                 ),
                 hurt_by(2, false),
+                // Whatever the distance, in sight: endermites.
+                prey(3, ENDERMITES, false, false),
             ],
         ),
         Witch => (
@@ -543,6 +596,56 @@ pub(super) fn brain(species: Species) -> Brain {
                 random_look(8),
             ],
             vec![hurt_by(1, true)],
+        ),
+        Silverfish => (
+            vec![
+                float(),
+                slot(1, 0, Goal::WakeFriends),
+                melee(4, 1.0, false),
+                slot(
+                    5,
+                    MOVE,
+                    Goal::Hide {
+                        merge: None,
+                        walk: None,
+                    },
+                ),
+            ],
+            vec![hurt_by(1, true), nearest(2, species.follow_range(), false)],
+        ),
+        Endermite => (
+            vec![
+                float(),
+                melee(2, 1.0, false),
+                stroll(3, 1.0),
+                look(7, 8.0),
+                random_look(8),
+            ],
+            vec![hurt_by(1, true), nearest(2, species.follow_range(), false)],
+        ),
+        IronGolem => (
+            vec![
+                melee(1, 1.0, false),
+                slot(2, MOVE, Goal::Patrol { speed: 0.6 }),
+                slot(4, MOVE | LOOK, Goal::OfferFlower { left: 0, to: None }),
+                stroll(5, 0.6),
+                look(7, 6.0),
+                random_look(8),
+            ],
+            vec![
+                hurt_by(2, false),
+                slot(3, TARGET, Goal::Notorious { unseen: 0 }),
+                prey(4, GOLEM_PREY, false, false),
+            ],
+        ),
+        SnowGolem => (
+            vec![
+                ranged(1, Ranged::Snowball, 20, 10.0),
+                stroll(2, 1.0),
+                look(3, 6.0),
+                random_look(4),
+            ],
+            vec![prey(1, SNOW_GOLEM_PREY, false, false)],
         ),
         // The bosses think in the server's own tick (`bosses`).
         EnderDragon | Wither => (vec![], vec![]),

@@ -16,6 +16,8 @@ const SPEED_SCALE: f64 = 0.9;
 const GROUND: f64 = 2.2;
 /// What a walker steps up onto without jumping (slabs, paths, carpets).
 const STEP: f64 = 0.6;
+/// Ticks an endermite lives.
+pub const ENDERMITE_LIFE: i32 = 2400;
 
 pub(super) fn wrap_degrees(a: f32) -> f32 {
     let a = a % 360.0;
@@ -140,6 +142,31 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
         if m.cold == lava {
             m.cold = !lava;
             m.dirty = true;
+        }
+    }
+    // Snow golems melt in water, rain and hot places, and leave snow where
+    // they walk elsewhere.
+    if m.species == Species::SnowGolem {
+        let melts = s.world.snow_golem_melts(c[0], c[1], c[2]);
+        if (wet || s.raining && sky_above(m, b, s) || melts) && m.age.is_multiple_of(10) {
+            out.push(MobEvent::Hurt {
+                amount: 1.0,
+                kind: if melts && !wet {
+                    "minecraft:on_fire"
+                } else {
+                    "minecraft:drown"
+                },
+            });
+        }
+        if s.griefing && !melts {
+            out.push(MobEvent::Trail);
+        }
+    }
+    // Endermites last two minutes unless named or kept.
+    if m.species == Species::Endermite && !m.persistent && m.custom_name.is_none() {
+        m.quirks.lifetime += 1;
+        if m.quirks.lifetime >= ENDERMITE_LIFE {
+            out.push(MobEvent::Vanish);
         }
     }
     // Endermen hate water.

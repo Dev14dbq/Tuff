@@ -486,6 +486,8 @@ pub fn dig(
         }
         if !silk_touch(ctx, actor.uuid) {
             crate::xp::spawn(ctx, centre(position), crate::xp::block_xp(name));
+            // Whatever was hiding in an infested block comes out.
+            crate::mobs::infest::emerge(ctx, position, state);
         }
     }
     outcome.events.push(Event::BlockBroken {
@@ -863,6 +865,10 @@ pub fn use_item_on(
     // The last skull of a wither's T.
     for &(p, state) in &placed.blocks {
         crate::bosses::wither::placed(ctx, &mut outcome.events, p, state);
+        // The head of a golem.
+        outcome
+            .events
+            .extend(crate::mobs::golems::placed(ctx, p, state));
     }
     // Survival and adventure use up the block.
     if actor.game_mode != CREATIVE {

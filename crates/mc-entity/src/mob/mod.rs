@@ -13,6 +13,7 @@
 //! - [`body`]: steering, walking, swimming and flying.
 
 mod body;
+pub use body::ENDERMITE_LIFE;
 mod brains;
 mod chores;
 pub mod goals;
@@ -83,6 +84,8 @@ pub struct Target {
     /// Who last hurt them, and whom they last hit (entity ids), for pets.
     pub hurt_by: Option<i32>,
     pub hit: Option<i32>,
+    /// Has a bad name with the villagers: golems go for them.
+    pub notorious: bool,
 }
 
 impl Target {
@@ -101,6 +104,7 @@ impl Target {
             pitch: 0.0,
             hurt_by: None,
             hit: None,
+            notorious: false,
         }
     }
 }
@@ -274,6 +278,8 @@ pub enum Missile {
     Potion(&'static str),
     /// A llama's spit.
     Spit,
+    /// A snow golem's snowball.
+    Snowball,
 }
 
 /// What a mob did that the world must act on.
@@ -359,6 +365,17 @@ pub enum MobEvent {
     PlaceBlock {
         cell: Cell,
     },
+    /// A silverfish hides in the infested form of the block here and is
+    /// gone.
+    Hide {
+        cell: Cell,
+    },
+    /// A silverfish calls the others out of the infested blocks around it.
+    WakeFriends,
+    /// A snow golem leaves snow under its feet where it can.
+    Trail,
+    /// Goes away without a trace (an endermite at the end of its life).
+    Vanish,
     /// Moved far at once: clients see a teleport.
     Teleported,
     /// Heals itself (a witch's potion).
@@ -379,6 +396,21 @@ pub enum MobEvent {
     CaravanLeave {
         head: i32,
     },
+}
+
+/// State only some kinds keep: the silverfish's call, the endermite's
+/// life, the golems.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Quirks {
+    /// Silverfish: ticks until it calls the others (0: not calling).
+    pub call_friends: i32,
+    /// Endermite: ticks lived without a name or persistence (vanilla's
+    /// `Lifetime`); it goes at 2400.
+    pub lifetime: i32,
+    /// Iron golem: built by a player (it never goes for players).
+    pub player_made: bool,
+    /// Snow golem: still wears its pumpkin.
+    pub pumpkin: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -521,6 +553,8 @@ pub struct Mob {
     pub arms_up: bool,
     /// The ender dragon's and the wither's own state.
     pub boss: Option<crate::boss::Boss>,
+    /// What only some kinds keep (see [`Quirks`]).
+    pub quirks: Quirks,
     /// Whether clients must be told about changed fields.
     pub dirty: bool,
     aggressive: bool,
@@ -639,6 +673,7 @@ impl Mob {
                 Species::Wither => Some(crate::boss::Boss::Wither(Default::default())),
                 _ => None,
             },
+            quirks: Quirks::default(),
             dirty: false,
             aggressive: false,
             rng: seed | 1,
@@ -677,6 +712,7 @@ impl Mob {
                 mob.set_size(size);
             }
             Species::EnderDragon | Species::Wither => mob.persistent = true,
+            Species::SnowGolem => mob.quirks.pumpkin = true,
             _ => {}
         }
         mob
@@ -1071,3 +1107,6 @@ mod tests;
 
 #[cfg(test)]
 mod chore_tests;
+
+#[cfg(test)]
+mod critter_tests;

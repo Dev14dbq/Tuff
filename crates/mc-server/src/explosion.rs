@@ -1071,6 +1071,7 @@ fn explode_one(
         }
         let props = |k: &str| blocks.property(state, k).map(str::to_owned);
         if block_drops {
+            crate::mobs::infest::emerge(ctx, p, state);
             drops.extend(
                 ctx.loot
                     .drops_exploded(name, &props, decay.then_some(blast.power))

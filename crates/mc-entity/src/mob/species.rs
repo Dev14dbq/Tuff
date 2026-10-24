@@ -7,6 +7,9 @@
 pub enum Category {
     Creature,
     Monster,
+    /// Neither: golems. They do not spawn with the biomes, do not despawn
+    /// and give no experience.
+    Misc,
 }
 
 macro_rules! species {
@@ -74,6 +77,10 @@ species! {
     MagmaCube => "minecraft:magma_cube", "Magma Cube";
     EnderDragon => "minecraft:ender_dragon", "Ender Dragon";
     Wither => "minecraft:wither", "Wither";
+    Silverfish => "minecraft:silverfish", "Silverfish";
+    Endermite => "minecraft:endermite", "Endermite";
+    IronGolem => "minecraft:iron_golem", "Iron Golem";
+    SnowGolem => "minecraft:snow_golem", "Snow Golem";
 }
 
 /// Which sound of a mob.
@@ -105,6 +112,7 @@ impl Species {
         match self {
             Cow | Mooshroom | Sheep | Pig | Chicken | Rabbit | Horse | Donkey | Mule | Llama
             | TraderLlama | Wolf | Cat | Fox | Parrot | Strider => Category::Creature,
+            IronGolem | SnowGolem => Category::Misc,
             _ => Category::Monster,
         }
     }
@@ -138,6 +146,9 @@ impl Species {
             Enderman => (0.6, 2.9),
             Slime | MagmaCube => (0.52, 0.52),
             Phantom => (0.9, 0.5),
+            Silverfish | Endermite => (0.4, 0.3),
+            IronGolem => (1.4, 2.7),
+            SnowGolem => (0.7, 1.9),
             Ghast => (4.0, 4.0),
             Blaze => (0.6, 1.8),
             EnderDragon => (16.0, 8.0),
@@ -167,6 +178,9 @@ impl Species {
             Parrot => 0.6,
             Slime | MagmaCube => 0.625,
             Phantom => 0.35,
+            Silverfish | Endermite => 0.13 / 0.3,
+            IronGolem => 2.5 / 2.7,
+            SnowGolem => 1.7 / 1.9,
             _ => 0.85,
         }
     }
@@ -182,6 +196,9 @@ impl Species {
             Parrot => 6.0,
             Horse | Donkey | Mule | Llama | TraderLlama => 22.0,
             Spider | Piglin => 16.0,
+            Silverfish | Endermite => 8.0,
+            IronGolem => 100.0,
+            SnowGolem => 4.0,
             CaveSpider => 12.0,
             Enderman => 40.0,
             Witch => 26.0,
@@ -203,6 +220,7 @@ impl Species {
             Donkey | Mule | Llama | TraderLlama | Strider => 0.175,
             Parrot => 0.2,
             Piglin => 0.35,
+            SnowGolem => 0.2,
             Phantom | Ghast => 0.7,
             Wither => 0.6,
             Slime | MagmaCube => 0.3,
@@ -238,6 +256,10 @@ impl Species {
             Piglin | ZombifiedPiglin => 5.0,
             Blaze | Phantom => 6.0,
             Skeleton | Stray => 2.0,
+            Silverfish => 1.0,
+            Endermite => 2.0,
+            // Each blow rolls 7.5 to 21.5 around this (see the melee goal).
+            IronGolem => 15.0,
             _ => 0.0,
         }
     }
@@ -248,6 +270,14 @@ impl Species {
         match self {
             Zombie | Husk | Drowned | ZombieVillager | ZombifiedPiglin => 2.0,
             Wither => 4.0,
+            _ => 0.0,
+        }
+    }
+
+    /// The `knockback_resistance` attribute.
+    pub fn knockback_resistance(self) -> f64 {
+        match self {
+            Species::IronGolem => 1.0,
             _ => 0.0,
         }
     }
@@ -319,6 +349,7 @@ impl Species {
                 | Species::Phantom
                 | Species::Cat
                 | Species::MagmaCube
+                | Species::SnowGolem
                 | Species::EnderDragon
                 | Species::Wither
         )
@@ -431,14 +462,24 @@ impl Species {
         )
     }
 
+    /// Arthropods: Bane of Arthropods hurts them more and slows them.
+    pub fn arthropod(self) -> bool {
+        matches!(
+            self,
+            Species::Spider | Species::CaveSpider | Species::Silverfish | Species::Endermite
+        )
+    }
+
     /// Experience a player gets for killing an adult (equipment adds more,
     /// see the server).
     pub fn xp_reward(self) -> (i32, i32) {
         use Species::*;
         match self.category() {
             Category::Creature => (1, 3),
+            Category::Misc => (0, 0),
             Category::Monster => match self {
                 Blaze => (10, 10),
+                Endermite => (3, 3),
                 Wither => (50, 50),
                 // The dragon's experience comes out as it dies.
                 Slime | MagmaCube | EnderDragon => (0, 0),
@@ -457,7 +498,7 @@ impl Species {
             _ => self.path(),
         };
         let ok = match which {
-            Sound::Ambient => !matches!(self, Creeper | Slime | MagmaCube),
+            Sound::Ambient => !matches!(self, Creeper | Slime | MagmaCube | IronGolem),
             Sound::Step => matches!(
                 self,
                 Cow | Mooshroom
@@ -476,6 +517,9 @@ impl Species {
                     | Piglin
                     | Drowned
                     | Horse
+                    | Silverfish
+                    | Endermite
+                    | IronGolem
             ),
             Sound::Hurt | Sound::Death => true,
         };

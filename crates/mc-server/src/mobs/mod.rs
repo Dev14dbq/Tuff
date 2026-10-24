@@ -14,7 +14,10 @@ pub(crate) mod blocks;
 pub mod chest;
 mod crowd;
 pub mod eggs;
+pub mod endermite;
+pub mod golems;
 pub mod hurt;
+pub mod infest;
 pub mod interact;
 pub mod meta;
 pub mod nbt;
@@ -112,7 +115,13 @@ pub struct MobState {
     pub trial_configs: Mutex<HashMap<String, crate::trials::Config>>,
     /// Health of villagers, which zombies hurt (20 when not listed).
     villagers: Mutex<HashMap<i32, f32>>,
+    /// What the villagers think of each player, below zero when bad.
+    standing: Mutex<HashMap<u128, i32>>,
 }
+
+/// Standing at or below which iron golems go for a player (the wiki's
+/// reputation of -100).
+const NOTORIOUS: i32 = -100;
 
 impl MobState {
     /// A player hit the entity with this id with `blow` (nothing happens
@@ -144,6 +153,31 @@ impl MobState {
             .entry(dim)
             .or_default()
             .push(Pending::Use { target, by, hand });
+    }
+
+    /// The player did something the villagers hold against them (hitting
+    /// one costs 25, killing one 125); iron golems go for the notorious.
+    pub fn offend(&self, player: u128, amount: i32) {
+        let mut all = lock(&self.standing);
+        let s = all.entry(player).or_insert(0);
+        *s = (*s - amount).max(-200);
+    }
+
+    /// Whether the villagers think so badly of the player that golems go
+    /// for them.
+    pub fn notorious(&self, player: u128) -> bool {
+        lock(&self.standing)
+            .get(&player)
+            .is_some_and(|&s| s <= NOTORIOUS)
+    }
+
+    /// A day passed: what the villagers hold against players fades by 20.
+    pub fn forgive(&self) {
+        let mut all = lock(&self.standing);
+        for s in all.values_mut() {
+            *s = (*s + 20).min(0);
+        }
+        all.retain(|_, s| *s != 0);
     }
 
     /// Health of the villager or wandering trader with this id.
@@ -309,6 +343,7 @@ fn players(ctx: &ServerContext) -> Vec<Target> {
     drop((vitals, inventories, players));
     for t in &mut out {
         (t.hurt_by, t.hit) = crate::combat::recent(ctx, t.uuid);
+        t.notorious = ctx.mobs.notorious(t.uuid);
     }
     out
 }
@@ -406,7 +441,7 @@ impl mc_entity::mob::Items for ItemSense<'_> {
 pub fn category(species: Species) -> i32 {
     match species.category() {
         Category::Monster => 5,
-        Category::Creature => fx::category::NEUTRAL,
+        Category::Creature | Category::Misc => fx::category::NEUTRAL,
     }
 }
 
@@ -509,6 +544,9 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     let mut out = Outcome::default();
 
     apply_pending(ctx, &mut entities, pending, now);
+    if now % 24000 == 0 {
+        ctx.mobs.forgive();
+    }
     crate::decor::leash::tell_mobs(ctx, &mut entities);
     if now % 20 == 0 {
         blocks::close_idle(ctx, level, &entities, &targets);
@@ -684,6 +722,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
 
     let spawned = spawn::tick(ctx, &ground, &mut entities, &targets, now, day, difficulty);
     out.fresh.extend(spawned);
+    golems::villagers(ctx, &ground, &mut entities, now, &mut out.fresh);
     let made = spawner::tick(ctx, &ground, &entities, &targets, difficulty);
     out.fresh.extend(made);
     let made = crate::trials::tick(ctx, &ground, &entities, &targets, difficulty, now);
@@ -851,6 +890,10 @@ fn handle(
         }
         MobEvent::Wear { slot, amount } => hurt::wear_gear(ctx, &mut entities[i], slot, amount),
         MobEvent::Buck => ride::eject(ctx, &mut entities[i]),
+        MobEvent::Trail => golems::snow_trail(ctx, level, &entities[i]),
+        MobEvent::Vanish => entities[i].removed = true,
+        MobEvent::Hide { cell } => infest::hide(ctx, level, entities, i, cell),
+        MobEvent::WakeFriends => infest::wake_friends(ctx, level, entities, i, &mut out.fresh),
     }
 }
 
@@ -949,6 +992,12 @@ fn shoot(
                 f64::from(14 - difficulty * 4),
             );
             fx::sound(ctx, "entity.drowned.shoot", 5, e.pos, 1.0, 1.0);
+        }
+        Missile::Snowball => {
+            let from = [e.pos[0], e.pos[1] + m.eye_height() - 0.1, e.pos[2]];
+            // Aims at the target's chest, with the drop of the throw.
+            let dir = [d[0], aim[1] - 1.1 - from[1] + flat * 0.2, d[2]];
+            spawn(mc_entity::extra::Shot::Snowball, from, dir, 1.6, 12.0);
         }
         Missile::Spit => {
             let from = [e.pos[0], e.pos[1] + m.eye_height() - 0.1, e.pos[2]];

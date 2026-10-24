@@ -236,6 +236,11 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
         Witch => v.push((17, MetadataValue::Boolean(m.drinking > 0))),
         Slime | MagmaCube => v.push((18, MetadataValue::VarInt(m.size))),
         Phantom => v.push((16, MetadataValue::VarInt(m.size))),
+        // Bit 16: the pumpkin is on.
+        SnowGolem => v.push((
+            16,
+            MetadataValue::Byte(if m.quirks.pumpkin { 16 } else { 0 }),
+        )),
         Ghast => v.push((16, MetadataValue::Boolean(m.charge > 10))),
         Blaze => v.push((16, MetadataValue::Byte(i8::from(m.charge > 0)))),
         Piglin => {

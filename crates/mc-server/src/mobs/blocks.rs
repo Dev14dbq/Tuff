@@ -194,6 +194,9 @@ fn occupy(ctx: &ServerContext, level: &mut WorldLevel, cell: Cell, taken: bool) 
 /// A villager lies down in the bed at `cell`.
 pub fn lie_down(ctx: &ServerContext, level: &mut WorldLevel, e: &mut Entity, cell: Cell) {
     occupy(ctx, level, cell, true);
+    if let Kind::Merchant(m) = &mut e.kind {
+        m.walk.slept = Some(crate::tick::lock(&ctx.time).age);
+    }
     e.pos = mc_entity::villager::bed_spot(cell);
     e.vel = [0.0; 3];
     e.on_ground = true;
@@ -362,6 +365,10 @@ pub fn place(
     }
     drop(ground);
     level.set_block(pos(cell), carried);
+    // A carved pumpkin may finish a golem.
+    for event in super::golems::placed(ctx, pos(cell), carried) {
+        let _ = ctx.events.send(event);
+    }
     if let Kind::Mob(m) = &mut entities[i].kind {
         m.carried = None;
         m.dirty = true;

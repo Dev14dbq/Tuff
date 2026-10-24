@@ -92,6 +92,16 @@ pub trait Terrain: Collide {
     fn holdable(&self, _x: i32, _y: i32, _z: i32) -> bool {
         false
     }
+    /// Whether snow golems melt here (a hot biome, the Nether): they take
+    /// damage and leave no snow.
+    fn snow_golem_melts(&self, _x: i32, _y: i32, _z: i32) -> bool {
+        false
+    }
+    /// Whether a silverfish may hide in the block (stone, cobblestone,
+    /// stone bricks, deepslate).
+    fn infestable(&self, _x: i32, _y: i32, _z: i32) -> bool {
+        false
+    }
 }
 
 /// What a walker is like.

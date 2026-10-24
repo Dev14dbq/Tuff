@@ -115,6 +115,12 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
         }
         return false;
     }
+    // A silverfish hurt by someone, or by magic, calls its friends.
+    if m.species == Species::Silverfish
+        && (h.by.is_some() || h.player.is_some() || h.kind == "minecraft:magic")
+    {
+        super::infest::notify_hurt(m);
+    }
     let (armor, toughness) = armor_of(ctx, m);
     let amount = crate::damage::armor_reduce(h.amount, armor, toughness, h.kind);
     if !m.hurt(amount, h.by.or(h.player.map(|_| -1))) {
@@ -193,13 +199,14 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
 }
 
 fn armor_resistance(ctx: &ServerContext, m: &Mob) -> f64 {
-    m.gear
-        .iter()
-        .flatten()
-        .filter_map(|g| ctx.items.get(g.item))
-        .map(|i| f64::from(i.knockback_resistance))
-        .sum::<f64>()
-        .min(1.0)
+    m.species.knockback_resistance()
+        + m.gear
+            .iter()
+            .flatten()
+            .filter_map(|g| ctx.items.get(g.item))
+            .map(|i| f64::from(i.knockback_resistance))
+            .sum::<f64>()
+            .min(1.0)
 }
 
 /// A player's melee blow lands on the mob at `i` (and sweeps those near).
@@ -269,7 +276,7 @@ fn hit_with_blow(
     };
     let bonus = if m.species.undead() {
         blow.undead
-    } else if matches!(m.species, Species::Spider | Species::CaveSpider) {
+    } else if m.species.arthropod() {
         blow.arthropod
     } else {
         0.0
@@ -373,8 +380,20 @@ pub fn mob_attacks(
                 ..Harm::new(damage, "minecraft:mob_attack")
             };
             harm_at(ctx, entities, j, &harm);
+            // An iron golem throws what it hits up into the air.
+            if species == Species::IronGolem
+                && let Kind::Mob(t) = &entities[j].kind
+            {
+                let lift = 0.4 * (1.0 - armor_resistance(ctx, t)).max(0.0);
+                entities[j].vel[1] += lift;
+                entities[j].on_ground = false;
+            }
         }
-        Kind::Merchant(_) => villager_hit(ctx, entities, j, species, damage, difficulty),
+        Kind::Merchant(_) => {
+            villager_hit(ctx, entities, j, species, damage, difficulty);
+            // The golems of the village go for whoever it was.
+            super::golems::defend(entities, j, id);
+        }
         _ => {}
     }
 }
