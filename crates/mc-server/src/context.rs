@@ -480,6 +480,9 @@ pub struct ServerContext {
     pub entities: Mutex<Vec<mc_entity::Entity>>,
     /// Chests and barrels someone has open.
     pub containers: Mutex<crate::containers::Containers>,
+    /// Players looking into an ender chest, by block. The items are each
+    /// player's; this is only the lid.
+    pub ender_chests: Mutex<crate::containers::EnderChests>,
     /// Contents (`Items`) of entities that hold items (minecarts and boats
     /// with a chest, hopper minecarts), by entity id.
     pub entity_items: Mutex<HashMap<i32, mc_nbt::Compound>>,
@@ -744,6 +747,7 @@ impl ServerContext {
             ticks: Mutex::new(mc_tick::ScheduledTicks::default()),
             entities: Mutex::new(Vec::new()),
             containers: Mutex::new(HashMap::new()),
+            ender_chests: Mutex::new(HashMap::new()),
             entity_items: Mutex::new(HashMap::new()),
             cart_rests: Mutex::new(HashMap::new()),
             daylight: Mutex::new(Default::default()),
@@ -1051,6 +1055,7 @@ impl ServerContext {
             ticks: Mutex::new(mc_tick::ScheduledTicks::default()),
             entities: Mutex::new(Vec::new()),
             containers: Mutex::new(HashMap::new()),
+            ender_chests: Mutex::new(HashMap::new()),
             entity_items: Mutex::new(HashMap::new()),
             cart_rests: Mutex::new(HashMap::new()),
             daylight: Mutex::new(Default::default()),

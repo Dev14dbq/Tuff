@@ -92,6 +92,10 @@ pub struct Open {
 
 pub type Containers = HashMap<(i32, i32, i32), Open>;
 
+/// Players with an ender chest's menu open, by block. The chest holds
+/// nothing itself (the items are the player's); only the lid is shared.
+pub type EnderChests = HashMap<(i32, i32, i32), Vec<u128>>;
+
 fn key(p: Position) -> (i32, i32, i32) {
     (p.x, p.y, p.z)
 }
@@ -658,6 +662,128 @@ pub fn player_left(ctx: &ServerContext, uuid: u128) {
     for (x, y, z) in open {
         close(ctx, uuid, Position::new(x, y, z));
     }
+    // The menu may have been opened in another dimension than the one they
+    // leave from.
+    let dims: Vec<_> = ctx
+        .dims
+        .iter()
+        .filter_map(|cell| cell.lock().expect("dimensions lock").clone())
+        .collect();
+    let mut covered = false;
+    for dim in &dims {
+        if std::ptr::eq(dim.as_ref(), ctx) {
+            covered = true;
+        }
+        ender_drop(dim, uuid);
+    }
+    if !covered {
+        ender_drop(ctx, uuid);
+    }
+}
+
+fn ender_drop(ctx: &ServerContext, uuid: u128) {
+    let open: Vec<(i32, i32, i32)> = ctx
+        .ender_chests
+        .lock()
+        .expect("ender chests lock")
+        .iter()
+        .filter(|(_, viewers)| viewers.contains(&uuid))
+        .map(|(k, _)| *k)
+        .collect();
+    for (x, y, z) in open {
+        ender_close(ctx, uuid, Position::new(x, y, z));
+    }
+}
+
+/// A player opened the ender chest menu at `p`.
+pub fn ender_open(ctx: &ServerContext, uuid: u128, p: Position) {
+    if ctx
+        .world
+        .block(p, &ctx.data.blocks)
+        .and_then(|s| ctx.data.blocks.block_name(s))
+        != Some("minecraft:ender_chest")
+    {
+        return;
+    }
+    let mut all = ctx.ender_chests.lock().expect("ender chests lock");
+    let viewers = all.entry(key(p)).or_default();
+    if viewers.contains(&uuid) {
+        return;
+    }
+    viewers.push(uuid);
+    let n = viewers.len();
+    drop(all);
+    ender_lid(ctx, p, n, true);
+}
+
+/// A player closed the ender chest menu at `p`.
+pub fn ender_close(ctx: &ServerContext, uuid: u128, p: Position) {
+    let mut all = ctx.ender_chests.lock().expect("ender chests lock");
+    let Some(viewers) = all.get_mut(&key(p)) else {
+        return;
+    };
+    let before = viewers.len();
+    viewers.retain(|&v| v != uuid);
+    let n = viewers.len();
+    if n == 0 {
+        all.remove(&key(p));
+    }
+    drop(all);
+    if n != before {
+        ender_lid(ctx, p, n, false);
+    }
+}
+
+/// The ender chest at `p` is gone: nobody is looking any more, and windows
+/// on it close. The block may already be air.
+pub fn ender_broken(ctx: &ServerContext, p: Position) {
+    let had = {
+        let mut all = ctx.ender_chests.lock().expect("ender chests lock");
+        all.remove(&key(p)).is_some_and(|v| !v.is_empty())
+    };
+    if had {
+        ender_lid(ctx, p, 0, false);
+    }
+    let _ = ctx
+        .events
+        .send(crate::context::Event::ContainerGone { position: p });
+}
+
+/// The lid shows how many look in (a block event), with the sound when the
+/// first opens it and the last closes it. `added` is a player joining.
+fn ender_lid(ctx: &ServerContext, p: Position, viewers: usize, added: bool) {
+    let block = ctx
+        .data
+        .builtin
+        .id("minecraft:block", "minecraft:ender_chest")
+        .unwrap_or(0);
+    let _ = ctx.events.send(crate::context::Event::BlockAction {
+        position: p,
+        action: 1,
+        param: viewers.min(255) as u8,
+        block,
+    });
+    if !((added && viewers == 1) || (!added && viewers == 0)) {
+        return;
+    }
+    let sound = if added {
+        "block.ender_chest.open"
+    } else {
+        "block.ender_chest.close"
+    };
+    let pitch = (crate::util::random_u64() >> 40) as f32 / (1u64 << 24) as f32 * 0.1 + 0.9;
+    crate::fx::sound(
+        ctx,
+        sound,
+        crate::fx::category::BLOCKS,
+        [
+            f64::from(p.x) + 0.5,
+            f64::from(p.y) + 0.5,
+            f64::from(p.z) + 0.5,
+        ],
+        0.5,
+        pitch,
+    );
 }
 
 /// A container block was placed at `p`: give it its empty block entity.
@@ -775,5 +901,94 @@ mod tests {
             first,
             "the same items the next time"
         );
+    }
+
+    /// Lid counts, ender-chest sounds, and whether the menu was told to close.
+    fn ender_lid_events(
+        events: &mut crate::context::EventReceiver,
+        block: i32,
+    ) -> (Vec<u8>, Vec<String>, bool) {
+        let mut params = Vec::new();
+        let mut sounds = Vec::new();
+        let mut gone = false;
+        while let Some(e) = events.try_changed() {
+            match e {
+                crate::context::Event::BlockAction {
+                    action: 1,
+                    param,
+                    block: id,
+                    position,
+                } => {
+                    assert_eq!(id, block);
+                    assert_eq!(position, Position::new(0, -60, 0));
+                    params.push(param);
+                }
+                crate::context::Event::Fx(crate::fx::Fx::Sound(s))
+                    if s.name.starts_with("minecraft:block.ender_chest.") =>
+                {
+                    assert_eq!(s.volume, 0.5);
+                    assert!(
+                        (0.9..1.0).contains(&s.pitch),
+                        "pitch {} is outside 0.9..1.0",
+                        s.pitch
+                    );
+                    assert_eq!((s.x, s.y, s.z), (0.5, -59.5, 0.5));
+                    sounds.push(s.name);
+                }
+                crate::context::Event::ContainerGone { position }
+                    if position == Position::new(0, -60, 0) =>
+                {
+                    gone = true;
+                }
+                _ => {}
+            }
+        }
+        (params, sounds, gone)
+    }
+
+    #[test]
+    fn an_ender_chest_lid_opens_and_closes_with_its_viewers() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let Ok(data) = mc_data::McData::load(&dir) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let ctx = ServerContext::new(crate::Config::new(dir), data).unwrap();
+        let p = Position::new(0, -60, 0);
+        let state = ctx
+            .data
+            .blocks
+            .default_state("minecraft:ender_chest")
+            .unwrap();
+        crate::level::WorldLevel::new(&ctx).set_block(p, state);
+        let block = ctx
+            .data
+            .builtin
+            .id("minecraft:block", "minecraft:ender_chest")
+            .unwrap();
+        let mut events = ctx.events.subscribe();
+        ender_open(&ctx, 1, p);
+        let (params, sounds, _) = ender_lid_events(&mut events, block);
+        assert_eq!(params, vec![1]);
+        assert_eq!(sounds, ["minecraft:block.ender_chest.open"]);
+        ender_open(&ctx, 2, p);
+        let (params, sounds, _) = ender_lid_events(&mut events, block);
+        assert_eq!(params, vec![2]);
+        assert!(sounds.is_empty(), "only the first open plays");
+        ender_close(&ctx, 1, p);
+        let (params, sounds, _) = ender_lid_events(&mut events, block);
+        assert_eq!(params, vec![1], "one viewer still looks in");
+        assert!(sounds.is_empty(), "it stays open");
+        player_left(&ctx, 2);
+        let (params, sounds, _) = ender_lid_events(&mut events, block);
+        assert_eq!(params, vec![0]);
+        assert_eq!(sounds, ["minecraft:block.ender_chest.close"]);
+        ender_open(&ctx, 1, p);
+        let _ = ender_lid_events(&mut events, block);
+        crate::level::WorldLevel::new(&ctx).set_block(p, ctx.shapes.air());
+        let (params, sounds, gone) = ender_lid_events(&mut events, block);
+        assert_eq!(params, vec![0], "breaking it shuts the lid");
+        assert_eq!(sounds, ["minecraft:block.ender_chest.close"]);
+        assert!(gone, "the open menu is closed");
     }
 }
