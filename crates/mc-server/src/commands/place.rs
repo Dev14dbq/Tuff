@@ -105,6 +105,7 @@ pub(crate) fn place_jigsaw(
     target: &str,
     depth: i32,
     p: Position,
+    keep_jigsaws: bool,
 ) -> std::result::Result<Parts, bool> {
     let Some(features) = features(ctx).filter(|f| f.structures.has_pool(pool)) else {
         return Err(true);
@@ -136,9 +137,11 @@ pub(crate) fn place_jigsaw(
         for cx in (b.min.x >> 4)..=(b.max.x >> 4) {
             let mut rand = mc_features::rand::WorldgenRandom::legacy(0);
             rand.set_large_feature_seed(world_seed, cx, cz);
-            features
-                .structures
-                .place(features, &mut live, &mut rand, &start, cx, cz);
+            mc_features::structure::jigsaw::keeping_jigsaws(keep_jigsaws, || {
+                features
+                    .structures
+                    .place(features, &mut live, &mut rand, &start, cx, cz);
+            });
         }
     }
     Ok(live.into_parts())

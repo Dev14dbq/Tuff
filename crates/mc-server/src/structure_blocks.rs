@@ -213,6 +213,7 @@ pub fn generate_jigsaw(
     game_mode: i32,
     p: Position,
     levels: i32,
+    keep_jigsaws: bool,
 ) -> Vec<Tag> {
     if !crate::command_blocks::may_use(ctx, uuid, game_mode) {
         return Vec::new();
@@ -231,7 +232,7 @@ pub fn generate_jigsaw(
         .unwrap_or(mc_tick::Dir::North);
     let (dx, dy, dz) = front.offset();
     let at = Position::new(p.x + dx, p.y + dy, p.z + dz);
-    match crate::commands::place::place_jigsaw(ctx, &pool, &target, levels.clamp(1, 20), at) {
+    match crate::commands::place::place_jigsaw(ctx, &pool, &target, levels.clamp(1, 20), at, keep_jigsaws) {
         Ok((changes, entities)) => {
             apply(ctx, changes, entities);
             Vec::new()
@@ -754,13 +755,34 @@ mod tests {
         set_jigsaw(&ctx, 5, 1, at, "a", "b", "c", "minecraft:air", "aligned", 1, 2);
         assert_eq!(string(&data(&ctx, at, JIGSAW).unwrap(), "name"), "minecraft:empty");
         // A pool that is not there fails.
-        let bad = crate::commands::place::place_jigsaw(&ctx, "minecraft:nope", "minecraft:empty", 1, at);
+        let bad = crate::commands::place::place_jigsaw(&ctx, "minecraft:nope", "minecraft:empty", 1, at, false);
         assert!(matches!(bad, Err(true)));
         // A real one places pieces.
         let pool = "minecraft:village/plains/town_centers";
-        match crate::commands::place::place_jigsaw(&ctx, pool, "minecraft:empty", 1, Position::new(40, -60, 40)) {
-            Ok((changes, _)) => assert!(!changes.is_empty()),
-            Err(invalid) => eprintln!("pool unavailable here (invalid pool: {invalid})"),
+        let jigsaws = |keep: bool| {
+            let (changes, _) = crate::commands::place::place_jigsaw(
+                &ctx,
+                pool,
+                "minecraft:empty",
+                1,
+                Position::new(40, -60, 40),
+                keep,
+            )
+            .ok()?;
+            assert!(!changes.is_empty());
+            Some(
+                changes
+                    .iter()
+                    .filter(|(_, s)| ctx.data.blocks.block_name(*s) == Some(JIGSAW))
+                    .count(),
+            )
+        };
+        match (jigsaws(false), jigsaws(true)) {
+            (Some(replaced), Some(kept)) => {
+                assert_eq!(replaced, 0, "jigsaws turn into their final state");
+                assert!(kept > 0, "Keep Jigsaws leaves them");
+            }
+            _ => eprintln!("pool unavailable here"),
         }
     }
 }

@@ -131,4 +131,49 @@ mod tests {
         let plain = Tag::from("hello");
         assert_eq!(crate::commands::resolve_text(&ctx, &src, &plain), plain);
     }
+
+    #[test]
+    fn nbt_parts_read_storage_blocks_and_separate() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut data = Compound::new();
+        data.insert("list", Tag::List(vec![Tag::Int(1), Tag::Int(2), Tag::Int(3)]));
+        data.insert("name", Tag::from("Alex"));
+        crate::tick::lock(&ctx.storage).set("minecraft:book_test", data);
+        let src = Src::of(&ctx, &Source::Console);
+        let part = |extra: &[(&str, &str)]| {
+            let mut c = Compound::new();
+            c.insert("nbt", Tag::from("list[]"));
+            c.insert("storage", Tag::from("minecraft:book_test"));
+            for (k, v) in extra {
+                c.insert(*k, Tag::from(*v));
+            }
+            crate::commands::resolve_text(&ctx, &src, &Tag::Compound(c))
+        };
+        let Tag::Compound(out) = part(&[]) else {
+            panic!("a component");
+        };
+        let Some(Tag::List(items)) = out.get("extra") else {
+            panic!("parts");
+        };
+        assert_eq!(items.len(), 5, "three numbers and two separators");
+        assert_eq!(items[1], Tag::from(", "));
+        let Tag::Compound(out) = part(&[("separator", "|")]) else {
+            panic!("a component");
+        };
+        let Some(Tag::List(items)) = out.get("extra") else {
+            panic!("parts");
+        };
+        assert_eq!(items[1], Tag::from("|"));
+        // A path that finds nothing shows nothing.
+        let mut c = Compound::new();
+        c.insert("nbt", Tag::from("missing"));
+        c.insert("storage", Tag::from("minecraft:book_test"));
+        let Tag::Compound(out) = crate::commands::resolve_text(&ctx, &src, &Tag::Compound(c)) else {
+            panic!("a component");
+        };
+        assert_eq!(out.get("extra"), Some(&Tag::List(Vec::new())));
+    }
 }

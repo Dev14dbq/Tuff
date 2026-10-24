@@ -1136,9 +1136,9 @@ async fn play(
                         let action = Action::TestInstance { position, action, test, size, rotation, ignore_entities };
                         let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                     }
-                    play::Serverbound::JigsawGenerate { position, levels, .. } => {
+                    play::Serverbound::JigsawGenerate { position, levels, keep_jigsaws } => {
                         let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                        let action = Action::GenerateJigsaw { position, levels };
+                        let action = Action::GenerateJigsaw { position, levels, keep_jigsaws };
                         let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::SetStructureBlock { position, action, mode, name, offset, size, mirror, rotation, metadata, integrity, seed, flags } => {

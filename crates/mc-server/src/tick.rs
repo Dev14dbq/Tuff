@@ -166,6 +166,7 @@ pub enum Action {
     GenerateJigsaw {
         position: Position,
         levels: i32,
+        keep_jigsaws: bool,
     },
     /// A test block's window was done.
     SetTestBlock {
@@ -1138,13 +1139,18 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             );
             Outcome::default()
         }
-        Action::GenerateJigsaw { position, levels } => Outcome {
+        Action::GenerateJigsaw {
+            position,
+            levels,
+            keep_jigsaws,
+        } => Outcome {
             messages: crate::structure_blocks::generate_jigsaw(
                 ctx,
                 actor.uuid,
                 actor.game_mode,
                 position,
                 levels,
+                keep_jigsaws,
             ),
             ..Outcome::default()
         },
