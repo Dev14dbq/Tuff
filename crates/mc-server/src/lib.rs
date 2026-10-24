@@ -96,7 +96,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, ensure};
 use tokio::net::TcpListener;
-use tracing::{debug, info};
+use tracing::info;
 
 pub use context::{DIMENSIONS, ServerContext};
 
@@ -290,8 +290,10 @@ impl Server {
                     stream.set_nodelay(true)?;
                     let ctx = self.ctx.clone();
                     tokio::spawn(async move {
+                        // Failed logins and broken connections show in the
+                        // log, so a refused join can be told apart later.
                         if let Err(err) = connection::handle(stream, peer, ctx).await {
-                            debug!("{peer}: {err:#}");
+                            info!("{peer} lost connection: {err:#}");
                         }
                     });
                 }
