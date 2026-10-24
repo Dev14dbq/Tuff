@@ -445,3 +445,45 @@ fn mobs_suffocate_inside_blocks() {
     run(&ctx, 30);
     assert!(with_mob(&ctx, id, |m| m.health) < 10.0);
 }
+
+#[test]
+fn a_lead_ties_an_animal_pulls_it_and_lets_go() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let cow = put(&ctx, Species::Cow, [2.5, -60.0, 0.5]);
+    let zombie = put(&ctx, Species::Zombie, [0.5, -60.0, 2.5]);
+    let leashes = |ctx: &ServerContext| lock(&ctx.leashes).links.clone();
+    // Monsters take no lead.
+    hold(&ctx, "minecraft:lead", 2);
+    ctx.mobs.use_on(ctx.dim, zombie, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert!(leashes(&ctx).is_empty());
+    ctx.mobs.use_on(ctx.dim, cow, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert_eq!(
+        leashes(&ctx).get(&cow),
+        Some(&crate::decor::leash::Holder::Player(STEVE))
+    );
+    let left = lock(&ctx.inventories)[&STEVE].slots[36]
+        .as_ref()
+        .map(|s| s.count);
+    assert_eq!(left, Some(1), "the lead was used");
+    // The player walks off: past six blocks the cow is pulled along.
+    if let Some(p) = lock(&ctx.players).get_mut(&STEVE) {
+        p.pose.as_mut().unwrap().x = 9.5;
+    }
+    let before = mob_of(&ctx, cow).unwrap().pos[0];
+    for _ in 0..10 {
+        crate::decor::leash::tick(&ctx);
+        run(&ctx, 1);
+    }
+    assert!(mob_of(&ctx, cow).unwrap().pos[0] > before + 0.5);
+    // Using it again lets go, and the lead drops.
+    ctx.mobs.use_on(ctx.dim, cow, steve([9.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert!(leashes(&ctx).is_empty());
+    assert_eq!(items_of(&ctx, "minecraft:lead"), 1);
+}

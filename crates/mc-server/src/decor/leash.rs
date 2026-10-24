@@ -22,8 +22,49 @@ use crate::tick::lock;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Holder {
     Player(u128),
-    /// The entity id of a knot.
+    /// The entity id of a knot (or of another entity holding it).
     Knot(i32),
+}
+
+/// Whether a lead goes on this mob: anything but monsters (minecraft.wiki,
+/// "Lead").
+pub fn leashable(m: &mc_entity::Mob) -> bool {
+    m.species.category() != mc_entity::mob::Category::Monster && m.dying.is_none()
+}
+
+/// A player uses `e` (a mob): one leading it lets go (the lead drops but in
+/// creative), one with a lead in hand ties it if it is free. Whether the use
+/// was the lead's.
+pub fn use_on_mob(
+    ctx: &ServerContext,
+    e: &Entity,
+    (player, game_mode): (u128, i32),
+    holding_lead: Option<usize>,
+) -> bool {
+    let Kind::Mob(m) = &e.kind else {
+        return false;
+    };
+    let holder = lock(&ctx.leashes).links.get(&e.id).copied();
+    if holder == Some(Holder::Player(player)) {
+        detach(ctx, e.id);
+        fx::sound(ctx, "item.lead.untied", fx::category::NEUTRAL, e.pos, 1.0, 1.0);
+        if game_mode != 1 {
+            drop_lead(ctx, Some(e.pos));
+        }
+        return true;
+    }
+    let Some(slot) = holding_lead else {
+        return false;
+    };
+    if holder.is_some() || !leashable(m) {
+        return false;
+    }
+    attach(ctx, e.id, Holder::Player(player));
+    fx::sound(ctx, "item.lead.tied", fx::category::NEUTRAL, e.pos, 1.0, 1.0);
+    if game_mode != 1 {
+        held::consume(ctx, player, slot, 1);
+    }
+    true
 }
 
 /// Leashed entity id -> holder.
@@ -167,7 +208,7 @@ pub fn tie_to_fence(
     }
     fx::sound(
         ctx,
-        "entity.leash_knot.place",
+        "item.lead.tied",
         fx::category::BLOCKS,
         [
             anchor[0] as f64 + 0.5,
@@ -207,7 +248,7 @@ pub fn tick(ctx: &ServerContext) {
     if links.is_empty() {
         return;
     }
-    let entities = lock(&ctx.entities);
+    let mut entities = lock(&ctx.entities);
     for (id, holder) in links {
         let Some(me) = entities.iter().find(|e| e.id == id && !e.removed) else {
             // The leashed one is gone (or is a player): the lead falls.
@@ -234,8 +275,25 @@ pub fn tick(ctx: &ServerContext) {
                     > 100.0
             }
         };
+        // Beyond six blocks the lead pulls the mob towards its holder.
+        if !snap
+            && let Some(f) = from
+            && let Some(me) = entities.iter_mut().find(|e| e.id == id)
+            && matches!(me.kind, Kind::Mob(_))
+        {
+            let d = [f[0] - me.pos[0], f[1] - me.pos[1], f[2] - me.pos[2]];
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if len > 6.0 {
+                for (v, d) in me.vel.iter_mut().zip(d) {
+                    let n = d / len;
+                    *v += (n * n * 0.4).copysign(n);
+                }
+            }
+            continue;
+        }
         if snap {
-            let at = me.pos;
+            let at = entities.iter().find(|e| e.id == id).map_or([0.0; 3], |e| e.pos);
+            fx::sound(ctx, "item.lead.break", fx::category::NEUTRAL, at, 1.0, 1.0);
             lock(&ctx.leashes).links.remove(&id);
             fx::emit(
                 ctx,

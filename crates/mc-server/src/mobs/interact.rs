@@ -97,6 +97,12 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
         swing(ctx, by);
         return;
     }
+    // Leads come first: letting go, or tying a free mob.
+    let lead = (name == "minecraft:lead").then_some(hslot);
+    if crate::decor::leash::use_on_mob(ctx, e, (by.uuid, by.game_mode), lead) {
+        swing(ctx, by);
+        return;
+    }
     let Kind::Mob(m) = &mut e.kind else {
         return;
     };

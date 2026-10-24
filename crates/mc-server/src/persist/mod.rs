@@ -138,13 +138,14 @@ fn leash_of(ctx: &ServerContext, e: &Entity, all: &[Entity]) -> Option<Leash> {
     let holder = *lock(&ctx.leashes).links.get(&e.id)?;
     match holder {
         Holder::Player(u) => Some(Leash::Entity(u)),
-        Holder::Knot(k) => all.iter().find(|o| o.id == k).and_then(|o| match &o.kind {
+        Holder::Knot(k) => all.iter().find(|o| o.id == k).map(|o| match &o.kind {
             Kind::Hung(Hung {
                 decor: Decor::LeashKnot,
                 anchor,
                 ..
-            }) => Some(Leash::Knot(*anchor)),
-            _ => None,
+            }) => Leash::Knot(*anchor),
+            // Another entity holds it.
+            _ => Leash::Entity(o.uuid),
         }),
     }
 }
@@ -290,7 +291,10 @@ fn spawn_loaded(ctx: &ServerContext, mut fresh: Vec<Loaded>) {
     }
     for (id, leash) in leashes {
         let holder = match leash {
-            Leash::Entity(u) => Holder::Player(u),
+            Leash::Entity(u) => match lock(&ctx.entities).iter().find(|e| e.uuid == u) {
+                Some(holder) => Holder::Knot(holder.id),
+                None => Holder::Player(u),
+            },
             Leash::Knot(at) => match knots.get(&at) {
                 Some(&k) => Holder::Knot(k),
                 None => Holder::Knot(new_knot(ctx, at, &mut knots)),

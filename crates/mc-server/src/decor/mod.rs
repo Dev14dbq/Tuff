@@ -183,7 +183,7 @@ pub fn place(
                 ctx,
                 pos,
                 Hung {
-                    decor: Decor::Stand(Stand::default()),
+                    decor: Decor::Stand(Box::default()),
                     facing: 0,
                     yaw,
                     anchor: cell,
@@ -321,7 +321,7 @@ pub fn break_hung(ctx: &ServerContext, e: &mut Entity, fresh: &mut Vec<Entity>, 
             }
             (Some("minecraft:armor_stand"), "entity.armor_stand.break")
         }
-        Decor::LeashKnot => (None, "entity.leash_knot.break"),
+        Decor::LeashKnot => (None, "item.lead.untied"),
     };
     if drop_self && let Some(name) = self_item {
         fresh.extend(dropped(ctx, at, name, 1, 0));

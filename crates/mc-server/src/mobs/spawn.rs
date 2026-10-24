@@ -1040,7 +1040,7 @@ mod tests {
             mk(Species::Cow, [200.0, 0.0, 0.0], 10),
         ];
         let none = std::collections::HashSet::new();
-        let gone = despawn(&mut v, &[player.clone()], 2, &none);
+        let gone = despawn(&mut v, std::slice::from_ref(&player), 2, &none);
         assert_eq!(gone.len(), 1);
         assert!(v[0].removed && !v[1].removed && !v[2].removed);
         // Named, leashed or idle-but-near mobs stay; peaceful takes them all.
@@ -1059,7 +1059,7 @@ mod tests {
         v[2].id = 3;
         let leashed: std::collections::HashSet<i32> = [2].into_iter().collect();
         for _ in 0..5000 {
-            assert!(despawn(&mut v, &[player.clone()], 2, &leashed).is_empty());
+            assert!(despawn(&mut v, std::slice::from_ref(&player), 2, &leashed).is_empty());
         }
         assert!(matches!(&v[2].kind, Kind::Mob(m) if m.idle == 0));
         assert_eq!(despawn(&mut v, &[player], 0, &leashed).len(), 3);

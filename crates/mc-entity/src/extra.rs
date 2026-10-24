@@ -170,7 +170,7 @@ pub enum Decor {
         variant: String,
         size: (i32, i32),
     },
-    Stand(Stand),
+    Stand(Box<Stand>),
     /// The knot a lead is tied to on a fence.
     LeashKnot,
 }

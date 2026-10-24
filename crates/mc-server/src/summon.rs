@@ -135,7 +135,7 @@ pub fn build(
             }
             Some((
                 Kind::Hung(Hung {
-                    decor: Decor::Stand(s),
+                    decor: Decor::Stand(Box::new(s)),
                     facing: 0,
                     yaw,
                     anchor: at.map(|v| v.floor() as i32),
