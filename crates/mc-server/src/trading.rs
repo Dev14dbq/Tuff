@@ -5,9 +5,18 @@
 //!
 //! Villagers have no schedule or pathfinding here: an unemployed villager
 //! takes a free workstation near it, and works there for good.
+//!
+//! Wandering traders follow the wiki ("Wandering Trader", Spawning). The
+//! counter and the chance live in `data/minecraft/wandering_trader.dat`
+//! (`spawn_delay`, `spawn_chance`), where 26.1 moved them out of level.dat.
+//! `WanderingTraderId` was removed in that change.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+use mc_nbt::{Compound, Tag};
+use mc_protocol::Position;
 
 use mc_data::{McData, TagValue};
 use mc_entity::trade::{Cost, Merchant, Offer};
@@ -75,11 +84,121 @@ struct TradeSet {
     trades: Vec<Def>,
 }
 
-/// When the wandering trader visits next.
+/// Ticks between chances to spawn a wandering trader (one Minecraft day).
+const TRADER_DELAY: i64 = 24000;
+/// How often the counter moves, while `spawn_wandering_traders` is on.
+const TRADER_PERIOD: i64 = 1200;
+const CHANCE_START: i32 = 25;
+const CHANCE_STEP: i32 = 25;
+const CHANCE_MAX: i32 = 75;
+/// Horizontal search around the player or the nearest bell, `-48..=47`.
+const TRADER_RANGE: i32 = 48;
+/// Same search for each llama, `-4..=3`.
+const LLAMA_RANGE: i32 = 4;
+const TRADER_FILE: &str = "data/minecraft/wandering_trader.dat";
+
+/// When the wandering trader visits next (`spawn_delay` and `spawn_chance`).
 #[derive(Debug)]
 pub struct Spawner {
     pub delay: i64,
     pub chance: i32,
+    file: Option<PathBuf>,
+    data_version: i32,
+}
+
+fn nbt_int(c: &Compound, key: &str) -> Option<i32> {
+    match c.get(key) {
+        Some(Tag::Int(v)) => Some(*v),
+        Some(Tag::Byte(v)) => Some(i32::from(*v)),
+        Some(Tag::Long(v)) => i32::try_from(*v).ok(),
+        _ => None,
+    }
+}
+
+impl Spawner {
+    /// `spawn_delay` 24000 and `spawn_chance` 25 when the world has no file yet.
+    pub fn load(world: Option<&Path>, data_version: i32) -> Self {
+        let file = world.map(|w| w.join(TRADER_FILE));
+        let mut s = Self {
+            delay: TRADER_DELAY,
+            chance: CHANCE_START,
+            file,
+            data_version,
+        };
+        if let Some(f) = &s.file
+            && let Ok(root) = crate::world::read_nbt_gz_compound(f)
+            && let Some(Tag::Compound(data)) = root.get("data")
+        {
+            if let Some(n) = nbt_int(data, "spawn_delay") {
+                s.delay = i64::from(n);
+            }
+            if let Some(n) = nbt_int(data, "spawn_chance") {
+                s.chance = n;
+            }
+        }
+        s
+    }
+
+    pub fn save(&self) {
+        let Some(file) = &self.file else {
+            return;
+        };
+        let mut data = Compound::new();
+        data.insert("spawn_delay", Tag::Int(self.delay as i32));
+        data.insert("spawn_chance", Tag::Int(self.chance));
+        let mut root = Compound::new();
+        root.insert("data", Tag::Compound(data));
+        root.insert("DataVersion", Tag::Int(self.data_version));
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(e) = crate::world::write_nbt_gz(file, &root) {
+            tracing::warn!("saving the wandering trader: {e:#}");
+        }
+    }
+}
+
+/// What one minute of the spawn counter decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Visit {
+    /// The day is not over yet.
+    Waiting,
+    /// `spawn_mobs` is off, so this day is skipped.
+    MobsOff,
+    /// The 25/50/75 roll failed.
+    Missed,
+    /// Nobody to spawn near; the chance goes back to 25%.
+    NoPlayer,
+    /// The extra 1-in-10 roll failed.
+    Gated,
+    /// Look for a spot and spawn.
+    Spawn,
+}
+
+/// One minute of the counter. `roll` is `0..100` (success when it is below
+/// the chance before this minute) and `gate` is `0..10` (success on 0).
+fn minute(s: &mut Spawner, spawn_mobs: bool, roll: i32, gate: i32, has_player: bool) -> Visit {
+    s.delay -= TRADER_PERIOD;
+    if s.delay > 0 {
+        return Visit::Waiting;
+    }
+    s.delay = TRADER_DELAY;
+    if !spawn_mobs {
+        return Visit::MobsOff;
+    }
+    let old = s.chance;
+    s.chance = (s.chance + CHANCE_STEP).clamp(CHANCE_START, CHANCE_MAX);
+    if roll >= old {
+        return Visit::Missed;
+    }
+    if !has_player {
+        s.chance = CHANCE_START;
+        return Visit::NoPlayer;
+    }
+    if gate != 0 {
+        return Visit::Gated;
+    }
+    Visit::Spawn
 }
 
 /// All trade sets, by name without namespace (`farmer/level_1`).
@@ -164,7 +283,7 @@ fn below(n: usize) -> usize {
 }
 
 impl Trades {
-    pub fn load(data: &McData, items: &Items) -> Self {
+    pub fn load(data: &McData, items: &Items, world: Option<&Path>, data_version: i32) -> Self {
         let pack = data.data_pack();
         let tags = pack.tags("minecraft:villager_trade").unwrap_or_default();
         let mut sets = HashMap::new();
@@ -194,10 +313,7 @@ impl Trades {
         }
         Self {
             sets,
-            spawner: Mutex::new(Spawner {
-                delay: 24000,
-                chance: 25,
-            }),
+            spawner: Mutex::new(Spawner::load(world, data_version)),
         }
     }
 
@@ -674,91 +790,211 @@ pub fn claimed_sites(entities: &[Entity]) -> HashSet<(i32, i32, i32)> {
         .collect()
 }
 
-/// The wandering trader's visits: every 1200 ticks the countdown to the next
-/// one runs, and when it is out there is a chance (25%, growing to 75% each
-/// day it fails) that one appears near a player.
-pub fn tick_spawner(ctx: &ServerContext, level: &mut crate::level::WorldLevel, now: i64) {
-    if now % 1200 != 0 || !crate::tick::lock(&ctx.game_rules).bool("spawn_wandering_traders") {
+/// The wandering trader's visits (minecraft.wiki, "Wandering Trader",
+/// Spawning): every 1200 ticks, while `spawn_wandering_traders` is on, the
+/// delay drops by 1200. At 0 it resets to 24000. Unless `spawn_mobs` is off
+/// there is a 25% chance, then 50%, then 75%, and after that a 1-in-10 chance
+/// to spawn near a random player (or the nearest bell within 48 blocks).
+pub fn tick_spawner(ctx: &ServerContext, now: i64) {
+    if ctx.world.dimension != "minecraft:overworld" {
         return;
     }
+    if now % TRADER_PERIOD != 0
+        || !crate::tick::lock(&ctx.game_rules).bool("spawn_wandering_traders")
     {
-        let mut s = ctx.trades.spawner.lock().expect("spawner lock");
-        s.delay -= 1200;
-        if s.delay > 0 {
-            return;
-        }
-        s.delay = 24000;
-        s.chance = (s.chance + 25).min(75);
-        if (below(100) as i32) >= s.chance {
-            return;
-        }
+        return;
     }
-    let players: Vec<crate::context::Pose> = crate::tick::lock(&ctx.players)
-        .values()
-        .filter(|p| p.dimension == ctx.world.dimension)
-        .filter_map(|p| p.pose)
-        .collect();
-    if players.is_empty() {
+    let players = overworld_players(ctx);
+    let visit = {
+        let mut s = ctx.trades.spawner.lock().expect("spawner lock");
+        let visit = minute(
+            &mut s,
+            ctx.game_rule_bool("spawn_mobs"),
+            below(100) as i32,
+            below(10) as i32,
+            !players.is_empty(),
+        );
+        s.save();
+        visit
+    };
+    if visit != Visit::Spawn {
         return;
     }
     let near = players[below(players.len())];
-    for _ in 0..10 {
-        let (dx, dz) = (below(49) as i32 - 24, below(49) as i32 - 24);
-        if dx.abs() < 10 && dz.abs() < 10 {
-            continue;
-        }
-        let (x, z) = (near.x.floor() as i32 + dx, near.z.floor() as i32 + dz);
-        let Some(y) = standable(ctx, level, x, near.y.floor() as i32, z) else {
-            continue;
-        };
-        if let Some(entity) = new_merchant(
-            ctx,
-            "minecraft:wandering_trader",
-            [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5],
-        ) {
-            let (trader, at) = (entity.id, entity.pos);
-            spawn(ctx, entity);
-            bring_llamas(ctx, trader, at);
-            ctx.trades.spawner.lock().expect("spawner lock").chance = 25;
-            return;
-        }
+    if try_spawn(ctx, near) {
+        let mut s = ctx.trades.spawner.lock().expect("spawner lock");
+        s.chance = CHANCE_START;
+        s.save();
     }
 }
 
-/// Two trader llamas come with a wandering trader, on leads.
+fn overworld_players(ctx: &ServerContext) -> Vec<crate::context::Pose> {
+    crate::tick::lock(&ctx.players)
+        .values()
+        .filter(|p| p.dimension == ctx.world.dimension)
+        .filter_map(|p| p.pose)
+        .collect()
+}
+
+/// `-range` to `range - 1` on each horizontal axis, as `nextInt(range * 2) - range`.
+fn horizontal(range: i32) -> (i32, i32) {
+    let span = (range * 2).max(1) as usize;
+    (below(span) as i32 - range, below(span) as i32 - range)
+}
+
+/// The nearest bell within 48 blocks, in chunks that are already loaded.
+fn nearest_bell(ctx: &ServerContext, origin: Position) -> Option<Position> {
+    let info = ctx.data.blocks.get("minecraft:bell")?;
+    let (lo, hi) = (info.first_state, info.last_state);
+    let air = ctx.rules.air;
+    let blocks = &ctx.data.blocks;
+    let y_lo = (origin.y - TRADER_RANGE).max(ctx.world.min_y);
+    let y_hi = (origin.y + TRADER_RANGE).min(ctx.world.min_y + ctx.world.height as i32 - 1);
+    let limit = i64::from(TRADER_RANGE) * i64::from(TRADER_RANGE);
+    let mut best: Option<(i64, Position)> = None;
+    let mut buf = vec![air; 16 * 16 * 16];
+    let cx0 = (origin.x - TRADER_RANGE) >> 4;
+    let cx1 = (origin.x + TRADER_RANGE) >> 4;
+    let cz0 = (origin.z - TRADER_RANGE) >> 4;
+    let cz1 = (origin.z + TRADER_RANGE) >> 4;
+    for cx in cx0..=cx1 {
+        for cz in cz0..=cz1 {
+            if !ctx.world.chunk_loaded(cx, cz) {
+                continue;
+            }
+            let mut y = y_lo;
+            while y <= y_hi {
+                ctx.world
+                    .read_cube([cx << 4, y, cz << 4], 16, air, blocks, &mut buf);
+                for dy in 0..16 {
+                    let by = y + dy;
+                    if !(y_lo..=y_hi).contains(&by) {
+                        continue;
+                    }
+                    for dx in 0..16 {
+                        for dz in 0..16 {
+                            let state = buf[((dx * 16 + dy) * 16 + dz) as usize];
+                            if !(lo..=hi).contains(&state) {
+                                continue;
+                            }
+                            let bell = Position::new((cx << 4) + dx, by, (cz << 4) + dz);
+                            let dist = {
+                                let d = |a: i32, b: i32| i64::from(a - b);
+                                let (x, yy, z) = (
+                                    d(bell.x, origin.x),
+                                    d(bell.y, origin.y),
+                                    d(bell.z, origin.z),
+                                );
+                                x * x + yy * yy + z * z
+                            };
+                            if dist <= limit && best.is_none_or(|(d, _)| dist < d) {
+                                best = Some((dist, bell));
+                            }
+                        }
+                    }
+                }
+                y += 16;
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+fn rejects_traders(ctx: &ServerContext, biome: &str) -> bool {
+    ctx.commands
+        .env
+        .tag(
+            "minecraft:worldgen/biome",
+            "minecraft:without_wandering_trader_spawns",
+        )
+        .iter()
+        .any(|b| b == biome)
+}
+
+fn biome_name(ctx: &ServerContext, p: Position) -> Option<String> {
+    let id = ctx.world.biome(p, &ctx.data.blocks)?;
+    let name = ctx.world.biome_name(id)?;
+    Some(if name.contains(':') {
+        name.to_owned()
+    } else {
+        format!("minecraft:{name}")
+    })
+}
+
+/// Feet y on the world surface where a mob can stand, or nothing.
+fn surface_stand(ctx: &ServerContext, x: i32, z: i32) -> Option<i32> {
+    let y = ctx.world.top_where(x, z, |s| !ctx.data.blocks.is_air(s))?;
+    standable_at(ctx, x, y, z).then_some(y)
+}
+
+fn standable_at(ctx: &ServerContext, x: i32, y: i32, z: i32) -> bool {
+    let blocks = &ctx.data.blocks;
+    let state = |y: i32| ctx.world.block(Position::new(x, y, z), blocks).unwrap_or(0);
+    let below = state(y - 1);
+    let open = |s: u32| !ctx.rules.blocks_motion(s) && !blocks.is_fluid(s);
+    ctx.rules.blocks_motion(below)
+        && !blocks.is_fluid(below)
+        && !ctx.rules.is_leaves(below)
+        && open(state(y))
+        && open(state(y + 1))
+}
+
+/// Ten tries for a surface spot within `-range..=range-1` of `origin`.
+fn find_spot(ctx: &ServerContext, origin: (i32, i32), range: i32) -> Option<(i32, i32, i32)> {
+    for _ in 0..10 {
+        let (dx, dz) = horizontal(range);
+        let (x, z) = (origin.0 + dx, origin.1 + dz);
+        if let Some(y) = surface_stand(ctx, x, z) {
+            return Some((x, y, z));
+        }
+    }
+    None
+}
+
+/// Spawns a wandering trader and two leashed llamas. The chance is the
+/// caller's to reset.
+fn try_spawn(ctx: &ServerContext, near: crate::context::Pose) -> bool {
+    let player = Position::new(
+        near.x.floor() as i32,
+        near.y.floor() as i32,
+        near.z.floor() as i32,
+    );
+    let target = nearest_bell(ctx, player).unwrap_or(player);
+    for _ in 0..10 {
+        let (dx, dz) = horizontal(TRADER_RANGE);
+        let (x, z) = (target.x + dx, target.z + dz);
+        let Some(y) = surface_stand(ctx, x, z) else {
+            continue;
+        };
+        if biome_name(ctx, Position::new(x, y, z)).is_some_and(|n| rejects_traders(ctx, &n)) {
+            return false;
+        }
+        let pos = [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5];
+        let Some(entity) = new_merchant(ctx, "minecraft:wandering_trader", pos) else {
+            return false;
+        };
+        let (id, at) = (entity.id, entity.pos);
+        spawn(ctx, entity);
+        bring_llamas(ctx, id, at);
+        return true;
+    }
+    false
+}
+
+/// Two trader llamas come with a wandering trader, on leads. Each gets ten
+/// tries at a surface spot within `-4..=3` of the trader.
 pub fn bring_llamas(ctx: &ServerContext, trader: i32, at: [f64; 3]) {
-    for k in 0..2 {
-        let pos = [at[0] + 1.5 - f64::from(k) * 3.0, at[1], at[2] + 1.0];
+    let origin = (at[0].floor() as i32, at[2].floor() as i32);
+    for _ in 0..2 {
+        let Some((x, y, z)) = find_spot(ctx, origin, LLAMA_RANGE) else {
+            continue;
+        };
+        let pos = [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5];
         let llama = crate::mobs::new_mob(ctx, mc_entity::Species::TraderLlama, pos);
         let id = llama.id;
         crate::decor::spawn_all(ctx, vec![llama]);
         crate::decor::leash::attach(ctx, id, crate::decor::leash::Holder::Knot(trader));
     }
-}
-
-/// The height where something can stand at `x`, `z` around `around`.
-fn standable(
-    ctx: &ServerContext,
-    level: &mut crate::level::WorldLevel,
-    x: i32,
-    around: i32,
-    z: i32,
-) -> Option<i32> {
-    use mc_tick::Level as _;
-    let blocks = &ctx.data.blocks;
-    let state =
-        |level: &mut crate::level::WorldLevel, y: i32| level.block(mc_tick::BlockPos::new(x, y, z));
-    for y in (around - 16..=around + 16).rev() {
-        let (below, feet, head) = (state(level, y - 1), state(level, y), state(level, y + 1));
-        if !blocks.is_air(below)
-            && !blocks.is_fluid(below)
-            && blocks.is_air(feet)
-            && blocks.is_air(head)
-        {
-            return Some(y);
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -951,5 +1187,184 @@ mod tests {
         assert_eq!(pay(&ctx, &offer, &mut grid, &reported, 10), 2);
         assert!(grid[0].is_none());
         assert_eq!(grid[1].as_ref().map(|s| s.count), Some(1));
+    }
+
+    #[test]
+    fn the_spawn_chance_rises_until_a_trader_appears() {
+        let mut s = Spawner::load(None, 0);
+        assert_eq!((s.delay, s.chance), (TRADER_DELAY, CHANCE_START));
+        for _ in 0..19 {
+            assert_eq!(minute(&mut s, true, 0, 0, true), Visit::Waiting);
+        }
+        assert_eq!(s.delay, TRADER_PERIOD);
+        // First day: roll against 25, then the stored chance becomes 50.
+        assert_eq!(minute(&mut s, true, 24, 0, true), Visit::Spawn);
+        assert_eq!(s.chance, 50);
+        s.chance = CHANCE_START;
+        s.delay = TRADER_PERIOD;
+        assert_eq!(minute(&mut s, true, 25, 0, true), Visit::Missed);
+        assert_eq!(s.chance, 50);
+        s.delay = TRADER_PERIOD;
+        assert_eq!(minute(&mut s, true, 49, 0, true), Visit::Spawn);
+        assert_eq!(s.chance, 75);
+        s.delay = TRADER_PERIOD;
+        assert_eq!(minute(&mut s, true, 74, 0, true), Visit::Spawn);
+        assert_eq!(s.chance, 75);
+        s.delay = TRADER_PERIOD;
+        assert_eq!(minute(&mut s, true, 0, 0, false), Visit::NoPlayer);
+        assert_eq!(s.chance, CHANCE_START);
+        s.delay = TRADER_PERIOD;
+        s.chance = 50;
+        assert_eq!(minute(&mut s, true, 0, 1, true), Visit::Gated);
+        assert_eq!(s.chance, 75);
+        s.delay = TRADER_PERIOD;
+        assert_eq!(minute(&mut s, false, 0, 0, true), Visit::MobsOff);
+        assert_eq!((s.delay, s.chance), (TRADER_DELAY, 75));
+    }
+
+    #[test]
+    fn spawn_counters_round_trip_through_wandering_trader_dat() {
+        let dir = std::env::temp_dir().join(format!("mc-trader-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Spawner::load(Some(&dir), 5023);
+        s.delay = 12000;
+        s.chance = 50;
+        s.save();
+        let loaded = Spawner::load(Some(&dir), 5023);
+        assert_eq!((loaded.delay, loaded.chance), (12000, 50));
+        let root = crate::world::read_nbt_gz_compound(&dir.join(TRADER_FILE)).unwrap();
+        let Tag::Compound(data) = root.get("data").unwrap() else {
+            panic!("data");
+        };
+        assert_eq!(data.get("spawn_delay"), Some(&Tag::Int(12000)));
+        assert_eq!(data.get("spawn_chance"), Some(&Tag::Int(50)));
+        assert!(data.get("WanderingTraderId").is_none());
+        assert!(root.get("WanderingTraderSpawnDelay").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn horizontal_offsets_match_the_wiki_ranges() {
+        for _ in 0..200 {
+            let (x, z) = horizontal(TRADER_RANGE);
+            assert!((-48..=47).contains(&x) && (-48..=47).contains(&z));
+            let (x, z) = horizontal(LLAMA_RANGE);
+            assert!((-4..=3).contains(&x) && (-4..=3).contains(&z));
+        }
+    }
+
+    #[test]
+    fn a_bell_within_48_blocks_is_the_spawn_target() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let _ = ctx
+            .world
+            .block(mc_protocol::Position::new(0, 0, 0), &ctx.data.blocks);
+        let origin = Position::new(0, -60, 0);
+        assert_eq!(nearest_bell(&ctx, origin), None);
+        let bell = ctx.data.blocks.default_state("minecraft:bell").unwrap();
+        ctx.world.set_block(
+            Position::new(30, -60, 30),
+            bell,
+            &ctx.data.blocks,
+            &ctx.rules,
+        );
+        assert_eq!(nearest_bell(&ctx, origin), Some(Position::new(30, -60, 30)));
+        ctx.world
+            .set_block(Position::new(30, -60, 30), 0, &ctx.data.blocks, &ctx.rules);
+        ctx.world.set_block(
+            Position::new(40, -60, 40),
+            bell,
+            &ctx.data.blocks,
+            &ctx.rules,
+        );
+        assert_eq!(nearest_bell(&ctx, origin), None);
+        assert!(rejects_traders(&ctx, "minecraft:the_void"));
+        assert!(!rejects_traders(&ctx, "minecraft:plains"));
+    }
+
+    #[test]
+    fn a_visit_spawns_a_trader_and_two_leashed_llamas() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        for cx in -3..=3 {
+            for cz in -3..=3 {
+                let _ = ctx.world.block(
+                    mc_protocol::Position::new(cx * 16, -60, cz * 16),
+                    &ctx.data.blocks,
+                );
+            }
+        }
+        let pose = crate::context::Pose {
+            x: 0.5,
+            y: -60.0,
+            z: 0.5,
+            yaw: 0.0,
+            pitch: 0.0,
+            on_ground: true,
+        };
+        assert!(try_spawn(&ctx, pose));
+        let entities = crate::tick::lock(&ctx.entities);
+        let trader = entities
+            .iter()
+            .find(|e| matches!(&e.kind, Kind::Merchant(m) if m.wandering))
+            .expect("trader");
+        assert_eq!(trader.age, 0);
+        assert_eq!(TRADER_STAY.saturating_sub(trader.age), 48000);
+        let id = trader.id;
+        let llamas: Vec<i32> = entities
+            .iter()
+            .filter(
+                |e| matches!(&e.kind, Kind::Mob(m) if m.species == mc_entity::Species::TraderLlama),
+            )
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(llamas.len(), 2);
+        drop(entities);
+        for llama in llamas {
+            assert_eq!(
+                crate::tick::lock(&ctx.leashes).links.get(&llama),
+                Some(&crate::decor::leash::Holder::Knot(id))
+            );
+        }
+    }
+
+    #[test]
+    fn spawn_rules_gate_the_counter() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        {
+            let mut s = ctx.trades.spawner.lock().unwrap();
+            s.delay = TRADER_PERIOD;
+            s.chance = 25;
+        }
+        ctx.game_rules
+            .lock()
+            .unwrap()
+            .set("spawn_wandering_traders", crate::rules::Value::Bool(false));
+        tick_spawner(&ctx, TRADER_PERIOD);
+        {
+            let s = ctx.trades.spawner.lock().unwrap();
+            assert_eq!((s.delay, s.chance), (TRADER_PERIOD, 25));
+        }
+        ctx.game_rules
+            .lock()
+            .unwrap()
+            .set("spawn_wandering_traders", crate::rules::Value::Bool(true));
+        ctx.game_rules
+            .lock()
+            .unwrap()
+            .set("spawn_mobs", crate::rules::Value::Bool(false));
+        tick_spawner(&ctx, TRADER_PERIOD);
+        let s = ctx.trades.spawner.lock().unwrap();
+        assert_eq!(s.delay, TRADER_DELAY);
+        assert_eq!(s.chance, 25);
     }
 }

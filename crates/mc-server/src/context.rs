@@ -1025,7 +1025,12 @@ impl ServerContext {
                 &recipes.item_tags,
             ),
             recipes,
-            trades: crate::trading::Trades::load(&data, &items),
+            trades: crate::trading::Trades::load(
+                &data,
+                &items,
+                world.folder(),
+                data.version.world_version,
+            ),
             vitals: Mutex::new(HashMap::new()),
             items,
             using: Mutex::new(HashMap::new()),

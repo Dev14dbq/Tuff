@@ -185,6 +185,9 @@ impl Level for WorldLevel<'_> {
         if ctx.data.blocks.block_name(state) == Some("minecraft:beacon") {
             crate::beacons::placed(ctx, to_position(p));
         }
+        if ctx.data.blocks.block_name(state) == Some("minecraft:conduit") {
+            crate::conduits::placed(ctx, to_position(p));
+        }
         if ctx.data.blocks.block_name(state) == Some("minecraft:daylight_detector") {
             crate::daylight::placed(ctx, to_position(p));
         }
