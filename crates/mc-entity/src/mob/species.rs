@@ -432,6 +432,7 @@ impl Species {
                 // Flying mobs (flying-mobs)
                 | Bogged
                 | Parched
+                | Giant
         )
     }
 

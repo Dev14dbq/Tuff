@@ -292,7 +292,15 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             ));
         }
         SulfurCube => {
-            v.push((19, MetadataValue::VarInt(-1)));
+            v.push((17, MetadataValue::Boolean(m.quirks.air.locked)));
+            v.push((
+                19,
+                MetadataValue::VarInt(if m.quirks.air.fuse >= 0 {
+                    mc_entity::mob::cube::FUSE
+                } else {
+                    -1
+                }),
+            ));
             v.push((20, MetadataValue::Boolean(false)));
         }
         Creeper => {

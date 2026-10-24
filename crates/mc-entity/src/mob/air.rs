@@ -84,6 +84,13 @@ pub struct Air {
     pub checks: i32,
     pub wait: i32,
     pub at_chest: Option<[i32; 3]>,
+    /// Sulfur cube: the archetype of the block it holds (index plus one, 0
+    /// for none), the ticks of its fuse (-1 unlit), the ticks before it
+    /// swallows again and whether its growing up is stopped.
+    pub archetype: u8,
+    pub fuse: i32,
+    pub pickup_timer: i32,
+    pub locked: bool,
 }
 
 impl Default for Air {
@@ -122,6 +129,10 @@ impl Default for Air {
             checks: 0,
             wait: 0,
             at_chest: None,
+            archetype: 0,
+            fuse: -1,
+            pickup_timer: 0,
+            locked: false,
         }
     }
 }

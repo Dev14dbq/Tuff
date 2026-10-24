@@ -657,7 +657,11 @@ fn a_bat_hangs_from_the_ceiling_until_a_player_comes_near() {
         return;
     };
     let _ = join(&ctx, [30.5, -60.0, 30.5]);
-    set(&ctx, [0, -59, 0], "minecraft:stone");
+    for x in -6..=6 {
+        for z in -6..=6 {
+            set(&ctx, [x, -59, z], "minecraft:stone");
+        }
+    }
     let id = put(&ctx, Species::Bat, [0.5, -60.0, 0.5]);
     let mut hung = false;
     for _ in 0..600 {
@@ -687,4 +691,77 @@ fn bats_spawn_in_the_dark_as_ambient_mobs() {
     assert_eq!(category(Species::Bat), crate::fx::category::AMBIENT);
     assert!(Species::Bat.flies());
     assert_eq!(Species::Bat.xp_reward(), (0, 0));
+}
+
+#[test]
+fn a_sulfur_cube_swallows_a_block_flies_off_a_blow_and_gives_it_back_to_shears() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 6.5]);
+    let id = put(&ctx, Species::SulfurCube, [0.5, -60.0, 0.5]);
+    hold(&ctx, "minecraft:dirt", 2);
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 4.5]), 0);
+    run(&ctx, 2);
+    let regular = mc_entity::mob::cube::index_of("regular").unwrap();
+    assert_eq!(with_mob(&ctx, id, |m| m.quirks.air.archetype), regular);
+    // It takes a blow from the south without a scratch and rolls north.
+    ctx.mobs.hit(
+        ctx.dim,
+        id,
+        steve([0.5, -60.0, 3.5]),
+        blow(6.0, [0.5, -60.0, 3.5]),
+    );
+    run(&ctx, 6);
+    assert_eq!(with_mob(&ctx, id, |m| m.health), 8.0);
+    let z = lock(&ctx.entities)
+        .iter()
+        .find(|e| e.id == id)
+        .map(|e| e.pos[2])
+        .unwrap();
+    assert!(z < 0.0, "z {z}");
+    // Shears take the block out again.
+    hold(&ctx, "minecraft:shears", 1);
+    run(&ctx, 60);
+    let at = lock(&ctx.entities)
+        .iter()
+        .find(|e| e.id == id)
+        .map(|e| e.pos)
+        .unwrap();
+    move_steve(&ctx, [at[0], at[1], at[2] + 2.0]);
+    ctx.mobs
+        .use_on(ctx.dim, id, steve([at[0], at[1], at[2] + 2.0]), 0);
+    run(&ctx, 2);
+    assert_eq!(with_mob(&ctx, id, |m| m.quirks.air.archetype), 0);
+    assert_eq!(items_of(&ctx, "minecraft:dirt"), 1);
+    // A small one takes none.
+    let small = put(&ctx, Species::SulfurCube, [2.5, -60.0, 0.5]);
+    set_mob(&ctx, small, |m| m.set_baby(true));
+    hold(&ctx, "minecraft:dirt", 1);
+    ctx.mobs.use_on(ctx.dim, small, steve([2.5, -60.0, 4.5]), 0);
+    run(&ctx, 2);
+    assert_eq!(with_mob(&ctx, small, |m| m.quirks.air.archetype), 0);
+}
+
+#[test]
+fn a_cube_with_tnt_goes_off_after_it_is_lit() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 12.5]);
+    let id = put(&ctx, Species::SulfurCube, [0.5, -60.0, 0.5]);
+    hold(&ctx, "minecraft:tnt", 1);
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 4.5]), 0);
+    run(&ctx, 2);
+    hold(&ctx, "minecraft:flint_and_steel", 1);
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 4.5]), 0);
+    run(&ctx, 2);
+    assert!(with_mob(&ctx, id, |m| m.quirks.air.fuse) >= 0, "not lit");
+    run(&ctx, 130);
+    assert!(
+        mob_of(&ctx, id).is_none() || with_mob(&ctx, id, |m| m.is_dead()),
+        "still there"
+    );
 }

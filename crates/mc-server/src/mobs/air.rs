@@ -162,6 +162,9 @@ pub fn used(
     if m.species == Species::CopperGolem && m.dying.is_none() {
         return copper_used(ctx, e, by, name, hslot);
     }
+    if m.species == Species::SulfurCube {
+        return super::cube::used(ctx, e, by, name, hslot, stack);
+    }
     if m.species != Species::Allay || m.dying.is_some() {
         return false;
     }

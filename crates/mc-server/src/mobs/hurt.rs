@@ -99,6 +99,10 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
         }
         return true;
     }
+    // Flying mobs (flying-mobs): a sulfur cube that holds a block flies off.
+    if let Some(done) = super::cube::hit(ctx, e, h) {
+        return done;
+    }
     let id = e.id;
     let Kind::Mob(m) = &mut e.kind else {
         return false;

@@ -17,6 +17,7 @@ pub use body::ENDERMITE_LIFE;
 pub mod air;
 mod brains;
 mod chores;
+pub mod cube;
 pub mod goals;
 pub mod land;
 pub mod species;
@@ -1089,6 +1090,9 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
     }
     if m.no_ai {
         body::physics(m, &mut b, s, None, out);
+    } else if cube::of(m).is_some() {
+        // A sulfur cube holding a block only rolls.
+        cube::roll(m, &mut b, s, out);
     } else {
         // Goals.
         m.look = None;

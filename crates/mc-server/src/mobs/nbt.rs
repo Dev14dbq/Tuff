@@ -287,6 +287,11 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
                 air.color = int(nbt, "Color").unwrap_or(16).clamp(0, 16) as u8;
             }
             Species::Creaking => air.home = cell(nbt, "home_pos"),
+            Species::SulfurCube => {
+                air.fuse = int(nbt, "fuse").unwrap_or(-1);
+                air.pickup_timer = int(nbt, "pickup_timer").unwrap_or(0);
+                air.locked = flag(nbt, "Locked").unwrap_or(false);
+            }
             Species::CopperGolem => {
                 air.weather = match string(nbt, "weather_state") {
                     Some("exposed") => 1,
@@ -643,6 +648,13 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
             c.insert("AttachFace", Tag::Byte(air.face as i8));
             c.insert("Peek", Tag::Byte(air.peek as i8));
             c.insert("Color", Tag::Byte(air.color as i8));
+        }
+        Species::SulfurCube => {
+            let air = &m.quirks.air;
+            c.insert("fuse", Tag::Int(air.fuse));
+            c.insert("pickup_timer", Tag::Int(air.pickup_timer));
+            c.insert("from_bucket", Tag::Byte(0));
+            c.insert("Locked", Tag::Byte(i8::from(air.locked)));
         }
         Species::Creaking => {
             if let Some(h) = m.quirks.air.home {

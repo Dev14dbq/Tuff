@@ -17,6 +17,7 @@ pub mod chest;
 pub mod copper;
 pub mod creaking;
 mod crowd;
+pub mod cube;
 pub mod eggs;
 pub mod endermite;
 pub mod golems;
@@ -568,6 +569,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         bees::hives(ctx, level, home);
         creaking::tick(ctx, level, &mut entities, now, day);
         copper::tick(ctx, level, &mut entities, now);
+        cube::tick(ctx, &mut entities, &targets, now);
     }
 
     let ground = Ground::new(ctx);

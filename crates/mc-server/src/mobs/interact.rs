@@ -440,7 +440,10 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
             goat_eat(ctx, m, pos);
             return;
         }
-        let may_breed = m.baby_age == 0 && !m.in_love() && (!species.tameable() || m.is_tame());
+        let may_breed = m.baby_age == 0
+            && !m.in_love()
+            && (!species.tameable() || m.is_tame())
+            && species != Species::SulfurCube;
         if may_breed {
             m.fall_in_love(Some(by.uuid));
             consume(ctx, by, hslot);
@@ -585,6 +588,12 @@ pub fn shear(ctx: &ServerContext, e: &mut Entity) -> bool {
         send_now(ctx, e);
         return true;
     }
+    if super::cube::shear(ctx, e) {
+        return true;
+    }
+    let Kind::Mob(m) = &mut e.kind else {
+        return false;
+    };
     // Flying mobs (flying-mobs): shears take a happy ghast's harness off.
     if species == Species::HappyGhast
         && let Some(g) = m.gear[slot::BODY].take()
