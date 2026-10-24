@@ -16,6 +16,14 @@ use mc_server::{Config, Server, find_data_dir};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::rand_core::OsRng;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
+
+// Chunks a view holds (not a square: vanilla sends a rounded area, which at
+// small distances reaches past it, so view distance 2 is 49 chunks and 3 is
+// 81), and how many arrive (and go) when the player walks 3 chunks east at
+// view distance 3.
+const VIEW_2: usize = 49;
+const VIEW_3: i32 = 81;
+const EDGE_3: usize = 27;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -244,7 +252,7 @@ async fn ping_login_spawn_and_chat() {
             "minecraft:chunk_batch_finished" => {
                 assert_eq!(Reader::new(&body).varint().unwrap(), chunks - batched);
                 batched = chunks;
-                if chunks == 7 * 7 {
+                if chunks == VIEW_3 {
                     break;
                 }
             }
@@ -258,7 +266,7 @@ async fn ping_login_spawn_and_chat() {
         Some(0x7f),
         "skin layers echo Client Information"
     );
-    assert_eq!(chunks, 7 * 7, "view distance 3 around spawn");
+    assert_eq!(chunks, VIEW_3, "view distance 3 around spawn");
     // Confirm Teleportation (26.3): teleport id, resulting x, y, z, yaw, pitch.
     let teleport = teleport.expect("spawn teleport");
     let mut r = Reader::new(&teleport);
@@ -281,14 +289,14 @@ async fn ping_login_spawn_and_chat() {
     bot.send("minecraft:move_player_pos", moved).await;
     // They may come in several batches, as they get ready.
     let (mut chunks, mut forgotten) = (0, 0);
-    while chunks < 3 * 7 {
+    while chunks < EDGE_3 {
         let (seen, _) = bot.recv_until("minecraft:chunk_batch_finished").await;
         let count = |name: &str| seen.iter().filter(|n| *n == name).count();
         chunks += count("minecraft:level_chunk_with_light");
         forgotten += count("minecraft:forget_level_chunk");
     }
-    assert_eq!(chunks, 3 * 7);
-    assert_eq!(forgotten, 3 * 7);
+    assert_eq!(chunks, EDGE_3);
+    assert_eq!(forgotten, EDGE_3);
 
     // --- chat comes back as a system message
     let mut chat = Vec::new();
@@ -779,12 +787,12 @@ async fn chunks_nobody_has_are_unloaded() {
     let (alice, _) = join_offline(addr, ctx.ids.clone(), "Alice").await;
     // The view arrives in batches as chunks get ready.
     for _ in 0..100 {
-        if ctx.world.loaded_chunks() == 25 {
+        if ctx.world.loaded_chunks() == VIEW_2 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(ctx.world.loaded_chunks(), 25, "a 5×5 view");
+    assert_eq!(ctx.world.loaded_chunks(), VIEW_2, "view distance 2");
     assert!(ctx.world.unload_unused().is_empty(), "Alice still has them");
     drop(alice);
     // The server notices the closed connection and forgets her chunks.
@@ -796,7 +804,7 @@ async fn chunks_nobody_has_are_unloaded() {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!((dropped, ctx.world.loaded_chunks()), (25, 0));
+    assert_eq!((dropped, ctx.world.loaded_chunks()), (VIEW_2, 0));
     let _ = stop.send(());
 }
 

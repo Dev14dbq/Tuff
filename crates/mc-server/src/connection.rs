@@ -2161,8 +2161,32 @@ fn chunk_of(coordinate: f64) -> i32 {
     (coordinate.floor() as i32) >> 4
 }
 
-/// Chunks the client has, kept to a square of `radius` around its chunk.
-/// The world counts this client as a viewer of each of them.
+/// Whether the chunk `dx`, `dz` chunks from the player's is sent for a view
+/// distance of `radius`. Since 1.20.2 that is a rounded area, not a square:
+/// the squared distance, with the two nearest rings of each axis not
+/// counted (the client keeps the ring around the view for its light and
+/// neighbours), is below `radius` squared. The counts match what a vanilla
+/// server sends (`docs/BENCHMARKS.md`, `docs/ROADMAP.md`): 473 chunks for
+/// 10, 1057 for 16, 3725 for 32; and 49 for 2, 81 for 3.
+fn in_view(radius: i32, dx: i32, dz: i32) -> bool {
+    let beyond = |d: i32| i64::from((d.abs() - 2).max(0));
+    beyond(dx).pow(2) + beyond(dz).pow(2) < i64::from(radius).pow(2)
+}
+
+/// The chunks of a view of `radius` around `(cx, cz)`, nearest first.
+fn view_chunks(radius: i32, cx: i32, cz: i32) -> Vec<(i32, i32)> {
+    let reach = radius + 1;
+    let mut chunks: Vec<_> = (cx - reach..=cx + reach)
+        .flat_map(|x| (cz - reach..=cz + reach).map(move |z| (x, z)))
+        .filter(|&(x, z)| in_view(radius, x - cx, z - cz))
+        .collect();
+    chunks.sort_by_key(|&(x, z)| ((x - cx).pow(2) + (z - cz).pow(2), x, z));
+    chunks
+}
+
+/// Chunks the client has, kept to the rounded area of `radius` around its
+/// chunk (see [`in_view`]). The world counts this client as a viewer of
+/// each of them.
 struct ChunkView {
     radius: i32,
     center: Option<(i32, i32)>,
@@ -2204,7 +2228,7 @@ impl ChunkView {
         }
         self.center = Some((cx, cz));
         let r = self.radius;
-        let in_range = |(x, z): (i32, i32)| (x - cx).abs() <= r && (z - cz).abs() <= r;
+        let in_range = |(x, z): (i32, i32)| in_view(r, x - cx, z - cz);
 
         let stale: Vec<_> = self
             .loaded
@@ -2218,11 +2242,9 @@ impl ChunkView {
             writer.queue(&play::ForgetLevelChunk { x, z })?;
         }
 
-        let mut missing: Vec<_> = (cx - r..=cx + r)
-            .flat_map(|x| (cz - r..=cz + r).map(move |z| (x, z)))
-            .filter(|c| !self.loaded.contains(c))
-            .collect();
-        missing.sort_by_key(|&(x, z)| (x - cx).pow(2) + (z - cz).pow(2));
+        // Nearest first.
+        let mut missing = view_chunks(r, cx, cz);
+        missing.retain(|c| !self.loaded.contains(c));
 
         writer.queue(&play::SetChunkCacheCenter { x: cx, z: cz })?;
         // All of them are worked on at once, nearest first; each batch sent
@@ -2577,5 +2599,49 @@ pub fn spawn_packet(ctx: &ServerContext) -> play::SetDefaultSpawnPosition {
         position: Position::new(spawn.pos.0, spawn.pos.1, spawn.pos.2),
         yaw: spawn.yaw,
         pitch: spawn.pitch,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_view_has_as_many_chunks_as_a_vanilla_server_sends() {
+        // Counts vanilla sent in `cargo xtask bench` / `chunk-speed`.
+        for (radius, count) in [(10, 473), (16, 1057), (32, 3725)] {
+            assert_eq!(
+                view_chunks(radius, 0, 0).len(),
+                count,
+                "view distance {radius}"
+            );
+        }
+        // And the small ones, where it is bigger than the square.
+        for (radius, count) in [(2, 49), (3, 81), (4, 117)] {
+            assert_eq!(
+                view_chunks(radius, 5, -7).len(),
+                count,
+                "view distance {radius}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_view_is_round_and_loads_nearest_first() {
+        let chunks = view_chunks(16, 0, 0);
+        assert_eq!(chunks[0], (0, 0));
+        let far = |&(x, z): &(i32, i32)| x * x + z * z;
+        assert!(chunks.windows(2).all(|w| far(&w[0]) <= far(&w[1])));
+        // The straight edge reaches one chunk past the radius, the corner
+        // of the square does not.
+        assert!(chunks.contains(&(17, 0)) && chunks.contains(&(0, -17)));
+        assert!(!chunks.contains(&(18, 0)));
+        assert!(!chunks.contains(&(17, 17)) && !chunks.contains(&(-14, 14)));
+        assert!(chunks.contains(&(12, 12)));
+        // Moving one chunk east: the new edge arrives, the old one goes.
+        let moved: HashSet<_> = view_chunks(16, 1, 0).into_iter().collect();
+        let before: HashSet<_> = chunks.into_iter().collect();
+        assert!(moved.contains(&(18, 0)) && !before.contains(&(18, 0)));
+        assert!(before.contains(&(-17, 0)) && !moved.contains(&(-17, 0)));
     }
 }
