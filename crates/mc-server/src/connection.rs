@@ -831,6 +831,12 @@ async fn play(
                     play::Serverbound::PlayerCommand { action: action @ (1 | 2), .. } => {
                         crate::combat::set_sprinting(&ctx, uuid, action == 1);
                     }
+                    play::Serverbound::PlayerCommand { action: 5, .. } => {
+                        // The inventory key while riding a boat with a chest.
+                        if let Some((position, kind)) = crate::vehicles::ridden_inventory(&ctx, entity_id) {
+                            windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
+                        }
+                    }
                     play::Serverbound::PlayerAction { status: status @ (3 | 4), .. } => {
                         // Q: drop one (4) or the whole stack (3) from the main hand.
                         let mut thrown = None;
@@ -930,6 +936,11 @@ async fn play(
                             let action = Action::Vehicle(crate::vehicles::Act::Dismount);
                             let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
+                    }
+                    play::Serverbound::PaddleBoat { left, right } if riding.is_some() => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::Vehicle(crate::vehicles::Act::Paddle { left, right });
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                     }
                     play::Serverbound::MoveVehicle { x, y, z, yaw, pitch } if riding.is_some() && awaiting_teleport.is_none() => {
                         if [x, y, z].iter().all(|c| c.is_finite()) {
@@ -2005,13 +2016,14 @@ fn spawn_entity(
         let Some(kind) = crate::fx::type_id(ctx, &d.kind) else {
             return Ok(());
         };
+        let at = d.at.unwrap_or(entity.pos);
         writer.queue(&play::AddEntity {
             entity_id: entity.id,
             uuid: entity.uuid,
             kind,
-            x: entity.pos[0],
-            y: entity.pos[1],
-            z: entity.pos[2],
+            x: at[0],
+            y: at[1],
+            z: at[2],
             velocity: d.vel,
             pitch: d.pitch,
             yaw: d.yaw,

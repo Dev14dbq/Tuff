@@ -1143,4 +1143,72 @@ mod tests {
         assert_eq!(packet.clocks[1].rate, 0.0);
         assert!(time.packet(false).clocks.is_empty());
     }
+
+    #[test]
+    fn detector_rails_see_minecarts_and_how_full_they_are() {
+        let Some(ctx) = crate::projectiles::tests::flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let blocks = &ctx.data.blocks;
+        let p = Position::new(30, -60, 30);
+        let rail = blocks
+            .state_id(
+                "minecraft:detector_rail",
+                &[("shape", "east_west"), ("powered", "false")],
+            )
+            .unwrap();
+        crate::level::WorldLevel::new(&ctx).set_block(p, rail);
+        let powered = |ctx: &ServerContext| {
+            let s = ctx.world.block(p, &ctx.data.blocks).unwrap();
+            ctx.data.blocks.property(s, "powered") == Some("true")
+        };
+        run_scheduled_ticks(&ctx);
+        assert!(!powered(&ctx));
+        // A chest minecart with a few items stops on it.
+        let cart = crate::vehicles::new(
+            &ctx,
+            mc_entity::extra::Craft::Minecart(mc_entity::extra::Cart::Chest),
+            [30.5, -59.9375, 30.5],
+            0.0,
+        );
+        let id = cart.id;
+        let kind = crate::containers::entity_kind("minecraft:chest_minecart").unwrap();
+        let stone = ctx.items.id("minecraft:stone").unwrap();
+        crate::containers::put(
+            &ctx,
+            crate::containers::entity_key(id),
+            kind,
+            &[(0, Some(mc_protocol::packets::play::ItemStack::new(stone, 64)))],
+        );
+        lock(&ctx.entities).push(cart);
+        run_scheduled_ticks(&ctx);
+        assert!(powered(&ctx));
+        // A comparator reads it: one full stack of 27 slots is 1 + 14/27.
+        let mut level = crate::level::WorldLevel::new(&ctx);
+        level.minecarts = minecart_boxes(&lock(&ctx.entities));
+        assert_eq!(
+            mc_tick::rails::comparator_reading(&level, level.logic(), crate::level::to_pos(p)),
+            Some(1)
+        );
+        crate::containers::put(
+            &ctx,
+            crate::containers::entity_key(id),
+            kind,
+            &(1..14)
+                .map(|i| (i, Some(mc_protocol::packets::play::ItemStack::new(stone, 64))))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            mc_tick::rails::comparator_reading(&level, level.logic(), crate::level::to_pos(p)),
+            Some(8)
+        );
+        // Gone: 20 ticks later the rail is off again.
+        lock(&ctx.entities).clear();
+        for _ in 0..21 {
+            lock(&ctx.time).age += 1;
+            run_scheduled_ticks(&ctx);
+        }
+        assert!(!powered(&ctx));
+    }
 }

@@ -14,7 +14,7 @@ use crate::hits::{self, Hit, Strike, Tick};
 use crate::interact::Actor;
 
 /// Flight duration and the number of stars of a rocket stack's components.
-fn read(comps: Option<&Tag>) -> (i32, usize) {
+pub(crate) fn read(comps: Option<&Tag>) -> (i32, usize) {
     let Some(Tag::Compound(c)) = comps else {
         return (1, 0);
     };
@@ -114,8 +114,12 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         e.removed = true;
         return;
     }
-    // Faster and faster, and up.
-    e.vel = [e.vel[0] * 1.15, e.vel[1] + 0.04, e.vel[2] * 1.15];
+    // Faster and faster, and up; one shot at an angle (from a crossbow or
+    // a dispenser) keeps its speed and course.
+    let at_angle = matches!(&e.kind, Kind::Projectile(p) if matches!(&p.shot, Shot::Firework(f) if f.shot_at_angle));
+    if !at_angle {
+        e.vel = [e.vel[0] * 1.15, e.vel[1] + 0.04, e.vel[2] * 1.15];
+    }
     fx::particles(t.ctx, "minecraft:firework", e.pos, 0.0, 0.0, 1);
 }
 

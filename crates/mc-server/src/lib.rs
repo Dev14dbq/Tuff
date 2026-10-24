@@ -22,6 +22,7 @@ mod crafting;
 mod damage;
 mod daylight;
 mod decor;
+mod dispense;
 mod dropped;
 mod effects;
 mod enchant_effects;

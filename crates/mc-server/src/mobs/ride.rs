@@ -177,6 +177,8 @@ pub fn act(ctx: &ServerContext, actor: &crate::interact::Actor, act: crate::vehi
                 pose,
             });
         }
+        // Mounts have no paddles.
+        crate::vehicles::Act::Paddle { .. } => {}
     }
 }
 

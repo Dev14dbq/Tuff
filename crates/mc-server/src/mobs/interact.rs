@@ -132,52 +132,11 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
     }
     // Shears.
     if name == "minecraft:shears" {
-        if m.can_shear() {
-            m.shear();
-            let color = WOOL_COLORS[usize::from(m.color & 15)];
-            let count = 1 + m.below(3) as i32;
-            fx::sound(
-                ctx,
-                "entity.sheep.shear",
-                fx::category::PLAYERS,
-                pos,
-                1.0,
-                1.0,
-            );
+        if shear(ctx, e) {
             if by.game_mode != 1 {
                 crate::held::wear(ctx, by.uuid, hslot, 1);
-            }
-            if let Some(wool) = ctx.items.id(&format!("minecraft:{color}_wool")) {
-                crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 1.0, pos[2]], wool, count);
             }
             swing(ctx, by);
-            send_now(ctx, e);
-        } else if species == Species::Mooshroom && !m.is_baby() {
-            // A mooshroom gives its mushrooms and becomes a cow.
-            let mushroom = if m.variant == 1 {
-                "minecraft:brown_mushroom"
-            } else {
-                "minecraft:red_mushroom"
-            };
-            fx::sound(
-                ctx,
-                "entity.mooshroom.shear",
-                fx::category::PLAYERS,
-                pos,
-                1.0,
-                1.0,
-            );
-            if by.game_mode != 1 {
-                crate::held::wear(ctx, by.uuid, hslot, 1);
-            }
-            if let Some(i) = ctx.items.id(mushroom) {
-                crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 1.0, pos[2]], i, 5);
-            }
-            if let Some(cow) = super::hurt::convert(ctx, e, Species::Cow) {
-                let _ = ctx.events.send(Event::EntitySpawned(cow.clone()));
-                let _ = ctx.events.send(Event::EntitiesRemoved(vec![id]));
-                lock(&ctx.entities).push(cow);
-            }
         }
         return;
     }
@@ -419,6 +378,64 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
     };
     if rideable && !by.sneaking && item.is_none_or(|_| !food) {
         super::ride::mount(ctx, e, by.entity_id);
+    }
+}
+
+/// Shears used on a mob (by a player or a dispenser): a sheep gives its
+/// wool, a mooshroom its mushrooms and becomes a cow. Whether it did.
+pub fn shear(ctx: &ServerContext, e: &mut Entity) -> bool {
+    let id = e.id;
+    let pos = e.pos;
+    let Kind::Mob(m) = &mut e.kind else {
+        return false;
+    };
+    if m.dying.is_some() {
+        return false;
+    }
+    let species = m.species;
+    if m.can_shear() {
+        m.shear();
+        let color = WOOL_COLORS[usize::from(m.color & 15)];
+        let count = 1 + m.below(3) as i32;
+        fx::sound(
+            ctx,
+            "entity.sheep.shear",
+            fx::category::PLAYERS,
+            pos,
+            1.0,
+            1.0,
+        );
+        if let Some(wool) = ctx.items.id(&format!("minecraft:{color}_wool")) {
+            crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 1.0, pos[2]], wool, count);
+        }
+        send_now(ctx, e);
+        true
+    } else if species == Species::Mooshroom && !m.is_baby() {
+        // A mooshroom gives its mushrooms and becomes a cow.
+        let mushroom = if m.variant == 1 {
+            "minecraft:brown_mushroom"
+        } else {
+            "minecraft:red_mushroom"
+        };
+        fx::sound(
+            ctx,
+            "entity.mooshroom.shear",
+            fx::category::PLAYERS,
+            pos,
+            1.0,
+            1.0,
+        );
+        if let Some(i) = ctx.items.id(mushroom) {
+            crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 1.0, pos[2]], i, 5);
+        }
+        if let Some(cow) = super::hurt::convert(ctx, e, Species::Cow) {
+            let _ = ctx.events.send(Event::EntitySpawned(cow.clone()));
+            let _ = ctx.events.send(Event::EntitiesRemoved(vec![id]));
+            lock(&ctx.entities).push(cow);
+        }
+        true
+    } else {
+        false
     }
 }
 

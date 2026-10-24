@@ -144,18 +144,27 @@ pub fn build(
             ))
         }
         "item_frame" | "glow_item_frame" | "painting" | "leash_knot" => {
-            let facing = int(nbt, "Facing").map_or(3, |f| f.clamp(0, 5) as u8);
+            // Paintings keep their facing as a horizontal one (`facing`:
+            // south, west, north, east).
+            let flat = (n == "painting")
+                .then(|| int(nbt, "facing"))
+                .flatten()
+                .map(|f| [3u8, 4, 2, 5][(f & 3) as usize]);
+            let facing = flat
+                .or_else(|| int(nbt, "Facing").map(|f| f.clamp(0, 5) as u8))
+                .unwrap_or(3);
             let cell = at.map(|v| v.floor() as i32);
             let (dx, dy, dz) = crate::blocks::FACES[usize::from(facing)];
             let anchor = [cell[0] - dx, cell[1] - dy, cell[2] - dz];
             let decor = match n {
-                "painting" => Decor::Painting {
-                    variant: match nbt.get("variant") {
+                "painting" => {
+                    let name = match nbt.get("variant") {
                         Some(Tag::String(v)) => mc_command::args::full_id(v),
                         _ => "minecraft:kebab".into(),
-                    },
-                    size: (1, 1),
-                },
+                    };
+                    let (hung, pos) = crate::decor::painting::hang(ctx, &name, cell, facing);
+                    return Some((Kind::Hung(hung), Some(pos)));
+                }
                 "leash_knot" => Decor::LeashKnot,
                 _ => Decor::Frame(Frame {
                     glow: n == "glow_item_frame",

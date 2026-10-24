@@ -138,6 +138,8 @@ fn step(t: &mut Tick, e: &mut Entity, v: &mut Vehicle) {
         }
         if cart == Cart::Tnt && v.fuse < 0 {
             v.fuse = 80;
+            // It flashes as it burns.
+            fx::status(ctx, e.id, 10);
             fx::sound(
                 ctx,
                 "entity.tnt.primed",
@@ -210,6 +212,7 @@ fn along(
     };
     // Put on the rail's line first.
     e.pos = on_line(rail, e.pos[0], e.pos[2]);
+    let height = e.pos[1];
     e.on_ground = true;
     let (mut dx, mut dz) = (
         f64::from(ex[1][0] - ex[0][0]),
@@ -263,12 +266,14 @@ fn along(
             e.vel[2] *= 0.5;
         }
     }
-    // It moves at most `max` a tick, then slows by itself (less with
-    // someone aboard).
+    // It moves at most `max` a tick (with someone aboard, three quarters
+    // of its speed), keeping the rest of its speed, then slows by itself
+    // (less with someone aboard).
+    let share = if occupied { 0.75 } else { 1.0 };
     let to = [
-        e.pos[0] + e.vel[0].clamp(-max, max),
+        e.pos[0] + (e.vel[0] * share).clamp(-max, max),
         e.pos[1],
-        e.pos[2] + e.vel[2].clamp(-max, max),
+        e.pos[2] + (e.vel[2] * share).clamp(-max, max),
     ];
     let drag = if occupied { 0.997 } else { 0.96 };
     let wet = if hits::in_water(ctx, e.pos) {
@@ -276,8 +281,8 @@ fn along(
     } else {
         1.0
     };
-    e.vel[0] = e.vel[0].clamp(-max, max) * drag * wet;
-    e.vel[2] = e.vel[2].clamp(-max, max) * drag * wet;
+    e.vel[0] *= drag * wet;
+    e.vel[2] *= drag * wet;
     // Stops against a block that is not a rail ahead of it, in its way.
     let ahead = [
         to[0].floor() as i32,
@@ -294,6 +299,14 @@ fn along(
     match find_rail(ctx, e.pos) {
         Some(next) => e.pos = on_line(&next, e.pos[0], e.pos[2]),
         None => e.pos[1] = to[1],
+    }
+    // Height lost becomes speed, height gained costs it: 0.05 a block.
+    let gain = (height - e.pos[1]) * 0.05;
+    let speed = e.vel[0].hypot(e.vel[2]);
+    if speed > 0.0 {
+        let k = ((speed + gain) / speed).max(0.0);
+        e.vel[0] *= k;
+        e.vel[2] *= k;
     }
     if e.vel[0] != 0.0 || e.vel[2] != 0.0 {
         v.yaw = (e.vel[0].atan2(e.vel[2]).to_degrees() as f32 + 90.0) % 360.0;
@@ -374,8 +387,10 @@ mod tests {
         }
         let mut e = cart(&ctx, [100.5, -59.9375, 0.5], [0.3, 0.0, 0.0]);
         run(&ctx, &mut e, 20);
-        // 0.3 × (1 + 0.96 + … + 0.96¹⁹) ≈ 4.18 blocks.
-        assert!(e.pos[0] > 104.6, "{:?}", e.pos);
+        // It moves first and slows after: 0.3 × (1 + 0.96 + … + 0.96¹⁹)
+        // = 4.1806 blocks.
+        let far = 0.3 * (1.0 - 0.96f64.powi(20)) / 0.04;
+        assert!((e.pos[0] - 100.5 - far).abs() < 1e-6, "{:?}", e.pos);
         assert!((e.pos[1] + 59.9375).abs() < 1e-6 && (e.pos[2] - 0.5).abs() < 1e-6);
         // Empty carts lose 4% a tick.
         assert!(e.vel[0] < 0.3 * 0.96f64.powi(19));
@@ -392,11 +407,11 @@ mod tests {
         }
         let mut e = cart(&ctx, [200.5, -59.9375, 0.5], [0.1, 0.0, 0.0]);
         run(&ctx, &mut e, 30);
-        assert!(
-            e.vel[0] > 0.3 && e.vel[0] <= MAX_SPEED + 1e-9,
-            "{:?}",
-            e.vel
-        );
+        // It keeps speeding up, but moves no more than 0.4 a tick.
+        assert!(e.vel[0] > MAX_SPEED, "{:?}", e.vel);
+        let at = e.pos[0];
+        run(&ctx, &mut e, 1);
+        assert!((e.pos[0] - at - MAX_SPEED).abs() < 1e-9, "{:?}", e.pos);
         for x in 300..330 {
             rail(&ctx, x, -60, "minecraft:powered_rail", "east_west", false);
         }
@@ -435,6 +450,26 @@ mod tests {
         let mut e = cart(&ctx, [400.5, -59.9375, 0.5], [0.35, 0.0, 0.0]);
         run(&ctx, &mut e, 10);
         assert!(e.pos[1] > -59.5, "{:?}", e.pos);
+    }
+
+    #[test]
+    fn a_cart_rolls_down_a_slope_from_rest() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        // One rail up (rising to the west), then flat track east.
+        rail(&ctx, 600, -60, "minecraft:rail", "ascending_west", false);
+        for x in 601..620 {
+            rail(&ctx, x, -60, "minecraft:rail", "east_west", false);
+        }
+        let mut e = cart(&ctx, [600.5, -59.4375, 0.5], [0.0; 3]);
+        run(&ctx, &mut e, 400);
+        // minecraft.wiki ("Minecart", distance of empty carts starting on a
+        // downward slope): 2.77 blocks from a slope one high. The height
+        // it loses turns into speed.
+        assert!((e.pos[0] - 600.5 - 2.77).abs() < 0.01, "{:?}", e.pos);
+        assert!(e.vel[0].abs() < 1e-3);
     }
 
     #[test]

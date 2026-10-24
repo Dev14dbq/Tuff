@@ -13,7 +13,7 @@
 mod crowd;
 pub mod eggs;
 pub mod hurt;
-mod interact;
+pub mod interact;
 pub mod meta;
 pub mod nbt;
 pub mod ride;

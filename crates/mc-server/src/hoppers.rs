@@ -15,7 +15,31 @@ use crate::containers::{self, Kind};
 use crate::context::ServerContext;
 use crate::tick::lock;
 
-pub type Active = HashSet<(i32, i32, i32)>;
+/// The hoppers that tick, in the order they came (placed or loaded), which
+/// is the order they take their turns in, as vanilla's block entity list.
+#[derive(Debug, Default)]
+pub struct Active {
+    order: Vec<(i32, i32, i32)>,
+    known: HashSet<(i32, i32, i32)>,
+}
+
+impl Active {
+    pub fn insert(&mut self, key: (i32, i32, i32)) {
+        if self.known.insert(key) {
+            self.order.push(key);
+        }
+    }
+
+    pub fn remove(&mut self, key: &(i32, i32, i32)) {
+        if self.known.remove(key) {
+            self.order.retain(|k| k != key);
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &(i32, i32, i32)> {
+        self.order.iter()
+    }
+}
 
 fn kind_at(ctx: &ServerContext, p: Position) -> Option<(Kind, &str)> {
     let blocks = &ctx.data.blocks;
@@ -198,7 +222,7 @@ fn pickup_into(ctx: &ServerContext, p: Position, kind: Kind, min: [f64; 3], max:
 }
 
 /// What a dispenser does with an item.
-enum Behavior {
+pub(crate) enum Behavior {
     /// It acted: one item is used up (or worn, for tools) and `leftover`
     /// (an empty bucket, a full bottle) comes back, with its components.
     Done {
@@ -211,7 +235,7 @@ enum Behavior {
     Default,
 }
 
-fn done(leftover: Option<i32>) -> Behavior {
+pub(crate) fn done(leftover: Option<i32>) -> Behavior {
     Behavior::Done {
         leftover: leftover.map(|i| ItemStack::new(i, 1)),
         wear: 0,
@@ -227,19 +251,36 @@ fn behavior(
     ctx: &ServerContext,
     level: &mut crate::level::WorldLevel,
     name: &str,
-    front: Position,
+    stack: &ItemStack,
+    p: Position,
+    facing: Dir,
 ) -> Behavior {
+    let (dx, dy, dz) = facing.offset();
+    let front = Position::new(p.x + dx, p.y + dy, p.z + dz);
     let blocks = &ctx.data.blocks;
     let state = ctx.world.block(front, blocks).unwrap_or(0);
     let block = blocks.block_name(state).unwrap_or("");
     let item = |n: &str| ctx.items.id(n);
     match name {
-        "minecraft:water_bucket" | "minecraft:lava_bucket" => {
-            let fluid = if name == "minecraft:water_bucket" {
-                "minecraft:water"
-            } else {
+        "minecraft:water_bucket"
+        | "minecraft:lava_bucket"
+        | "minecraft:cod_bucket"
+        | "minecraft:salmon_bucket"
+        | "minecraft:pufferfish_bucket"
+        | "minecraft:tropical_fish_bucket"
+        | "minecraft:axolotl_bucket"
+        | "minecraft:tadpole_bucket" => {
+            let fluid = if name == "minecraft:lava_bucket" {
                 "minecraft:lava"
+            } else {
+                "minecraft:water"
             };
+            let free = ctx.shapes.is_air(state) || ctx.rules.is_replaceable(state);
+            // In the Nether the water is gone at once; the bucket is empty.
+            if fluid == "minecraft:water" && free && mc_tick::Level::ultrawarm(level) {
+                mc_tick::Level::sponge_dried(level, crate::level::to_pos(front));
+                return done(item("minecraft:bucket"));
+            }
             let placed = if fluid == "minecraft:water"
                 && blocks.property(state, "waterlogged") == Some("false")
             {
@@ -258,7 +299,9 @@ fn behavior(
             }
         }
         "minecraft:bucket" => {
-            let (new, full) = if blocks.property(state, "waterlogged") == Some("true") {
+            let (new, full) = if block == "minecraft:powder_snow" {
+                (ctx.shapes.air(), "minecraft:powder_snow_bucket")
+            } else if blocks.property(state, "waterlogged") == Some("true") {
                 (
                     ctx.shapes.with(state, "waterlogged", "false"),
                     "minecraft:water_bucket",
@@ -277,7 +320,6 @@ fn behavior(
                 _ => Behavior::Default,
             }
         }
-        "minecraft:powder_snow_bucket" => Behavior::Default,
         "minecraft:bone_meal" => {
             if crate::growth::bone_meal(level, front) {
                 done(None)
@@ -286,16 +328,16 @@ fn behavior(
             }
         }
         "minecraft:tnt" => {
+            // It hops up, a little to one side, as lit TNT does.
             let mut tnt = crate::explosion::primed(ctx, front, crate::explosion::TNT_FUSE, None);
             tnt.pos = centre_of(front);
-            tnt.vel = [0.0; 3];
             let _ = ctx
                 .events
                 .send(crate::context::Event::EntitySpawned(tnt.clone()));
             lock(&ctx.entities).push(tnt);
             done(None)
         }
-        "minecraft:flint_and_steel" | "minecraft:fire_charge" => {
+        "minecraft:flint_and_steel" => {
             let lit = block.ends_with("campfire") || block.ends_with("candle");
             let ok = if block == "minecraft:tnt" {
                 crate::explosion::ignite(ctx, level, front, None)
@@ -313,8 +355,6 @@ fn behavior(
             };
             if !ok {
                 Behavior::Failed
-            } else if name == "minecraft:fire_charge" {
-                done(None)
             } else {
                 Behavior::Done {
                     leftover: None,
@@ -335,7 +375,8 @@ fn behavior(
                     wear: 1,
                 }
             } else {
-                Behavior::Default
+                // Else the sheep, mooshrooms and leads in front.
+                crate::dispense::behavior(level, name, stack, p, facing).unwrap_or(Behavior::Default)
             }
         }
         "minecraft:glass_bottle" => {
@@ -345,8 +386,9 @@ fn behavior(
                 level.set_block(front, ctx.shapes.with(state, "honey_level", "0"));
                 return done(item("minecraft:honey_bottle"));
             }
-            let water =
-                block == "minecraft:water" || blocks.property(state, "waterlogged") == Some("true");
+            // A water source (or a waterlogged block).
+            let water = (block == "minecraft:water" && blocks.property(state, "level") == Some("0"))
+                || blocks.property(state, "waterlogged") == Some("true");
             match item("minecraft:potion") {
                 Some(potion) if water => {
                     let mut contents = mc_nbt::Compound::new();
@@ -363,7 +405,7 @@ fn behavior(
                 _ => Behavior::Default,
             }
         }
-        _ => Behavior::Default,
+        _ => crate::dispense::behavior(level, name, stack, p, facing).unwrap_or(Behavior::Default),
     }
 }
 
@@ -451,10 +493,9 @@ fn give_back(ctx: &ServerContext, p: Position, kind: Kind, back: &ItemStack) -> 
 /// A dropper or dispenser fires: a random stocked slot gives one item,
 /// which goes into the container in front (droppers) or out onto the
 /// ground. A dispenser acts on the item first where it has a behaviour
-/// (buckets, bone meal, TNT, flint and steel, fire charges, shears, glass
-/// bottles, armour onto a player in front). Items that need entities the
-/// server does not have yet (boats, minecarts, arrows, eggs, spawn eggs)
-/// are dropped as by a dropper.
+/// (buckets, bone meal, TNT, flint and steel, shears, glass bottles,
+/// armour onto a player in front; the rest in `dispense`), with a click and
+/// smoke.
 pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, dropper: bool) {
     let ctx = level.context();
     let Some((kind, _)) = kind_at(ctx, p) else {
@@ -462,7 +503,10 @@ pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, 
     };
     let slots = containers::slots(ctx, p, kind);
     let filled: Vec<usize> = (0..slots.len()).filter(|&i| slots[i].is_some()).collect();
+    let at = [f64::from(p.x), f64::from(p.y), f64::from(p.z)];
     if filled.is_empty() {
+        // Empty: a higher click.
+        crate::fx::level_event(ctx, 1001, at, 0);
         return;
     }
     let slot = filled[(crate::util::random_u64() % filled.len() as u64) as usize];
@@ -472,19 +516,36 @@ pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, 
     let (dx, dy, dz) = facing.offset();
     let front = Position::new(p.x + dx, p.y + dy, p.z + dz);
     if dropper && let Some(dst) = store_at(ctx, front) {
-        transfer_from_slot(ctx, p, kind, slot, dst, facing.opposite());
+        // An empty hopper handed an item rests 8 ticks.
+        let empty_hopper = dst.name == "minecraft:hopper"
+            && containers::slots(ctx, dst.at, dst.kind)
+                .iter()
+                .all(Option::is_none);
+        if transfer_from_slot(ctx, p, kind, slot, dst, facing.opposite()) && empty_hopper {
+            set_cooldown(ctx, front, mc_tick::hopper::HOPPER_COOLDOWN);
+        }
         return;
     }
-    let action = if dropper {
+    let name = ctx.items.name(stack.item).unwrap_or("").to_owned();
+    let action = if dropper || name.is_empty() {
         Behavior::Default
-    } else if let Some(name) = ctx.items.name(stack.item).map(str::to_owned) {
-        match behavior(ctx, level, &name, front) {
-            Behavior::Default if dress_player(ctx, front, &stack) => done(None),
-            other => other,
-        }
+    } else if dress_player(ctx, front, &stack) {
+        // Armour goes on a player in front first.
+        done(None)
     } else {
-        Behavior::Default
+        behavior(ctx, level, &name, &stack, p, facing)
     };
+    // The click (a launch for projectiles, a failing click when it could
+    // not act) and smoke out of its face.
+    let sound = match action {
+        Behavior::Failed => Some(1001),
+        Behavior::Default => Some(1000),
+        Behavior::Done { .. } => crate::dispense::sound_of(&name),
+    };
+    if let Some(event) = sound {
+        crate::fx::level_event(ctx, event, at, 0);
+    }
+    crate::fx::level_event(ctx, 2000, at, facing as i32);
     match action {
         Behavior::Failed => {}
         Behavior::Done { leftover, wear } => {
@@ -653,9 +714,10 @@ pub fn register(ctx: &ServerContext, p: Position) {
     lock(&ctx.hoppers).insert((p.x, p.y, p.z));
 }
 
-/// One game tick of every hopper minecart that is on: it pulls one item
-/// from the container above it, or else picks up an item entity around it,
-/// then rests 4 ticks.
+/// One game tick of every hopper minecart that is on (minecraft.wiki,
+/// "Minecart with Hopper"): it pulls one item from the container above it,
+/// or else picks up an item entity around it, every tick (it does not rest
+/// like a hopper).
 pub fn tick_carts(ctx: &ServerContext) {
     let carts: Vec<(i32, [f64; 3])> = lock(&ctx.entities)
         .iter()
@@ -669,44 +731,28 @@ pub fn tick_carts(ctx: &ServerContext) {
     let Some(kind) = containers::entity_kind("minecraft:hopper_minecart") else {
         return;
     };
-    let mut rests = lock(&ctx.cart_rests);
-    rests.retain(|id, _| carts.iter().any(|c| c.0 == *id));
-    let resting: Vec<i32> = rests
-        .iter_mut()
-        .filter_map(|(&id, left)| {
-            *left -= 1;
-            (*left > 0).then_some(id)
-        })
-        .collect();
-    rests.retain(|_, left| *left > 0);
-    drop(rests);
     for (id, pos) in carts {
-        if resting.contains(&id) {
-            continue;
-        }
         let dst = Store {
             at: containers::entity_key(id),
             kind,
             name: "",
         };
-        // The container above: the block over the cart's middle.
+        // The container above: its bottom 0.5 (exclusive) to 1.5 above
+        // the cart's bottom.
         let above = Position::new(
             pos[0].floor() as i32,
             (pos[1] + 0.5 + 1.0).floor() as i32,
             pos[2].floor() as i32,
         );
-        let pulled = match kind_at(ctx, above) {
-            Some((k, name)) => {
-                let src = Store {
-                    at: above,
-                    kind: k,
-                    name,
-                };
-                move_one(ctx, src, Dir::Down, dst, Dir::Up)
-            }
-            None => false,
-        };
-        let moved = pulled || {
+        // With a container there it only pulls; else it picks items up.
+        if let Some((k, name)) = kind_at(ctx, above) {
+            let src = Store {
+                at: above,
+                kind: k,
+                name,
+            };
+            move_one(ctx, src, Dir::Down, dst, Dir::Up);
+        } else {
             let (x, y, z) = (pos[0], pos[1] + 0.5, pos[2]);
             pickup_into(
                 ctx,
@@ -714,10 +760,7 @@ pub fn tick_carts(ctx: &ServerContext) {
                 kind,
                 [x - 0.5, y - 0.5, z - 0.5],
                 [x + 0.5, y + 1.0, z + 0.5],
-            )
-        };
-        if moved {
-            lock(&ctx.cart_rests).insert(id, 4);
+            );
         }
     }
 }
@@ -962,5 +1005,97 @@ mod tests {
             Some(stick)
         );
         assert!(containers::slots(&ctx, box_at, chest_block)[0].is_none());
+    }
+
+    /// Hoppers A → B → a chest, ticked in `order` (0 is A, 1 is B) each
+    /// game tick; the tick the chest gets its first item.
+    fn chain(ctx: &ServerContext, x: i32, order: [usize; 2]) -> Option<usize> {
+        let blocks = &ctx.data.blocks;
+        let east = ctx
+            .shapes
+            .with(blocks.default_state("minecraft:hopper").unwrap(), "facing", "east");
+        let (a, b, c) = (
+            Position::new(x, -60, 0),
+            Position::new(x + 1, -60, 0),
+            Position::new(x + 2, -60, 0),
+        );
+        WorldLevel::new(ctx).set_block(a, east);
+        WorldLevel::new(ctx).set_block(b, east);
+        WorldLevel::new(ctx).set_block(c, blocks.default_state("minecraft:chest").unwrap());
+        let stick = ctx.items.id("minecraft:stick").unwrap();
+        let hopper = containers::kind_of("minecraft:hopper").unwrap();
+        containers::put(ctx, a, hopper, &[(0, Some(ItemStack::new(stick, 2)))]);
+        let chest = containers::kind_of("minecraft:chest").unwrap();
+        for tick in 0..20 {
+            let mut level = WorldLevel::new(ctx);
+            let logic = level.logic();
+            for &i in &order {
+                mc_tick::hopper::tick(&mut level, logic, crate::level::to_pos([a, b][i]));
+            }
+            if containers::slots(ctx, c, chest)[0].is_some() {
+                return Some(tick);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn a_hopper_handed_its_first_item_waits_seven_turns() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        // Whether B had its turn before A filled it or not, it passes the
+        // item on 7 ticks later.
+        assert_eq!(chain(&ctx, 10, [0, 1]), Some(7));
+        assert_eq!(chain(&ctx, 20, [1, 0]), Some(7));
+    }
+
+    #[test]
+    fn hoppers_in_a_chunk_read_from_disk_tick() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        if mc_data::McData::load(&dir).is_err() {
+            eprintln!("skipped: no game data");
+            return;
+        }
+        let folder = std::env::temp_dir().join(format!("mc-hoppers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let open = || {
+            let mut config = crate::Config::new(dir.clone());
+            config.world = Some(folder.clone());
+            config.seed = Some(12345);
+            ServerContext::new(config, mc_data::McData::load(&dir).unwrap()).unwrap()
+        };
+        let (hopper, chest) = (Position::new(40, 200, 40), Position::new(40, 199, 40));
+        let stick = {
+            let ctx = open();
+            let blocks = &ctx.data.blocks;
+            // Locked by nothing, facing down into a chest.
+            WorldLevel::new(&ctx).set_block(chest, blocks.default_state("minecraft:chest").unwrap());
+            WorldLevel::new(&ctx).set_block(hopper, blocks.default_state("minecraft:hopper").unwrap());
+            let stick = ctx.items.id("minecraft:stick").unwrap();
+            containers::put(
+                &ctx,
+                hopper,
+                containers::kind_of("minecraft:hopper").unwrap(),
+                &[(0, Some(ItemStack::new(stick, 3)))],
+            );
+            lock(&ctx.hoppers).remove(&(hopper.x, hopper.y, hopper.z));
+            crate::save(&ctx);
+            stick
+        };
+        let ctx = open();
+        assert!(lock(&ctx.hoppers).iter().next().is_none());
+        // Reading the chunk wakes the hopper: it pushes on the next tick.
+        let _ = ctx.world.block(hopper, &ctx.data.blocks);
+        crate::tick::run_scheduled_ticks(&ctx);
+        let chest_kind = containers::kind_of("minecraft:chest").unwrap();
+        assert_eq!(
+            containers::slots(&ctx, chest, chest_kind)[0]
+                .as_ref()
+                .map(|s| (s.item, s.count)),
+            Some((stick, 1))
+        );
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }
