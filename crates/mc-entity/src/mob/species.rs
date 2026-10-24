@@ -74,6 +74,7 @@ species! {
     MagmaCube => "minecraft:magma_cube", "Magma Cube";
     EnderDragon => "minecraft:ender_dragon", "Ender Dragon";
     Wither => "minecraft:wither", "Wither";
+    Silverfish => "minecraft:silverfish", "Silverfish";
 }
 
 /// Which sound of a mob.
@@ -138,6 +139,7 @@ impl Species {
             Enderman => (0.6, 2.9),
             Slime | MagmaCube => (0.52, 0.52),
             Phantom => (0.9, 0.5),
+            Silverfish => (0.4, 0.3),
             Ghast => (4.0, 4.0),
             Blaze => (0.6, 1.8),
             EnderDragon => (16.0, 8.0),
@@ -167,6 +169,7 @@ impl Species {
             Parrot => 0.6,
             Slime | MagmaCube => 0.625,
             Phantom => 0.35,
+            Silverfish => 0.13 / 0.3,
             _ => 0.85,
         }
     }
@@ -182,6 +185,7 @@ impl Species {
             Parrot => 6.0,
             Horse | Donkey | Mule | Llama | TraderLlama => 22.0,
             Spider | Piglin => 16.0,
+            Silverfish => 8.0,
             CaveSpider => 12.0,
             Enderman => 40.0,
             Witch => 26.0,
@@ -238,6 +242,7 @@ impl Species {
             Piglin | ZombifiedPiglin => 5.0,
             Blaze | Phantom => 6.0,
             Skeleton | Stray => 2.0,
+            Silverfish => 1.0,
             _ => 0.0,
         }
     }
@@ -431,6 +436,14 @@ impl Species {
         )
     }
 
+    /// Arthropods: Bane of Arthropods hurts them more and slows them.
+    pub fn arthropod(self) -> bool {
+        matches!(
+            self,
+            Species::Spider | Species::CaveSpider | Species::Silverfish
+        )
+    }
+
     /// Experience a player gets for killing an adult (equipment adds more,
     /// see the server).
     pub fn xp_reward(self) -> (i32, i32) {
@@ -476,6 +489,7 @@ impl Species {
                     | Piglin
                     | Drowned
                     | Horse
+                    | Silverfish
             ),
             Sound::Hurt | Sound::Death => true,
         };

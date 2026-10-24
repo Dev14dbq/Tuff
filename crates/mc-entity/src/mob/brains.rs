@@ -544,6 +544,22 @@ pub(super) fn brain(species: Species) -> Brain {
             ],
             vec![hurt_by(1, true)],
         ),
+        Silverfish => (
+            vec![
+                float(),
+                slot(1, 0, Goal::WakeFriends),
+                melee(4, 1.0, false),
+                slot(
+                    5,
+                    MOVE,
+                    Goal::Hide {
+                        merge: None,
+                        walk: None,
+                    },
+                ),
+            ],
+            vec![hurt_by(1, true), nearest(2, species.follow_range(), false)],
+        ),
         // The bosses think in the server's own tick (`bosses`).
         EnderDragon | Wither => (vec![], vec![]),
     };

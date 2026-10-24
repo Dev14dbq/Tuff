@@ -1,6 +1,8 @@
 use super::*;
 use crate::combat::Blow;
 
+mod critters;
+
 #[test]
 fn darkness_follows_the_day() {
     assert_eq!(sky_darken(1000), 0);

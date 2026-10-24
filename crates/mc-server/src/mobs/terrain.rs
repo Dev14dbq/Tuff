@@ -9,30 +9,32 @@ use mc_protocol::Position;
 
 use crate::context::ServerContext;
 
-const WATER: u16 = 1;
-const LAVA: u16 = 2;
-const HAZARD: u16 = 4;
-const CLIMB: u16 = 8;
-const PLANT: u16 = 16;
-const GRASS_BLOCK: u16 = 32;
-const SOLID: u16 = 64;
+const WATER: u32 = 1;
+const LAVA: u32 = 2;
+const HAZARD: u32 = 4;
+const CLIMB: u32 = 8;
+const PLANT: u32 = 16;
+const GRASS_BLOCK: u32 = 32;
+const SOLID: u32 = 64;
 /// A door opened by hand (not iron), and whether it is open.
-const DOOR: u16 = 128;
-const DOOR_OPEN: u16 = 256;
-const IRON_DOOR: u16 = 512;
+const DOOR: u32 = 128;
+const DOOR_OPEN: u32 = 256;
+const IRON_DOOR: u32 = 512;
 /// In `#enderman_holdable`.
-const HOLDABLE: u16 = 1024;
-const CHEST: u16 = 2048;
-const LIT_FURNACE: u16 = 4096;
-const BED: u16 = 8192;
+const HOLDABLE: u32 = 1024;
+const CHEST: u32 = 2048;
+const LIT_FURNACE: u32 = 4096;
+const BED: u32 = 8192;
 /// The head of a bed nobody lies in.
-const BED_FREE: u16 = 32768;
+const BED_FREE: u32 = 32768;
 /// A full cube that suffocates (not glass, not leaves).
-const SMOTHER: u16 = 16384;
+const SMOTHER: u32 = 16384;
+/// A block silverfish hide in.
+const INFESTABLE: u32 = 65536;
 
 /// What each block state is to a mob, worked out once from the block tables.
-fn flags(ctx: &ServerContext) -> &'static [u16] {
-    static TABLE: OnceLock<Vec<u16>> = OnceLock::new();
+fn flags(ctx: &ServerContext) -> &'static [u32] {
+    static TABLE: OnceLock<Vec<u32>> = OnceLock::new();
     TABLE.get_or_init(|| {
         let blocks = &ctx.data.blocks;
         let holdable = ctx
@@ -105,6 +107,9 @@ fn flags(ctx: &ServerContext) -> &'static [u16] {
                     {
                         f |= BED_FREE;
                     }
+                }
+                if super::infest::is_host(name) {
+                    f |= INFESTABLE;
                 }
                 use mc_tick::support::{BOTTOM_FULL, TOP_FULL};
                 let full =
@@ -200,9 +205,9 @@ type Span = (u8, u8);
 /// tick (paths ask about the same cells again and again).
 pub struct Ground<'a> {
     ctx: &'a ServerContext,
-    flags: &'static [u16],
+    flags: &'static [u32],
     spans: &'static [(u8, u8)],
-    cache: RefCell<mc_tick::fast::FastMap<(i32, i32, i32), u16>>,
+    cache: RefCell<mc_tick::fast::FastMap<(i32, i32, i32), u32>>,
     span_cache: RefCell<mc_tick::fast::FastMap<(i32, i32, i32), Span>>,
 }
 
@@ -217,7 +222,7 @@ impl<'a> Ground<'a> {
         }
     }
 
-    fn at(&self, x: i32, y: i32, z: i32) -> u16 {
+    fn at(&self, x: i32, y: i32, z: i32) -> u32 {
         if let Some(&f) = self.cache.borrow().get(&(x, y, z)) {
             return f;
         }
@@ -319,6 +324,10 @@ impl Terrain for Ground<'_> {
 
     fn free_bed(&self, x: i32, y: i32, z: i32) -> bool {
         self.at(x, y, z) & BED_FREE != 0
+    }
+
+    fn infestable(&self, x: i32, y: i32, z: i32) -> bool {
+        self.at(x, y, z) & INFESTABLE != 0
     }
 
     fn perch(&self, x: i32, y: i32, z: i32) -> Perch {

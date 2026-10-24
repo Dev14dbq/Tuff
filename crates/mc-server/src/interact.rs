@@ -470,6 +470,8 @@ pub fn dig(
         }
         if !silk_touch(ctx, actor.uuid) {
             crate::xp::spawn(ctx, centre(position), crate::xp::block_xp(name));
+            // Whatever was hiding in an infested block comes out.
+            crate::mobs::infest::emerge(ctx, position, state);
         }
     }
     outcome.events.push(Event::BlockBroken {

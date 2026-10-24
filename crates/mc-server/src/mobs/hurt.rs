@@ -115,6 +115,12 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
         }
         return false;
     }
+    // A silverfish hurt by someone, or by magic, calls its friends.
+    if m.species == Species::Silverfish
+        && (h.by.is_some() || h.player.is_some() || h.kind == "minecraft:magic")
+    {
+        super::infest::notify_hurt(m);
+    }
     let (armor, toughness) = armor_of(ctx, m);
     let amount = crate::damage::armor_reduce(h.amount, armor, toughness, h.kind);
     if !m.hurt(amount, h.by.or(h.player.map(|_| -1))) {
@@ -269,7 +275,7 @@ fn hit_with_blow(
     };
     let bonus = if m.species.undead() {
         blow.undead
-    } else if matches!(m.species, Species::Spider | Species::CaveSpider) {
+    } else if m.species.arthropod() {
         blow.arthropod
     } else {
         0.0

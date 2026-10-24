@@ -359,6 +359,13 @@ pub enum MobEvent {
     PlaceBlock {
         cell: Cell,
     },
+    /// A silverfish hides in the infested form of the block here and is
+    /// gone.
+    Hide {
+        cell: Cell,
+    },
+    /// A silverfish calls the others out of the infested blocks around it.
+    WakeFriends,
     /// Moved far at once: clients see a teleport.
     Teleported,
     /// Heals itself (a witch's potion).
@@ -379,6 +386,14 @@ pub enum MobEvent {
     CaravanLeave {
         head: i32,
     },
+}
+
+/// State only some kinds keep: the silverfish's call, the endermite's
+/// life, the golems.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Quirks {
+    /// Silverfish: ticks until it calls the others (0: not calling).
+    pub call_friends: i32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -521,6 +536,8 @@ pub struct Mob {
     pub arms_up: bool,
     /// The ender dragon's and the wither's own state.
     pub boss: Option<crate::boss::Boss>,
+    /// What only some kinds keep (see [`Quirks`]).
+    pub quirks: Quirks,
     /// Whether clients must be told about changed fields.
     pub dirty: bool,
     aggressive: bool,
@@ -639,6 +656,7 @@ impl Mob {
                 Species::Wither => Some(crate::boss::Boss::Wither(Default::default())),
                 _ => None,
             },
+            quirks: Quirks::default(),
             dirty: false,
             aggressive: false,
             rng: seed | 1,
@@ -1071,3 +1089,6 @@ mod tests;
 
 #[cfg(test)]
 mod chore_tests;
+
+#[cfg(test)]
+mod critter_tests;

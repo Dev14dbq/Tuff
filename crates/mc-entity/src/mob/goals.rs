@@ -194,6 +194,17 @@ pub enum Goal {
     /// A llama falls in behind a caravan (a leashed llama and those
     /// following it).
     Caravan { speed: f64 },
+    /// A silverfish that was hurt calls the others out of their blocks
+    /// when the count runs out (`Quirks::call_friends`).
+    WakeFriends,
+    /// A silverfish at peace hides in a stone block next to it, or else
+    /// wanders.
+    Hide {
+        /// The block it goes into.
+        merge: Option<Cell>,
+        /// Where it wanders to instead.
+        walk: Option<Cell>,
+    },
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -709,6 +720,39 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                 None => false,
             }
         }
+        Goal::WakeFriends => m.quirks.call_friends > 0,
+        Goal::Hide { merge, walk } => {
+            *merge = None;
+            *walk = None;
+            // Nothing at all without mob griefing; not while it has a
+            // target or is on its way somewhere.
+            if !s.griefing || m.target.is_some() || !m.nav.is_done() {
+                return false;
+            }
+            if m.below(10) == 0 {
+                const SIDES: [Cell; 6] = [
+                    [0, -1, 0],
+                    [0, 1, 0],
+                    [0, 0, -1],
+                    [0, 0, 1],
+                    [-1, 0, 0],
+                    [1, 0, 0],
+                ];
+                let d = SIDES[m.below(6) as usize];
+                let at = cell_of(b.pos);
+                let c = [at[0] + d[0], at[1] + d[1], at[2] + d[2]];
+                if s.world.infestable(c[0], c[1], c[2]) {
+                    *merge = Some(c);
+                    return true;
+                }
+            }
+            // Otherwise it strolls, as long as someone has been about.
+            if m.idle >= 100 || m.below(10) != 0 {
+                return false;
+            }
+            *walk = random_spot(m, s, cell_of(b.pos), 10, 7, false, None);
+            walk.is_some()
+        }
         Goal::Shelter { interval, .. } => {
             if m.sitting || m.target.is_some() {
                 return false;
@@ -903,6 +947,8 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                 && !m.sitting
         }
         Goal::Shelter { .. } | Goal::SeekLava { .. } => !m.nav.is_done(),
+        Goal::WakeFriends => m.quirks.call_friends > 0,
+        Goal::Hide { merge, .. } => merge.is_none() && !m.nav.is_done(),
         Goal::Caravan { .. } => {
             m.leash.is_none()
                 && m.caravan_head.and_then(|id| s.mob(id)).is_some_and(|o| {
@@ -983,6 +1029,15 @@ fn start(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobE
             }
         }
         Goal::Freeze => m.nav.stop(),
+        Goal::WakeFriends => {}
+        Goal::Hide { merge, walk } => {
+            if let Some(cell) = *merge {
+                out.push(MobEvent::Hide { cell });
+            } else if let Some(c) = *walk {
+                m.nav.stop();
+                m.goto = Some((center(c), 1.0));
+            }
+        }
         Goal::TakeBlock => chores::take_block(m, b, s, out),
         Goal::LeaveBlock => chores::leave_block(m, b, out),
         Goal::Perch { tries, stay, .. } => {
@@ -1006,6 +1061,7 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
     match g {
         Goal::Panic { .. }
         | Goal::Stroll { .. }
+        | Goal::Hide { .. }
         | Goal::Avoid { .. }
         | Goal::FleeSun { .. }
         | Goal::FollowOwner { .. }
@@ -1381,6 +1437,18 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
         Goal::Shelter { speed, .. } | Goal::SeekLava { speed, .. } => {
             if let Some(c) = m.nav.goal {
                 m.goto = Some((center(c), *speed));
+            }
+        }
+        Goal::WakeFriends => {
+            m.quirks.call_friends -= 1;
+            if m.quirks.call_friends <= 0 {
+                m.quirks.call_friends = 0;
+                out.push(MobEvent::WakeFriends);
+            }
+        }
+        Goal::Hide { .. } => {
+            if let Some(c) = m.nav.goal {
+                m.goto = Some((center(c), 1.0));
             }
         }
         Goal::Caravan { speed } => {

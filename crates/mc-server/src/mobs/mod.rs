@@ -15,6 +15,7 @@ pub mod chest;
 mod crowd;
 pub mod eggs;
 pub mod hurt;
+pub mod infest;
 pub mod interact;
 pub mod meta;
 pub mod nbt;
@@ -851,6 +852,8 @@ fn handle(
         }
         MobEvent::Wear { slot, amount } => hurt::wear_gear(ctx, &mut entities[i], slot, amount),
         MobEvent::Buck => ride::eject(ctx, &mut entities[i]),
+        MobEvent::Hide { cell } => infest::hide(ctx, level, entities, i, cell),
+        MobEvent::WakeFriends => infest::wake_friends(ctx, level, entities, i, &mut out.fresh),
     }
 }
 
