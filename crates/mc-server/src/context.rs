@@ -76,6 +76,8 @@ pub enum Direct {
     TestHighlight(mc_protocol::packets::play::GameTestHighlightPos),
     /// A push (knockback): the player's own velocity.
     Motion(mc_protocol::packets::play::SetEntityMotion),
+    /// Colours and icons of one map.
+    Map(mc_protocol::packets::play::MapItemData),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -395,6 +397,8 @@ pub struct Shared {
     pub mobs: crate::mobs::MobState,
     /// Inventories of the players in play.
     pub inventories: Mutex<HashMap<u128, crate::interact::Hands>>,
+    /// Filled maps (`data/minecraft/maps`), shared by every dimension.
+    pub maps: Mutex<crate::maps::Store>,
     /// What broken blocks drop.
     pub loot: crate::loot::BlockLoot,
     /// Crafting recipes.
@@ -1019,6 +1023,7 @@ impl ServerContext {
             shapes,
             mobs: Default::default(),
             inventories: Mutex::new(HashMap::new()),
+            maps: Mutex::new(crate::maps::Store::default()),
             loot: crate::loot::BlockLoot::load(&data),
             enchantments: crate::enchants::Enchantments::load(
                 &data,

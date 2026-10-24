@@ -363,6 +363,7 @@ fn save(ctx: &ServerContext) {
     ctx.bossbars.lock().expect("bossbars lock").save();
     ctx.scoreboard.lock().expect("scoreboard lock").save();
     ctx.storage.lock().expect("storage lock").save();
+    crate::maps::save(ctx);
     if let Err(err) = ctx.world.save_time(&time) {
         tracing::warn!("saving the time: {err:#}");
     }

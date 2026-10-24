@@ -2078,6 +2078,82 @@ pub mod play {
         }
     }
 
+    /// One icon on a map (Map Data). `direction` is 0–15: 0 is north, then
+    /// clockwise in 22.5° steps.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct MapDecoration {
+        /// Id in `minecraft:map_decoration_type`.
+        pub kind: i32,
+        pub x: i8,
+        pub z: i8,
+        pub direction: u8,
+        pub name: Option<Tag>,
+    }
+
+    /// A rectangle of map colours. Bytes are `x + z * columns`, (0, 0) the
+    /// north-west corner of the rectangle.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct MapColorPatch {
+        pub columns: u8,
+        pub rows: u8,
+        /// West edge, in pixels on the map.
+        pub x: u8,
+        /// North edge, in pixels on the map.
+        pub z: u8,
+        pub data: Vec<u8>,
+    }
+
+    /// Map Data (`minecraft:map_item_data`). `icons` of `None` leaves the
+    /// client's icons as they are; a patch with no columns leaves colours.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct MapItemData {
+        pub map_id: i32,
+        pub scale: u8,
+        pub locked: bool,
+        pub icons: Option<Vec<MapDecoration>>,
+        pub patch: Option<MapColorPatch>,
+    }
+    packet!(MapItemData, Play, "minecraft:map_item_data");
+    impl Encode for MapItemData {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.map_id);
+            out.put_u8(self.scale);
+            out.put_bool(self.locked);
+            match &self.icons {
+                None => out.put_bool(false),
+                Some(icons) => {
+                    out.put_bool(true);
+                    out.put_len(icons.len());
+                    for icon in icons {
+                        out.put_varint(icon.kind);
+                        out.put_u8(icon.x as u8);
+                        out.put_u8(icon.z as u8);
+                        out.put_u8(icon.direction);
+                        match &icon.name {
+                            None => out.put_bool(false),
+                            Some(name) => {
+                                out.put_bool(true);
+                                put_nbt(out, name);
+                            }
+                        }
+                    }
+                }
+            }
+            match &self.patch {
+                None => out.put_u8(0),
+                Some(patch) => {
+                    out.put_u8(patch.columns);
+                    if patch.columns > 0 {
+                        out.put_u8(patch.rows);
+                        out.put_u8(patch.x);
+                        out.put_u8(patch.z);
+                        out.put_byte_array(&patch.data);
+                    }
+                }
+            }
+        }
+    }
+
     pub mod heightmap {
         pub const WORLD_SURFACE: i32 = 1;
         pub const MOTION_BLOCKING: i32 = 4;
@@ -3530,6 +3606,65 @@ mod tests {
             0x80, 0x00, 0x00,
         ];
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn map_item_data_layout() {
+        let packet = play::MapItemData {
+            map_id: 3,
+            scale: 1,
+            locked: true,
+            icons: Some(vec![play::MapDecoration {
+                kind: 0,
+                x: 1,
+                z: -2,
+                direction: 8,
+                name: None,
+            }]),
+            patch: Some(play::MapColorPatch {
+                columns: 1,
+                rows: 1,
+                x: 4,
+                z: 5,
+                data: vec![7],
+            }),
+        };
+        let mut out = Vec::new();
+        packet.encode(&mut out);
+        let mut expected = Vec::new();
+        expected.put_varint(3);
+        expected.put_u8(1);
+        expected.put_bool(true);
+        expected.put_bool(true);
+        expected.put_varint(1);
+        expected.put_varint(0);
+        expected.put_u8(1);
+        expected.put_u8((-2i8) as u8);
+        expected.put_u8(8);
+        expected.put_bool(false);
+        expected.put_u8(1);
+        expected.put_u8(1);
+        expected.put_u8(4);
+        expected.put_u8(5);
+        expected.put_byte_array(&[7]);
+        assert_eq!(out, expected);
+
+        let mut bare = Vec::new();
+        play::MapItemData {
+            map_id: 0,
+            scale: 0,
+            locked: false,
+            icons: None,
+            patch: None,
+        }
+        .encode(&mut bare);
+        let mut expect_bare = Vec::new();
+        expect_bare.put_varint(0);
+        expect_bare.put_u8(0);
+        expect_bare.put_bool(false);
+        expect_bare.put_bool(false);
+        expect_bare.put_u8(0);
+        assert_eq!(bare, expect_bare);
     }
 }
 

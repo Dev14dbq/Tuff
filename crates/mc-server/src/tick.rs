@@ -593,6 +593,7 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
         }
     }
     crate::archaeology::tick(ctx);
+    crate::maps::tick(ctx);
 }
 
 /// Ids, boxes and container kinds of the minecarts.

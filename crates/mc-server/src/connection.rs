@@ -546,6 +546,9 @@ async fn play(
         players: everyone.iter().map(OnlinePlayer::info_entry).collect(),
     })?;
     let _ = ctx.events.send(Event::PlayerJoined(me.clone()));
+    // A rejoin should see the whole map again, not a rectangle of what
+    // changed while the previous session still had it.
+    crate::maps::forget(&ctx, uuid);
     let mut visible: HashSet<u128> = HashSet::new();
     for other in everyone
         .iter()
@@ -1568,6 +1571,7 @@ async fn play(
                                 Direct::TestStatus(p) => writer.queue(&p)?,
                                 Direct::TestHighlight(p) => writer.queue(&p)?,
                                 Direct::Motion(p) => writer.queue(&p)?,
+                                Direct::Map(p) => writer.queue(&p)?,
                             }
                         }
                         Ok(Event::Scoreboard(p)) => send_scoreboard(writer, &p)?,

@@ -675,6 +675,14 @@ static MODIFIER: [Field; 6] = [
 
 static MAP_POST: Net = Net::Enum(&["lock", "scale"]);
 
+static MAP_DECOR: [Field; 4] = [
+    req("type", Net::Holder("minecraft:map_decoration_type")),
+    req("x", Net::Double),
+    req("z", Net::Double),
+    req("rotation", Net::Float),
+];
+static MAP_DECORATIONS: Net = Net::Map(&Net::Str, &Net::Fields(&MAP_DECOR));
+
 /// The encoding of component `name`, if we know it.
 pub fn codec(name: &str) -> Option<&'static Net> {
     static ENCHANTMENTS: Net = Net::Map(&Net::Holder("minecraft:enchantment"), &Net::VarInt);
@@ -809,6 +817,7 @@ pub fn codec(name: &str) -> Option<&'static Net> {
         "firework_explosion" => &N17,
         "banner_patterns" => &BANNER,
         "map_post_processing" => &MAP_POST,
+        "map_decorations" => &MAP_DECORATIONS,
         "base_color" => &N18,
         "suspicious_stew_effects" => &STEW,
         "profile" => &N19,
