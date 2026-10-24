@@ -145,6 +145,13 @@ pub struct Aqua {
     /// the clients have been told.
     pub mount: Option<i32>,
     pub mount_sent: bool,
+    /// Dolphin: the item in the water it is making for (the world looks it
+    /// up), ticks it has held one, and ticks before it plays again.
+    pub play_at: Option<[f64; 3]>,
+    pub hold: i32,
+    pub play_cd: i32,
+    /// Dolphin: ticks before it leaps again.
+    pub leap_cd: i32,
     /// A golden dandelion holds a baby (or a tadpole) at its age.
     pub age_locked: bool,
     /// Guardian: ticks charging the beam, whom it aims at (entity id, 0
@@ -186,6 +193,10 @@ impl Default for Aqua {
             caught: None,
             growth: 0,
             age_locked: false,
+            play_at: None,
+            hold: 0,
+            play_cd: 0,
+            leap_cd: 0,
             mount: None,
             mount_sent: false,
             charge: 0,
@@ -349,6 +360,17 @@ pub(super) fn water_spot(m: &mut Mob, b: &Body, s: &Senses, h: i32, v: i32) -> O
     None
 }
 
+/// How high the surface is above: the height of the first cell that is not
+/// water over `pos`, when it is within five blocks and open.
+fn surface_above(s: &Senses, pos: [f64; 3]) -> Option<f64> {
+    let c = cell_of(pos);
+    (0..=5).find_map(|dy| {
+        let cell = [c[0], c[1] + dy, c[2]];
+        (!water(s.world, cell))
+            .then(|| (!s.world.solid(cell[0], cell[1], cell[2])).then_some(f64::from(cell[1])))?
+    })
+}
+
 /// A spot of water away from `from`, a stride long.
 fn water_away(m: &mut Mob, b: &Body, s: &Senses, from: [f64; 3], reach: f64) -> Option<[f64; 3]> {
     let (dx, dz) = (b.pos[0] - from[0], b.pos[2] - from[2]);
@@ -397,6 +419,10 @@ pub enum Act {
     Squid { time: i32 },
     /// A dolphin goes after a swimming player or one in a boat.
     Escort { player: Option<i32>, grace: i32 },
+    /// A dolphin swims out of the water and back in.
+    Leap { left: i32, launched: bool },
+    /// A dolphin swims to an item in the water to play with it.
+    Play,
     /// A dolphin leads on to the treasure it was sent for.
     Treasure { left: i32 },
     /// Goes up for air.
@@ -497,6 +523,18 @@ pub(super) fn can_use(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses) -> b
             found.is_some()
         }
         Act::Treasure { .. } => m.quirks.aqua.treasure.is_some() && wet,
+        Act::Leap { .. } => {
+            wet && !m.is_baby()
+                && m.target.is_none()
+                && m.quirks.aqua.leap_cd == 0
+                && m.below(120) == 0
+                && surface_above(s, b.pos).is_some()
+        }
+        Act::Play => {
+            wet && m.quirks.aqua.play_at.is_some()
+                && m.gear[super::slot::MAINHAND].is_none()
+                && m.quirks.aqua.hold == 0
+        }
         Act::Breathe { to } => {
             if !wet || m.quirks.aqua.breath >= 300 {
                 return false;
@@ -716,6 +754,12 @@ pub(super) fn can_continue(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses)
             p.present && (p.swimming || p.boating) && dist_sq(b.pos, p.pos) < 400.0
         }),
         Act::Treasure { left } => *left > 0 && m.quirks.aqua.treasure.is_some(),
+        Act::Leap { left, launched } => {
+            *left -= 1;
+            // Done once it is back under the surface.
+            *left > 0 && !(*launched && in_water(b, s) && *left < 90)
+        }
+        Act::Play => m.quirks.aqua.play_at.is_some() && m.gear[super::slot::MAINHAND].is_none(),
         Act::Breathe { .. } => in_water(b, s) && m.quirks.aqua.breath < 4000,
         Act::Home { to, left } => {
             *left -= 1;
@@ -764,6 +808,10 @@ pub(super) fn start(act: &mut Act, m: &mut Mob, _b: &Body, out: &mut Vec<MobEven
             m.dirty = true;
         }
         Act::Treasure { left } => *left = 600,
+        Act::Leap { left, launched } => {
+            *left = 100;
+            *launched = false;
+        }
         Act::Beam { .. } => {
             m.quirks.aqua.charge = -10;
             m.quirks.aqua.beam = 0;
@@ -796,6 +844,9 @@ pub(super) fn stop(act: &mut Act, m: &mut Mob) {
         }
         Act::Hunt { wait, .. } if *wait => {
             m.target = None;
+        }
+        Act::Leap { .. } => {
+            m.quirks.aqua.leap_cd = 200;
         }
         Act::Tongue { .. } => {
             m.quirks.aqua.tongue = 0;
@@ -862,6 +913,32 @@ pub(super) fn tick(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses, out: &m
                 } else {
                     m.goto = Some((p, 1.2));
                 }
+            }
+        }
+        Act::Leap { launched, .. } => {
+            let (dx, dz) = {
+                let yaw = f64::from(m.yaw).to_radians();
+                (-yaw.sin(), yaw.cos())
+            };
+            if in_water(b, s) && !*launched {
+                // Up through the surface, the way it faces.
+                if let Some(top) = surface_above(s, b.pos) {
+                    m.goto = Some(([b.pos[0] + dx * 3.0, top + 2.0, b.pos[2] + dz * 3.0], 1.8));
+                }
+            } else if !*launched {
+                *launched = true;
+                b.vel = [dx * 0.4, 0.55, dz * 0.4];
+                b.on_ground = false;
+                out.push(MobEvent::Sound {
+                    name: "entity.dolphin.jump".into(),
+                    volume: 1.0,
+                    pitch: 1.0,
+                });
+            }
+        }
+        Act::Play => {
+            if let Some(p) = m.quirks.aqua.play_at {
+                m.goto = Some((p, 1.2));
             }
         }
         Act::Breathe { to } => {
@@ -1124,6 +1201,12 @@ pub(super) fn pulse(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEven
     }
     if m.quirks.aqua.dash_cd > 0 {
         m.quirks.aqua.dash_cd -= 1;
+    }
+    if m.quirks.aqua.leap_cd > 0 {
+        m.quirks.aqua.leap_cd -= 1;
+    }
+    if m.quirks.aqua.play_cd > 0 {
+        m.quirks.aqua.play_cd -= 1;
     }
     breathing(m, b, s, wet, out);
     stranded(m, b, wet, out);

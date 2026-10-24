@@ -672,6 +672,48 @@ fn a_drowned_with_a_trident_may_ride_a_zombie_nautilus() {
 }
 
 #[test]
+fn a_dolphin_takes_an_item_floating_in_the_water_and_spits_it_out_again() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    join(&ctx, [0.5, -60.0, 0.5]);
+    fill(&ctx, [-6, -60, -6], [6, -54, 6], "minecraft:water");
+    let id = put(&ctx, Species::Dolphin, [4.5, -58.0, 0.5]);
+    let stick = ctx.items.id("minecraft:stick").unwrap();
+    crate::tick::spawn_item_at(&ctx, [-3.5, -57.5, 0.5], stick, 3);
+    // Nothing ticks items here, so the pause before pickup is over by hand.
+    for e in lock(&ctx.entities).iter_mut() {
+        if let Kind::Item { pickup_delay, .. } = &mut e.kind {
+            *pickup_delay = 0;
+        }
+    }
+    let held =
+        |ctx: &ServerContext| with_mob(ctx, id, |m| m.gear[mc_entity::mob::slot::MAINHAND].clone());
+    let mut took = false;
+    for _ in 0..40 {
+        run(&ctx, 20);
+        if held(&ctx).is_some() {
+            took = true;
+            break;
+        }
+    }
+    assert!(took, "the dolphin never took the stick");
+    assert_eq!(held(&ctx).map(|g| (g.item, g.count)), Some((stick, 3)));
+    let items = |ctx: &ServerContext| {
+        lock(&ctx.entities)
+            .iter()
+            .filter(|e| matches!(e.kind, Kind::Item { item, .. } if item == stick))
+            .count()
+    };
+    assert_eq!(items(&ctx), 0);
+    // And it lets go again after a few seconds.
+    run(&ctx, 260);
+    assert!(held(&ctx).is_none());
+    assert_eq!(items(&ctx), 1);
+}
+
+#[test]
 fn an_axolotl_is_bred_with_a_bucket_of_tropical_fish_and_the_bucket_comes_back() {
     let Some(ctx) = flat() else {
         eprintln!("skipped: no game data");

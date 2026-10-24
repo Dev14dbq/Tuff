@@ -961,6 +961,7 @@ fn aquatic(species: Species) -> (Vec<Slot>, Vec<Slot>) {
                 aq(0, MOVE, Aq::Breathe { to: None }),
                 aq(0, MOVE, Aq::ToWater { to: None, left: 0 }),
                 aq(1, MOVE, Aq::Treasure { left: 0 }),
+                aq(3, MOVE, Aq::Play),
                 aq(
                     4,
                     MOVE | LOOK,
@@ -973,6 +974,14 @@ fn aquatic(species: Species) -> (Vec<Slot>, Vec<Slot>) {
                 look(6, 6.0),
                 random_look(7),
                 melee(8, 1.2, false),
+                aq(
+                    4,
+                    MOVE,
+                    Aq::Leap {
+                        left: 0,
+                        launched: false,
+                    },
+                ),
             ],
             vec![hurt_by(1, true)],
         ),

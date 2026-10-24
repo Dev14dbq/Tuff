@@ -259,6 +259,29 @@ fn fish_follow_the_leader_of_the_school() {
 }
 
 #[test]
+fn a_dolphin_leaps_out_of_the_water_and_comes_back() {
+    let world = Pool::deep();
+    let mut e = mob(Species::Dolphin, [0.5, 10.0, 0.5]);
+    m(&mut e)
+        .brain
+        .goals
+        .retain(|s| matches!(s.goal, Goal::Aqua(aqua::Act::Leap { .. })));
+    let mut out = Vec::new();
+    let mut top: f64 = 0.0;
+    for t in 0..2400 {
+        tick(&mut e, &senses(&world, &[], &[], t), &mut out);
+        top = top.max(e.pos[1]);
+    }
+    assert!(top > 12.3, "{top}");
+    assert!(
+        out.iter()
+            .any(|o| matches!(o, MobEvent::Sound { name, .. } if name == "entity.dolphin.jump"))
+    );
+    // Leaps are some seconds apart, not constant: it ends up in the water.
+    assert!(wet(&world, e.pos) || e.pos[1] < 13.0, "{:?}", e.pos);
+}
+
+#[test]
 fn a_school_does_not_outgrow_its_size() {
     let world = Pool::deep();
     let mut e = mob(Species::Cod, [10.5, 5.0, 0.5]);

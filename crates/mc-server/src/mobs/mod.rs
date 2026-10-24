@@ -754,6 +754,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         }
     }
     interact::pick_up(ctx, &mut entities, &mut out.data, now);
+    aqua::play(ctx, &mut entities, now);
     interact::admire(ctx, &mut entities);
 
     let spawned = spawn::tick(ctx, &ground, &mut entities, &targets, now, day, difficulty);

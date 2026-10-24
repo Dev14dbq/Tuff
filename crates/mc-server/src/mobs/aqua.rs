@@ -777,3 +777,141 @@ pub fn breath(ctx: &ServerContext, m: &mc_entity::Mob, targets: &[Target]) {
         );
     }
 }
+
+/// Dolphins play with what floats in the water: they find an item, take it
+/// up, carry it a while and spit it out again.
+pub fn play(ctx: &ServerContext, entities: &mut [Entity], now: i64) {
+    use mc_entity::mob::slot;
+    use mc_entity::nav::{Liquid, Terrain};
+    let dolphins: Vec<usize> = entities
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| {
+            matches!(&e.kind, Kind::Mob(m) if m.species == Species::Dolphin
+                && m.dying.is_none() && !e.removed && !m.is_baby())
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if dolphins.is_empty() {
+        return;
+    }
+    let ground = super::Ground::new(ctx);
+    for i in dolphins {
+        let pos = entities[i].pos;
+        let Kind::Mob(m) = &mut entities[i].kind else {
+            continue;
+        };
+        // One it was given on a reload is let go too.
+        if m.gear[slot::MAINHAND].is_some() && m.quirks.aqua.hold == 0 {
+            m.quirks.aqua.hold = 100;
+        }
+        // Carrying one: it is let go after a while.
+        if m.quirks.aqua.hold > 0 {
+            m.quirks.aqua.hold -= 1;
+            if m.quirks.aqua.hold == 0
+                && let Some(g) = m.gear[slot::MAINHAND].take()
+            {
+                m.quirks.aqua.play_cd = 300;
+                let yaw = f64::from(m.yaw).to_radians();
+                let at = [
+                    pos[0] - yaw.sin() * 1.2,
+                    pos[1] + 0.3,
+                    pos[2] + yaw.cos() * 1.2,
+                ];
+                crate::tick::spawn_item_at(ctx, at, g.item, g.count);
+                fx::sound(
+                    ctx,
+                    "entity.dolphin.play",
+                    fx::category::NEUTRAL,
+                    pos,
+                    1.0,
+                    1.0,
+                );
+                send_worn(ctx, &entities[i]);
+            }
+            continue;
+        }
+        if m.gear[slot::MAINHAND].is_some() || m.quirks.aqua.play_cd > 0 || now % 10 != 0 {
+            continue;
+        }
+        // The nearest item in the water within twelve blocks.
+        let mut best: Option<(f64, usize)> = None;
+        for (j, o) in entities.iter().enumerate() {
+            let Kind::Item { pickup_delay, .. } = o.kind else {
+                continue;
+            };
+            let d = super::dist_sq(o.pos, pos);
+            let wet = ground.liquid(
+                o.pos[0].floor() as i32,
+                o.pos[1].floor() as i32,
+                o.pos[2].floor() as i32,
+            ) == Liquid::Water;
+            if o.removed || pickup_delay > 0 || !wet || d > 144.0 {
+                continue;
+            }
+            if best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, j));
+            }
+        }
+        let Some((d, j)) = best else {
+            if let Kind::Mob(m) = &mut entities[i].kind {
+                m.quirks.aqua.play_at = None;
+            }
+            continue;
+        };
+        let target = entities[j].pos;
+        if d > 2.25 {
+            if let Kind::Mob(m) = &mut entities[i].kind {
+                m.quirks.aqua.play_at = Some(target);
+            }
+            continue;
+        }
+        // Close enough: it takes the stack.
+        let Kind::Item {
+            item,
+            count,
+            damage,
+            ref components,
+            ..
+        } = entities[j].kind
+        else {
+            continue;
+        };
+        let components = components.clone();
+        let (item_id, collector) = (entities[j].id, entities[i].id);
+        entities[j].removed = true;
+        if let Kind::Mob(m) = &mut entities[i].kind {
+            m.gear[slot::MAINHAND] = Some(mc_entity::mob::Gear {
+                item,
+                count,
+                damage,
+                components,
+            });
+            m.quirks.aqua.play_at = None;
+            m.quirks.aqua.hold = 100 + m.below(100) as i32;
+            m.drop_chance[slot::MAINHAND] = 2.0;
+        }
+        let _ = ctx.events.send(crate::context::Event::ItemTaken {
+            item_entity: item_id,
+            collector,
+            count,
+            slots: Vec::new(),
+        });
+        let _ = ctx
+            .events
+            .send(crate::context::Event::EntitiesRemoved(vec![item_id]));
+        send_worn(ctx, &entities[i]);
+    }
+}
+
+fn send_worn(ctx: &ServerContext, e: &Entity) {
+    if let Kind::Mob(m) = &e.kind {
+        fx::emit(
+            ctx,
+            fx::Fx::Equip(mc_protocol::packets::play::SetEquipment {
+                entity_id: e.id,
+                slots: super::meta::equipment_of(m),
+            }),
+        );
+    }
+}
