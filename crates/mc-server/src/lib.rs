@@ -61,6 +61,7 @@ mod precipitation;
 mod projectiles;
 pub mod properties;
 mod random_ticks;
+mod respawn;
 pub mod rules;
 mod scoreboard;
 mod storage;
