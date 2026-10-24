@@ -97,22 +97,29 @@ fn tame_flags(m: &Mob) -> MetadataValue {
     MetadataValue::Byte(f)
 }
 
+/// The entity flags: burning, and invisible or glowing by its effects.
+pub fn flags_of(m: &Mob) -> i8 {
+    let burning =
+        m.burning > 0 && !m.species.fire_immune() || m.species == Species::Blaze && m.charge > 0;
+    i8::from(burning) | crate::effects::flags(&m.effects)
+}
+
 /// All the metadata fields of a mob, as sent when it appears.
 pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataValue)> {
     use Species::*;
-    let burning = m.burning > 0 && !m.species.fire_immune() || m.species == Blaze && m.charge > 0;
     let mut v = vec![
-        (field::FLAGS, MetadataValue::Byte(i8::from(burning))),
+        (field::FLAGS, MetadataValue::Byte(flags_of(m))),
         (metadata::HEALTH, MetadataValue::Float(m.health.max(0.0))),
-        (
-            field::MOB_FLAGS,
-            MetadataValue::Byte(
-                i8::from(m.no_ai)
-                    | if m.left_handed { 2 } else { 0 }
-                    | if m.aggressive() || m.arms_up { 4 } else { 0 },
-            ),
-        ),
     ];
+    v.extend(crate::mob_effects::effect_fields(ctx, m, false));
+    v.extend([(
+        field::MOB_FLAGS,
+        MetadataValue::Byte(
+            i8::from(m.no_ai)
+                | if m.left_handed { 2 } else { 0 }
+                | if m.aggressive() || m.arms_up { 4 } else { 0 },
+        ),
+    )]);
     if let Some(name) = &m.custom_name {
         let mut c = mc_nbt::Compound::new();
         c.insert("text", mc_nbt::Tag::String(name.clone()));

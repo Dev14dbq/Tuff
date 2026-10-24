@@ -226,8 +226,8 @@ const ATTRIBUTES: [(&str, f64, f64, f64); 36] = [
 
 const OPERATIONS: [&str; 3] = ["add_value", "add_multiplied_base", "add_multiplied_total"];
 
-/// All modifiers on an attribute of a player: effects', creative mode's
-/// and those `/attribute` added.
+/// All modifiers on an attribute of a player: effects', the gear's
+/// enchantments' and items', creative mode's and those `/attribute` added.
 pub fn all_modifiers(
     ctx: &ServerContext,
     uuid: u128,
@@ -239,10 +239,18 @@ pub fn all_modifiers(
         .get(&uuid)
         .map(|v| {
             let mut m = v.effects.modifiers_named(&full);
-            m.extend(v.worn.modifiers(&full).iter().cloned());
+            m.extend(v.worn.enchanted(&full).iter().cloned());
             m
         })
         .unwrap_or_default();
+    // What is worn and held now.
+    let gear = crate::enchant_effects::gear(ctx, uuid);
+    mods.extend(
+        crate::worn::gear_modifiers(ctx, &gear)
+            .into_iter()
+            .filter(|(a, _)| *a == full)
+            .map(|(_, m)| m),
+    );
     if game_mode == 1 {
         let creative = match name {
             "block_interaction_range" => Some(("minecraft:creative_mode_block_range", 0.5)),
@@ -296,6 +304,21 @@ pub fn snapshot(ctx: &ServerContext, uuid: u128, name: &str) -> Option<Attribute
         base,
         modifiers: all_modifiers(ctx, uuid, name, mode),
     })
+}
+
+/// Attributes clients are not told about (only the server uses them).
+const UNSYNCED: [&str; 5] = [
+    "attack_damage",
+    "attack_knockback",
+    "follow_range",
+    "knockback_resistance",
+    "tempt_range",
+];
+
+/// Whether clients are told about the attribute (`armor`,
+/// `minecraft:attack_speed`).
+pub fn synced(name: &str) -> bool {
+    !UNSYNCED.contains(&name.trim_start_matches("minecraft:"))
 }
 
 /// A player's attribute value with every modifier.

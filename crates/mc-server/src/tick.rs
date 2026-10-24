@@ -1234,6 +1234,11 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     for hit in std::mem::take(&mut out.hits) {
         crate::hits::apply(ctx, &mut entities, &mut removed, &mut gone, hit);
     }
+    for d in std::mem::take(&mut out.doses) {
+        if let Some(e) = entities.iter_mut().find(|e| e.id == d.target && !e.removed) {
+            crate::mob_effects::dose(ctx, e, &d.effects, d.strength, d.splash, d.by);
+        }
+    }
     for entity in out.spawn.drain(..) {
         let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
         lock(&ctx.entities).push(entity);

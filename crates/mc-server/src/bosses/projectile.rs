@@ -148,13 +148,25 @@ fn skull_hit(t: &mut Tick, e: &Entity, strike: Strike, dangerous: bool) {
                 );
             }
         }
-        Strike::Target(i) => t.out.hits.push(hits::Hit {
-            target: t.targets[i].id,
-            amount,
-            by: None,
-            with: Some(e.id),
-            kind,
-        }),
+        Strike::Target(i) => {
+            t.out.hits.push(hits::Hit {
+                target: t.targets[i].id,
+                amount,
+                by: None,
+                with: Some(e.id),
+                kind,
+            });
+            // A mob it hits withers too.
+            if seconds > 0 && t.targets[i].kind.is_some() {
+                t.out.doses.push(hits::Dose {
+                    target: t.targets[i].id,
+                    effects: vec![("minecraft:wither".into(), 1, 20 * seconds)],
+                    strength: 1.0,
+                    splash: false,
+                    by: None,
+                });
+            }
+        }
         Strike::Block { .. } => hits::hit_block(t.ctx, &strike, e.pos, false),
     }
     t.out.blasts.push(crate::explosion::Blast {

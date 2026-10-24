@@ -71,15 +71,15 @@ const FIRE: [&str; 5] = [
     "minecraft:campfire",
 ];
 
-/// Armor points and toughness a mob has: its own and what it wears.
+/// Armor points and toughness a mob has: its own and what it wears (the
+/// items' `attribute_modifiers` in the slots they are for).
 fn armor_of(ctx: &ServerContext, m: &Mob) -> (f32, f32) {
-    m.gear
-        .iter()
-        .flatten()
-        .filter_map(|g| ctx.items.get(g.item))
-        .fold((m.species.armor(), 0.0), |a, i| {
-            (a.0 + i.armor, a.1 + i.toughness)
-        })
+    let armor = crate::mob_effects::attribute(ctx, m, "armor", f64::from(m.species.armor()));
+    let toughness = crate::mob_effects::attribute(ctx, m, "armor_toughness", 0.0);
+    (
+        armor.clamp(0.0, 30.0) as f32,
+        toughness.clamp(0.0, 20.0) as f32,
+    )
 }
 
 /// Hurts a mob; whether the hit counted. A death starts [`die`].
@@ -115,6 +115,9 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
         }
         return false;
     }
+    if crate::effects::fire_proof(&m.effects, h.kind) {
+        return false;
+    }
     // A silverfish hurt by someone, or by magic, calls its friends.
     if m.species == Species::Silverfish
         && (h.by.is_some() || h.player.is_some() || h.kind == "minecraft:magic")
@@ -123,6 +126,7 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     }
     let (armor, toughness) = armor_of(ctx, m);
     let amount = crate::damage::armor_reduce(h.amount, armor, toughness, h.kind);
+    let amount = crate::effects::reduce_damage(&m.effects, amount, h.kind);
     if !m.hurt(amount, h.by.or(h.player.map(|_| -1))) {
         return false;
     }
@@ -198,15 +202,9 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     true
 }
 
-fn armor_resistance(ctx: &ServerContext, m: &Mob) -> f64 {
-    m.species.knockback_resistance()
-        + m.gear
-            .iter()
-            .flatten()
-            .filter_map(|g| ctx.items.get(g.item))
-            .map(|i| f64::from(i.knockback_resistance))
-            .sum::<f64>()
-            .min(1.0)
+pub(crate) fn armor_resistance(ctx: &ServerContext, m: &Mob) -> f64 {
+    let base = m.species.knockback_resistance();
+    crate::mob_effects::attribute(ctx, m, "knockback_resistance", base).clamp(-2.0, 1.0)
 }
 
 /// A player's melee blow lands on the mob at `i` (and sweeps those near).
@@ -343,7 +341,9 @@ pub fn mob_attacks(
     };
     let species = m.species;
     let weapon = m.gear_item(slot::MAINHAND).and_then(|w| ctx.items.get(w));
-    let damage = damage + weapon.map_or(0.0, |w| w.attack_damage);
+    // The weapon's modifiers, strength and weakness change the blow.
+    let damage = crate::mob_effects::attribute(ctx, m, "attack_damage", f64::from(damage))
+        .clamp(0.0, 2048.0) as f32;
     let disables = weapon.and_then(|w| w.weapon).map_or(0.0, |w| w.1);
     let burning = m.burning > 0;
     if let Some(t) = targets.iter().find(|t| t.id == target) {
@@ -379,7 +379,9 @@ pub fn mob_attacks(
                 killer: Some(species.id().to_owned()),
                 ..Harm::new(damage, "minecraft:mob_attack")
             };
-            harm_at(ctx, entities, j, &harm);
+            if self::harm(ctx, &mut entities[j], &harm) {
+                bite(ctx, &mut entities[j], species, difficulty);
+            }
             // An iron golem throws what it hits up into the air.
             if species == Species::IronGolem
                 && let Kind::Mob(t) = &entities[j].kind
@@ -398,28 +400,38 @@ pub fn mob_attacks(
     }
 }
 
-fn harm_at(ctx: &ServerContext, entities: &mut [Entity], j: usize, h: &Harm) {
-    harm(ctx, &mut entities[j], h);
-}
-
-/// Effects some mobs give with their bite.
-fn poison(ctx: &ServerContext, uuid: u128, species: Species, difficulty: i32) {
+/// The effect some mobs give with their bite, and its seconds.
+fn bite_effect(species: Species, difficulty: i32) -> Option<(&'static str, i32)> {
     let (effect, seconds) = match species {
         Species::CaveSpider if difficulty >= 2 => ("poison", if difficulty == 3 { 15 } else { 7 }),
         Species::Husk => ("hunger", 7 * difficulty),
         Species::WitherSkeleton => ("wither", 10),
-        _ => return,
+        _ => return None,
     };
-    if seconds <= 0 {
-        return;
-    }
-    if let Some(kind) = crate::effects::kind_of(effect) {
+    (seconds > 0).then_some((effect, seconds))
+}
+
+/// Effects some mobs give with their bite.
+fn poison(ctx: &ServerContext, uuid: u128, species: Species, difficulty: i32) {
+    if let Some((effect, seconds)) = bite_effect(species, difficulty)
+        && let Some(kind) = crate::effects::kind_of(effect)
+    {
         crate::effects::give(
             ctx,
             uuid,
             kind,
             crate::effects::Instance::new(0, seconds * 20, true),
         );
+    }
+}
+
+/// The bite's effect on a mob it hit.
+fn bite(ctx: &ServerContext, e: &mut Entity, species: Species, difficulty: i32) {
+    if let Some((effect, seconds)) = bite_effect(species, difficulty)
+        && let Some(kind) = crate::effects::kind_of(effect)
+    {
+        let i = crate::effects::Instance::new(0, seconds * 20, true);
+        crate::mob_effects::give(ctx, e, kind, i, None);
     }
 }
 

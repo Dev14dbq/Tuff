@@ -124,8 +124,10 @@ pub fn color(effects: &[EffectSpec]) -> i32 {
     (r / n) << 16 | (g / n) << 8 | (b / n)
 }
 
-/// A splash potion breaks at `at` (`direct` is the player it hit, who gets
-/// the full strength). Lingering ones leave a cloud instead.
+/// A splash potion `owner` threw breaks at `at` (`direct` is the player
+/// and `direct_mob` the mob it hit, who get the full strength). Lingering
+/// ones leave a cloud instead.
+#[allow(clippy::too_many_arguments)]
 pub fn shatter(
     t: &mut Tick,
     at: [f64; 3],
@@ -133,6 +135,8 @@ pub fn shatter(
     color_rgb: i32,
     lingering: bool,
     direct: Option<&Who>,
+    direct_mob: Option<i32>,
+    owner: Option<u128>,
 ) {
     let ctx = t.ctx;
     // Particles and the sound of breaking glass: world event 2002 (3 for
@@ -166,25 +170,52 @@ pub fn shatter(
         if strength <= 0.0 {
             continue;
         }
-        apply(t.ctx, who.uuid, effects_list, strength);
+        apply(t.ctx, who.uuid, effects_list, strength, true);
+    }
+    // And the mobs within 4 blocks of it (feet to where it broke).
+    let (by, direct_mob) = (owner, direct_mob);
+    for target in t.targets.iter().filter(|g| g.kind.is_some()) {
+        let b = target.aabb;
+        let feet = [
+            (b.min[0] + b.max[0]) / 2.0,
+            b.min[1],
+            (b.min[2] + b.max[2]) / 2.0,
+        ];
+        let d2 = (0..3).map(|a| (feet[a] - at[a]).powi(2)).sum::<f64>();
+        let hit = direct_mob == Some(target.id);
+        if d2 >= 16.0 && !hit {
+            continue;
+        }
+        let strength = if hit { 1.0 } else { 1.0 - d2.sqrt() / 4.0 };
+        t.out.doses.push(crate::hits::Dose {
+            target: target.id,
+            effects: effects_list.to_vec(),
+            strength,
+            splash: true,
+            by,
+        });
     }
 }
 
-/// Gives a player the effects at a fraction of their strength.
-pub fn apply(ctx: &crate::context::ServerContext, uuid: u128, list: &[EffectSpec], strength: f64) {
+/// Gives a player the effects at a fraction of their strength: instant
+/// ones act by that much, the others last that much as long (a splash's
+/// only if over a second is left).
+pub fn apply(
+    ctx: &crate::context::ServerContext,
+    uuid: u128,
+    list: &[EffectSpec],
+    strength: f64,
+    splash: bool,
+) {
     for (name, amp, dur) in list {
         let Some(kind) = effects::kind_of(name) else {
             continue;
         };
         if kind.instant {
-            // Instant effects scale their amount; the whole of it at full
-            // strength, in 1 tick.
-            if strength >= 0.5 {
-                effects::give(ctx, uuid, kind, Instance::new(*amp, 1, true));
-            }
+            effects::instant(ctx, uuid, kind, *amp, strength);
         } else {
             let ticks = (strength * f64::from(*dur) + 0.5) as i32;
-            if ticks >= 20 {
+            if ticks > 20 || !splash && ticks > 0 {
                 effects::give(ctx, uuid, kind, Instance::new(*amp, ticks, true));
             }
         }
@@ -245,17 +276,34 @@ pub fn tick_cloud(t: &mut Tick, e: &mut Entity) {
         return;
     }
     let mut used = false;
+    let quarter: Vec<EffectSpec> = effects
+        .iter()
+        .map(|(n, a, d)| (n.clone(), *a, d / 4))
+        .collect();
+    for target in t.targets.iter().filter(|g| g.kind.is_some()) {
+        let b = target.aabb;
+        let (dx, dz) = (
+            (b.min[0] + b.max[0]) / 2.0 - e.pos[0],
+            (b.min[2] + b.max[2]) / 2.0 - e.pos[2],
+        );
+        if dx * dx + dz * dz <= f64::from(*radius).powi(2) && (b.min[1] - e.pos[1]).abs() < 2.0 {
+            t.out.doses.push(crate::hits::Dose {
+                target: target.id,
+                effects: quarter.clone(),
+                strength: 1.0,
+                splash: false,
+                by: None,
+            });
+            used = true;
+        }
+    }
     for who in t.players {
         let (dx, dz) = (who.pose.x - e.pos[0], who.pose.z - e.pos[2]);
         if who.solid()
             && dx * dx + dz * dz <= f64::from(*radius).powi(2)
             && (who.pose.y - e.pos[1]).abs() < 2.0
         {
-            let quarter: Vec<EffectSpec> = effects
-                .iter()
-                .map(|(n, a, d)| (n.clone(), *a, d / 4))
-                .collect();
-            apply(t.ctx, who.uuid, &quarter, 1.0);
+            apply(t.ctx, who.uuid, &quarter, 1.0, false);
             used = true;
         }
     }

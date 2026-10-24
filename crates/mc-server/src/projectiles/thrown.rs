@@ -174,7 +174,20 @@ fn land(
             lingering,
             ..
         } => {
-            potions::shatter(t, e.pos, effects, *color, *lingering, who.as_ref());
+            let direct_mob = match strike {
+                Strike::Target(i) => Some(t.targets[*i].id),
+                _ => None,
+            };
+            potions::shatter(
+                t,
+                e.pos,
+                effects,
+                *color,
+                *lingering,
+                who.as_ref(),
+                direct_mob,
+                owner,
+            );
         }
         _ => {}
     }

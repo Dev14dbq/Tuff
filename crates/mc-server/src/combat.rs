@@ -168,8 +168,9 @@ pub fn swing_with(ctx: &ServerContext, uuid: u128, pose: Pose, base: Option<f32>
     let info = held.as_ref().and_then(|h| ctx.items.get(h.stack.item));
     let comps = held.as_ref().and_then(|h| h.comps.as_ref());
     let level = |name: &str| crate::held::enchant(comps, name);
-    let base = base.unwrap_or(1.0 + info.map_or(0.0, |i| i.attack_damage));
-    let speed = (4.0 + info.map_or(0.0, |i| i.attack_speed)).max(0.1);
+    // The attributes, with the held item's modifiers and the effects'.
+    let base = base.unwrap_or(crate::commands::gear::value(ctx, uuid, "attack_damage") as f32);
+    let speed = (crate::commands::gear::value(ctx, uuid, "attack_speed") as f32).max(0.1);
     let period = 20.0 / speed;
     let t = now(ctx);
     let (since, sprinting) = with(ctx, uuid, |f| {
@@ -380,19 +381,9 @@ pub struct Hit<'a> {
     pub disables_shield: f32,
 }
 
-/// Total knockback resistance a player wears (netherite).
+/// A player's knockback resistance (netherite armor).
 fn worn_resistance(ctx: &ServerContext, uuid: u128) -> f64 {
-    let inv = lock(&ctx.inventories);
-    let Some(h) = inv.get(&uuid) else {
-        return 0.0;
-    };
-    h.slots[5..9]
-        .iter()
-        .flatten()
-        .filter_map(|s| ctx.items.get(s.item))
-        .map(|i| f64::from(i.knockback_resistance))
-        .sum::<f64>()
-        .min(1.0)
+    crate::commands::gear::value(ctx, uuid, "knockback_resistance")
 }
 
 /// Whether a raised shield faces `from`.
@@ -648,14 +639,7 @@ pub fn after_blow(
         if m.dying.is_some() {
             continue;
         }
-        let resist = m
-            .gear
-            .iter()
-            .flatten()
-            .filter_map(|g| ctx.items.get(g.item))
-            .map(|i| f64::from(i.knockback_resistance))
-            .sum::<f64>()
-            .min(1.0);
+        let resist = crate::mobs::hurt::armor_resistance(ctx, m);
         if let Some(v) = power(e.pos, resist) {
             for (a, b) in e.vel.iter_mut().zip(v) {
                 *a += b;

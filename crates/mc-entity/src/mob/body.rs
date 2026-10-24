@@ -439,7 +439,7 @@ pub(super) fn physics(
     let cell = cell_of(b.pos);
     let wet = in_water(b, s);
     let in_lava = s.world.liquid(cell[0], cell[1], cell[2]) == Liquid::Lava;
-    let speed_attr = m.speed_attr * SPEED_SCALE;
+    let speed_attr = m.movement_speed() * SPEED_SCALE;
     let flies = m.species.flies() && !m.sitting;
     if flies {
         // Fliers: no gravity, a slow drift towards where they go.
@@ -492,7 +492,7 @@ pub(super) fn physics(
                 };
                 // A strider out of lava is slowed (-0.34 of its speed).
                 let chill = if m.cold { 0.66 } else { 1.0 };
-                let speed = (m.speed_attr + bonus) * i.speed * chill;
+                let speed = (m.movement_speed() + bonus) * i.speed * chill;
                 let want = speed * speed * GROUND;
                 let control = if b.on_ground || wet { 0.5 } else { 0.1 };
                 b.vel[0] += (i.dir[0] * want - b.vel[0]) * control;
@@ -523,7 +523,8 @@ pub(super) fn physics(
             m.fall_distance = 0.0;
         } else {
             if m.jump && b.on_ground {
-                b.vel[1] = 0.42;
+                // Jump boost: a tenth of a block a tick more per level.
+                b.vel[1] = 0.42 + 0.1 * f64::from(m.effect_level("jump_boost"));
             }
         }
     }
@@ -547,8 +548,19 @@ pub(super) fn physics(
             b.vel[axis] = 0.0;
         }
     }
-    if falls {
-        b.vel[1] = (b.vel[1] - GRAVITY) * 0.98;
+    let levitation = m.effect_level("levitation");
+    if falls && levitation > 0 {
+        // Levitation lifts it 0.05 a tick per level instead of gravity.
+        b.vel[1] += (0.05 * f64::from(levitation) - b.vel[1]) * 0.2;
+        b.vel[1] *= 0.98;
+        m.fall_distance = 0.0;
+    } else if falls {
+        // Slow falling: gravity at most 0.01 on the way down, no fall.
+        let slow = b.vel[1] <= 0.0 && m.effect_level("slow_falling") > 0;
+        if slow {
+            m.fall_distance = 0.0;
+        }
+        b.vel[1] = (b.vel[1] - if slow { GRAVITY.min(0.01) } else { GRAVITY }) * 0.98;
         // A chicken flaps: it falls slowly.
         if m.species == Species::Chicken && b.vel[1] < -0.1 {
             b.vel[1] = -0.1;
@@ -596,7 +608,7 @@ pub(super) fn physics(
         if fell > 0.0 {
             out.push(MobEvent::Landed { distance: fell });
         }
-        let safe = m.species.safe_fall();
+        let safe = m.species.safe_fall() + f64::from(m.effect_level("jump_boost"));
         if gathered > safe && m.species.takes_fall_damage() {
             out.push(MobEvent::Hurt {
                 amount: (gathered - safe).ceil() as f32,

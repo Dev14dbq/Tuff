@@ -693,7 +693,23 @@ fn unknown_entities_and_keys_are_written_back() {
         .unwrap();
     assert_eq!(cow.get("Silent"), Some(&Tag::Byte(1)));
     assert_eq!(cow.get("Glowing"), Some(&Tag::Byte(1)));
-    assert!(cow.get("active_effects").is_some());
+    // The cow's effects are its own now, written back as they were.
+    let Some(Tag::List(effects)) = cow.get("active_effects") else {
+        panic!("no effects")
+    };
+    let Tag::Compound(speed) = &effects[0] else {
+        panic!()
+    };
+    assert_eq!(
+        speed.get("id"),
+        Some(&Tag::String("minecraft:speed".into()))
+    );
+    assert_eq!(speed.get("amplifier"), Some(&Tag::Byte(1)));
+    assert_eq!(speed.get("duration"), Some(&Tag::Int(100)));
+    assert!(lock(&ctx.entities).iter().any(|e| matches!(
+        &e.kind,
+        mc_entity::Kind::Mob(m) if m.effects.has("speed")
+    )));
     let Some(Tag::List(attrs)) = cow.get("attributes") else {
         panic!()
     };

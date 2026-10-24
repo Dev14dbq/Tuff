@@ -110,9 +110,29 @@ fn effect_name(kind: &Kind) -> Tag {
     Tag::Compound(c)
 }
 
-/// Only players are living entities on this server so far.
-fn living(t: &Target) -> bool {
-    t.is_player()
+/// Gives a player or mob an effect; whether it took (other entities
+/// take none).
+fn give_to(r: &Run, t: &Target, kind: &'static Kind, i: Instance) -> bool {
+    if t.is_player() {
+        effects::give(r.ctx, t.uuid(), kind, i)
+    } else {
+        crate::mob_effects::with_mob(r.ctx, t.uuid(), |e| {
+            crate::mob_effects::give(r.ctx, e, kind, i, None)
+        })
+        .unwrap_or(false)
+    }
+}
+
+/// Takes effects from a player or mob; whether any went.
+fn clear_from(r: &Run, t: &Target, kind: Option<&'static Kind>) -> bool {
+    if t.is_player() {
+        effects::remove(r.ctx, t.uuid(), kind)
+    } else {
+        crate::mob_effects::with_mob(r.ctx, t.uuid(), |e| {
+            crate::mob_effects::remove(r.ctx, e, kind)
+        })
+        .unwrap_or(false)
+    }
 }
 
 fn effect_give(r: &mut Run, rest: &[&str]) -> Result<i32> {
@@ -135,14 +155,7 @@ fn effect_give(r: &mut Run, rest: &[&str]) -> Result<i32> {
     let particles = !r.boolean("hideParticles").unwrap_or(false);
     let mut done = 0;
     for t in &targets {
-        if living(t)
-            && effects::give(
-                r.ctx,
-                t.uuid(),
-                kind,
-                Instance::new(amplifier, duration, particles),
-            )
-        {
+        if give_to(r, t, kind, Instance::new(amplifier, duration, particles)) {
             done += 1;
         }
     }
@@ -170,7 +183,7 @@ fn effect_clear(r: &mut Run, kind: Option<&'static Kind>) -> Result<i32> {
     let targets = r.targets_or_self("targets", false)?;
     let mut done = 0;
     for t in &targets {
-        if living(t) && effects::remove(r.ctx, t.uuid(), kind) {
+        if clear_from(r, t, kind) {
             done += 1;
         }
     }

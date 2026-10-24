@@ -39,6 +39,7 @@ const SOMETIMES: &[&str] = &[
     "weapon",
     "Sitting",
     "Leash",
+    "active_effects",
 ];
 
 /// Keys written from what is known and from what was read alike.

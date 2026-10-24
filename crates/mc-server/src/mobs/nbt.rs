@@ -110,6 +110,9 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
     if let Some(v) = int(nbt, "Fire") {
         m.burning = v.max(0);
     }
+    if nbt.get("active_effects").is_some() {
+        m.effects = crate::effects::Effects::from_nbt(nbt.get("active_effects"));
+    }
     if let Some(v) = flag(nbt, "IsBaby") {
         m.set_baby(v);
     }
@@ -323,6 +326,9 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
     );
     c.insert("AbsorptionAmount", Tag::Float(0.0));
     c.insert("attributes", attributes(m));
+    if let Some(effects) = crate::mob_effects::to_nbt(m) {
+        c.insert("active_effects", effects);
+    }
     c.insert("FallFlying", Tag::Byte(0));
     let mut brain = Compound::new();
     brain.insert("memories", Tag::Compound(Compound::new()));

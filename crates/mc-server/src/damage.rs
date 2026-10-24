@@ -4,7 +4,6 @@
 //! pack's `damage_type` entries.
 
 use crate::context::ServerContext;
-use crate::tick::lock;
 
 /// Air a player holds, in ticks.
 pub const MAX_AIR: i32 = 300;
@@ -74,18 +73,13 @@ pub fn with_breach<R>(delta: f32, f: impl FnOnce() -> R) -> R {
     r
 }
 
-/// A player's armor points and toughness from what they wear (slots 5–8),
-/// by the `armor` and `armor_toughness` modifiers of the items.
+/// A player's armor points and toughness: the `armor` and
+/// `armor_toughness` attributes, with the modifiers of what they wear.
 pub fn worn_armor(ctx: &ServerContext, uuid: u128) -> (f32, f32) {
-    let inventories = lock(&ctx.inventories);
-    let Some(hands) = inventories.get(&uuid) else {
-        return (0.0, 0.0);
-    };
-    hands.slots[5..9]
-        .iter()
-        .flatten()
-        .filter_map(|s| ctx.items.get(s.item))
-        .fold((0.0, 0.0), |a, i| (a.0 + i.armor, a.1 + i.toughness))
+    (
+        crate::commands::gear::value(ctx, uuid, "armor") as f32,
+        crate::commands::gear::value(ctx, uuid, "armor_toughness") as f32,
+    )
 }
 
 /// A damage type's data-pack entry.
