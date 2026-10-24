@@ -761,6 +761,15 @@ pub fn use_item_on(
         });
         return outcome;
     }
+    let map_item = held.is_some_and(|stack| {
+        matches!(
+            ctx.items.name(stack.item),
+            Some("minecraft:map" | "minecraft:filled_map")
+        )
+    });
+    if map_item && crate::maps::use_held(ctx, &mut outcome, actor, hand, Some(clicked)) {
+        return outcome;
+    }
     let Some(block) = held.and_then(|item| ctx.rules.block_for_item(item.item)) else {
         return refuse(outcome);
     };
@@ -1100,6 +1109,9 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
     if let Some(h) = crate::held::held(ctx, actor.uuid, hand)
         && crate::vehicles::place_boat(ctx, &mut outcome, actor, hand, &h.name, yaw, pitch)
     {
+        return outcome;
+    }
+    if crate::maps::use_held(ctx, &mut outcome, actor, hand, None) {
         return outcome;
     }
     let held = ctx

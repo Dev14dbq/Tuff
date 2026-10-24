@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 mod json_nbt;
+mod map_color;
 
 pub use json_nbt::json_to_nbt;
 
@@ -244,6 +245,8 @@ pub struct Blocks {
     air: Vec<bool>,
     /// Per state id: water, lava, or `waterlogged=true`.
     fluid: Vec<bool>,
+    /// Per state id: base map colour (0 is unexplored / NONE).
+    map_color: Vec<u8>,
     /// `name[k=v,...]` with properties sorted by name → state id.
     by_key: HashMap<String, u32>,
     /// State id → its `name[k=v,...]` key.
@@ -279,6 +282,11 @@ fn sorted_properties(properties: &Value) -> Vec<(String, String)> {
     list
 }
 
+fn reported_map_color(value: &Value) -> Option<u8> {
+    let n = value.as_u64()?;
+    u8::try_from(n).ok().filter(|id| *id <= 61)
+}
+
 const AIR_BLOCKS: &[&str] = &["minecraft:air", "minecraft:cave_air", "minecraft:void_air"];
 const FLUID_BLOCKS: &[&str] = &["minecraft:water", "minecraft:lava"];
 
@@ -290,7 +298,7 @@ impl Blocks {
             .ok_or_else(|| DataError::new(path, "not an object"))?;
         let mut by_name = HashMap::with_capacity(blocks.len());
         let mut state_count = 0;
-        let (mut air, mut fluid) = (Vec::new(), Vec::new());
+        let (mut air, mut fluid, mut map_color) = (Vec::new(), Vec::new(), Vec::new());
         let mut by_key = HashMap::new();
         let mut keys = Vec::new();
         let mut name_len = Vec::new();
@@ -322,13 +330,24 @@ impl Blocks {
                 if air.len() <= id {
                     air.resize(id + 1, false);
                     fluid.resize(id + 1, false);
+                    map_color.resize(id + 1, 0);
                     keys.resize(id + 1, String::new());
                     name_len.resize(id + 1, 0);
                 }
                 name_len[id] = name.len() as u16;
                 air[id] = is_air;
-                fluid[id] =
-                    is_fluid_block || state["properties"]["waterlogged"].as_str() == Some("true");
+                let properties = &state["properties"];
+                fluid[id] = is_fluid_block || properties["waterlogged"].as_str() == Some("true");
+                map_color[id] = reported_map_color(&state["map_color"])
+                    .or_else(|| reported_map_color(&block["map_color"]))
+                    .unwrap_or_else(|| {
+                        map_color::of(
+                            name,
+                            properties["waterlogged"].as_str() == Some("true"),
+                            properties["axis"].as_str(),
+                            properties["part"].as_str(),
+                        )
+                    });
                 let properties = sorted_properties(&state["properties"]);
                 let key = state_key(
                     name,
@@ -357,6 +376,7 @@ impl Blocks {
             state_count,
             air,
             fluid,
+            map_color,
             by_key,
             keys,
             name_len,
@@ -429,6 +449,12 @@ impl Blocks {
 
     pub fn is_fluid(&self, state: u32) -> bool {
         self.fluid.get(state as usize).copied().unwrap_or(false)
+    }
+
+    /// Base map colour of a block state (0 = NONE, drawn as unexplored). A
+    /// `map_color` int on the blocks report wins; otherwise the wiki table.
+    pub fn map_color(&self, state: u32) -> u8 {
+        self.map_color.get(state as usize).copied().unwrap_or(0)
     }
 
     pub fn get(&self, name: &str) -> Option<&BlockInfo> {

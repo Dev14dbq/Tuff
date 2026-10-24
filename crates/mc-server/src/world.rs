@@ -989,6 +989,16 @@ impl World {
         dropped
     }
 
+    /// The block at `p` when that chunk is already loaded. Does not generate
+    /// or read a chunk from disk (map updates must not explore by loading).
+    pub fn block_if_loaded(&self, p: Position) -> Option<u32> {
+        let chunks = self.chunks.lock().expect("chunks lock");
+        let chunk = chunks.get(&(p.x >> 4, p.z >> 4))?.chunk.as_ref()?;
+        chunk
+            .contains_y(p.y)
+            .then(|| chunk.block((p.x & 15) as usize, p.y, (p.z & 15) as usize))
+    }
+
     /// Whether the chunk holding `p` is in memory (vanilla's "loaded").
     pub fn is_loaded(&self, p: Position) -> bool {
         self.chunks
