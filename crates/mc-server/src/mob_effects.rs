@@ -47,6 +47,8 @@ pub fn accepts(ctx: &ServerContext, species: Species, kind: &Effect) -> bool {
         }
         "poison" => !matches!(species, Spider | CaveSpider),
         "wither" => species != WitherSkeleton,
+        // Flying mobs (flying-mobs): parched are immune to weakness.
+        "weakness" => species != Parched,
         "oozing" => !tagged(ctx, species, "minecraft:immune_to_oozing"),
         "infested" => !tagged(ctx, species, "minecraft:immune_to_infested"),
         _ => true,

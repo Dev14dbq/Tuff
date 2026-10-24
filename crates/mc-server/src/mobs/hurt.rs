@@ -143,6 +143,10 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
         amount
     };
     let amount = crate::effects::reduce_damage(&m.effects, amount, h.kind);
+    // Flying mobs (flying-mobs)
+    let Some(amount) = super::air::filter(m, h, amount) else {
+        return false;
+    };
     if !m.hurt(amount, h.by.or(h.player.map(|_| -1))) {
         return false;
     }
@@ -156,6 +160,7 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
             fx::sound(ctx, "entity.enderman.teleport", 5, e.pos, 1.0, 1.0);
         }
     }
+    super::air::hurt(ctx, e, h);
     let Kind::Mob(m) = &mut e.kind else {
         return false;
     };
@@ -444,6 +449,8 @@ fn bite_effect(species: Species, difficulty: i32) -> Option<(&'static str, i32)>
         Species::CaveSpider if difficulty >= 2 => ("poison", if difficulty == 3 { 15 } else { 7 }),
         Species::Husk => ("hunger", 7 * difficulty),
         Species::WitherSkeleton => ("wither", 10),
+        // Flying mobs (flying-mobs): a bee's sting.
+        Species::Bee if difficulty >= 2 => ("poison", if difficulty == 3 { 18 } else { 10 }),
         _ => return None,
     };
     (seconds > 0).then_some((effect, seconds))
@@ -834,6 +841,7 @@ pub fn die(
     {
         spawn_stack(ctx, pos, item, 1, 0, Default::default());
     }
+    super::air::died(ctx, e);
     // Big slimes split into smaller ones.
     let Kind::Mob(m) = &mut e.kind else {
         return;

@@ -446,6 +446,10 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         }
         Goal::RandomLook { .. } => m.next_f64() < 0.02,
         Goal::Melee { .. } => {
+            // A bee that has stung has no stinger left.
+            if m.quirks.air.stung {
+                return false;
+            }
             if m.species.skeleton() && holds(m, s, "minecraft:bow")
                 || m.species == Species::Drowned && holds(m, s, "minecraft:trident")
             {
@@ -1730,9 +1734,14 @@ fn ranged(
                     out.push(MobEvent::Shoot {
                         target: t.id,
                         aim,
-                        missile: Missile::Arrow {
-                            damage: 2.0,
-                            slowness: m.species == Species::Stray,
+                        missile: match m.species {
+                            // Flying mobs (flying-mobs): tipped arrows.
+                            Species::Bogged => Missile::Tipped("minecraft:poison", 80),
+                            Species::Parched => Missile::Tipped("minecraft:weakness", 225),
+                            _ => Missile::Arrow {
+                                damage: 2.0,
+                                slowness: m.species == Species::Stray,
+                            },
                         },
                     });
                     out.push(MobEvent::Sound {

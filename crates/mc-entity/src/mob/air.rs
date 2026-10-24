@@ -68,6 +68,12 @@ pub struct Air {
     pub state: u8,
     /// Happy ghast: ticks it stays still.
     pub still: i32,
+    /// Allay: what it carries (item, count), where it is bound for (set by
+    /// the server each tick) and the note block it hears, with the game
+    /// time it stops listening.
+    pub carried: Option<(i32, i32)>,
+    pub errand: Option<[f64; 3]>,
+    pub note: Option<([i32; 3], i64)>,
 }
 
 impl Default for Air {
@@ -99,6 +105,9 @@ impl Default for Air {
             next_weather: -1,
             state: 0,
             still: 0,
+            carried: None,
+            errand: None,
+            note: None,
         }
     }
 }
@@ -220,6 +229,10 @@ pub(super) fn tick(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses, out: &m
     match act {
         Act::Follow => {
             let Some(p) = liked(m, s) else { return };
+            if let Some(at) = m.quirks.air.errand {
+                m.goto = Some((at, 1.0));
+                return;
+            }
             let d = dist_sq(b.pos, p.pos);
             if d > 16.0 {
                 m.goto = Some(([p.pos[0], p.pos[1] + 1.0, p.pos[2]], 1.0));
@@ -316,16 +329,19 @@ fn peek(m: &mut Mob, b: &Body, s: &Senses, left: &mut i32, out: &mut Vec<MobEven
 
 /// Moves a shulker to another spot within 8 blocks of where it is: a cell
 /// of air with a full block under it. Whether it found one.
-pub fn shulker_teleport(m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
-    let c = cell_of(b.pos);
+pub fn shulker_teleport(entity: &mut crate::Entity, world: &dyn crate::nav::Terrain) -> bool {
+    let crate::Kind::Mob(m) = &mut entity.kind else {
+        return false;
+    };
+    let c = cell_of(entity.pos);
     for _ in 0..5 {
         let x = c[0] + m.below(17) as i32 - 8;
         let y = c[1] + m.below(17) as i32 - 8;
         let z = c[2] + m.below(17) as i32 - 8;
-        if s.world.solid(x, y, z) || s.world.solid(x, y + 1, z) || !s.world.solid(x, y - 1, z) {
+        if world.solid(x, y, z) || world.solid(x, y + 1, z) || !world.solid(x, y - 1, z) {
             continue;
         }
-        b.pos = [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5];
+        entity.pos = [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5];
         m.quirks.air.face = 0;
         m.quirks.air.peek = 0;
         m.dirty = true;

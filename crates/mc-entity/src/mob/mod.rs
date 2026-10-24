@@ -280,6 +280,8 @@ pub enum Missile {
     /// A snow golem's snowball.
     Snowball,
     // Flying mobs (flying-mobs)
+    /// An arrow with an effect (name, ticks it lasts on the victim).
+    Tipped(&'static str, i32),
     /// A breeze's wind charge.
     WindCharge,
     /// A shulker's homing bullet.

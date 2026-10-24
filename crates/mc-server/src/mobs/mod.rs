@@ -10,6 +10,7 @@
 //! - [`meta`]: metadata and equipment for clients;
 //! - [`nbt`]: mobs as `/summon` and `/data` see them.
 
+pub mod air;
 pub(crate) mod blocks;
 pub mod chest;
 mod crowd;
@@ -557,6 +558,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         blocks::free_beds(ctx, level, &entities);
     }
     chest::mirror(ctx, &mut entities);
+    air::tick(ctx, &mut entities, &targets, now);
 
     let ground = Ground::new(ctx);
     let items = ItemSense {
@@ -794,6 +796,9 @@ fn handle(
     match ev {
         MobEvent::Attack { target, damage } => {
             hurt::mob_attacks(ctx, entities, i, target, damage, targets, difficulty, now);
+            if species == Species::Bee {
+                air::bee_stung(&mut entities[i]);
+            }
         }
         MobEvent::Shoot {
             target,
@@ -968,7 +973,12 @@ fn shoot(
         crate::projectiles::spawn_by_mob(ctx, shot, me, from, vel)
     };
     match missile {
-        Missile::Arrow { damage, slowness } => {
+        Missile::Arrow { .. } | Missile::Tipped(..) => {
+            let (damage, slowness, tipped) = match missile {
+                Missile::Arrow { damage, slowness } => (damage, slowness, None),
+                Missile::Tipped(effect, ticks) => (2.0, false, Some((effect, ticks))),
+                _ => return,
+            };
             let Some(item) = ctx.items.id("minecraft:arrow") else {
                 return;
             };
@@ -978,6 +988,9 @@ fn shoot(
             a.hit.push(e.id);
             if slowness {
                 a.effects.push(("minecraft:slowness".into(), 0, 600 * 8));
+            }
+            if let Some((effect, ticks)) = tipped {
+                a.effects.push((effect.into(), 0, ticks * 8));
             }
             let from = [eye[0], eye[1] - 0.1, eye[2]];
             let dir = [d[0], aim[1] - 0.6 - from[1] + flat * 0.2, d[2]];

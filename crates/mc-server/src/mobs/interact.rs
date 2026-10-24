@@ -126,6 +126,10 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         swing(ctx, by);
         return;
     }
+    if super::air::used(ctx, e, by, &name, hslot, held.as_ref().map(|h| &h.stack)) {
+        swing(ctx, by);
+        return;
+    }
     let Kind::Mob(m) = &mut e.kind else {
         return;
     };
@@ -553,6 +557,31 @@ pub fn shear(ctx: &ServerContext, e: &mut Entity) -> bool {
         send_now(ctx, e);
         return true;
     }
+    // Flying mobs (flying-mobs): a bogged gives up its two mushrooms, once.
+    if species == Species::Bogged && !m.quirks.air.sheared && !m.is_baby() {
+        m.quirks.air.sheared = true;
+        let drops = [m.below(2), m.below(2)];
+        fx::sound(
+            ctx,
+            "entity.bogged.shear",
+            fx::category::PLAYERS,
+            pos,
+            1.0,
+            1.0,
+        );
+        for red in drops {
+            let name = if red == 0 {
+                "minecraft:brown_mushroom"
+            } else {
+                "minecraft:red_mushroom"
+            };
+            if let Some(item) = ctx.items.id(name) {
+                crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 1.4, pos[2]], item, 1);
+            }
+        }
+        send_now(ctx, e);
+        return true;
+    }
     if m.can_shear() {
         m.shear();
         let color = WOOL_COLORS[usize::from(m.color & 15)];
@@ -600,14 +629,14 @@ pub fn shear(ctx: &ServerContext, e: &mut Entity) -> bool {
 }
 
 /// Sends the mob's metadata now.
-fn send_now(ctx: &ServerContext, e: &mut Entity) {
+pub(super) fn send_now(ctx: &ServerContext, e: &mut Entity) {
     if let Kind::Mob(m) = &mut e.kind {
         m.dirty = false;
     }
     super::hurt::send_data(ctx, e);
 }
 
-fn send_equipment(ctx: &ServerContext, e: &Entity) {
+pub(super) fn send_equipment(ctx: &ServerContext, e: &Entity) {
     if let Kind::Mob(m) = &e.kind {
         fx::emit(
             ctx,
