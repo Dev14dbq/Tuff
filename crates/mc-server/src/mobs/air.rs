@@ -10,7 +10,7 @@ use crate::tick::lock;
 
 /// What a hit does before the mob's own health is touched: the damage that
 /// goes through, or `None` when the mob takes none.
-pub fn filter(m: &mc_entity::Mob, h: &Harm, amount: f32) -> Option<f32> {
+pub fn filter(ctx: &ServerContext, m: &mc_entity::Mob, h: &Harm, amount: f32) -> Option<f32> {
     match m.species {
         // A creaking its heart keeps is hurt by nothing but the void and
         // /kill.
@@ -18,6 +18,12 @@ pub fn filter(m: &mc_entity::Mob, h: &Harm, amount: f32) -> Option<f32> {
             if m.quirks.air.home.is_some()
                 && !matches!(h.kind, "minecraft:out_of_world" | "minecraft:generic_kill") =>
         {
+            // Hit by a player at night: resin grows by its heart.
+            if let (Some(home), Some(_)) = (m.quirks.air.home, h.player)
+                && super::creaking::awake_time(super::day_time(ctx))
+            {
+                super::creaking::hit(ctx, home, lock(&ctx.time).age);
+            }
             None
         }
         Species::Breeze if h.kind == "minecraft:fall" => None,

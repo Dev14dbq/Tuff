@@ -14,6 +14,7 @@ pub mod air;
 pub mod bees;
 pub(crate) mod blocks;
 pub mod chest;
+pub mod creaking;
 mod crowd;
 pub mod eggs;
 pub mod endermite;
@@ -564,6 +565,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         let home = raining || !bright;
         bees::bees(ctx, level, &mut entities, now, home);
         bees::hives(ctx, level, home);
+        creaking::tick(ctx, level, &mut entities, now, day);
     }
 
     let ground = Ground::new(ctx);

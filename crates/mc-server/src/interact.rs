@@ -495,6 +495,9 @@ pub fn dig(
     {
         crate::mobs::bees::disturbed(ctx, position, Some(actor.uuid), false);
     }
+    if blocks.block_name(state) == Some("minecraft:creaking_heart") {
+        crate::mobs::creaking::broken(ctx, position, state, Some(actor.uuid));
+    }
     if blocks.block_name(state) == Some("minecraft:jukebox")
         && let Some(be) = ctx.world.block_entity(position, blocks)
         && let Some(mc_nbt::Tag::Compound(record)) = be.data.get("RecordItem")

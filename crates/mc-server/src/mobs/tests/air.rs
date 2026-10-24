@@ -390,3 +390,87 @@ fn a_robbed_hive_lets_angry_bees_out_unless_a_campfire_smokes_them() {
         .any(|e| matches!(&e.kind, Kind::Mob(m) if m.species == Species::Bee && m.anger > 0));
     assert!(angry, "no angry bee");
 }
+
+fn set_time(ctx: &ServerContext, t: i64) {
+    let mut time = lock(&ctx.time);
+    for c in &mut time.clocks {
+        c.ticks = t;
+    }
+    if time.clocks.is_empty() {
+        time.age = t;
+    }
+}
+
+fn heart_state(ctx: &ServerContext, at: [i32; 3]) -> String {
+    let p = mc_protocol::Position::new(at[0], at[1], at[2]);
+    let s = ctx.world.block(p, &ctx.data.blocks).unwrap();
+    ctx.data
+        .blocks
+        .property(s, "creaking_heart_state")
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn a_creaking_heart_wakes_at_night_sends_a_creaking_and_sleeps_by_day() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [10.5, -60.0, 20.5]);
+    set(&ctx, [10, -59, 10], "minecraft:pale_oak_log");
+    set(&ctx, [10, -60, 10], "minecraft:creaking_heart");
+    crate::mobs::creaking::placed(&ctx, mc_protocol::Position::new(10, -60, 10));
+    set(&ctx, [10, -61, 10], "minecraft:pale_oak_log");
+    set_time(&ctx, 6000);
+    run(&ctx, 5);
+    assert_eq!(heart_state(&ctx, [10, -60, 10]), "dormant");
+    set_time(&ctx, 18000);
+    for _ in 0..200 {
+        run(&ctx, 1);
+    }
+    assert_eq!(heart_state(&ctx, [10, -60, 10]), "awake");
+    assert_eq!(count_of(&ctx, Species::Creaking), 1, "no creaking");
+    let id = lock(&ctx.entities)
+        .iter()
+        .find(|e| matches!(&e.kind, Kind::Mob(m) if m.species == Species::Creaking))
+        .map(|e| e.id)
+        .unwrap();
+    assert_eq!(
+        with_mob(&ctx, id, |m| m.quirks.air.home),
+        Some([10, -60, 10])
+    );
+    // A hit at night grows resin on a log by the heart.
+    ctx.mobs
+        .harm(ctx.dim, id, 5.0, "minecraft:generic", Some(STEVE));
+    run(&ctx, 2);
+    assert_eq!(with_mob(&ctx, id, |m| m.health), 1.0);
+    // Day comes: the heart sleeps and the creaking is gone.
+    set_time(&ctx, 1000);
+    run(&ctx, 5);
+    assert_eq!(heart_state(&ctx, [10, -60, 10]), "dormant");
+    assert_eq!(count_of(&ctx, Species::Creaking), 0, "creaking stayed");
+}
+
+#[test]
+fn breaking_a_heart_kills_its_creaking() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [10.5, -60.0, 20.5]);
+    set(&ctx, [10, -59, 10], "minecraft:pale_oak_log");
+    set(&ctx, [10, -60, 10], "minecraft:creaking_heart");
+    crate::mobs::creaking::placed(&ctx, mc_protocol::Position::new(10, -60, 10));
+    set(&ctx, [10, -61, 10], "minecraft:pale_oak_log");
+    set_time(&ctx, 18000);
+    for _ in 0..200 {
+        run(&ctx, 1);
+    }
+    assert_eq!(count_of(&ctx, Species::Creaking), 1);
+    let p = mc_protocol::Position::new(10, -60, 10);
+    let state = ctx.world.block(p, &ctx.data.blocks).unwrap();
+    crate::mobs::creaking::broken(&ctx, p, state, Some(STEVE));
+    run(&ctx, 30);
+    assert_eq!(count_of(&ctx, Species::Creaking), 0);
+}

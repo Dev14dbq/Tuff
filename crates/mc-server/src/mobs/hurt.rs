@@ -144,7 +144,7 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     };
     let amount = crate::effects::reduce_damage(&m.effects, amount, h.kind);
     // Flying mobs (flying-mobs)
-    let Some(amount) = super::air::filter(m, h, amount) else {
+    let Some(amount) = super::air::filter(ctx, m, h, amount) else {
         return false;
     };
     if !m.hurt(amount, h.by.or(h.player.map(|_| -1))) {
