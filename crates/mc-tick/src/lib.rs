@@ -14,6 +14,7 @@ pub mod gravity;
 pub mod hopper;
 pub mod leaves;
 pub mod level;
+pub mod lightning;
 pub mod pistons;
 pub mod portal;
 pub mod rails;

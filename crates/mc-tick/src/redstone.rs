@@ -248,8 +248,35 @@ fn trapped_chest(level: &dyn Level, ctx: Ctx, at: BlockPos, state: u32) -> u8 {
 fn other_power(ctx: Ctx, state: u32) -> u8 {
     match ctx.shapes.block_name(state) {
         Some("minecraft:daylight_detector" | "minecraft:target") => level_of(ctx, state, "power"),
+        // A struck lightning rod.
+        Some(_) if is_rod(ctx, state) && is(ctx, state, "powered") => 15,
         _ => 0,
     }
+}
+
+/// Lightning rods, whatever their age or wax.
+fn is_rod(ctx: Ctx, state: u32) -> bool {
+    ctx.shapes
+        .block_name(state)
+        .is_some_and(|n| n.ends_with("lightning_rod"))
+}
+
+/// Lightning struck the rod at `p`: it gives 15 for 8 ticks, strongly to the
+/// block it stands on (minecraft.wiki, "Lightning Rod"). Says whether there
+/// was a rod.
+pub fn rod_struck(level: &mut dyn Level, ctx: Ctx, p: BlockPos) -> bool {
+    let state = level.block(p);
+    if !is_rod(ctx, state) {
+        return false;
+    }
+    let new = with_bool(ctx, state, "powered", true);
+    set_block(level, ctx, p, new, Flags::ALL);
+    if let Some(f) = facing(ctx, new) {
+        update_neighbors_at(level, ctx, p.offset(f.opposite()));
+    }
+    let kind = ctx.shapes.block_index(new);
+    level.schedule_block_tick(p, kind, 8, 0);
+    true
 }
 
 /// Strong power the block `state` at `at` sends into its neighbour `toward`.
@@ -278,6 +305,12 @@ fn emitted_strong(
             level.comparator_output(at)
         }
         Part::Wire if wires && wire_points(ctx, state, toward) => wire_power(ctx, state),
+        _ if is_rod(ctx, state)
+            && is(ctx, state, "powered")
+            && facing(ctx, state).map(Dir::opposite) == Some(toward) =>
+        {
+            15
+        }
         _ if toward == Dir::Down
             && ctx.shapes.block_name(state) == Some("minecraft:trapped_chest") =>
         {
@@ -372,6 +405,13 @@ fn dust_connects_to(ctx: Ctx, state: u32, d: Dir) -> bool {
                         | "minecraft:detector_rail"
                         | "minecraft:comparator"
                         | "minecraft:lightning_rod"
+                        | "minecraft:exposed_lightning_rod"
+                        | "minecraft:weathered_lightning_rod"
+                        | "minecraft:oxidized_lightning_rod"
+                        | "minecraft:waxed_lightning_rod"
+                        | "minecraft:waxed_exposed_lightning_rod"
+                        | "minecraft:waxed_weathered_lightning_rod"
+                        | "minecraft:waxed_oxidized_lightning_rod"
                         | "minecraft:sculk_sensor"
                         | "minecraft:calibrated_sculk_sensor"
                 )
@@ -856,6 +896,22 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     if ctx.shapes.block_index(state) != kind {
         return;
     }
+    if is_rod(ctx, state) {
+        // The rod is done giving its signal.
+        if is(ctx, state, "powered") {
+            set_block(
+                level,
+                ctx,
+                p,
+                with_bool(ctx, state, "powered", false),
+                Flags::ALL,
+            );
+            if let Some(f) = facing(ctx, state) {
+                update_neighbors_at(level, ctx, p.offset(f.opposite()));
+            }
+        }
+        return;
+    }
     if ctx.shapes.block_name(state) == Some("minecraft:target") {
         // The signal of a hit target runs out.
         if level_of(ctx, state, "power") != 0 {
@@ -968,6 +1024,11 @@ pub fn on_place(level: &mut dyn Level, ctx: Ctx, p: BlockPos, old: u32, state: u
             }
             Part::Observer if is(ctx, s, "powered") && !placed => {
                 update_in_front(level, ctx, p, s);
+            }
+            Part::None if !placed && is_rod(ctx, s) && is(ctx, s, "powered") => {
+                if let Some(f) = facing(ctx, s) {
+                    update_neighbors_at(level, ctx, p.offset(f.opposite()));
+                }
             }
             // Only when a comparator comes or goes, not when it changes state.
             Part::Comparator if part(ctx, old) != part(ctx, state) => {

@@ -374,7 +374,7 @@ pub fn copper_age(name: &str) -> Option<usize> {
 
 /// [`copper_age`] for copper that really weathers (it has a next stage, or
 /// is fully oxidized): copper torches do not.
-fn weathering_age(ctx: Ctx, name: &str) -> Option<usize> {
+pub(crate) fn weathering_age(ctx: Ctx, name: &str) -> Option<usize> {
     let age = copper_age(name)?;
     (age == 3 || ctx.shapes.default_state(&next_copper(name, age)).is_some()).then_some(age)
 }
