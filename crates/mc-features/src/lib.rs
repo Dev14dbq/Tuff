@@ -10,7 +10,7 @@
 //! the chunk and the feature's place in that order.
 
 pub mod blocks;
-mod end;
+pub mod end;
 pub mod feature;
 mod misc;
 mod nether;
@@ -150,4 +150,7 @@ pub trait Region {
     /// Asks for a tick of the fluid or block at `p` once the chunk is done.
     fn schedule_tick(&mut self, p: P);
     fn seed(&self) -> i64;
+    /// An entity the feature makes (an end crystal), as saved NBT with its
+    /// `id` and `Pos`.
+    fn add_entity(&mut self, _nbt: mc_nbt::Compound) {}
 }

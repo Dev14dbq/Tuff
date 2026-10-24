@@ -139,6 +139,7 @@ enum Class {
     Firework,
     Bobber,
     Cloud,
+    Boss,
 }
 
 /// One tick of a projectile.
@@ -152,6 +153,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         Shot::Firework(_) => Class::Firework,
         Shot::Bobber { .. } => Class::Bobber,
         Shot::Cloud { .. } => Class::Cloud,
+        Shot::WitherSkull { .. } | Shot::DragonFireball | Shot::Breath { .. } => Class::Boss,
         _ => Class::Thrown,
     };
     match class {
@@ -161,6 +163,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         Class::Firework => firework::tick(t, e),
         Class::Bobber => fishing::tick(t, e),
         Class::Cloud => potions::tick_cloud(t, e),
+        Class::Boss => crate::bosses::projectile::tick(t, e),
     }
     if e.removed {
         return;

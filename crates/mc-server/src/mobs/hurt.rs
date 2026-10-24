@@ -84,6 +84,12 @@ fn armor_of(ctx: &ServerContext, m: &Mob) -> (f32, f32) {
 
 /// Hurts a mob; whether the hit counted. A death starts [`die`].
 pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
+    // The dragon takes hits its own way; the wither shrugs some off.
+    if matches!(&e.kind, Kind::Mob(m) if m.species.boss())
+        && let Some(done) = crate::bosses::harm(ctx, e, h)
+    {
+        return done;
+    }
     let id = e.id;
     let Kind::Mob(m) = &mut e.kind else {
         return false;
@@ -630,6 +636,10 @@ pub fn die(
     };
     for drop in drops {
         crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 0.3, pos[2]], drop.item, drop.count);
+    }
+    // The wither's star is not in its loot table.
+    if drops_on && path == "wither" {
+        crate::bosses::wither::drop_star(ctx, pos);
     }
     for (item, count, damage) in gear_drops {
         spawn_stack(ctx, pos, item, count, damage);

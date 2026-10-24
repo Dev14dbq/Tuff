@@ -504,6 +504,8 @@ pub struct ServerContext {
     pub border: Mutex<crate::border::Border>,
     /// Force-loaded chunks (`/forceload`).
     pub forced: Mutex<crate::forced::Forced>,
+    /// The dragon fight (in the End) and the bosses' bars.
+    pub bosses: Mutex<crate::bosses::State>,
 }
 
 impl Deref for ServerContext {
@@ -765,6 +767,7 @@ impl ServerContext {
                 version,
             )),
             events: self.shared.hub.for_dim(index),
+            bosses: Mutex::default(),
         }))
     }
 
@@ -1065,6 +1068,7 @@ impl ServerContext {
             weather: Mutex::new(weather),
             border: Mutex::new(border),
             forced: Mutex::new(forced),
+            bosses: Mutex::default(),
         });
         *shared.dims[0].lock().expect("dimensions lock") = Some(Arc::clone(&overworld));
         Ok(overworld)
@@ -1093,6 +1097,12 @@ impl ServerContext {
 
     pub fn next_entity_id(&self) -> i32 {
         self.next_entity_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// `n` ids in a row, the first returned (the ender dragon's parts take
+    /// the ids after its own).
+    pub fn next_entity_ids(&self, n: i32) -> i32 {
+        self.next_entity_id.fetch_add(n, Ordering::Relaxed)
     }
 
     pub fn online_count(&self) -> usize {

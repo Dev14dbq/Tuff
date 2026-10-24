@@ -14,7 +14,13 @@ use crate::{P, Region};
 #[derive(Debug)]
 pub enum End {
     /// `end_spike`; with no spikes listed, the ten of the world's seed.
-    Spikes(Vec<Spike>),
+    Spikes {
+        spikes: Vec<Spike>,
+        /// The crystals on top cannot be hurt (`crystal_invulnerable`).
+        invulnerable: bool,
+        /// Where their beams point (`crystal_beam_target`).
+        beam: Option<P>,
+    },
     /// `end_platform`: the obsidian square players arrive on.
     Platform,
     /// `end_gateway`: a gateway in its bedrock frame.
@@ -62,8 +68,8 @@ pub fn spikes_for_seed(seed: i64) -> Vec<Spike> {
 impl End {
     pub fn parse(ty: &str, v: &Value, _l: &Loader) -> Option<Self> {
         Some(match ty {
-            "end_spike" => End::Spikes(
-                v["spikes"]
+            "end_spike" => End::Spikes {
+                spikes: v["spikes"]
                     .as_array()
                     .into_iter()
                     .flatten()
@@ -78,7 +84,12 @@ impl End {
                         }
                     })
                     .collect(),
-            ),
+                invulnerable: v["crystal_invulnerable"].as_bool().unwrap_or(false),
+                beam: v["crystal_beam_target"].as_array().and_then(|a| {
+                    let c = |i: usize| a.get(i)?.as_i64().map(|n| n as i32);
+                    Some(P::new(c(0)?, c(1)?, c(2)?))
+                }),
+            },
             "end_platform" => End::Platform,
             "end_gateway" => End::Gateway {
                 exit: v["exit"].as_array().and_then(|a| {
@@ -97,17 +108,22 @@ impl End {
         let facts = cx.facts;
         let state = |n: &str| facts.default_state(n).unwrap_or(0);
         match self {
-            End::Spikes(list) => {
+            End::Spikes {
+                spikes,
+                invulnerable,
+                beam,
+            } => {
                 let seeded;
-                let list = if list.is_empty() {
+                let list = if spikes.is_empty() {
                     seeded = spikes_for_seed(region.seed());
                     &seeded
                 } else {
-                    list
+                    spikes
                 };
                 for s in list {
                     if s.x >> 4 == p.x >> 4 && s.z >> 4 == p.z >> 4 {
                         spike(facts, region, s);
+                        region.add_entity(crystal(r, s, *invulnerable, *beam));
                     }
                 }
                 true
@@ -235,9 +251,41 @@ fn spike(facts: &Facts, region: &mut dyn Region, s: &Spike) {
             }
         }
     }
-    // The crystal (an entity, Ф5) stands on bedrock in fire.
+    // The crystal stands on bedrock in fire.
     region.set(P::new(s.x, s.height, s.z), state("minecraft:bedrock"));
     region.set(P::new(s.x, s.height + 1, s.z), state("minecraft:fire"));
+}
+
+/// The end crystal on top of a spike, as saved NBT.
+pub fn crystal(
+    r: &mut WorldgenRandom,
+    s: &Spike,
+    invulnerable: bool,
+    beam: Option<P>,
+) -> mc_nbt::Compound {
+    use mc_nbt::Tag;
+    let mut nbt = mc_nbt::Compound::new();
+    nbt.insert("id", Tag::String("minecraft:end_crystal".into()));
+    nbt.insert(
+        "Pos",
+        Tag::List(vec![
+            Tag::Double(f64::from(s.x) + 0.5),
+            Tag::Double(f64::from(s.height + 1)),
+            Tag::Double(f64::from(s.z) + 0.5),
+        ]),
+    );
+    nbt.insert(
+        "Rotation",
+        Tag::List(vec![Tag::Float(r.next_float() * 360.0), Tag::Float(0.0)]),
+    );
+    nbt.insert("ShowBottom", Tag::Byte(1));
+    if invulnerable {
+        nbt.insert("Invulnerable", Tag::Byte(1));
+    }
+    if let Some(b) = beam {
+        nbt.insert("beam_target", Tag::IntArray(vec![b.x, b.y, b.z]));
+    }
+    nbt
 }
 
 const HORIZONTAL: [Dir; 4] = [Dir::North, Dir::East, Dir::South, Dir::West];

@@ -458,6 +458,8 @@ pub(super) fn brain(species: Species) -> Brain {
             ],
             vec![hurt_by(1, true)],
         ),
+        // The bosses think in the server's own tick (`bosses`).
+        EnderDragon | Wither => (vec![], vec![]),
     };
     Brain { goals, targets }
 }

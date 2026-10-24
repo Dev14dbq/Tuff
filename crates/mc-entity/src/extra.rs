@@ -92,6 +92,25 @@ pub enum Shot {
     Fireball {
         small: bool,
     },
+    /// A wither's skull; a blue (`dangerous`) one is slower and breaks
+    /// almost anything.
+    WitherSkull {
+        dangerous: bool,
+    },
+    /// The ender dragon's fireball: it leaves a cloud of breath.
+    DragonFireball,
+    /// A cloud of dragon's breath: harming for whoever stands in it.
+    Breath {
+        radius: f32,
+        /// Radius gained each tick (it grows, or shrinks).
+        grow: f32,
+        /// Ticks left.
+        left: i32,
+        /// Harming's amplifier.
+        amplifier: i32,
+        /// Players it hurt and the age it may hurt them again.
+        hit: Vec<(u128, u32)>,
+    },
     /// A fishing bobber; `hooked` is the entity it pulls.
     Bobber {
         hooked: Option<i32>,

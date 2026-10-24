@@ -92,6 +92,7 @@ fn gear(ctx: &ServerContext, tag: &Tag) -> Option<Gear> {
 /// Sets what `nbt` says on a mob (`/summon` data).
 pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
     let s = m.species;
+    crate::bosses::load_nbt(m, nbt);
     if let Some(v) = flag(nbt, "NoAI") {
         m.no_ai = v;
     }
@@ -265,6 +266,7 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
 
 /// The mob's own keys, for `/data` (next to the entity's common ones).
 pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
+    crate::bosses::save_nbt(m, c);
     c.insert("Health", Tag::Float(m.health));
     c.insert(
         "DeathTime",

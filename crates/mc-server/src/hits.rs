@@ -261,12 +261,18 @@ pub fn apply(
         .with
         .and_then(|w| entities.iter().find(|e| e.id == w))
         .map(|p| [p.pos[0] - p.vel[0], p.pos[1], p.pos[2] - p.vel[2]]);
-    let Some(e) = entities
-        .iter_mut()
-        .find(|e| e.id == hit.target && !e.removed)
-    else {
+    let part = crate::bosses::part_owner(entities, hit.target);
+    let target = part.map_or(hit.target, |(id, _)| id);
+    let Some(e) = entities.iter_mut().find(|e| e.id == target && !e.removed) else {
         return;
     };
+    if let Kind::Crystal(c) = &mut e.kind {
+        crate::bosses::crystal::strike(c, hit.by, hit.kind);
+        return;
+    }
+    if let Some((_, part)) = part {
+        crate::bosses::dragon::aim_at(e, part);
+    }
     if matches!(e.kind, Kind::Mob(_)) {
         let mut h = crate::mobs::hurt::Harm::new(hit.amount, hit.kind);
         h.player = hit.by;
@@ -310,14 +316,16 @@ pub fn use_entity(
     let mut fresh = Vec::new();
     {
         let mut entities = crate::tick::lock(&ctx.entities);
-        let Some(e) = entities
-            .iter_mut()
-            .find(|e| e.id == entity_id && !e.removed)
-        else {
+        let part = crate::bosses::part_owner(&entities, entity_id);
+        let owner = part.map_or(entity_id, |(id, _)| id);
+        let Some(e) = entities.iter_mut().find(|e| e.id == owner && !e.removed) else {
             return outcome;
         };
         // Within reach of the eyes.
-        let b = e.aabb();
+        let b = match (part, &e.kind) {
+            (Some((_, part)), Kind::Mob(m)) => m.dragon().map_or(e.aabb(), |d| d.part_box(part)),
+            _ => e.aabb(),
+        };
         let eye = [actor.pose.x, actor.pose.y + 1.62, actor.pose.z];
         let d2: f64 = (0..3)
             .map(|i| (b.min[i] - eye[i]).max(eye[i] - b.max[i]).max(0.0).powi(2))
@@ -334,6 +342,12 @@ pub fn use_entity(
             }
             Kind::Mob(_) => crate::mobs::clicked(ctx, &actor, entity_id, hand, attack),
             _ => {}
+        }
+        if let Kind::Crystal(c) = &mut e.kind
+            && attack
+            && actor.game_mode != 3
+        {
+            crate::bosses::crystal::strike(c, Some(actor.uuid), "minecraft:player_attack");
         }
     }
     crate::decor::spawn_all(ctx, fresh);

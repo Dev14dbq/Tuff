@@ -65,6 +65,8 @@ pub struct Pipeline {
     rings: OnceLock<()>,
     /// Lava settles as in the Nether.
     fast_lava: bool,
+    /// Entities features made (end crystals), waiting for the world.
+    entities: Mutex<Vec<mc_nbt::Compound>>,
 }
 
 /// A chunk's bare terrain, made once.
@@ -151,7 +153,13 @@ impl Pipeline {
             rings: OnceLock::new(),
             claims: crate::util::Claims::default(),
             fast_lava: false,
+            entities: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Entities features made since the last call.
+    pub fn take_entities(&self) -> Vec<mc_nbt::Compound> {
+        std::mem::take(&mut *self.entities.lock().expect("generated entities lock"))
     }
 
     /// Lava flows fast, far and thin (the dimension's `gameplay/fast_lava`).
@@ -830,6 +838,14 @@ impl Region for Gen<'_> {
 
     fn seed(&self) -> i64 {
         self.pipeline.seed
+    }
+
+    fn add_entity(&mut self, nbt: mc_nbt::Compound) {
+        self.pipeline
+            .entities
+            .lock()
+            .expect("generated entities lock")
+            .push(nbt);
     }
 }
 

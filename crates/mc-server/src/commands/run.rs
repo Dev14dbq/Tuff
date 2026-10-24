@@ -2225,7 +2225,7 @@ fn summon(r: &mut Run) -> Result<i32> {
         },
     };
     let entity = mc_entity::Entity {
-        id: r.ctx.next_entity_id(),
+        id: crate::bosses::entity_id(r.ctx, &entity_kind),
         uuid: crate::util::random_uuid(),
         kind: entity_kind,
         pos: at,

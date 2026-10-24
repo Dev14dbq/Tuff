@@ -413,6 +413,8 @@ pub struct Mob {
     pub charge: i32,
     /// Zombies raise their arms while chasing.
     pub arms_up: bool,
+    /// The ender dragon's and the wither's own state.
+    pub boss: Option<crate::boss::Boss>,
     /// Whether clients must be told about changed fields.
     pub dirty: bool,
     aggressive: bool,
@@ -420,6 +422,34 @@ pub struct Mob {
 }
 
 impl Mob {
+    pub fn dragon(&self) -> Option<&crate::boss::Dragon> {
+        match &self.boss {
+            Some(crate::boss::Boss::Dragon(d)) => Some(d),
+            _ => None,
+        }
+    }
+
+    pub fn dragon_mut(&mut self) -> Option<&mut crate::boss::Dragon> {
+        match &mut self.boss {
+            Some(crate::boss::Boss::Dragon(d)) => Some(d),
+            _ => None,
+        }
+    }
+
+    pub fn wither(&self) -> Option<&crate::boss::Wither> {
+        match &self.boss {
+            Some(crate::boss::Boss::Wither(w)) => Some(w),
+            _ => None,
+        }
+    }
+
+    pub fn wither_mut(&mut self) -> Option<&mut crate::boss::Wither> {
+        match &mut self.boss {
+            Some(crate::boss::Boss::Wither(w)) => Some(w),
+            _ => None,
+        }
+    }
+
     pub fn new(species: Species, seed: u64) -> Self {
         let mut mob = Self {
             species,
@@ -482,6 +512,11 @@ impl Mob {
             hurt_by_player: None,
             charge: 0,
             arms_up: false,
+            boss: match species {
+                Species::EnderDragon => Some(crate::boss::Boss::Dragon(Box::default())),
+                Species::Wither => Some(crate::boss::Boss::Wither(Default::default())),
+                _ => None,
+            },
             dirty: false,
             aggressive: false,
             rng: seed | 1,
@@ -513,6 +548,7 @@ impl Mob {
                 let size = 1 << mob.below(3);
                 mob.set_size(size);
             }
+            Species::EnderDragon | Species::Wither => mob.persistent = true,
             _ => {}
         }
         mob

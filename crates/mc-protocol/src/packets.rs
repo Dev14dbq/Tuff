@@ -2177,6 +2177,10 @@ pub mod play {
         OptUuid(Option<u128>),
         /// A block state (an enderman's), or none.
         OptBlockState(Option<u32>),
+        /// One particle: its type id and options, encoded.
+        Particle(Vec<u8>),
+        /// A block position, or none (an end crystal's beam target).
+        OptBlockPos(Option<crate::Position>),
         /// A registry id under its own serializer type (cat, cow, wolf, pig
         /// and chicken variants): (type id, value).
         Holder(i32, i32),
@@ -2219,6 +2223,17 @@ pub mod play {
                     out.put_bool(uuid.is_some());
                     if let Some(u) = uuid {
                         out.put_uuid(*u);
+                    }
+                }
+                MetadataValue::Particle(bytes) => {
+                    out.put_varint(16);
+                    out.extend_from_slice(bytes);
+                }
+                MetadataValue::OptBlockPos(pos) => {
+                    out.put_varint(11);
+                    out.put_bool(pos.is_some());
+                    if let Some(p) = pos {
+                        out.put_position(*p);
                     }
                 }
                 MetadataValue::OptBlockState(state) => {
@@ -3269,7 +3284,9 @@ mod sign_update_tests {
     #[test]
     fn sign_update_as_a_26_3_client_sends_it() {
         // Position, four empty lines, front side: captured from the client.
-        let body = [0x00, 0x09, 0xc3, 0x40, 0x02, 0x6c, 0xc0, 0x40, 0, 0, 0, 0, 1];
+        let body = [
+            0x00, 0x09, 0xc3, 0x40, 0x02, 0x6c, 0xc0, 0x40, 0, 0, 0, 0, 1,
+        ];
         let packet = Serverbound::decode("minecraft:sign_update", &mut Reader::new(&body)).unwrap();
         let Serverbound::SignUpdate { front, lines, .. } = packet else {
             panic!("{packet:?}")

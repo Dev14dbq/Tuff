@@ -17,8 +17,8 @@ mod interact;
 pub mod meta;
 pub mod nbt;
 pub mod ride;
-mod spawner;
 mod spawn;
+mod spawner;
 mod terrain;
 
 use std::collections::HashMap;
@@ -156,7 +156,11 @@ pub fn new_mob_in(
 ) -> Entity {
     let mob = Mob::new(species, crate::util::random_u64());
     let mut e = Entity {
-        id: ctx.next_entity_id(),
+        id: if species == Species::EnderDragon {
+            ctx.next_entity_ids(9)
+        } else {
+            ctx.next_entity_id()
+        },
         uuid: crate::util::random_uuid(),
         kind: Kind::Mob(Box::new(mob)),
         pos,
@@ -335,6 +339,9 @@ fn apply_pending(ctx: &ServerContext, entities: &mut [Entity], pending: Vec<Pend
     for p in pending {
         match p {
             Pending::Hit { target, by, blow } => {
+                // A dragon is hit in one of its parts.
+                let part = crate::bosses::part_owner(entities, target);
+                let target = part.map_or(target, |(id, _)| id);
                 let Some(i) = entities.iter().position(|e| e.id == target) else {
                     continue;
                 };
@@ -342,8 +349,15 @@ fn apply_pending(ctx: &ServerContext, entities: &mut [Entity], pending: Vec<Pend
                 let Kind::Mob(m) = &e.kind else {
                     continue;
                 };
-                if m.dying.is_some() || dist_sq(by.pos, e.pos) > REACH_SQ {
+                let at = match (part, m.dragon()) {
+                    (Some((_, p)), Some(d)) => d.parts[p as usize],
+                    _ => e.pos,
+                };
+                if m.dying.is_some() || dist_sq(by.pos, at) > REACH_SQ {
                     continue;
+                }
+                if let Some((_, p)) = part {
+                    crate::bosses::dragon::aim_at(&mut entities[i], p);
                 }
                 hurt::player_blow(ctx, entities, i, &by, &blow, now);
             }
@@ -407,18 +421,23 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         if e.removed {
             continue;
         }
-        let near = targets
-            .iter()
-            .any(|t| dist_sq(t.pos, e.pos) <= ACTIVE_RANGE * ACTIVE_RANGE);
+        // The bosses think wherever their chunk is loaded.
+        let near = m.species.boss()
+            || targets
+                .iter()
+                .any(|t| dist_sq(t.pos, e.pos) <= ACTIVE_RANGE * ACTIVE_RANGE);
         let (cx, cz) = (
             (e.pos[0].floor() as i32) >> 4,
             (e.pos[2].floor() as i32) >> 4,
         );
-        if !near || !ctx.world.chunk_loaded(cx, cz) {
+        if !near || !ctx.world.chunk_loaded(cx, cz) && !m.species.boss() {
             continue;
         }
         // Monsters do not exist in peaceful.
-        if difficulty == 0 && m.species.category() == Category::Monster {
+        if difficulty == 0
+            && m.species.category() == Category::Monster
+            && m.species != Species::EnderDragon
+        {
             e.removed = true;
             out.removed.push(e.id);
             continue;
@@ -444,11 +463,14 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             nether: ctx.world.dimension == "minecraft:the_nether",
         };
         events.clear();
-        if ride::steered(e) {
+        if m.species.boss() {
+            crate::bosses::tick_mob(ctx, level, &mut entities, i, &targets, now, &mut out.blasts);
+        } else if ride::steered(e) {
             ride::tick(ctx, e, &senses, &mut events);
         } else {
             mc_entity::mob::tick(e, &senses, &mut events);
         }
+        let e = &mut entities[i];
         let id = e.id;
         // Keep what the others see of it up to date.
         if let Some(o) = seen.iter_mut().find(|o| o.id == id)
@@ -476,9 +498,11 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             out.removed.push(e.id);
             continue;
         }
+        // The dragon dies its own way.
         if let Kind::Mob(m) = &e.kind
             && m.is_dead()
             && m.dying.is_none()
+            && m.species != Species::EnderDragon
         {
             hurt::die(ctx, e, None, 0);
         }
@@ -515,9 +539,11 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     }
     // Mobs hurt by the blast.
     for e in entities.iter_mut() {
+        // The dragon dies its own way.
         if let Kind::Mob(m) = &e.kind
             && m.is_dead()
             && m.dying.is_none()
+            && m.species != Species::EnderDragon
         {
             hurt::die(ctx, e, None, 0);
         }
@@ -595,6 +621,8 @@ fn handle(
                 source: id,
                 owner: None,
                 mob: true,
+                dangerous: false,
+                by: None,
             });
         }
         MobEvent::Lay { item } => hurt::lay(ctx, &entities[i], item),

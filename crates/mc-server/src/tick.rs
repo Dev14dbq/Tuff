@@ -430,6 +430,7 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
     tick_entities(ctx, &mut level);
     crate::trading::tick_spawner(ctx, &mut level, lock(&ctx.time).age);
     crate::mobs::tick(ctx, &mut level);
+    crate::bosses::tick(ctx, &mut level);
     press_plates(ctx, &mut level);
     mc_tick::pistons::tick(&mut level, logic);
     crate::hoppers::tick(ctx, &mut level);
@@ -745,11 +746,14 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             pose,
         })
         .collect();
-    let targets: Vec<crate::hits::Target> = entities
+    let mut targets: Vec<crate::hits::Target> = entities
         .iter()
         .filter(|e| match &e.kind {
-            mc_entity::Kind::Hung(_) | mc_entity::Kind::Vehicle(_) => true,
-            mc_entity::Kind::Mob(m) => m.dying.is_none(),
+            mc_entity::Kind::Hung(_)
+            | mc_entity::Kind::Vehicle(_)
+            | mc_entity::Kind::Crystal(_) => true,
+            // The dragon is hit in its parts.
+            mc_entity::Kind::Mob(m) => m.dying.is_none() && m.dragon().is_none(),
             _ => false,
         })
         .map(|e| crate::hits::Target {
@@ -757,6 +761,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             aabb: e.aabb(),
         })
         .collect();
+    targets.extend(crate::bosses::part_targets(&entities));
     crate::decor::leash::tick(ctx);
     level.minecarts = minecart_boxes(&entities);
     let mut out = crate::hits::Out::default();
@@ -833,8 +838,8 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                 entity.vel = [0.0; 3];
                 fuses.extend(crate::trading::tick(ctx, level, entity, &mut claimed, now));
             }
-            // Mobs have their own tick.
-            mc_entity::Kind::Mob(_) => {}
+            // Mobs have their own tick, and so do crystals.
+            mc_entity::Kind::Mob(_) | mc_entity::Kind::Crystal(_) => {}
             mc_entity::Kind::ExperienceOrb { .. } => {
                 mc_entity::fall_with(entity, &Solid(level), mc_entity::ORB_GRAVITY);
                 if entity.on_ground {

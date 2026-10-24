@@ -103,6 +103,18 @@ pub fn build(
             };
             shot(Shot::Arrow(a))
         }
+        "wither_skull" => shot(Shot::WitherSkull {
+            dangerous: flag(nbt, "dangerous"),
+        }),
+        "dragon_fireball" => shot(Shot::DragonFireball),
+        "end_crystal" => {
+            let mut c = mc_entity::boss::Crystal {
+                show_bottom: true,
+                ..Default::default()
+            };
+            crate::bosses::crystal::apply_nbt(&mut c, nbt);
+            Some((Kind::Crystal(c), None))
+        }
         "snowball" => shot(Shot::Snowball),
         "egg" => shot(Shot::Egg),
         "ender_pearl" => shot(Shot::Pearl),
@@ -212,7 +224,7 @@ pub fn build(
                     "furnace_minecart" => Cart::Furnace,
                     "hopper_minecart" => Cart::Hopper,
                     "tnt_minecart" => Cart::Tnt,
-            "command_block_minecart" => Cart::Command,
+                    "command_block_minecart" => Cart::Command,
                     _ => return None,
                 })
             };
