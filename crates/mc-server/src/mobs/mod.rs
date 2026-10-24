@@ -616,6 +616,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             out.removed.push(e.id);
             continue;
         }
+        crate::mob_effects::tick(ctx, e, now);
         // The dragon dies its own way.
         if let Kind::Mob(m) = &e.kind
             && m.is_dead()

@@ -60,10 +60,25 @@ pub struct Hit {
     pub kind: &'static str,
 }
 
+/// Effects for a mob from a potion, cloud or arrow; the tick gives them
+/// once the entities have moved.
+#[derive(Clone, Debug)]
+pub struct Dose {
+    pub target: i32,
+    pub effects: Vec<mc_entity::extra::EffectSpec>,
+    /// How much of their strength they have (1 at the full).
+    pub strength: f64,
+    /// From a splash: effects with a second or less left are not given.
+    pub splash: bool,
+    /// The player behind it.
+    pub by: Option<u128>,
+}
+
 /// What an entity's tick leaves for the tick to do.
 #[derive(Default)]
 pub struct Out {
     pub hits: Vec<Hit>,
+    pub doses: Vec<Dose>,
     pub sync: Vec<Sync>,
     /// Entities to add after this tick.
     pub spawn: Vec<Entity>,

@@ -243,6 +243,31 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                         with: Some(e.id),
                         kind: "minecraft:arrow",
                     });
+                    // A tipped arrow's effects last an eighth as long; a
+                    // spectral arrow makes it glow.
+                    if target.kind.is_some() {
+                        let mut effects: Vec<mc_entity::extra::EffectSpec> = a
+                            .effects
+                            .iter()
+                            .map(|(n, amp, dur)| {
+                                let instant = crate::effects::kind_of(n).is_some_and(|k| k.instant);
+                                let ticks = if instant { 1 } else { (dur / 8).max(1) };
+                                (n.clone(), *amp, ticks)
+                            })
+                            .collect();
+                        if a.spectral {
+                            effects.push(("minecraft:glowing".into(), 0, 200));
+                        }
+                        if !effects.is_empty() {
+                            t.out.doses.push(hits::Dose {
+                                target: target.id,
+                                effects,
+                                strength: 1.0,
+                                splash: false,
+                                by: owner,
+                            });
+                        }
+                    }
                     if a.pierce > 0 {
                         a.pierce -= 1;
                         a.hit.push(target.id);

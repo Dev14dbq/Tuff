@@ -521,6 +521,8 @@ pub struct Mob {
     pub arms_up: bool,
     /// The ender dragon's and the wither's own state.
     pub boss: Option<crate::boss::Boss>,
+    /// Mob effects (`active_effects`).
+    pub effects: crate::effect::Effects,
     /// Whether clients must be told about changed fields.
     pub dirty: bool,
     aggressive: bool,
@@ -639,6 +641,7 @@ impl Mob {
                 Species::Wither => Some(crate::boss::Boss::Wither(Default::default())),
                 _ => None,
             },
+            effects: Default::default(),
             dirty: false,
             aggressive: false,
             rng: seed | 1,
@@ -740,6 +743,17 @@ impl Mob {
     pub fn set_max_health(&mut self, hp: f32) {
         self.max_health = hp;
         self.health = hp;
+    }
+
+    /// Its movement speed with what its effects (speed, slowness) do.
+    pub fn movement_speed(&self) -> f64 {
+        self.effects
+            .value_from(crate::effect::Attr::MovementSpeed, self.speed_attr)
+    }
+
+    /// The level (1, 2...) of an effect it has, 0 if none.
+    pub fn effect_level(&self, name: &str) -> i32 {
+        self.effects.active.get(name).map_or(0, |i| i.amplifier + 1)
     }
 
     /// Slimes and magma cubes: size sets health, speed and damage.

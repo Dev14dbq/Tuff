@@ -8,6 +8,7 @@
 //! Blocks collide as full cubes for now; shapes come later.
 
 pub mod boss;
+pub mod effect;
 pub mod extra;
 pub mod mob;
 pub mod nav;

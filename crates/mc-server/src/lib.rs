@@ -53,6 +53,7 @@ pub mod logs;
 mod loot;
 mod maps;
 mod menus;
+mod mob_effects;
 mod mobs;
 mod packs;
 mod persist;
