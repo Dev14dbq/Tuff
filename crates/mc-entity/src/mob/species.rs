@@ -81,6 +81,8 @@ species! {
     Endermite => "minecraft:endermite", "Endermite";
     IronGolem => "minecraft:iron_golem", "Iron Golem";
     SnowGolem => "minecraft:snow_golem", "Snow Golem";
+    // Land animals (Cursor)
+    Goat => "minecraft:goat", "Goat";
 }
 
 /// Which sound of a mob.
@@ -112,6 +114,8 @@ impl Species {
         match self {
             Cow | Mooshroom | Sheep | Pig | Chicken | Rabbit | Horse | Donkey | Mule | Llama
             | TraderLlama | Wolf | Cat | Fox | Parrot | Strider => Category::Creature,
+            // Land animals (Cursor)
+            Goat => Category::Creature,
             IronGolem | SnowGolem => Category::Misc,
             _ => Category::Monster,
         }
@@ -153,6 +157,8 @@ impl Species {
             Blaze => (0.6, 1.8),
             EnderDragon => (16.0, 8.0),
             Wither => (0.9, 3.5),
+            // Land animals (Cursor)
+            Goat => (0.9, 1.3),
         }
     }
 
@@ -181,6 +187,8 @@ impl Species {
             Silverfish | Endermite => 0.13 / 0.3,
             IronGolem => 2.5 / 2.7,
             SnowGolem => 1.7 / 1.9,
+            // Land animals (Cursor)
+            Goat => 0.95,
             _ => 0.85,
         }
     }
@@ -205,6 +213,8 @@ impl Species {
             Slime | MagmaCube => 1.0,
             EnderDragon => 200.0,
             Wither => 300.0,
+            // Land animals (Cursor)
+            Goat => 10.0,
             _ => 20.0,
         }
     }
@@ -224,6 +234,8 @@ impl Species {
             Phantom | Ghast => 0.7,
             Wither => 0.6,
             Slime | MagmaCube => 0.3,
+            // Land animals (Cursor)
+            Goat => 0.2,
             _ => 0.25,
         }
     }
@@ -360,6 +372,8 @@ impl Species {
         match self {
             Species::Rabbit | Species::Fox => 5.0,
             Species::Horse | Species::Donkey | Species::Mule => 4.0,
+            // Land animals (Cursor): 10 HP less fall damage than the usual 3.
+            Species::Goat => 13.0,
             _ => 3.0,
         }
     }
@@ -395,6 +409,8 @@ impl Species {
             Cat => "minecraft:cat_food",
             Fox => "minecraft:fox_food",
             Parrot => "minecraft:parrot_food",
+            // Land animals (Cursor)
+            Goat => "minecraft:goat_food",
             _ => return None,
         })
     }
@@ -520,6 +536,8 @@ impl Species {
                     | Silverfish
                     | Endermite
                     | IronGolem
+                    // Land animals (Cursor)
+                    | Goat
             ),
             Sound::Hurt | Sound::Death => true,
         };

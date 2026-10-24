@@ -225,6 +225,18 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
     {
         m.quirks.pumpkin = v;
     }
+    // Land animals (Cursor)
+    if s == Species::Goat {
+        if let Some(v) = flag(nbt, "IsScreamingGoat") {
+            m.quirks.land.screaming = v;
+        }
+        if let Some(v) = flag(nbt, "HasLeftHorn") {
+            m.quirks.land.left_horn = v;
+        }
+        if let Some(v) = flag(nbt, "HasRightHorn") {
+            m.quirks.land.right_horn = v;
+        }
+    }
     if let Some(v) = int(nbt, "Lifetime")
         && s == Species::Endermite
     {
@@ -497,6 +509,15 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
         }
         Species::SnowGolem => {
             c.insert("Pumpkin", Tag::Byte(i8::from(m.quirks.pumpkin)));
+        }
+        // Land animals (Cursor)
+        Species::Goat => {
+            c.insert(
+                "IsScreamingGoat",
+                Tag::Byte(i8::from(m.quirks.land.screaming)),
+            );
+            c.insert("HasLeftHorn", Tag::Byte(i8::from(m.quirks.land.left_horn)));
+            c.insert("HasRightHorn", Tag::Byte(i8::from(m.quirks.land.right_horn)));
         }
         _ => {}
     }

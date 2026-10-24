@@ -810,6 +810,9 @@ pub fn breed(
     let pos = a.pos;
     let (va, vb) = (ma.variant, mb.variant);
     let owner = ma.owner.or(mb.owner);
+    // Land animals (Cursor): both screamers have a screaming baby, one
+    // parent about half the time, neither about one in fifty.
+    let (scream_a, scream_b) = (ma.quirks.land.screaming, mb.quirks.land.screaming);
     let mut baby = super::new_mob(ctx, kind, pos);
     if let Kind::Mob(m) = &mut baby.kind {
         m.set_baby(true);
@@ -826,6 +829,18 @@ pub fn breed(
         if matches!(kind, Species::Wolf | Species::Cat) && owner.is_some() {
             m.owner = owner;
             m.set_max_health(if kind == Species::Wolf { 40.0 } else { 10.0 });
+        }
+        // Land animals (Cursor)
+        if kind == Species::Goat {
+            m.quirks.land.screaming = if scream_a && scream_b {
+                true
+            } else if scream_a || scream_b {
+                m.below(2) == 0
+            } else {
+                m.below(50) == 0
+            };
+            m.quirks.land.left_horn = true;
+            m.quirks.land.right_horn = true;
         }
         m.persistent = true;
     }

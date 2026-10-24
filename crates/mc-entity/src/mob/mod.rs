@@ -17,6 +17,7 @@ pub use body::ENDERMITE_LIFE;
 mod brains;
 mod chores;
 pub mod goals;
+mod land;
 pub mod species;
 
 pub use goals::{Goal, Slot};
@@ -396,6 +397,16 @@ pub enum MobEvent {
     CaravanLeave {
         head: i32,
     },
+    // Land animals (Cursor)
+    /// A goat's charge connects.
+    Ram {
+        target: i32,
+        damage: f32,
+        /// Knockback levels beyond the basic push.
+        knockback: f64,
+    },
+    /// A goat rams a block that snaps a horn off.
+    Horn,
 }
 
 /// State only some kinds keep: the silverfish's call, the endermite's
@@ -411,6 +422,8 @@ pub struct Quirks {
     pub player_made: bool,
     /// Snow golem: still wears its pumpkin.
     pub pumpkin: bool,
+    // Land animals (Cursor)
+    pub land: land::Land,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -716,6 +729,13 @@ impl Mob {
             }
             Species::EnderDragon | Species::Wither => mob.persistent = true,
             Species::SnowGolem => mob.quirks.pumpkin = true,
+            // Land animals (Cursor)
+            Species::Goat => {
+                // The first ram and the first long jump wait, as they do
+                // after either has happened.
+                mob.quirks.land.ram_cd = mob.rand_range(600, 1200);
+                mob.quirks.land.jump_cd = mob.rand_range(600, 1200);
+            }
             _ => {}
         }
         mob
@@ -815,6 +835,15 @@ impl Mob {
                 let k = 1.0 + 0.15 * f64::from(self.size);
                 (w * k, h * k)
             }
+            // Land animals (Cursor): the box shrinks for the leap.
+            Species::Goat if self.quirks.land.jumping => {
+                let (w, h) = (0.63, 0.91);
+                if self.is_baby() {
+                    (w / 2.0, h / 2.0)
+                } else {
+                    (w, h)
+                }
+            }
             _ if self.is_baby() => (w / 2.0, h / 2.0),
             _ => (w, h),
         }
@@ -913,6 +942,10 @@ impl Mob {
         // An angry wolf growls, a drowned in water gurgles.
         if self.species == Species::Wolf && self.anger > 0 && which != Sound::Step {
             name = name.replace("entity.wolf.", "entity.wolf_angry.");
+        }
+        // Land animals (Cursor): a screamer has its own voice, except the step.
+        if self.species == Species::Goat && self.quirks.land.screaming && which != Sound::Step {
+            name = name.replace("entity.goat.", "entity.goat.screaming.");
         }
         Some(name)
     }
@@ -1026,6 +1059,7 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
         });
     }
     body::life(m, &mut b, s, out);
+    land::pulse(m);
     if m.is_dead() || entity.removed {
         return;
     }

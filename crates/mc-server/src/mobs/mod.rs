@@ -21,6 +21,7 @@ pub mod infest;
 pub mod interact;
 pub mod meta;
 pub mod nbt;
+mod land;
 pub mod ride;
 mod spawn;
 mod spawner;
@@ -895,6 +896,15 @@ fn handle(
         MobEvent::Vanish => entities[i].removed = true,
         MobEvent::Hide { cell } => infest::hide(ctx, level, entities, i, cell),
         MobEvent::WakeFriends => infest::wake_friends(ctx, level, entities, i, &mut out.fresh),
+        // Land animals (Cursor)
+        MobEvent::Ram {
+            target,
+            damage,
+            knockback,
+        } => land::ram(
+            ctx, entities, i, target, damage, knockback, targets,
+        ),
+        MobEvent::Horn => land::horn(ctx, &mut entities[i]),
     }
 }
 

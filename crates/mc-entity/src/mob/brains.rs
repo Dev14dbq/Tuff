@@ -2,6 +2,7 @@
 //! section of each mob's page).
 
 use super::goals::{Avoidee, Goal, Ranged, Slot};
+use super::land::Act;
 use super::{Brain, JUMP, LOOK, MOVE, Species, TARGET};
 
 fn slot(priority: u8, flags: u8, goal: Goal) -> Slot {
@@ -649,6 +650,34 @@ pub(super) fn brain(species: Species) -> Brain {
         ),
         // The bosses think in the server's own tick (`bosses`).
         EnderDragon | Wither => (vec![], vec![]),
+        // Land animals (Cursor)
+        Goat => (
+            vec![
+                float(),
+                panic(1, 1.4),
+                breed(2, 1.0),
+                tempt(3, 1.25),
+                slot(
+                    4,
+                    MOVE | LOOK,
+                    Goal::Land(Act::Ram {
+                        phase: 0,
+                        at: None,
+                        who: None,
+                    }),
+                ),
+                slot(
+                    5,
+                    MOVE | JUMP,
+                    Goal::Land(Act::LongJump { left: 0, spot: None }),
+                ),
+                follow_parent(6, 1.1),
+                stroll(7, 1.0),
+                look(8, 6.0),
+                random_look(9),
+            ],
+            vec![],
+        ),
     };
     Brain { goals, targets }
 }

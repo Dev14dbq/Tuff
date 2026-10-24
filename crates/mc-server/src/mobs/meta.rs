@@ -255,6 +255,17 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             v.push((17, MetadataValue::Boolean(m.is_baby())));
         }
         EnderDragon | Wither => v.extend(crate::bosses::metadata(m)),
+        // Land animals (Cursor). Indices 18–20 are the goat fields on the
+        // protocol page (screaming, left horn, right horn).
+        Goat => {
+            v.push((
+                metadata::POSE,
+                MetadataValue::Pose(if m.quirks.land.jumping { 6 } else { 0 }),
+            ));
+            v.push((a, MetadataValue::Boolean(m.quirks.land.screaming)));
+            v.push((a + 1, MetadataValue::Boolean(m.quirks.land.left_horn)));
+            v.push((a + 2, MetadataValue::Boolean(m.quirks.land.right_horn)));
+        }
         _ => {}
     }
     v

@@ -1525,6 +1525,89 @@ fn leads_snap_at_twelve_blocks_and_move_between_mobs() {
 }
 
 #[test]
+fn a_bucket_milks_a_goat_and_its_horns_round_trip() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = put(&ctx, Species::Goat, [2.5, -60.0, 0.5]);
+    hold(&ctx, "minecraft:bucket", 1);
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    let milk = ctx.items.id("minecraft:milk_bucket").unwrap();
+    let got = lock(&ctx.inventories)[&STEVE].slots[36]
+        .as_ref()
+        .map(|s| s.item);
+    assert_eq!(got, Some(milk));
+
+    let mob = {
+        let e = mob_of(&ctx, id).unwrap();
+        let Kind::Mob(m) = e.kind else { panic!() };
+        m
+    };
+    assert!(mob.quirks.land.left_horn && mob.quirks.land.right_horn);
+    assert!(!mob.quirks.land.screaming);
+    let mut saved = mc_nbt::Compound::new();
+    crate::mobs::nbt::write(&ctx, &mob, &mut saved);
+    let mut loaded = Mob::new(Species::Goat, 1);
+    loaded.quirks.land.screaming = false;
+    loaded.quirks.land.left_horn = true;
+    crate::mobs::nbt::apply(&ctx, &mut loaded, &saved);
+    // Rewrite with the screaming goat and one horn gone.
+    let mut screaming = mob;
+    screaming.quirks.land.screaming = true;
+    screaming.quirks.land.right_horn = false;
+    let mut saved = mc_nbt::Compound::new();
+    crate::mobs::nbt::write(&ctx, &screaming, &mut saved);
+    crate::mobs::nbt::apply(&ctx, &mut loaded, &saved);
+    assert!(loaded.quirks.land.screaming);
+    assert!(loaded.quirks.land.left_horn);
+    assert!(!loaded.quirks.land.right_horn);
+
+    let meta = crate::mobs::meta::metadata_of(&ctx, &loaded, 0);
+    let flag = |index: u8| {
+        meta.iter().find_map(|(i, v)| {
+            (*i == index).then_some(matches!(v, mc_protocol::packets::play::MetadataValue::Boolean(true)))
+        })
+    };
+    assert_eq!(flag(18), Some(true));
+    assert_eq!(flag(19), Some(true));
+    assert_eq!(flag(20), Some(false));
+    assert_eq!(
+        crate::mobs::land::horn_group("minecraft:frozen_peaks"),
+        2
+    );
+    assert_eq!(crate::mobs::land::horn_group("minecraft:desert"), 3);
+    assert_eq!(crate::mobs::land::horn_group("minecraft:swamp"), 1);
+    assert_eq!(crate::mobs::land::horn_group("minecraft:plains"), 0);
+}
+
+#[test]
+fn two_screaming_goats_have_a_screaming_baby() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let a = put(&ctx, Species::Goat, [0.5, -60.0, 0.5]);
+    let b = put(&ctx, Species::Goat, [2.5, -60.0, 0.5]);
+    let mut entities = lock(&ctx.entities);
+    for id in [a, b] {
+        let Kind::Mob(m) = &mut entities.iter_mut().find(|e| e.id == id).unwrap().kind else {
+            panic!()
+        };
+        m.quirks.land.screaming = true;
+        m.fall_in_love(None);
+    }
+    let baby = crate::mobs::hurt::breed(&ctx, &mut entities, 0, b).expect("baby");
+    drop(entities);
+    let Kind::Mob(m) = &baby.kind else { panic!() };
+    assert!(m.is_baby());
+    assert!(m.quirks.land.screaming);
+    assert!(m.quirks.land.left_horn && m.quirks.land.right_horn);
+}
+
+#[test]
 fn a_burning_mob_in_a_water_cauldron_goes_out() {
     let Some(ctx) = flat() else {
         eprintln!("skipped: no game data");

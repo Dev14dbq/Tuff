@@ -33,6 +33,19 @@ fn consume(ctx: &ServerContext, by: &Actor, slot: usize) {
     }
 }
 
+/// A goat's eat sound (a screamer has its own).
+fn goat_eat(ctx: &ServerContext, m: &mc_entity::Mob, pos: [f64; 3]) {
+    if m.species != Species::Goat {
+        return;
+    }
+    let name = if m.quirks.land.screaming {
+        "entity.goat.screaming.eat"
+    } else {
+        "entity.goat.eat"
+    };
+    fx::sound(ctx, name, fx::category::NEUTRAL, pos, 1.0, 1.0);
+}
+
 /// Swaps one of the held item for `into` (a bucket for milk).
 fn swap_one(ctx: &ServerContext, by: &Actor, slot: usize, into: &str) {
     let Some(item) = ctx.items.id(into) else {
@@ -188,13 +201,22 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         }
     }
     // Milk.
-    if name == "minecraft:bucket"
-        && matches!(species, Species::Cow | Species::Mooshroom)
-        && !m.is_baby()
-    {
-        fx::sound(ctx, "entity.cow.milk", fx::category::PLAYERS, pos, 1.0, 1.0);
-        swap_one(ctx, by, hslot, "minecraft:milk_bucket");
-        return;
+    if name == "minecraft:bucket" && !m.is_baby() {
+        let milk = match species {
+            Species::Cow | Species::Mooshroom => Some("entity.cow.milk"),
+            // Land animals (Cursor)
+            Species::Goat => Some(if m.quirks.land.screaming {
+                "entity.goat.screaming.milk"
+            } else {
+                "entity.goat.milk"
+            }),
+            _ => None,
+        };
+        if let Some(sound) = milk {
+            fx::sound(ctx, sound, fx::category::PLAYERS, pos, 1.0, 1.0);
+            swap_one(ctx, by, hslot, "minecraft:milk_bucket");
+            return;
+        }
     }
     if name == "minecraft:bowl" && species == Species::Mooshroom && !m.is_baby() {
         fx::sound(
@@ -389,6 +411,8 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
                 0.0,
                 5,
             );
+            // Land animals (Cursor)
+            goat_eat(ctx, m, pos);
             return;
         }
         let may_breed = m.baby_age == 0 && !m.in_love() && (!species.tameable() || m.is_tame());
@@ -396,6 +420,8 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
             m.fall_in_love(Some(by.uuid));
             consume(ctx, by, hslot);
             fx::status(ctx, id, 18);
+            // Land animals (Cursor)
+            goat_eat(ctx, m, pos);
             return;
         }
     }

@@ -215,6 +215,8 @@ pub enum Goal {
         /// Where it wanders to instead.
         walk: Option<Cell>,
     },
+    // Land animals (Cursor)
+    Land(super::land::Act),
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -846,6 +848,8 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                 None => false,
             }
         }
+        // Land animals (Cursor)
+        Goal::Land(act) => super::land::can_use(act, m, b, s),
     }
 }
 
@@ -1046,6 +1050,8 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                     o.alive && (o.leashed || o.chain_held) && dist_sq(b.pos, o.pos) <= 676.0
                 })
         }
+        // Land animals (Cursor)
+        Goal::Land(act) => super::land::can_continue(act, m),
     }
 }
 
@@ -1141,6 +1147,8 @@ fn start(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobE
             let r = m.below(1200) + 1200;
             *stay = (m.below(r) + 1200) as i32;
         }
+        // Land animals (Cursor)
+        Goal::Land(act) => super::land::start(act, m, out),
         _ => {}
     }
 }
@@ -1231,6 +1239,8 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
             }
             m.nav.stop();
         }
+        // Land animals (Cursor)
+        Goal::Land(act) => super::land::stop(act, m),
         _ => {}
     }
 }
@@ -1599,6 +1609,8 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
                 });
             }
         }
+        // Land animals (Cursor)
+        Goal::Land(act) => super::land::tick(act, m, b, s, out),
     }
 }
 
