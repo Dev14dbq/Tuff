@@ -144,6 +144,24 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
             m.dirty = true;
         }
     }
+    // Snow golems melt in water, rain and hot places, and leave snow where
+    // they walk elsewhere.
+    if m.species == Species::SnowGolem {
+        let melts = s.world.snow_golem_melts(c[0], c[1], c[2]);
+        if (wet || s.raining && sky_above(m, b, s) || melts) && m.age.is_multiple_of(10) {
+            out.push(MobEvent::Hurt {
+                amount: 1.0,
+                kind: if melts && !wet {
+                    "minecraft:on_fire"
+                } else {
+                    "minecraft:drown"
+                },
+            });
+        }
+        if s.griefing && !melts {
+            out.push(MobEvent::Trail);
+        }
+    }
     // Endermites last two minutes unless named or kept.
     if m.species == Species::Endermite && !m.persistent && m.custom_name.is_none() {
         m.quirks.lifetime += 1;

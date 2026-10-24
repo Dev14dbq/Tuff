@@ -306,6 +306,8 @@ impl Spots<'_> {
         }
         let p = Position::new(x, y, z);
         match species.category() {
+            // Golems come from villagers and players, never from here.
+            Category::Misc => false,
             Category::Creature => {
                 // Its kind of ground underfoot, in the light.
                 let below = self
@@ -363,6 +365,7 @@ impl Spots<'_> {
         let list = match category {
             Category::Creature => &spawns.creature,
             Category::Monster => &spawns.monster,
+            Category::Misc => return,
         };
         let Some(entry) = pick(list) else {
             return;
@@ -378,7 +381,7 @@ impl Spots<'_> {
         // Animals on the surface; monsters anywhere from bedrock up, which
         // is mostly caves.
         let y = match category {
-            Category::Creature => top + 1,
+            Category::Creature | Category::Misc => top + 1,
             Category::Monster => {
                 let min = self.ctx.world.min_y;
                 min + below((top + 2 - min).max(1) as u32) as i32
@@ -497,6 +500,7 @@ fn spawn_round(
             match m.species.category() {
                 Category::Creature => creatures += 1,
                 Category::Monster => monsters += 1,
+                Category::Misc => {}
             }
         }
     }

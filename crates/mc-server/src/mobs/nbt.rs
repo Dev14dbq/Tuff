@@ -212,6 +212,16 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
             m.variant = v.clamp(0, 3);
         }
     }
+    if let Some(v) = flag(nbt, "PlayerCreated")
+        && s == Species::IronGolem
+    {
+        m.quirks.player_made = v;
+    }
+    if let Some(v) = flag(nbt, "Pumpkin")
+        && s == Species::SnowGolem
+    {
+        m.quirks.pumpkin = v;
+    }
     if let Some(v) = int(nbt, "Lifetime")
         && s == Species::Endermite
     {
@@ -476,6 +486,12 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
         Species::Endermite => {
             c.insert("Lifetime", Tag::Int(m.quirks.lifetime));
         }
+        Species::IronGolem => {
+            c.insert("PlayerCreated", Tag::Byte(i8::from(m.quirks.player_made)));
+        }
+        Species::SnowGolem => {
+            c.insert("Pumpkin", Tag::Byte(i8::from(m.quirks.pumpkin)));
+        }
         _ => {}
     }
 }
@@ -496,6 +512,9 @@ fn attributes(m: &Mob) -> Tag {
     }
     if s.horse() {
         list.push(("jump_strength", m.jump_strength));
+    }
+    if s.knockback_resistance() > 0.0 {
+        list.push(("knockback_resistance", s.knockback_resistance()));
     }
     Tag::List(
         list.into_iter()

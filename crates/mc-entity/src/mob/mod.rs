@@ -84,6 +84,8 @@ pub struct Target {
     /// Who last hurt them, and whom they last hit (entity ids), for pets.
     pub hurt_by: Option<i32>,
     pub hit: Option<i32>,
+    /// Has a bad name with the villagers: golems go for them.
+    pub notorious: bool,
 }
 
 impl Target {
@@ -102,6 +104,7 @@ impl Target {
             pitch: 0.0,
             hurt_by: None,
             hit: None,
+            notorious: false,
         }
     }
 }
@@ -275,6 +278,8 @@ pub enum Missile {
     Potion(&'static str),
     /// A llama's spit.
     Spit,
+    /// A snow golem's snowball.
+    Snowball,
 }
 
 /// What a mob did that the world must act on.
@@ -367,6 +372,8 @@ pub enum MobEvent {
     },
     /// A silverfish calls the others out of the infested blocks around it.
     WakeFriends,
+    /// A snow golem leaves snow under its feet where it can.
+    Trail,
     /// Goes away without a trace (an endermite at the end of its life).
     Vanish,
     /// Moved far at once: clients see a teleport.
@@ -400,6 +407,10 @@ pub struct Quirks {
     /// Endermite: ticks lived without a name or persistence (vanilla's
     /// `Lifetime`); it goes at 2400.
     pub lifetime: i32,
+    /// Iron golem: built by a player (it never goes for players).
+    pub player_made: bool,
+    /// Snow golem: still wears its pumpkin.
+    pub pumpkin: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -701,6 +712,7 @@ impl Mob {
                 mob.set_size(size);
             }
             Species::EnderDragon | Species::Wither => mob.persistent = true,
+            Species::SnowGolem => mob.quirks.pumpkin = true,
             _ => {}
         }
         mob

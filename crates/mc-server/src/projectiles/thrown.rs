@@ -85,7 +85,14 @@ fn land(
             if let Strike::Target(i) = strike {
                 t.out.hits.push(hits::Hit {
                     target: t.targets[*i].id,
-                    amount: 0.0,
+                    // Only blazes feel a snowball.
+                    amount: if matches!(shot, Shot::Snowball)
+                        && t.targets[*i].kind == Some("minecraft:blaze")
+                    {
+                        3.0
+                    } else {
+                        0.0
+                    },
                     by: owner,
                     with: Some(e.id),
                     kind: "minecraft:thrown",

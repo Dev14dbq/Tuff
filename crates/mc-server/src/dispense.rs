@@ -223,6 +223,16 @@ pub fn behavior(
                 Some(Behavior::Default)
             }
         }
+        // A carved pumpkin that finishes a golem is set down in the empty
+        // cell (the golem comes); otherwise someone wears it.
+        "carved_pumpkin" if crate::mobs::golems::would_build(ctx, front) => {
+            let head = ctx.data.blocks.default_state("minecraft:carved_pumpkin")?;
+            level.set_block(front, head);
+            for event in crate::mobs::golems::placed(ctx, front, head) {
+                let _ = ctx.events.send(event);
+            }
+            Some(done(None))
+        }
         _ => equip(ctx, name, stack, front),
     }
 }
@@ -961,6 +971,29 @@ mod tests {
         let p = loaded(&ctx, 40, "minecraft:carved_pumpkin", 1);
         fire(&ctx, p);
         assert_eq!(left(&ctx, p), 1);
+    }
+
+    #[test]
+    fn a_dispensed_carved_pumpkin_finishes_a_snow_golem() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        // The dispenser at x = 0 faces east: head at 1, snow at 2 and 3.
+        let p = loaded(&ctx, 0, "minecraft:carved_pumpkin", 2);
+        fire(&ctx, p);
+        // Nothing to build: the pumpkin stays.
+        assert_eq!(left(&ctx, p), 2);
+        set(&ctx, Position::new(2, -60, 0), "minecraft:snow_block");
+        set(&ctx, Position::new(3, -60, 0), "minecraft:snow_block");
+        fire(&ctx, p);
+        assert_eq!(left(&ctx, p), 1);
+        for x in 1..=3 {
+            assert_eq!(block(&ctx, Position::new(x, -60, 0)), "minecraft:air");
+        }
+        assert!(lock(&ctx.entities).iter().any(
+            |e| matches!(&e.kind, Kind::Mob(m) if m.species == mc_entity::Species::SnowGolem)
+        ));
     }
 
     #[test]

@@ -362,6 +362,10 @@ pub fn place(
     }
     drop(ground);
     level.set_block(pos(cell), carried);
+    // A carved pumpkin may finish a golem.
+    for event in super::golems::placed(ctx, pos(cell), carried) {
+        let _ = ctx.events.send(event);
+    }
     if let Kind::Mob(m) = &mut entities[i].kind {
         m.carried = None;
         m.dirty = true;

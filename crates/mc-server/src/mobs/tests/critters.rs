@@ -190,6 +190,195 @@ fn a_spawner_with_silverfish_makes_them() {
     assert!(count_of(&ctx, Species::Silverfish) >= 1, "none made");
 }
 
+// ---- golems ----
+
+fn set_mob<R>(ctx: &ServerContext, id: i32, f: impl FnOnce(&mut Mob) -> R) -> R {
+    let mut all = lock(&ctx.entities);
+    let Kind::Mob(m) = &mut all.iter_mut().find(|e| e.id == id).unwrap().kind else {
+        panic!()
+    };
+    f(m)
+}
+
+#[test]
+fn iron_ingots_mend_an_iron_golem_by_a_quarter() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = put(&ctx, Species::IronGolem, [2.5, -60.0, 0.5]);
+    set_mob(&ctx, id, |m| m.health = 30.0);
+    hold(&ctx, "minecraft:iron_ingot", 4);
+    let at = [0.5, -60.0, 0.5];
+    ctx.mobs.use_on(ctx.dim, id, steve(at), 0);
+    run(&ctx, 1);
+    assert_eq!(with_mob(&ctx, id, |m| m.health), 55.0);
+    ctx.mobs.use_on(ctx.dim, id, steve(at), 0);
+    ctx.mobs.use_on(ctx.dim, id, steve(at), 0);
+    run(&ctx, 1);
+    assert_eq!(with_mob(&ctx, id, |m| m.health), 100.0);
+    // At full health the ingot is kept.
+    ctx.mobs.use_on(ctx.dim, id, steve(at), 0);
+    run(&ctx, 1);
+    let left = lock(&ctx.inventories)[&STEVE].main_hand().map(|s| s.count);
+    assert_eq!(left, Some(1));
+}
+
+#[test]
+fn shears_take_a_snow_golems_pumpkin_off_once() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = put(&ctx, Species::SnowGolem, [2.5, -60.0, 0.5]);
+    hold(&ctx, "minecraft:shears", 1);
+    let at = [0.5, -60.0, 0.5];
+    ctx.mobs.use_on(ctx.dim, id, steve(at), 0);
+    run(&ctx, 1);
+    assert!(!with_mob(&ctx, id, |m| m.quirks.pumpkin));
+    assert_eq!(items_of(&ctx, "minecraft:carved_pumpkin"), 1);
+    ctx.mobs.use_on(ctx.dim, id, steve(at), 0);
+    run(&ctx, 1);
+    assert_eq!(items_of(&ctx, "minecraft:carved_pumpkin"), 1);
+    // Clients are told: bit 16 of field 16.
+    let e = mob_of(&ctx, id).unwrap();
+    let Kind::Mob(m) = &e.kind else { panic!() };
+    let data = metadata_of(&ctx, m, 0);
+    assert!(data.contains(&(16, mc_protocol::packets::play::MetadataValue::Byte(0))));
+}
+
+#[test]
+fn a_snow_golem_leaves_a_trail_of_snow() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let _ = put(&ctx, Species::SnowGolem, [10.5, -60.0, 10.5]);
+    run(&ctx, 60);
+    let snow = (-5..30)
+        .flat_map(|x| (-5..30).map(move |z| [x, -60, z]))
+        .filter(|c| block(&ctx, *c) == "minecraft:snow")
+        .count();
+    assert!(snow >= 1, "no snow");
+    // Not with mob griefing off.
+    set_rule(&ctx, "minecraft:mob_griefing", false);
+    for x in -5..30 {
+        for z in -5..30 {
+            set_state(&ctx, [x, -60, z], ctx.shapes.air());
+        }
+    }
+    run(&ctx, 60);
+    let snow = (-5..30)
+        .flat_map(|x| (-5..30).map(move |z| [x, -60, z]))
+        .filter(|c| block(&ctx, *c) == "minecraft:snow")
+        .count();
+    assert_eq!(snow, 0);
+}
+
+#[test]
+fn an_iron_golem_kills_a_zombie_and_is_not_thrown_back_by_blows() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    normal(&ctx);
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let golem = put(&ctx, Species::IronGolem, [10.5, -60.0, 0.5]);
+    let zombie = put(&ctx, Species::Zombie, [14.5, -60.0, 0.5]);
+    run(&ctx, 200);
+    assert!(
+        mob_of(&ctx, zombie).is_none_or(|e| matches!(&e.kind, Kind::Mob(m) if m.is_dead())),
+        "zombie lives"
+    );
+    // A player's blow pushes a zombie but not the golem.
+    let still = put(&ctx, Species::IronGolem, [-10.5, -60.0, 0.5]);
+    let control = put(&ctx, Species::Zombie, [-10.5, -60.0, 5.5]);
+    for id in [still, control] {
+        set_mob(&ctx, id, |m| m.no_ai = true);
+    }
+    run(&ctx, 3);
+    let at = [-10.5, -58.0, 2.5];
+    for id in [still, control] {
+        ctx.mobs.hit(ctx.dim, id, steve(at), blow(1.0, at));
+    }
+    run(&ctx, 1);
+    let push = |id| mob_of(&ctx, id).unwrap().vel[2].abs();
+    assert!(push(control) > 0.1, "{}", push(control));
+    assert!(push(still) < 1e-6, "{}", push(still));
+    let _ = golem;
+}
+
+#[test]
+fn iron_golems_that_players_did_not_make_go_for_players_the_villagers_scorn() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    normal(&ctx);
+    let uuid = join(&ctx, [0.5, -60.0, 0.5]);
+    let golem = put(&ctx, Species::IronGolem, [5.5, -60.0, 0.5]);
+    let made = put(&ctx, Species::IronGolem, [-5.5, -60.0, 0.5]);
+    set_mob(&ctx, made, |m| m.quirks.player_made = true);
+    run(&ctx, 100);
+    assert_eq!(lock(&ctx.vitals)[&uuid].health, 20.0);
+    ctx.mobs.offend(uuid, 125);
+    assert!(ctx.mobs.notorious(uuid));
+    run(&ctx, 100);
+    assert!(lock(&ctx.vitals)[&uuid].health < 20.0);
+    let _ = golem;
+    assert_eq!(with_mob(&ctx, made, |m| m.target), None);
+    // Time heals the name: 125 down to 85 in two days.
+    ctx.mobs.forgive();
+    assert!(ctx.mobs.notorious(uuid));
+    ctx.mobs.forgive();
+    assert!(!ctx.mobs.notorious(uuid));
+}
+
+#[test]
+fn golems_stay_in_peaceful_and_far_from_players_and_are_saved() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    ctx.difficulty
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let iron = put(&ctx, Species::IronGolem, [60.5, -60.0, 0.5]);
+    let snow = put(&ctx, Species::SnowGolem, [-60.5, -60.0, 0.5]);
+    set_mob(&ctx, iron, |m| m.idle = 5000);
+    for _ in 0..30 {
+        run(&ctx, 100);
+    }
+    assert!(mob_of(&ctx, iron).is_some() && mob_of(&ctx, snow).is_some());
+    let e = mob_of(&ctx, iron).unwrap();
+    let Kind::Mob(m) = &e.kind else { panic!() };
+    let mut c = mc_nbt::Compound::new();
+    set_mob(&ctx, iron, |m| m.quirks.player_made = true);
+    let e = mob_of(&ctx, iron).unwrap();
+    let Kind::Mob(m2) = &e.kind else { panic!() };
+    crate::mobs::nbt::write(&ctx, m2, &mut c);
+    assert_eq!(c.get("PlayerCreated"), Some(&mc_nbt::Tag::Byte(1)));
+    let mut again = Mob::new(Species::IronGolem, 1);
+    crate::mobs::nbt::apply(&ctx, &mut again, &c);
+    assert!(again.quirks.player_made);
+    assert!(!m.quirks.player_made);
+    // Its loot table: poppies and iron.
+    set_mob(&ctx, iron, |m| m.health = 1.0);
+    ctx.mobs.hit(
+        ctx.dim,
+        iron,
+        steve([60.5, -60.0, 0.5]),
+        blow(1000.0, [60.5, -60.0, 0.5]),
+    );
+    ctx.mobs
+        .harm(ctx.dim, iron, 1000.0, "minecraft:generic", Some(STEVE));
+    run(&ctx, 2);
+    assert!(items_of(&ctx, "minecraft:iron_ingot") >= 3);
+}
+
 // ---- endermites ----
 
 #[test]

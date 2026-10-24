@@ -31,6 +31,8 @@ pub enum Ranged {
     Blaze,
     /// Llamas spit at whoever they have a grudge against.
     Spit,
+    /// Snow golems throw snowballs.
+    Snowball,
 }
 
 /// Whom a mob keeps away from.
@@ -143,6 +145,9 @@ pub enum Goal {
         /// Ticks the target has been out of sight.
         unseen: i32,
     },
+    /// Go after the nearest player with a bad name (iron golems that no
+    /// player made).
+    Notorious { unseen: i32 },
     /// Go after the nearest mob of some kinds (or villagers).
     Prey {
         kinds: &'static [Species],
@@ -194,6 +199,11 @@ pub enum Goal {
     /// A llama falls in behind a caravan (a leashed llama and those
     /// following it).
     Caravan { speed: f64 },
+    /// An iron golem goes back to the villagers it knows and wanders about
+    /// them.
+    Patrol { speed: f64 },
+    /// An iron golem holds a poppy out to a villager now and then.
+    OfferFlower { left: i32, to: Option<i32> },
     /// A silverfish that was hurt calls the others out of their blocks
     /// when the count runs out (`Quirks::call_friends`).
     WakeFriends,
@@ -438,7 +448,7 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                 Ranged::Bow => holds(m, s, "minecraft:bow"),
                 Ranged::Trident => holds(m, s, "minecraft:trident"),
                 Ranged::Potion => m.drinking == 0,
-                Ranged::Fireball | Ranged::Blaze | Ranged::Spit => true,
+                Ranged::Fireball | Ranged::Blaze | Ranged::Spit | Ranged::Snowball => true,
             };
             armed && target(m, s).is_some()
         }
@@ -547,6 +557,15 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             {
                 return false;
             }
+            // Golems leave each other alone, and players leave the ones
+            // players built alone.
+            if m.species == Species::IronGolem
+                && (m.quirks.player_made && s.player(id).is_some()
+                    || s.mob(id)
+                        .is_some_and(|o| o.species == Some(Species::IronGolem)))
+            {
+                return false;
+            }
             s.seen(id).is_some()
         }
         Goal::Nearest {
@@ -572,17 +591,70 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                 true
             })
         }
+        Goal::Notorious { .. } => {
+            if m.quirks.player_made || m.below(10) != 0 {
+                return false;
+            }
+            let found = s
+                .nearest(b.pos, 10.0, |p| {
+                    p.targetable && p.notorious && sees_player(m, b, s, p)
+                })
+                .map(|p| p.id);
+            found.is_some_and(|id| {
+                m.target = Some(id);
+                true
+            })
+        }
+        Goal::Patrol { speed } => {
+            // The village is where the villagers are.
+            let Some(home) = s
+                .nearest_mob(b.pos, 64.0, |o| o.species.is_none())
+                .map(|o| o.pos)
+            else {
+                return false;
+            };
+            if dist_sq(b.pos, home) <= 400.0 && m.below(120) != 0 {
+                return false;
+            }
+            match random_spot(m, s, cell_of(home), 8, 4, true, None) {
+                Some(c) => {
+                    m.nav.stop();
+                    m.goto = Some((center(c), *speed));
+                    true
+                }
+                None => false,
+            }
+        }
+        Goal::OfferFlower { to, .. } => {
+            if !s.day || m.below(4000) != 0 {
+                return false;
+            }
+            *to = s
+                .nearest_mob(b.pos, 6.0, |o| {
+                    o.species.is_none() && (o.pos[1] - b.pos[1]).abs() <= 2.0
+                })
+                .map(|o| o.id);
+            to.is_some()
+        }
         Goal::Prey {
             kinds,
             villagers,
             wild_only,
             ..
         } => {
+            let (kinds, villagers) = (*kinds, *villagers);
+            // Nothing of the kind about: no need to look (or to roll).
+            let any = |o: &super::Other| match o.species {
+                Some(k) => kinds.contains(&k),
+                None => villagers,
+            };
+            if !s.mobs.iter().any(any) {
+                return false;
+            }
             if *wild_only && m.is_tame() || m.below(10) != 0 {
                 return false;
             }
             let range = m.species.follow_range();
-            let (kinds, villagers) = (*kinds, *villagers);
             let me = b.id;
             let eye_pos = eye(m, b.pos);
             let found = s
@@ -948,6 +1020,25 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         }
         Goal::Shelter { .. } | Goal::SeekLava { .. } => !m.nav.is_done(),
         Goal::WakeFriends => m.quirks.call_friends > 0,
+        Goal::Patrol { .. } => !m.nav.is_done(),
+        Goal::OfferFlower { left, to } => {
+            *left > 0 && to.and_then(|id| s.mob(id)).is_some_and(|o| o.alive)
+        }
+        Goal::Notorious { unseen } => {
+            let Some(t) = target(m, s) else {
+                return false;
+            };
+            let bad = s.player(t.id).is_some_and(|p| p.notorious);
+            if !bad || dist_sq(b.pos, t.pos) > 256.0 {
+                return false;
+            }
+            if can_see(m, b, s, &t) {
+                *unseen = 0;
+            } else {
+                *unseen += 1;
+            }
+            *unseen <= 60
+        }
         Goal::Hide { merge, .. } => merge.is_none() && !m.nav.is_done(),
         Goal::Caravan { .. } => {
             m.leash.is_none()
@@ -1029,7 +1120,12 @@ fn start(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobE
             }
         }
         Goal::Freeze => m.nav.stop(),
-        Goal::WakeFriends => {}
+        Goal::WakeFriends | Goal::Patrol { .. } | Goal::Notorious { .. } => {}
+        Goal::OfferFlower { left, .. } => {
+            *left = 400;
+            m.nav.stop();
+            out.push(MobEvent::Status(11));
+        }
         Goal::Hide { merge, walk } => {
             if let Some(cell) = *merge {
                 out.push(MobEvent::Hide { cell });
@@ -1062,6 +1158,7 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
         Goal::Panic { .. }
         | Goal::Stroll { .. }
         | Goal::Hide { .. }
+        | Goal::Patrol { .. }
         | Goal::Avoid { .. }
         | Goal::FleeSun { .. }
         | Goal::FollowOwner { .. }
@@ -1094,7 +1191,11 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
                 m.dirty = true;
             }
         }
-        Goal::Nearest { unseen, .. } | Goal::Prey { unseen, .. } => {
+        Goal::OfferFlower { to, .. } => {
+            *to = None;
+            out.push(MobEvent::Status(34));
+        }
+        Goal::Nearest { unseen, .. } | Goal::Prey { unseen, .. } | Goal::Notorious { unseen } => {
             *unseen = 0;
             m.target = None;
         }
@@ -1169,7 +1270,15 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
             {
                 m.attack_cooldown = 20;
                 out.push(MobEvent::Swing);
-                let damage = m.species.attack_damage();
+                // An iron golem's blow is half its attack and a roll of up to
+                // all of it again: 7.5 to 21.5.
+                let damage = if m.species == Species::IronGolem {
+                    out.push(MobEvent::Status(4));
+                    let a = m.species.attack_damage();
+                    a / 2.0 + m.below(a as u32) as f32
+                } else {
+                    m.species.attack_damage()
+                };
                 out.push(MobEvent::Attack {
                     target: t.id,
                     damage,
@@ -1439,6 +1548,19 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
                 m.goto = Some((center(c), *speed));
             }
         }
+        Goal::Notorious { .. } => {}
+        Goal::Patrol { speed } => {
+            if let Some(c) = m.nav.goal {
+                m.goto = Some((center(c), *speed));
+            }
+        }
+        Goal::OfferFlower { left, to } => {
+            *left -= 1;
+            m.nav.stop();
+            if let Some(o) = to.and_then(|id| s.mob(id)) {
+                m.look = Some([o.pos[0], o.pos[1] + o.height * 0.85, o.pos[2]]);
+            }
+        }
         Goal::WakeFriends => {
             m.quirks.call_friends -= 1;
             if m.quirks.call_friends <= 0 {
@@ -1541,16 +1663,24 @@ fn ranged(
                 *timer = -1;
             }
         }
-        Ranged::Trident | Ranged::Potion => {
+        Ranged::Trident | Ranged::Potion | Ranged::Snowball => {
             if d <= range * range && *seen >= 5 {
                 m.nav.stop();
             } else {
-                m.goto = Some((t.pos, 1.0));
+                let speed = if kind == Ranged::Snowball { 1.25 } else { 1.0 };
+                m.goto = Some((t.pos, speed));
             }
             *timer -= 1;
             if *timer == 0 && visible && d <= range * range {
                 let missile = if kind == Ranged::Trident {
                     Missile::Trident
+                } else if kind == Ranged::Snowball {
+                    out.push(MobEvent::Sound {
+                        name: "entity.snow_golem.shoot".into(),
+                        volume: 1.0,
+                        pitch: 1.0 / (m.next_f64() as f32 * 0.4 + 0.8),
+                    });
+                    Missile::Snowball
                 } else if d > 64.0 {
                     Missile::Potion("minecraft:slowness")
                 } else if m.below(4) == 0 && d < 9.0 {

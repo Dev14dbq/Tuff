@@ -146,6 +146,17 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         }
         return;
     }
+    // Iron mends an iron golem: a quarter of its health.
+    if name == "minecraft:iron_ingot" && species == Species::IronGolem && m.health < m.max_health {
+        m.health = (m.health + 25.0).min(m.max_health);
+        m.dirty = true;
+        consume(ctx, by, hslot);
+        let pitch = 1.0 + (m.next_f64() - m.next_f64()) as f32 * 0.2;
+        fx::sound(ctx, "entity.iron_golem.repair", 5, pos, 1.0, pitch);
+        swing(ctx, by);
+        send_now(ctx, e);
+        return;
+    }
     // Shears.
     if name == "minecraft:shears" {
         if shear(ctx, e) {
@@ -476,6 +487,23 @@ pub fn shear(ctx: &ServerContext, e: &mut Entity) -> bool {
         return false;
     }
     let species = m.species;
+    if species == Species::SnowGolem && m.quirks.pumpkin {
+        // The pumpkin comes off whole.
+        m.quirks.pumpkin = false;
+        fx::sound(
+            ctx,
+            "entity.snow_golem.shear",
+            fx::category::PLAYERS,
+            pos,
+            1.0,
+            1.0,
+        );
+        if let Some(item) = ctx.items.id("minecraft:carved_pumpkin") {
+            crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 1.7, pos[2]], item, 1);
+        }
+        send_now(ctx, e);
+        return true;
+    }
     if m.can_shear() {
         m.shear();
         let color = WOOL_COLORS[usize::from(m.color & 15)];

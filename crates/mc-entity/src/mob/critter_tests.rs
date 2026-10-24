@@ -4,10 +4,14 @@ use super::*;
 use crate::nav::Liquid;
 use crate::physics::Collide;
 
-/// A flat floor (y < 0) whose stone can be hidden in when `stone` is set.
+/// A flat floor (y < 0) whose stone can be hidden in when `stone` is set,
+/// hot when `hot`, in the day and the rain when those are set.
 #[derive(Default)]
 struct Den {
     stone: bool,
+    hot: bool,
+    day: bool,
+    rain: bool,
 }
 
 impl Collide for Den {
@@ -32,6 +36,9 @@ impl Terrain for Den {
     fn infestable(&self, _: i32, y: i32, _: i32) -> bool {
         self.stone && y < 0
     }
+    fn snow_golem_melts(&self, _: i32, _: i32, _: i32) -> bool {
+        self.hot
+    }
 }
 
 fn senses<'a>(world: &'a Den, players: &'a [Target], tick: u64, griefing: bool) -> Senses<'a> {
@@ -42,10 +49,10 @@ fn senses<'a>(world: &'a Den, players: &'a [Target], tick: u64, griefing: bool) 
         items: &NoItems,
         tick,
         difficulty: 2,
-        sunny: false,
-        raining: false,
+        sunny: world.day && !world.rain,
+        raining: world.rain,
         nether: false,
-        day: false,
+        day: world.day,
         griefing,
     }
 }
@@ -138,7 +145,16 @@ fn a_silverfish_goes_for_a_player_and_bites() {
 #[test]
 fn a_silverfish_at_peace_hides_in_stone_next_to_it() {
     let mut e = mob(Species::Silverfish, [0.5, 0.0, 0.5]);
-    let out = run(&mut e, &Den { stone: true }, &[], 600, true);
+    let out = run(
+        &mut e,
+        &Den {
+            stone: true,
+            ..Den::default()
+        },
+        &[],
+        600,
+        true,
+    );
     let hid = out.iter().find_map(|ev| match ev {
         MobEvent::Hide { cell } => Some(*cell),
         _ => None,
@@ -150,12 +166,30 @@ fn a_silverfish_at_peace_hides_in_stone_next_to_it() {
 #[test]
 fn a_silverfish_does_not_hide_without_mob_griefing_or_with_a_target() {
     let mut e = mob(Species::Silverfish, [0.5, 0.0, 0.5]);
-    let out = run(&mut e, &Den { stone: true }, &[], 600, false);
+    let out = run(
+        &mut e,
+        &Den {
+            stone: true,
+            ..Den::default()
+        },
+        &[],
+        600,
+        false,
+    );
     assert!(!out.iter().any(|ev| matches!(ev, MobEvent::Hide { .. })));
     // With a player in sight it fights instead.
     let mut e = mob(Species::Silverfish, [0.5, 0.0, 0.5]);
     let p = Target::at(100, 100, [3.5, 0.0, 0.5]);
-    let out = run(&mut e, &Den { stone: true }, &[p], 200, true);
+    let out = run(
+        &mut e,
+        &Den {
+            stone: true,
+            ..Den::default()
+        },
+        &[p],
+        200,
+        true,
+    );
     assert!(!out.iter().any(|ev| matches!(ev, MobEvent::Hide { .. })));
 }
 
@@ -234,5 +268,226 @@ fn an_endermite_turns_on_whoever_hurt_it() {
     assert!(
         out.iter()
             .any(|ev| matches!(ev, MobEvent::Alert { target: 9 }))
+    );
+}
+
+fn villager(id: i32, pos: [f64; 3]) -> Other {
+    Other {
+        species: None,
+        ..other(id, Species::Zombie, pos)
+    }
+}
+
+fn damages(out: &[MobEvent], target: i32) -> Vec<f32> {
+    out.iter()
+        .filter_map(|ev| match ev {
+            MobEvent::Attack { target: t, damage } if *t == target => Some(*damage),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_iron_golem_hits_monsters_for_seven_and_a_half_to_twenty_one_and_a_half() {
+    let mut e = mob(Species::IronGolem, [0.5, 0.0, 0.5]);
+    let zombie = other(9, Species::Zombie, [3.5, 0.0, 0.5]);
+    let out = run_among(&mut e, &Den::default(), &[], &[zombie], 600, true);
+    let hits = damages(&out, 9);
+    assert!(hits.len() > 10, "{} hits", hits.len());
+    assert!(hits.iter().all(|d| (7.5..=21.5).contains(d)), "{hits:?}");
+    assert!(hits.iter().any(|d| *d > 14.5) && hits.iter().any(|d| *d < 14.5));
+    assert!(out.iter().any(|ev| matches!(ev, MobEvent::Status(4))));
+    assert_eq!(Species::IronGolem.max_health(), 100.0);
+    assert_eq!(Species::IronGolem.knockback_resistance(), 1.0);
+    assert_eq!(Species::IronGolem.size(), (1.4, 2.7));
+}
+
+#[test]
+fn an_iron_golem_leaves_creepers_and_other_golems_alone() {
+    let mut e = mob(Species::IronGolem, [0.5, 0.0, 0.5]);
+    let others = [
+        other(8, Species::Creeper, [3.5, 0.0, 0.5]),
+        other(9, Species::IronGolem, [0.5, 0.0, 3.5]),
+        other(10, Species::Cow, [-3.5, 0.0, 0.5]),
+    ];
+    let out = run_among(&mut e, &Den::default(), &[], &others, 300, true);
+    assert_eq!(m(&mut e).target, None);
+    assert!(!out.iter().any(|ev| matches!(ev, MobEvent::Attack { .. })));
+    // A golem that hurt it is not a target either.
+    assert!(m(&mut e).hurt(5.0, Some(9)));
+    run_among(&mut e, &Den::default(), &[], &others, 20, true);
+    assert_eq!(m(&mut e).target, None);
+}
+
+#[test]
+fn a_golem_a_player_made_never_goes_for_players_but_a_village_golem_does_when_hit() {
+    let p = Target::at(100, 100, [3.5, 0.0, 0.5]);
+    for made in [true, false] {
+        let mut e = mob(Species::IronGolem, [0.5, 0.0, 0.5]);
+        m(&mut e).quirks.player_made = made;
+        // Calm players are left alone by both.
+        let out = run(&mut e, &Den::default(), std::slice::from_ref(&p), 100, true);
+        assert!(damages(&out, 100).is_empty());
+        // Hit by the player.
+        assert!(m(&mut e).hurt(1.0, Some(100)));
+        let out = run(&mut e, &Den::default(), std::slice::from_ref(&p), 100, true);
+        assert_eq!(!damages(&out, 100).is_empty(), !made, "player made: {made}");
+    }
+}
+
+#[test]
+fn a_village_golem_goes_for_a_player_with_a_bad_name_and_a_made_one_does_not() {
+    let mut bad = Target::at(100, 100, [5.5, 0.0, 0.5]);
+    bad.notorious = true;
+    for made in [false, true] {
+        let mut e = mob(Species::IronGolem, [0.5, 0.0, 0.5]);
+        m(&mut e).quirks.player_made = made;
+        let out = run(
+            &mut e,
+            &Den::default(),
+            std::slice::from_ref(&bad),
+            200,
+            true,
+        );
+        assert_eq!(!damages(&out, 100).is_empty(), !made, "player made: {made}");
+    }
+}
+
+#[test]
+fn a_golem_walks_back_to_the_villagers_and_offers_them_a_poppy() {
+    // Forty blocks off the village it heads there.
+    let mut e = mob(Species::IronGolem, [0.5, 0.0, 0.5]);
+    let v = villager(7, [40.5, 0.0, 0.5]);
+    run_among(&mut e, &Den::default(), &[], &[v], 400, true);
+    assert!(e.pos[0] > 10.0, "{:?}", e.pos);
+    // By day, now and then, with a villager beside it.
+    let mut e = mob(Species::IronGolem, [0.5, 0.0, 0.5]);
+    let v = villager(7, [2.5, 0.0, 0.5]);
+    let day = Den {
+        day: true,
+        ..Den::default()
+    };
+    let (mut offered, mut stopped) = (None, None);
+    for t in 0..60_000u64 {
+        let mut out = Vec::new();
+        let s = Senses {
+            mobs: std::slice::from_ref(&v),
+            ..senses(&day, &[], t, true)
+        };
+        tick(&mut e, &s, &mut out);
+        for ev in out {
+            match ev {
+                MobEvent::Status(11) => offered = offered.or(Some(t)),
+                MobEvent::Status(34) => stopped = stopped.or(Some(t)),
+                _ => {}
+            }
+        }
+        if stopped.is_some() {
+            break;
+        }
+    }
+    let (from, to) = (
+        offered.expect("never offered"),
+        stopped.expect("never stopped"),
+    );
+    // It holds it out at most 400 ticks (a stroll back to the village
+    // may end it sooner).
+    assert!(to - from <= 401, "{from} {to}");
+}
+
+#[test]
+fn zombies_and_skeletons_go_for_iron_golems() {
+    for species in [Species::Zombie, Species::Skeleton, Species::Spider] {
+        let mut e = mob(species, [0.5, 0.0, 0.5]);
+        let golem = other(9, Species::IronGolem, [6.5, 0.0, 0.5]);
+        run_among(&mut e, &Den::default(), &[], &[golem], 100, true);
+        assert_eq!(m(&mut e).target, Some(9), "{species:?}");
+    }
+}
+
+#[test]
+fn a_snow_golem_throws_snowballs_at_monsters_but_not_players() {
+    let mut e = mob(Species::SnowGolem, [0.5, 0.0, 0.5]);
+    assert_eq!(Species::SnowGolem.max_health(), 4.0);
+    assert!(m(&mut e).quirks.pumpkin);
+    let zombie = other(9, Species::Creeper, [8.5, 0.0, 0.5]);
+    let p = Target::at(100, 100, [-3.5, 0.0, 0.5]);
+    let out = run_among(
+        &mut e,
+        &Den::default(),
+        std::slice::from_ref(&p),
+        &[zombie],
+        200,
+        true,
+    );
+    let shots = out
+        .iter()
+        .filter(|ev| {
+            matches!(
+                ev,
+                MobEvent::Shoot {
+                    target: 9,
+                    missile: Missile::Snowball,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert!(shots >= 3, "{shots} snowballs");
+    assert!(
+        !out.iter()
+            .any(|ev| matches!(ev, MobEvent::Shoot { target: 100, .. }))
+    );
+    assert!(!out.iter().any(|ev| matches!(ev, MobEvent::Attack { .. })));
+}
+
+fn count_of(out: &[MobEvent], f: impl Fn(&MobEvent) -> bool) -> usize {
+    out.iter().filter(|ev| f(ev)).count()
+}
+
+#[test]
+fn a_snow_golem_leaves_snow_in_the_cold_and_melts_in_the_heat_the_rain_and_water() {
+    let cold = Den::default();
+    let mut e = mob(Species::SnowGolem, [0.5, 0.0, 0.5]);
+    let out = run(&mut e, &cold, &[], 40, true);
+    assert!(count_of(&out, |ev| matches!(ev, MobEvent::Trail)) >= 30);
+    assert_eq!(count_of(&out, |ev| matches!(ev, MobEvent::Hurt { .. })), 0);
+    // No trail with mob griefing off.
+    let mut e = mob(Species::SnowGolem, [0.5, 0.0, 0.5]);
+    let out = run(&mut e, &cold, &[], 40, false);
+    assert_eq!(count_of(&out, |ev| matches!(ev, MobEvent::Trail)), 0);
+    // Hot: it burns and leaves nothing.
+    let hot = Den {
+        hot: true,
+        ..Den::default()
+    };
+    let mut e = mob(Species::SnowGolem, [0.5, 0.0, 0.5]);
+    let out = run(&mut e, &hot, &[], 40, true);
+    assert_eq!(count_of(&out, |ev| matches!(ev, MobEvent::Trail)), 0);
+    assert!(
+        count_of(&out, |ev| matches!(
+            ev,
+            MobEvent::Hurt {
+                kind: "minecraft:on_fire",
+                ..
+            }
+        )) >= 3
+    );
+    // Rain.
+    let rain = Den {
+        rain: true,
+        day: true,
+        ..Den::default()
+    };
+    let mut e = mob(Species::SnowGolem, [0.5, 0.0, 0.5]);
+    let out = run(&mut e, &rain, &[], 40, true);
+    assert!(
+        count_of(&out, |ev| matches!(
+            ev,
+            MobEvent::Hurt {
+                kind: "minecraft:drown",
+                ..
+            }
+        )) >= 3
     );
 }

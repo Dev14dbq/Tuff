@@ -848,6 +848,10 @@ pub fn use_item_on(
     // The last skull of a wither's T.
     for &(p, state) in &placed.blocks {
         crate::bosses::wither::placed(ctx, &mut outcome.events, p, state);
+        // The head of a golem.
+        outcome
+            .events
+            .extend(crate::mobs::golems::placed(ctx, p, state));
     }
     // Survival and adventure use up the block.
     if actor.game_mode != CREATIVE {

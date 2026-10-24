@@ -198,6 +198,30 @@ fn spans(ctx: &ServerContext) -> &'static [(u8, u8)] {
     })
 }
 
+/// Whether the biome has the `snow_golem_melts` attribute (read once from
+/// the data pack).
+fn melting_biome(ctx: &ServerContext, name: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    let mut cache = crate::tick::lock(CACHE.get_or_init(Default::default));
+    if let Some(&melts) = cache.get(name) {
+        return melts;
+    }
+    let full = if name.contains(':') {
+        name.to_owned()
+    } else {
+        format!("minecraft:{name}")
+    };
+    let melts = ctx
+        .data
+        .data_pack()
+        .read_entry("minecraft:worldgen/biome", &full)
+        .is_ok_and(|json| json["attributes"]["minecraft:gameplay/snow_golem_melts"] == true);
+    cache.insert(name.to_owned(), melts);
+    melts
+}
+
 /// A collision box's bottom and top, in sixteenths.
 type Span = (u8, u8);
 
@@ -324,6 +348,23 @@ impl Terrain for Ground<'_> {
 
     fn free_bed(&self, x: i32, y: i32, z: i32) -> bool {
         self.at(x, y, z) & BED_FREE != 0
+    }
+
+    fn snow_golem_melts(&self, x: i32, y: i32, z: i32) -> bool {
+        if self.ctx.world.dimension == "minecraft:the_nether" {
+            return true;
+        }
+        let Some(id) = self
+            .ctx
+            .world
+            .biome(Position::new(x, y, z), &self.ctx.data.blocks)
+        else {
+            return false;
+        };
+        let Some(name) = self.ctx.world.biome_name(id) else {
+            return false;
+        };
+        melting_biome(self.ctx, name)
     }
 
     fn infestable(&self, x: i32, y: i32, z: i32) -> bool {
