@@ -247,6 +247,9 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
             m.conversion = v;
         }
     }
+    if let Some(p) = uuid(nbt, "ConversionPlayer") {
+        m.curer = Some(p);
+    }
     if let Some(Tag::Compound(b)) = nbt.get("carriedBlockState") {
         m.carried = crate::persist::state_from(ctx, b);
     }
@@ -463,6 +466,9 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
         }
         Species::ZombieVillager => {
             c.insert("ConversionTime", Tag::Int(m.conversion));
+            if let Some(p) = m.curer {
+                c.insert("ConversionPlayer", uuid_tag(p));
+            }
             let (kind, profession, level) = m
                 .villager
                 .clone()

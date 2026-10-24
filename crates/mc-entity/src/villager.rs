@@ -31,10 +31,14 @@ pub enum Op {
 pub struct Env<'a> {
     /// Night: time for bed.
     pub night: bool,
+    /// The afternoon (9000 to 12000): villagers meet at their bell.
+    pub gather: bool,
     /// Where zombies and other monsters it fears are.
     pub threats: &'a [[f64; 3]],
 }
 
+/// Blocks from the bell it is satisfied to be at in the afternoon.
+const MEET: f64 = 4.0;
 /// Blocks within which it sees a monster and runs.
 const FEAR: f64 = 8.0;
 /// Where a lying villager's body sits on a bed (its height).
@@ -60,6 +64,9 @@ pub struct Walk {
     pub golem_seen_until: i64,
     /// Game time it last gossiped.
     pub gossiped: Option<i64>,
+    /// Game time it last talked with another villager (and told it what
+    /// it has heard).
+    pub chatted: Option<i64>,
     /// A bell rang: until when (game time) it hides in the bed at the cell.
     pub hiding: Option<(u32, Cell)>,
     rng: u64,
@@ -121,6 +128,10 @@ pub fn step(
         return;
     };
     let home = m.home.map(|(x, y, z)| [x, y, z]);
+    let meeting = m
+        .meeting
+        .filter(|_| env.gather && !m.wandering)
+        .map(|(x, y, z)| [x, y, z]);
     let walk = &mut m.walk;
     let wandering = m.wandering;
     walk.nav.tick(pos, now);
@@ -198,6 +209,14 @@ pub fn step(
         if walk.nav.is_done() && flat_dist(pos, bed) > 2.0 {
             let p = params();
             if let Some(s) = beside(world, bed, &p) {
+                walk.nav.go_to(world, from, s, &p);
+            }
+        }
+    } else if let Some(bell) = meeting.filter(|b| flat_dist(pos, *b) > MEET) {
+        // The afternoon: it goes to the bell.
+        if walk.nav.is_done() {
+            let p = params();
+            if let Some(s) = beside(world, bell, &p) {
                 walk.nav.go_to(world, from, s, &p);
             }
         }
@@ -290,6 +309,21 @@ pub fn step(
     };
     entity.vel = [0.0, vel[1], 0.0];
     entity.age += 1;
+}
+
+/// Sets it walking to the cell, if it is not on its way somewhere.
+pub fn head_for(entity: &mut Entity, world: &dyn Terrain, to: Cell) {
+    let from = [
+        entity.pos[0].floor() as i32,
+        (entity.pos[1] + 0.5).floor() as i32,
+        entity.pos[2].floor() as i32,
+    ];
+    let Kind::Merchant(m) = &mut entity.kind else {
+        return;
+    };
+    if m.walk.nav.is_done() && !m.walk.asleep {
+        m.walk.nav.go_to(world, from, to, &params());
+    }
 }
 
 /// A cell to stand in beside the bed.

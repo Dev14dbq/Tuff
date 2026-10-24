@@ -229,6 +229,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
     // Curing a zombie villager.
     if name == "minecraft:golden_apple" && species == Species::ZombieVillager && m.conversion < 0 {
         m.conversion = 3600 + m.below(2401) as i32;
+        m.curer = Some(by.uuid);
         m.persistent = true;
         m.dirty = true;
         consume(ctx, by, hslot);

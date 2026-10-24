@@ -13,7 +13,7 @@ fn state_named(ctx: &ServerContext, name: &str) -> u32 {
     ctx.data.blocks.default_state(name).unwrap()
 }
 
-fn normal(ctx: &ServerContext) {
+pub(super) fn normal(ctx: &ServerContext) {
     ctx.difficulty
         .store(2, std::sync::atomic::Ordering::Relaxed);
 }
@@ -192,7 +192,7 @@ fn a_spawner_with_silverfish_makes_them() {
 
 // ---- golems ----
 
-fn set_mob<R>(ctx: &ServerContext, id: i32, f: impl FnOnce(&mut Mob) -> R) -> R {
+pub(super) fn set_mob<R>(ctx: &ServerContext, id: i32, f: impl FnOnce(&mut Mob) -> R) -> R {
     let mut all = lock(&ctx.entities);
     let Kind::Mob(m) = &mut all.iter_mut().find(|e| e.id == id).unwrap().kind else {
         panic!()
@@ -309,32 +309,6 @@ fn an_iron_golem_kills_a_zombie_and_is_not_thrown_back_by_blows() {
     assert!(push(control) > 0.1, "{}", push(control));
     assert!(push(still) < 1e-6, "{}", push(still));
     let _ = golem;
-}
-
-#[test]
-fn iron_golems_that_players_did_not_make_go_for_players_the_villagers_scorn() {
-    let Some(ctx) = flat() else {
-        eprintln!("skipped: no game data");
-        return;
-    };
-    normal(&ctx);
-    let uuid = join(&ctx, [0.5, -60.0, 0.5]);
-    let golem = put(&ctx, Species::IronGolem, [5.5, -60.0, 0.5]);
-    let made = put(&ctx, Species::IronGolem, [-5.5, -60.0, 0.5]);
-    set_mob(&ctx, made, |m| m.quirks.player_made = true);
-    run(&ctx, 100);
-    assert_eq!(lock(&ctx.vitals)[&uuid].health, 20.0);
-    ctx.mobs.offend(uuid, 125);
-    assert!(ctx.mobs.notorious(uuid));
-    run(&ctx, 100);
-    assert!(lock(&ctx.vitals)[&uuid].health < 20.0);
-    let _ = golem;
-    assert_eq!(with_mob(&ctx, made, |m| m.target), None);
-    // Time heals the name: 125 down to 85 in two days.
-    ctx.mobs.forgive();
-    assert!(ctx.mobs.notorious(uuid));
-    ctx.mobs.forgive();
-    assert!(!ctx.mobs.notorious(uuid));
 }
 
 #[test]

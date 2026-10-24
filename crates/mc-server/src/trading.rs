@@ -631,7 +631,7 @@ pub fn complete(
         let (xp, reward) = (offer.xp * times, offer.reward_xp);
         if !m.wandering {
             for _ in 0..times {
-                m.gossip.happen(uuid, Kind::Trading);
+                m.gossip.happen(uuid, mc_entity::gossip::Kind::Trading);
             }
             m.xp += xp;
             if m.should_level_up() && m.level_up_in.is_none() {
@@ -1099,6 +1099,54 @@ mod tests {
     }
 
     #[test]
+    fn prices_follow_what_the_villager_thinks_of_the_player() {
+        use mc_entity::gossip::Kind as Gossip;
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut e = villager(&ctx);
+        let m = merchant(&mut e);
+        m.offers = ctx.trades.level_offers("farmer", 1, "minecraft:plains");
+        let (cheap, dear) = (m.offers[0].clone(), m.offers[1].clone());
+        assert!(cheap.price_multiplier > 0.0 && dear.price_multiplier > 0.0);
+        // A stranger pays the plain price.
+        refresh_prices(&ctx, 1, m);
+        assert!(m.offers.iter().all(|o| o.special_price == 0));
+        // Cured and fond: 5 * 20 + 25 + 25 = 150 points of good name.
+        m.gossip.happen(1, Gossip::MajorPositive);
+        m.gossip.happen(1, Gossip::MinorPositive);
+        for _ in 0..7 {
+            m.gossip.happen(1, Gossip::Trading);
+        }
+        let name = m.gossip.reputation(1);
+        assert_eq!(name, 100 + 25 + 25);
+        refresh_prices(&ctx, 1, m);
+        for (o, base) in m.offers.iter().zip([&cheap, &dear]) {
+            let off = (name as f32 * base.price_multiplier).floor() as i32;
+            assert_eq!(o.special_price, -off);
+            let plain = base.cost_a.count;
+            assert_eq!(o.price_a(64), (plain - off).clamp(1, 64));
+        }
+        // Somebody else is as much a stranger as before.
+        refresh_prices(&ctx, 2, m);
+        assert!(m.offers.iter().all(|o| o.special_price == 0));
+        // A bad name makes everything dearer, rounding up.
+        for _ in 0..3 {
+            m.gossip.happen(2, Gossip::MajorNegative);
+        }
+        m.gossip.happen(2, Gossip::MinorNegative);
+        let name = m.gossip.reputation(2);
+        assert_eq!(name, -5 * 75 - 25);
+        refresh_prices(&ctx, 2, m);
+        for (o, base) in m.offers.iter().zip([&cheap, &dear]) {
+            let more = -(name as f32 * base.price_multiplier).floor() as i32;
+            assert!(more > 0);
+            assert_eq!(o.special_price, more);
+        }
+    }
+
+    #[test]
     fn trading_earns_levels_and_restocks() {
         let Some(ctx) = context() else {
             eprintln!("skipped: no game data");
@@ -1124,6 +1172,13 @@ mod tests {
         assert_eq!(snap.xp, 10);
         let mut e = ctx.entities.lock().unwrap().pop().unwrap();
         assert_eq!(merchant(&mut e).level_up_in, Some(LEVEL_UP_DELAY));
+        // The villager remembers the trade.
+        assert_eq!(
+            merchant(&mut e)
+                .gossip
+                .value(1, mc_entity::gossip::Kind::Trading),
+            4
+        );
         for _ in 0..LEVEL_UP_DELAY {
             settle(&ctx, &mut e, 3000);
         }

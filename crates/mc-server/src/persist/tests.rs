@@ -154,6 +154,17 @@ fn everything(ctx: &ServerContext) -> Vec<Entity> {
         m.meeting = Some((40, 99, 30));
         m.last_restock = 12000;
         m.restocks_today = 1;
+        m.age = 6000;
+        m.food = 3;
+        m.pantry = vec![mc_entity::trade::Cost {
+            item: ctx.items.id("minecraft:bread").unwrap(),
+            count: 2,
+        }];
+        m.gossip
+            .happen(0xfeed, mc_entity::gossip::Kind::MajorNegative);
+        m.gossip.happen(0xfeed, mc_entity::gossip::Kind::Trading);
+        m.gossip
+            .happen(0xbeef, mc_entity::gossip::Kind::MajorPositive);
     }
     ctx.mobs.set_villager_health(villager.id, Some(13.5));
     all.push(villager);
@@ -534,6 +545,13 @@ fn every_kind_of_entity_comes_back_after_a_restart() {
         (m.job_site, m.home, m.meeting),
         (Some((37, 99, 34)), Some((38, 99, 34)), Some((40, 99, 30)))
     );
+    // What it ate, carries and has heard.
+    assert_eq!((m.age, m.food), (6000, 3));
+    assert_eq!(m.pantry.len(), 1);
+    assert_eq!(m.pantry[0].count, 2);
+    assert_eq!(ctx.items.name(m.pantry[0].item), Some("minecraft:bread"));
+    assert_eq!(m.gossip.reputation(0xfeed), -125 + 4);
+    assert_eq!(m.gossip.reputation(0xbeef), 100);
     let pig = entities
         .iter()
         .find(|e| matches!(&e.kind, Kind::Mob(m) if m.species == Species::Pig))

@@ -8,6 +8,10 @@ use super::{
 };
 use crate::nav::{Cell, Graze, Liquid, standable};
 
+/// Ticks left of the 400 a golem holds out a poppy at which a child beside
+/// it takes it.
+const TAKEN_AFTER: i32 = 360;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Slot {
     pub priority: u8,
@@ -597,7 +601,7 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             }
             let found = s
                 .nearest(b.pos, 10.0, |p| {
-                    p.targetable && p.notorious && sees_player(m, b, s, p)
+                    p.targetable && m.quirks.scorned.contains(&p.uuid) && sees_player(m, b, s, p)
                 })
                 .map(|p| p.id);
             found.is_some_and(|id| {
@@ -629,11 +633,14 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             if !s.day || m.below(4000) != 0 {
                 return false;
             }
-            *to = s
-                .nearest_mob(b.pos, 6.0, |o| {
-                    o.species.is_none() && (o.pos[1] - b.pos[1]).abs() <= 2.0
+            // A child is who it looks for.
+            let near = |baby: bool| {
+                s.nearest_mob(b.pos, 6.0, |o| {
+                    o.species.is_none() && (o.baby || !baby) && (o.pos[1] - b.pos[1]).abs() <= 2.0
                 })
-                .map(|o| o.id);
+                .map(|o| o.id)
+            };
+            *to = near(true).or_else(|| near(false));
             to.is_some()
         }
         Goal::Prey {
@@ -1028,7 +1035,9 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             let Some(t) = target(m, s) else {
                 return false;
             };
-            let bad = s.player(t.id).is_some_and(|p| p.notorious);
+            let bad = s
+                .player(t.id)
+                .is_some_and(|p| m.quirks.scorned.contains(&p.uuid));
             if !bad || dist_sq(b.pos, t.pos) > 256.0 {
                 return false;
             }
@@ -1559,6 +1568,11 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
             m.nav.stop();
             if let Some(o) = to.and_then(|id| s.mob(id)) {
                 m.look = Some([o.pos[0], o.pos[1] + o.height * 0.85, o.pos[2]]);
+                // A child that comes close enough takes it.
+                if o.baby && *left <= TAKEN_AFTER && dist_sq(b.pos, o.pos) <= 36.0 {
+                    out.push(MobEvent::FlowerTaken(o.id));
+                    *left = 0;
+                }
             }
         }
         Goal::WakeFriends => {

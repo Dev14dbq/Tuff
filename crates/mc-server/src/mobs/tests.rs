@@ -2,6 +2,7 @@ use super::*;
 use crate::combat::Blow;
 
 mod critters;
+mod villages;
 
 #[test]
 fn darkness_follows_the_day() {

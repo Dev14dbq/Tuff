@@ -963,6 +963,10 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         let t = crate::mobs::day_time(ctx).rem_euclid(24000);
         ctx.world.dimension == "minecraft:overworld" && (12000..23000).contains(&t)
     };
+    let gather = {
+        let t = crate::mobs::day_time(ctx).rem_euclid(24000);
+        ctx.world.dimension == "minecraft:overworld" && (9000..12000).contains(&t)
+    };
     let threats: Vec<[f64; 3]> = entities
         .iter()
         .filter(|e| {
@@ -1077,6 +1081,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                         !m.trading.is_empty(),
                         &mc_entity::villager::Env {
                             night,
+                            gather,
                             threats: &threats,
                         },
                         &mut ops,

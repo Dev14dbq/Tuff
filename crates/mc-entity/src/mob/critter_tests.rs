@@ -337,11 +337,11 @@ fn a_golem_a_player_made_never_goes_for_players_but_a_village_golem_does_when_hi
 
 #[test]
 fn a_village_golem_goes_for_a_player_with_a_bad_name_and_a_made_one_does_not() {
-    let mut bad = Target::at(100, 100, [5.5, 0.0, 0.5]);
-    bad.notorious = true;
+    let bad = Target::at(100, 100, [5.5, 0.0, 0.5]);
     for made in [false, true] {
         let mut e = mob(Species::IronGolem, [0.5, 0.0, 0.5]);
         m(&mut e).quirks.player_made = made;
+        m(&mut e).quirks.scorned = vec![100];
         let out = run(
             &mut e,
             &Den::default(),
@@ -393,6 +393,80 @@ fn a_golem_walks_back_to_the_villagers_and_offers_them_a_poppy() {
     // It holds it out at most 400 ticks (a stroll back to the village
     // may end it sooner).
     assert!(to - from <= 401, "{from} {to}");
+}
+
+#[test]
+fn a_golem_holds_a_poppy_out_to_a_child_that_comes_and_takes_it() {
+    let day = Den {
+        day: true,
+        ..Den::default()
+    };
+    // Whether the offer is taken, by a child or a grown villager beside it.
+    let offer = |baby: bool| {
+        let mut e = mob(Species::IronGolem, [0.5, 0.0, 0.5]);
+        m(&mut e).speed_attr = 0.0;
+        let mut v = villager(7, [2.5, 0.0, 0.5]);
+        v.baby = baby;
+        let (mut offered, mut taken, mut stopped) = (false, None, None);
+        for t in 0..60_000u64 {
+            let mut out = Vec::new();
+            let s = Senses {
+                mobs: std::slice::from_ref(&v),
+                ..senses(&day, &[], t, true)
+            };
+            tick(&mut e, &s, &mut out);
+            for ev in out {
+                match ev {
+                    MobEvent::Status(11) => offered = true,
+                    MobEvent::FlowerTaken(id) => taken = taken.or(Some((id, t))),
+                    MobEvent::Status(34) => stopped = stopped.or(Some(t)),
+                    _ => {}
+                }
+            }
+            if stopped.is_some() {
+                break;
+            }
+        }
+        (offered, taken)
+    };
+    let (offered, taken) = offer(true);
+    assert!(offered);
+    assert_eq!(taken.map(|t| t.0), Some(7));
+    // A grown one is offered it too, and never takes it.
+    let (offered, taken) = offer(false);
+    assert!(offered && taken.is_none());
+}
+
+#[test]
+fn a_golem_offers_its_poppy_to_a_child_before_a_grown_villager() {
+    let day = Den {
+        day: true,
+        ..Den::default()
+    };
+    let mut e = mob(Species::IronGolem, [0.5, 0.0, 0.5]);
+    m(&mut e).speed_attr = 0.0;
+    let grown = villager(7, [1.5, 0.0, 0.5]);
+    let mut child = villager(8, [4.5, 0.0, 0.5]);
+    child.baby = true;
+    let mobs = [grown, child];
+    for t in 0..60_000u64 {
+        let mut out = Vec::new();
+        let s = Senses {
+            mobs: &mobs,
+            ..senses(&day, &[], t, true)
+        };
+        tick(&mut e, &s, &mut out);
+        if out.iter().any(|ev| matches!(ev, MobEvent::Status(11))) {
+            let looking = m(&mut e)
+                .brain
+                .goals
+                .iter()
+                .any(|s| matches!(s.goal, Goal::OfferFlower { to: Some(8), .. }));
+            assert!(looking);
+            return;
+        }
+    }
+    panic!("never offered");
 }
 
 #[test]

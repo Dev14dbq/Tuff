@@ -157,6 +157,7 @@ pub fn try_use(
         "minecraft:composter" => composter(ctx, outcome, actor, hand, clicked, state, held_name),
         "minecraft:jukebox" => jukebox(ctx, outcome, actor, hand, clicked, state, held_name),
         "minecraft:bell" => {
+            ctx.mobs.bell(ctx.dim, clicked);
             fx::sound(
                 ctx,
                 "block.bell.use",
