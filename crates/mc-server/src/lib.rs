@@ -21,6 +21,7 @@ mod combat;
 mod command_blocks;
 mod commands;
 mod connection;
+mod consume;
 mod containers;
 mod context;
 mod crafter;

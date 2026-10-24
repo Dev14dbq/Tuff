@@ -116,6 +116,22 @@ impl Items {
         self.get(id)?.defaults.get(name.as_ref())
     }
 
+    /// A component of a stack as JSON: its own value, nothing if removed,
+    /// else the item's default.
+    pub fn component(
+        &self,
+        stack: &mc_protocol::packets::play::ItemStack,
+        name: &str,
+    ) -> Option<Value> {
+        if let Some(t) = stack.components.get(name) {
+            return Some(mc_command::text::to_json(t));
+        }
+        if stack.components.is_removed(name) {
+            return None;
+        }
+        self.default_component(stack.item, name).cloned()
+    }
+
     /// How well it takes enchantments; 0 if not at all.
     pub fn enchantable(&self, id: i32) -> i32 {
         self.get(id).and_then(|i| i.enchantable).unwrap_or(0)

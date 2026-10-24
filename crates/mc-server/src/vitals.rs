@@ -288,6 +288,7 @@ fn finish_using(ctx: &ServerContext, uuid: u128, using: &Using) {
     };
     // The item must still be there.
     let mut changed = Vec::new();
+    let eaten;
     {
         let mut inventories = lock(&ctx.inventories);
         let Some(hands) = inventories.get_mut(&uuid) else {
@@ -299,6 +300,7 @@ fn finish_using(ctx: &ServerContext, uuid: u128, using: &Using) {
         if !still {
             return;
         }
+        eaten = hands.slots[using.slot].clone();
         if using.game_mode != 1 {
             let stack = hands.slots[using.slot].as_mut().expect("checked");
             stack.count -= 1;
@@ -359,6 +361,9 @@ fn finish_using(ctx: &ServerContext, uuid: u128, using: &Using) {
             uuid,
             health: packet,
         });
+    }
+    if let Some(stack) = &eaten {
+        crate::consume::eaten(ctx, uuid, stack);
     }
     let _ = ctx.events.send(Event::UsedItem {
         uuid,

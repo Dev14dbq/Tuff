@@ -880,6 +880,61 @@ pub fn tick(ctx: &ServerContext, tick_count: i64) {
     }
 }
 
+/// An effect as data packs and components write one (`{id, amplifier,
+/// duration, ambient, show_particles, show_icon}`; numbers or booleans).
+pub fn instance_of(v: &serde_json::Value) -> Option<(&'static Kind, Instance)> {
+    let kind = kind_of(v["id"].as_str()?)?;
+    let flag = |name: &str, default: bool| match &v[name] {
+        serde_json::Value::Bool(b) => *b,
+        serde_json::Value::Number(n) => n.as_i64().is_some_and(|n| n != 0),
+        _ => default,
+    };
+    let particles = flag("show_particles", true);
+    Some((
+        kind,
+        Instance {
+            amplifier: v["amplifier"].as_i64().unwrap_or(0) as i32,
+            duration: v["duration"].as_i64().unwrap_or(0) as i32,
+            ambient: flag("ambient", false),
+            particles,
+            icon: flag("show_icon", particles),
+            hidden: None,
+        },
+    ))
+}
+
+/// An instant effect acts on a player at once, `strength` of it (1 when
+/// drunk, less for a splash further off): health 4, damage 6, doubled with
+/// each level; saturation feeds.
+pub fn instant(ctx: &ServerContext, uuid: u128, kind: &Kind, amplifier: i32, strength: f64) {
+    let amp = amplifier.clamp(0, 28);
+    match kind.name {
+        "instant_health" => heal(ctx, uuid, (f64::from(4 << amp) * strength) as f32),
+        "instant_damage" => {
+            let amount = (strength * f64::from(6 << amp) + 0.5) as i32;
+            crate::vitals::hurt(
+                ctx,
+                uuid,
+                amount as f32,
+                "minecraft:magic",
+                "death.attack.magic",
+            );
+        }
+        "saturation" => {
+            let packet = lock(&ctx.vitals).get_mut(&uuid).map(|v| {
+                let n = amplifier + 1;
+                v.food = (v.food + n).min(20);
+                v.saturation = (v.saturation + n as f32).min(v.food as f32);
+                v.packet()
+            });
+            if let Some(health) = packet {
+                let _ = ctx.events.send(Event::Health { uuid, health });
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Heals a living player up to their maximum health.
 pub fn heal(ctx: &ServerContext, uuid: u128, amount: f32) {
     let Some(entity_id) = entity_id(ctx, uuid) else {
