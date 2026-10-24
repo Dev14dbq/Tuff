@@ -317,6 +317,36 @@ fn intersects(pose: &Pose, p: Position) -> bool {
         && pose.z + half > bz
 }
 
+/// Whether the held item lets a creative player break blocks: swords, the
+/// trident and the mace do not (`can_destroy_blocks_in_creative` of their
+/// `tool`, on the stack or by default).
+fn breaks_in_creative(ctx: &ServerContext, uuid: u128) -> bool {
+    let Some(held) = crate::held::held(ctx, uuid, 0) else {
+        return true;
+    };
+    let own = held.comps.as_ref().and_then(|c| match c {
+        mc_nbt::Tag::Compound(c) => match c.get("minecraft:tool") {
+            Some(mc_nbt::Tag::Compound(t)) => match t.get("can_destroy_blocks_in_creative") {
+                Some(mc_nbt::Tag::Byte(b)) => Some(*b != 0),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    });
+    own.unwrap_or_else(|| {
+        ctx.items
+            .get(held.stack.item)
+            .and_then(|i| {
+                i.defaults
+                    .get("minecraft:tool")?
+                    .get("can_destroy_blocks_in_creative")?
+                    .as_bool()
+            })
+            .unwrap_or(true)
+    })
+}
+
 /// Player Action. Creative players break on "start digging"; anyone on
 /// "finish digging" (dig times are not checked yet).
 pub fn dig(
@@ -375,7 +405,7 @@ pub fn dig(
     // instantly (dig times are not checked yet).
     let breaks = match (status, actor.game_mode) {
         (_, SPECTATOR) => false,
-        (dig::START, CREATIVE) => true,
+        (dig::START, CREATIVE) => breaks_in_creative(ctx, actor.uuid),
         (dig::START, _) => blocks::breaks_instantly(&ctx.data, &ctx.rules, state),
         (dig::FINISH, mode) => mode != CREATIVE,
         _ => return Outcome::default(),
@@ -1545,5 +1575,30 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    #[test]
+    fn a_sword_breaks_nothing_in_creative() {
+        let Some((ctx, mut actor)) = with_flint(0) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        actor.game_mode = CREATIVE;
+        let at = Position::new(1, -61, 0);
+        let stone = ctx.data.blocks.default_state("minecraft:stone").unwrap();
+        WorldLevel::new(&ctx).set_block(at, stone);
+        let sword = ctx.items.id("minecraft:diamond_sword").unwrap();
+        ctx.inventories.lock().unwrap().get_mut(&7).unwrap().slots[36] =
+            Some(ItemStack::new(sword, 1));
+        dig(&ctx, actor, dig::START, at, 1, 1);
+        assert_eq!(ctx.world.block(at, &ctx.data.blocks), Some(stone));
+        // A pickaxe, or an empty hand, breaks it at once.
+        ctx.inventories.lock().unwrap().get_mut(&7).unwrap().slots[36] = None;
+        dig(&ctx, actor, dig::START, at, 1, 1);
+        assert!(
+            ctx.data
+                .blocks
+                .is_air(ctx.world.block(at, &ctx.data.blocks).unwrap())
+        );
     }
 }

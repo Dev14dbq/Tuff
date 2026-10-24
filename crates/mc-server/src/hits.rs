@@ -347,7 +347,7 @@ pub fn apply(
     if let Some((_, part)) = part {
         crate::bosses::dragon::aim_at(e, part);
     }
-    if matches!(e.kind, Kind::Mob(_)) {
+    if matches!(e.kind, Kind::Mob(_) | Kind::Merchant(_)) {
         let mut h = crate::mobs::hurt::Harm::new(hit.amount, hit.kind);
         h.player = hit.by;
         h.by = hit
@@ -442,6 +442,10 @@ pub fn use_entity(
                 );
             }
             Kind::Mob(_) if !handled => crate::mobs::clicked(ctx, &actor, entity_id, hand, attack),
+            // Villagers and wandering traders trade on a click; a blow hurts.
+            Kind::Merchant(_) if attack => {
+                crate::mobs::clicked(ctx, &actor, entity_id, hand, attack)
+            }
             _ => {}
         }
         if let Kind::Crystal(c) = &mut e.kind

@@ -90,6 +90,15 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     {
         return done;
     }
+    if matches!(e.kind, Kind::Merchant(_)) {
+        let Some(dead) = merchant_hurt(ctx, e, h) else {
+            return false;
+        };
+        if dead {
+            merchant_dies(ctx, e);
+        }
+        return true;
+    }
     let id = e.id;
     let Kind::Mob(m) = &mut e.kind else {
         return false;
@@ -246,7 +255,7 @@ pub fn player_blow(
         let sweep = 1.0 + blow.sweep_ratio * blow.damage;
         let target_box = entities[i].aabb();
         for (j, o) in entities.iter_mut().enumerate() {
-            if j == i || !matches!(o.kind, Kind::Mob(_)) {
+            if j == i || !matches!(o.kind, Kind::Mob(_) | Kind::Merchant(_)) {
                 continue;
             }
             let b = o.aabb();
@@ -272,24 +281,28 @@ fn hit_with_blow(
     knockback: f64,
     weapon: Option<crate::loot::Tool>,
 ) -> bool {
-    let Kind::Mob(m) = &e.kind else {
-        return false;
+    // Villagers and wandering traders are neither undead nor arthropods.
+    let bonus = match &e.kind {
+        Kind::Mob(m) => {
+            let bonus = if m.species.undead() {
+                blow.undead
+            } else if m.species.arthropod() {
+                blow.arthropod
+            } else {
+                0.0
+            };
+            let aquatic = blow.impaling > 0.0
+                && ctx
+                    .commands
+                    .env
+                    .tag("minecraft:entity_type", "minecraft:sensitive_to_impaling")
+                    .iter()
+                    .any(|t| t == m.species.id());
+            bonus + if aquatic { blow.impaling } else { 0.0 }
+        }
+        Kind::Merchant(_) => 0.0,
+        _ => return false,
     };
-    let bonus = if m.species.undead() {
-        blow.undead
-    } else if m.species.arthropod() {
-        blow.arthropod
-    } else {
-        0.0
-    };
-    let aquatic = blow.impaling > 0.0
-        && ctx
-            .commands
-            .env
-            .tag("minecraft:entity_type", "minecraft:sensitive_to_impaling")
-            .iter()
-            .any(|t| t == m.species.id());
-    let bonus = bonus + if aquatic { blow.impaling } else { 0.0 };
     let h = Harm {
         amount: damage + bonus,
         kind: blow.kind(),
@@ -395,7 +408,7 @@ pub fn mob_attacks(
             }
         }
         Kind::Merchant(_) => {
-            villager_hit(ctx, entities, j, species, damage, difficulty);
+            villager_hit(ctx, entities, j, (id, pos, species), damage, difficulty);
             // The golems of the village go for whoever it was.
             super::golems::defend(entities, j, id);
         }
@@ -438,71 +451,139 @@ fn bite(ctx: &ServerContext, e: &mut Entity, species: Species, difficulty: i32) 
     }
 }
 
+/// Villagers and wandering traders have 20 health (minecraft.wiki).
+const MERCHANT_HEALTH: f32 = 20.0;
+/// Ticks after a hit in which only a harder blow hurts, by the difference.
+const MERCHANT_IFRAMES: i64 = 10;
+
+/// A villager's or wandering trader's health, and its last hit.
+#[derive(Clone, Copy, Debug)]
+pub struct MerchantHealth {
+    pub health: f32,
+    hurt_at: i64,
+    last: f32,
+}
+
+impl Default for MerchantHealth {
+    fn default() -> Self {
+        Self {
+            health: MERCHANT_HEALTH,
+            hurt_at: i64::MIN / 2,
+            last: 0.0,
+        }
+    }
+}
+
+/// Hurts a villager or wandering trader: whether that killed it, or `None`
+/// when the hit did not count. Players who hit a villager lose standing
+/// with the village.
+fn merchant_hurt(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> Option<bool> {
+    let Kind::Merchant(v) = &e.kind else {
+        return None;
+    };
+    if e.removed || h.amount <= 0.0 {
+        return None;
+    }
+    let wandering = v.wandering;
+    let (id, pos) = (e.id, e.pos);
+    let now = lock(&ctx.time).age;
+    let left = {
+        let mut all = lock(&ctx.mobs.villagers);
+        let s = all.entry(id).or_default();
+        let amount = if now - s.hurt_at < MERCHANT_IFRAMES {
+            if h.amount <= s.last {
+                return None;
+            }
+            h.amount - s.last
+        } else {
+            s.hurt_at = now;
+            h.amount
+        };
+        s.last = h.amount;
+        s.health -= amount;
+        s.health
+    };
+    if let Some(from) = h.from {
+        let strength = 0.4 + h.knockback * 0.5;
+        e.vel = crate::combat::knockback(e.vel, pos, from, strength, e.on_ground);
+        e.on_ground = false;
+    }
+    fx::emit(
+        ctx,
+        fx::Fx::Damage(play::DamageEvent {
+            entity_id: id,
+            damage_type: ctx.damage_type(h.kind),
+            direct: h.direct.or(h.by),
+            cause: h.by,
+        }),
+    );
+    let dead = left <= 0.0;
+    let who = if wandering {
+        "wandering_trader"
+    } else {
+        "villager"
+    };
+    let sound = format!("entity.{who}.{}", if dead { "death" } else { "hurt" });
+    fx::sound(ctx, &sound, fx::category::NEUTRAL, pos, 1.0, 1.0);
+    if let Some(p) = h.player
+        && !wandering
+    {
+        ctx.mobs.offend(p, if dead { 125 } else { 25 });
+    }
+    Some(dead)
+}
+
+/// A villager or wandering trader dies: it falls over and is gone (neither
+/// drops anything).
+fn merchant_dies(ctx: &ServerContext, e: &mut Entity) {
+    let id = e.id;
+    lock(&ctx.mobs.villagers).remove(&id);
+    e.removed = true;
+    fx::status(ctx, id, 3);
+    let _ = ctx.events.send(Event::EntitiesRemoved(vec![id]));
+}
+
 /// A zombie hits a villager: it dies at the end of its health, and on
 /// normal (half the time) or hard turns into a zombie villager.
 fn villager_hit(
     ctx: &ServerContext,
     entities: &mut [Entity],
     j: usize,
-    by: Species,
+    by: (i32, [f64; 3], Species),
     damage: f32,
     difficulty: i32,
 ) {
-    let id = entities[j].id;
-    let left = {
-        let mut hp = lock(&ctx.mobs.villagers);
-        let h = hp.entry(id).or_insert(20.0);
-        *h -= damage;
-        *h
+    let (attacker, from, by) = by;
+    let harm = Harm {
+        by: Some(attacker),
+        from: Some(from),
+        killer: Some(by.id().to_owned()),
+        ..Harm::new(damage, "minecraft:mob_attack")
     };
-    fx::emit(
-        ctx,
-        fx::Fx::Damage(play::DamageEvent {
-            entity_id: id,
-            damage_type: ctx.damage_type("minecraft:mob_attack"),
-            direct: None,
-            cause: None,
-        }),
-    );
     let pos = entities[j].pos;
-    fx::sound(
-        ctx,
-        "entity.villager.hurt",
-        fx::category::NEUTRAL,
-        pos,
-        1.0,
-        1.0,
-    );
-    if left > 0.0 {
+    if merchant_hurt(ctx, &mut entities[j], &harm) != Some(true) {
         return;
     }
-    lock(&ctx.mobs.villagers).remove(&id);
     let infect = by.zombie() && (difficulty == 3 || difficulty == 2 && crate::hits::rnd() < 0.5);
     let Kind::Merchant(v) = &entities[j].kind else {
         return;
     };
-    let data = (v.variant.clone(), v.profession.clone(), v.level);
-    entities[j].removed = true;
-    if infect {
-        let mut z = super::new_mob(ctx, Species::ZombieVillager, pos);
-        if let Kind::Mob(m) = &mut z.kind {
-            m.villager = Some(data);
-            m.persistent = true;
-        }
-        fx::sound(ctx, "entity.zombie.infect", 5, pos, 2.0, 1.0);
-        let _ = ctx.events.send(Event::EntitySpawned(z.clone()));
-        lock(&ctx.entities).push(z);
-    } else {
-        fx::status(ctx, id, 3);
-        fx::sound(
-            ctx,
-            "entity.villager.death",
-            fx::category::NEUTRAL,
-            pos,
-            1.0,
-            1.0,
-        );
+    if !infect || v.wandering {
+        merchant_dies(ctx, &mut entities[j]);
+        return;
     }
+    let id = entities[j].id;
+    let data = (v.variant.clone(), v.profession.clone(), v.level);
+    lock(&ctx.mobs.villagers).remove(&id);
+    entities[j].removed = true;
+    let mut z = super::new_mob(ctx, Species::ZombieVillager, pos);
+    if let Kind::Mob(m) = &mut z.kind {
+        m.villager = Some(data);
+        m.persistent = true;
+    }
+    fx::sound(ctx, "entity.zombie.infect", 5, pos, 2.0, 1.0);
+    let _ = ctx.events.send(Event::EntitySpawned(z.clone()));
+    lock(&ctx.entities).push(z);
     let _ = ctx.events.send(Event::EntitiesRemoved(vec![id]));
 }
 
