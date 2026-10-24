@@ -310,9 +310,23 @@ pub(crate) fn file_of(ctx: &ServerContext, id: &str) -> Option<std::path::PathBu
     )
 }
 
+/// Structures a powered save block kept in memory only (vanilla's template
+/// manager holds them until the world is saved from a window).
+fn memory() -> &'static std::sync::Mutex<std::collections::HashMap<String, Compound>> {
+    static MEMORY: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Compound>>> =
+        std::sync::OnceLock::new();
+    MEMORY.get_or_init(Default::default)
+}
+
 /// The structure `id`: one a structure block saved, else the data pack's.
 pub(crate) fn load(ctx: &ServerContext, id: &str) -> Option<std::sync::Arc<Template>> {
     let features = crate::commands::place::features(ctx)?;
+    let kept = crate::tick::lock(memory()).get(id).cloned();
+    if let Some(root) = kept
+        && let Some(t) = Template::from_nbt(&root, &features.facts)
+    {
+        return Some(std::sync::Arc::new(t));
+    }
     if let Some(path) = file_of(ctx, id)
         && let Some(t) = Template::load(&path, &features.facts)
     {
@@ -416,14 +430,20 @@ fn frame(p: Position, d: &Compound) -> (Position, [i32; 3]) {
     )
 }
 
-fn save(ctx: &ServerContext, p: Position, d: &Compound) -> Tag {
+fn save(ctx: &ServerContext, p: Position, d: &Compound, to_disk: bool) -> Tag {
     let name = string(d, "name");
     let Some(id) = template_id(&name) else {
         return translate("structure_block.invalid_structure_name", vec![text(&name)]);
     };
     let (min, size) = frame(p, d);
     let ok = size.iter().all(|&s| s >= 1)
-        && file_of(ctx, &id).is_some_and(|path| write_file(&path, capture(ctx, min, size)));
+        && if to_disk {
+            crate::tick::lock(memory()).remove(&id);
+            file_of(ctx, &id).is_some_and(|path| write_file(&path, capture(ctx, min, size)))
+        } else {
+            crate::tick::lock(memory()).insert(id.clone(), capture(ctx, min, size));
+            true
+        };
     translate(
         if ok {
             "structure_block.save_success"
@@ -606,7 +626,7 @@ fn update_structure(
     }
     let mut said = Vec::new();
     match action {
-        1 if mode_s == "SAVE" => said.push(save(ctx, p, &d)),
+        1 if mode_s == "SAVE" => said.push(save(ctx, p, &d, true)),
         2 if mode_s == "LOAD" => said.push(place(ctx, p, &mut d)),
         3 if mode_s == "SAVE" => said.push(translate(
             if detect(ctx, p, &mut d) {
@@ -636,7 +656,7 @@ pub fn power(ctx: &ServerContext, p: Position, powered: bool) {
     if powered {
         match string(&d, "mode").as_str() {
             "SAVE" => {
-                save(ctx, p, &d);
+                save(ctx, p, &d, false);
             }
             "LOAD" => {
                 place(ctx, p, &mut d);
@@ -667,6 +687,25 @@ mod tests {
     fn name_at(ctx: &ServerContext, p: Position) -> String {
         let s = ctx.world.block(p, &ctx.data.blocks).unwrap();
         ctx.data.blocks.block_name(s).unwrap().to_owned()
+    }
+
+    #[test]
+    fn a_powered_save_block_keeps_the_structure_in_memory_only() {
+        let dir = std::env::temp_dir().join(format!("mc-structure-mem-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let Some(ctx) = context(&dir) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let at = Position::new(300, -60, 0);
+        put(&ctx, at, "minecraft:structure_block", &[("mode", "save")]);
+        placed(&ctx, at, ctx.world.block(at, &ctx.data.blocks).unwrap());
+        put(&ctx, Position::new(301, -60, 0), "minecraft:gold_block", &[]);
+        update_structure(&ctx, at, 0, 0, "remembered", [1, 0, 0], [1, 1, 1], 0, 0, "", 1.0, 0, 1);
+        power(&ctx, at, true);
+        assert!(!dir.join("generated/minecraft/structures/remembered.nbt").exists());
+        let t = load(&ctx, "minecraft:remembered").expect("kept in memory");
+        assert_eq!([t.size.x, t.size.y, t.size.z], [1, 1, 1]);
     }
 
     #[test]

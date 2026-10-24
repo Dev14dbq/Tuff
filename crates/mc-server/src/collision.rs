@@ -40,6 +40,18 @@ fn turned(b: Box6, dir: &str) -> Box6 {
     }
 }
 
+/// The box `b` (made for a thing pointing up) turned to point `dir`.
+fn pointing(b: Box6, dir: &str) -> Box6 {
+    match dir {
+        "down" => [b[0], 1.0 - b[4], b[2], b[3], 1.0 - b[1], b[5]],
+        "north" => [b[0], b[2], 1.0 - b[4], b[3], b[5], 1.0 - b[1]],
+        "south" => [b[0], b[2], b[1], b[3], b[5], b[4]],
+        "east" => [b[1], b[0], b[2], b[4], b[3], b[5]],
+        "west" => [1.0 - b[4], b[0], b[2], 1.0 - b[1], b[3], b[5]],
+        _ => b,
+    }
+}
+
 fn boxes_of(ctx: &ServerContext, s: u32) -> Option<Vec<Box6>> {
     let blocks = &ctx.data.blocks;
     let name = blocks.block_name(s)?.trim_start_matches("minecraft:");
@@ -137,7 +149,16 @@ fn boxes_of(ctx: &ServerContext, s: u32) -> Option<Vec<Box6>> {
             px(2.0, 0.0, 9.0, 8.0, 2.0, 15.0),
         ],
         n if n == "cauldron" || n.ends_with("_cauldron") => vec![
-            px(0.0, 0.0, 0.0, 16.0, 4.0, 16.0),
+            // Legs at the corners, then the floor.
+            px(0.0, 0.0, 0.0, 4.0, 3.0, 2.0),
+            px(0.0, 0.0, 0.0, 2.0, 3.0, 4.0),
+            px(12.0, 0.0, 0.0, 16.0, 3.0, 2.0),
+            px(14.0, 0.0, 0.0, 16.0, 3.0, 4.0),
+            px(0.0, 0.0, 14.0, 4.0, 3.0, 16.0),
+            px(0.0, 0.0, 12.0, 2.0, 3.0, 16.0),
+            px(12.0, 0.0, 14.0, 16.0, 3.0, 16.0),
+            px(14.0, 0.0, 12.0, 16.0, 3.0, 16.0),
+            px(0.0, 3.0, 0.0, 16.0, 4.0, 16.0),
             px(0.0, 4.0, 0.0, 16.0, 16.0, 2.0),
             px(0.0, 4.0, 14.0, 16.0, 16.0, 16.0),
             px(0.0, 4.0, 2.0, 2.0, 16.0, 14.0),
@@ -205,6 +226,64 @@ fn boxes_of(ctx: &ServerContext, s: u32) -> Option<Vec<Box6>> {
                 "west" => px(13.0, 0.0, 0.0, 16.0, 16.0, 16.0),
                 _ => px(0.0, 0.0, 13.0, 16.0, 16.0, 16.0),
             }]
+        }
+        "anvil" | "chipped_anvil" | "damaged_anvil" => {
+            let along_x = matches!(prop("facing")?, "north" | "south");
+            let parts = [
+                px(2.0, 0.0, 2.0, 14.0, 4.0, 14.0),
+                px(4.0, 4.0, 3.0, 12.0, 5.0, 13.0),
+                px(6.0, 5.0, 4.0, 10.0, 10.0, 12.0),
+                px(3.0, 10.0, 0.0, 13.0, 16.0, 16.0),
+            ];
+            // The long top runs across the way it faces.
+            parts
+                .into_iter()
+                .map(|b| if along_x { b } else { [b[2], b[1], b[0], b[5], b[4], b[3]] })
+                .collect()
+        }
+        n if n.ends_with("chain") => {
+            let b = px(6.5, 0.0, 6.5, 9.5, 16.0, 9.5);
+            vec![match prop("axis")? {
+                "x" => [b[1], b[0], b[2], b[4], b[3], b[5]],
+                "z" => [b[0], b[2], b[1], b[3], b[5], b[4]],
+                _ => b,
+            }]
+        }
+        "end_rod" | "lightning_rod" => {
+            vec![pointing(px(6.0, 0.0, 6.0, 10.0, 16.0, 10.0), prop("facing")?)]
+        }
+        "ladder" => vec![turned(px(0.0, 0.0, 13.0, 16.0, 16.0, 16.0), prop("facing")?)],
+        "lily_pad" => vec![px(1.0, 0.0, 1.0, 15.0, 1.5, 15.0)],
+        "turtle_egg" => {
+            if prop("eggs")? == "1" {
+                vec![px(3.0, 0.0, 3.0, 12.0, 7.0, 12.0)]
+            } else {
+                vec![px(1.0, 0.0, 1.0, 15.0, 7.0, 15.0)]
+            }
+        }
+        "sea_pickle" => vec![match prop("pickles")? {
+            "1" => px(6.0, 0.0, 6.0, 10.0, 6.0, 10.0),
+            "2" => px(3.0, 0.0, 3.0, 13.0, 6.0, 13.0),
+            "3" => px(2.0, 0.0, 2.0, 14.0, 6.0, 14.0),
+            _ => px(2.0, 0.0, 2.0, 14.0, 7.0, 14.0),
+        }],
+        "dragon_egg" => vec![px(1.0, 0.0, 1.0, 15.0, 16.0, 15.0)],
+        "conduit" => vec![px(5.0, 5.0, 5.0, 11.0, 11.0, 11.0)],
+        "azalea" | "flowering_azalea" => {
+            vec![px(0.0, 8.0, 0.0, 16.0, 16.0, 16.0), px(6.0, 0.0, 6.0, 10.0, 8.0, 10.0)]
+        }
+        "piston" | "sticky_piston" => {
+            if !is("extended", "true") {
+                return None;
+            }
+            vec![pointing(px(0.0, 0.0, 0.0, 16.0, 12.0, 16.0), prop("facing")?)]
+        }
+        "piston_head" => {
+            let facing = prop("facing")?;
+            vec![
+                pointing(px(0.0, 12.0, 0.0, 16.0, 16.0, 16.0), facing),
+                pointing(px(6.0, 0.0, 6.0, 10.0, 12.0, 10.0), facing),
+            ]
         }
         n if n.ends_with("_fence") => arms(4.0, 2.0, 24.0),
         n if n.ends_with("_wall") => {
@@ -304,6 +383,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fence.len(), 2);
+        // An anvil facing north is wide across east-west at the top.
+        let anvil = boxes("minecraft:anvil", &[("facing", "north")]).unwrap();
+        assert_eq!(anvil.len(), 4);
+        assert!(anvil.contains(&px(3.0, 10.0, 0.0, 13.0, 16.0, 16.0)), "{anvil:?}");
+        let east = boxes("minecraft:anvil", &[("facing", "east")]).unwrap();
+        assert!(east.contains(&px(0.0, 10.0, 3.0, 16.0, 16.0, 13.0)), "{east:?}");
+        // Rods point where they face; a closed piston is a cube.
+        assert_eq!(
+            boxes("minecraft:end_rod", &[("facing", "east")]),
+            Some(vec![[0.0, 6.0 * P, 6.0 * P, 1.0, 10.0 * P, 10.0 * P]])
+        );
+        assert_eq!(boxes("minecraft:piston", &[("extended", "false"), ("facing", "up")]), None);
+        assert_eq!(
+            boxes("minecraft:piston", &[("extended", "true"), ("facing", "down")]),
+            Some(vec![[0.0, 0.25, 0.0, 1.0, 1.0, 1.0]])
+        );
+        assert_eq!(boxes("minecraft:ladder", &[("facing", "east"), ("waterlogged", "false")]).unwrap().len(), 1);
         // A ray through the air above a bottom slab passes; one through it
         // does not.
         let slab = [[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]];
