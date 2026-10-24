@@ -20,6 +20,7 @@ mod collision;
 mod combat;
 mod command_blocks;
 mod commands;
+mod conduits;
 mod connection;
 mod containers;
 mod context;
@@ -357,6 +358,7 @@ fn save(ctx: &ServerContext) {
     let started = std::time::Instant::now();
     let time = ctx.time.lock().expect("time lock").clone();
     ctx.weather.lock().expect("weather lock").save();
+    ctx.trades.spawner.lock().expect("spawner lock").save();
     ctx.border.lock().expect("border lock").save();
     ctx.bossbars.lock().expect("bossbars lock").save();
     ctx.scoreboard.lock().expect("scoreboard lock").save();

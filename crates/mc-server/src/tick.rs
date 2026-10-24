@@ -339,6 +339,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
                 crate::test_blocks::tick(d, lock(&d.time).age);
                 crate::crafter::tick(d);
                 crate::beacons::tick(d, count as i64);
+                crate::conduits::tick(d, lock(&d.time).age);
                 lock(&d.border).tick();
             }
             crate::effects::tick(&ctx, count as i64);
@@ -573,7 +574,7 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
     }
     run_block_events(ctx, &mut level);
     tick_entities(ctx, &mut level);
-    crate::trading::tick_spawner(ctx, &mut level, lock(&ctx.time).age);
+    crate::trading::tick_spawner(ctx, lock(&ctx.time).age);
     crate::mobs::tick(ctx, &mut level);
     crate::bosses::tick(ctx, &mut level);
     press_plates(ctx, &mut level);

@@ -1905,6 +1905,14 @@ pub(crate) fn client_data(id: &str, data: &mc_nbt::Compound) -> Option<mc_nbt::C
         }
         return Some(out);
     }
+    // A conduit shows whom it is attacking. Whether it is active stays here.
+    if id == "minecraft:conduit" {
+        let mut out = mc_nbt::Compound::new();
+        if let Some(target) = data.get("Target") {
+            out.insert("Target", target.clone());
+        }
+        return (!out.is_empty()).then_some(out);
+    }
     // A vault shows its config and what it displays; the rewards stay with
     // the server.
     if id == "minecraft:vault" {
