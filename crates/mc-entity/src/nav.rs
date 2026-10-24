@@ -84,6 +84,10 @@ pub trait Terrain: Collide {
     fn perch(&self, _x: i32, _y: i32, _z: i32) -> Perch {
         Perch::None
     }
+    /// Whether the block is the head of a bed nobody lies in.
+    fn free_bed(&self, _x: i32, _y: i32, _z: i32) -> bool {
+        false
+    }
     /// Whether an enderman may pick the block up (`#enderman_holdable`).
     fn holdable(&self, _x: i32, _y: i32, _z: i32) -> bool {
         false
@@ -106,6 +110,8 @@ pub struct PathParams {
     /// Walks through closed doors opened by hand (villagers open them,
     /// zombies that break doors bash them).
     pub doors: bool,
+    /// Walks on the surface of lava (striders).
+    pub lava: bool,
 }
 
 impl PathParams {
@@ -117,6 +123,7 @@ impl PathParams {
             water_cost: 8.0,
             reach_sq: 0,
             doors: false,
+            lava: false,
         }
     }
 }
@@ -145,7 +152,7 @@ fn clear(w: &dyn Terrain, c: Cell, p: &PathParams) -> bool {
         && (0..p.height).all(|dy| {
             let (x, y, z) = (c[0], c[1] + dy, c[2]);
             (!blocks(w, x, y, z) || p.doors && w.door(x, y, z).is_some_and(|d| d.by_hand))
-                && w.liquid(x, y, z) != Liquid::Lava
+                && (w.liquid(x, y, z) != Liquid::Lava || p.lava && dy == 0)
                 && !w.hazard(x, y, z)
         })
 }
@@ -164,6 +171,7 @@ pub fn standable(w: &dyn Terrain, c: Cell, p: &PathParams) -> bool {
         return false;
     }
     blocks(w, below[0], below[1], below[2])
+        || (p.lava && w.liquid(c[0], c[1], c[2]) == Liquid::Lava)
         || (wet && w.liquid(below[0], below[1], below[2]) != Liquid::Lava)
 }
 

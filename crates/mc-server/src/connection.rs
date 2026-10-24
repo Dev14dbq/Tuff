@@ -2118,6 +2118,9 @@ fn spawn_entity(
         }
         mc_entity::Kind::Merchant(ref m) if !m.wandering => {
             writer.queue(&crate::trading::villager_data(ctx, entity.id, m))?;
+            if m.walk.asleep && let Some(bed) = m.walk.bed {
+                writer.queue(&crate::mobs::blocks::sleep_data(entity.id, Some(bed)))?;
+            }
         }
         _ => {}
     }

@@ -422,6 +422,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     crate::decor::leash::tell_mobs(ctx, &mut entities);
     if now % 20 == 0 {
         blocks::close_idle(ctx, level, &entities, &targets);
+        blocks::free_beds(ctx, level, &entities);
     }
     chest::mirror(ctx, &mut entities);
 

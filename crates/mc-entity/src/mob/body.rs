@@ -42,6 +42,7 @@ pub(super) fn params(m: &Mob) -> PathParams {
     if m.species.fire_immune() {
         p.water_cost = 8.0;
     }
+    p.lava = m.species == Species::Strider;
     p
 }
 
@@ -132,8 +133,17 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
     if m.species == Species::Enderman {
         super::chores::daylight_teleport(m, b, s, out);
     }
+    // Striders are cold out of lava and hate water.
+    if m.species == Species::Strider {
+        let lava = s.world.liquid(c[0], c[1], c[2]) == Liquid::Lava
+            || s.world.liquid(c[0], c[1] - 1, c[2]) == Liquid::Lava;
+        if m.cold == lava {
+            m.cold = !lava;
+            m.dirty = true;
+        }
+    }
     // Endermen hate water.
-    if m.species == Species::Enderman
+    if matches!(m.species, Species::Enderman | Species::Strider)
         && (wet || s.raining && sky_above(m, b, s))
         && m.age.is_multiple_of(10)
     {
@@ -428,7 +438,16 @@ pub(super) fn physics(
             b.vel[1] -= 0.02;
         }
     } else {
-        if in_lava {
+        if in_lava && m.species == Species::Strider {
+            // It walks on lava: floats at the surface when nothing is above.
+            let above = s.world.liquid(cell[0], cell[1] + 1, cell[2]) == Liquid::Lava;
+            if above {
+                b.vel[1] = 0.1;
+            } else {
+                b.pos[1] = f64::from(cell[1]) + 8.0 / 9.0;
+                b.vel[1] = 0.0;
+            }
+        } else if in_lava {
             b.vel[1] = b.vel[1] * 0.5 + 0.02;
         }
         // Horizontal velocity.
@@ -441,7 +460,9 @@ pub(super) fn physics(
                 } else {
                     0.0
                 };
-                let speed = (m.speed_attr + bonus) * i.speed;
+                // A strider out of lava is slowed (-0.34 of its speed).
+                let chill = if m.cold { 0.66 } else { 1.0 };
+                let speed = (m.speed_attr + bonus) * i.speed * chill;
                 let want = speed * speed * GROUND;
                 let control = if b.on_ground || wet { 0.5 } else { 0.1 };
                 b.vel[0] += (i.dir[0] * want - b.vel[0]) * control;
@@ -477,7 +498,10 @@ pub(super) fn physics(
         }
     }
     // Gravity pulls after the move, as in vanilla (a jump rises 1.25).
-    let falls = !flies && !wet;
+    let on_lava = m.species == Species::Strider
+        && in_lava
+        && s.world.liquid(cell[0], cell[1] + 1, cell[2]) != Liquid::Lava;
+    let falls = !flies && !wet && !on_lava;
     m.jump = false;
     let before = b.pos;
     let aabb = Aabb {
@@ -512,7 +536,7 @@ pub(super) fn physics(
     } else if blocked_h && s.world.climbable(cell[0], cell[1], cell[2]) {
         b.vel[1] = 0.2;
     }
-    b.on_ground = ground;
+    b.on_ground = ground || on_lava;
     // Steps.
     if ground && !wet {
         let walked = (b.pos[0] - before[0]).hypot(b.pos[2] - before[2]);

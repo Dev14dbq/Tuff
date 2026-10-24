@@ -769,6 +769,25 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     let (mut blasts, mut fuses) = (Vec::new(), Vec::new());
     let now = lock(&ctx.time).age;
     let mut claimed = crate::trading::claimed_sites(&entities);
+    // What villagers see: night for the bed, zombies to run from.
+    let night = {
+        let t = crate::mobs::day_time(ctx).rem_euclid(24000);
+        ctx.world.dimension == "minecraft:overworld" && (12000..23000).contains(&t)
+    };
+    let threats: Vec<[f64; 3]> = entities
+        .iter()
+        .filter(|e| {
+            !e.removed
+                && matches!(&e.kind, mc_entity::Kind::Mob(m) if m.dying.is_none() && matches!(
+                    m.species,
+                    mc_entity::mob::Species::Zombie
+                        | mc_entity::mob::Species::Husk
+                        | mc_entity::mob::Species::Drowned
+                        | mc_entity::mob::Species::ZombieVillager
+                ))
+        })
+        .map(|e| e.pos)
+        .collect();
     // Plates see entities where they are at that moment of the tick.
     level.entity_boxes = Some(entities.iter().map(|e| e.aabb()).collect());
     for (i, entity) in entities.iter_mut().enumerate() {
@@ -843,6 +862,10 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                         &ground,
                         now as u32,
                         !m.trading.is_empty(),
+                        &mc_entity::villager::Env {
+                            night,
+                            threats: &threats,
+                        },
                         &mut ops,
                     );
                 } else {
@@ -851,11 +874,17 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                 }
                 for op in ops {
                     match op {
-                        mc_entity::villager::DoorOp::Open(c) => {
+                        mc_entity::villager::Op::Open(c) => {
                             crate::mobs::blocks::open_door(ctx, level, c, true)
                         }
-                        mc_entity::villager::DoorOp::Close(c) => {
+                        mc_entity::villager::Op::Close(c) => {
                             crate::mobs::blocks::open_door(ctx, level, c, false)
+                        }
+                        mc_entity::villager::Op::Sleep(c) => {
+                            crate::mobs::blocks::lie_down(ctx, level, entity, c)
+                        }
+                        mc_entity::villager::Op::Wake(c) => {
+                            crate::mobs::blocks::get_up(ctx, level, entity.id, c)
                         }
                     }
                 }

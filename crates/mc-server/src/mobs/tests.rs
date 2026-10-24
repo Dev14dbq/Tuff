@@ -1028,3 +1028,217 @@ fn a_wandering_trader_brings_two_leashed_llamas_that_leave_with_it() {
     assert!(mobs_of(&ctx, Species::TraderLlama).iter().all(|e| e.removed));
     assert_eq!(items_of(&ctx, "minecraft:lead"), 0);
 }
+
+#[test]
+fn a_warped_fungus_on_a_stick_boosts_the_strider_and_wears_by_one() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = put(&ctx, Species::Strider, [0.5, -60.0, 0.5]);
+    let saddle = ctx.items.id("minecraft:saddle").unwrap();
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.gear[mc_entity::mob::slot::SADDLE] = Some(mc_entity::mob::Gear {
+            item: saddle,
+            count: 1,
+            damage: 0,
+        });
+        m.riders.push(7000);
+    }
+    // A carrot on a stick does nothing to a strider.
+    hold(&ctx, "minecraft:carrot_on_a_stick", 1);
+    let actor = actor_at([0.5, -60.0, 0.5]);
+    crate::interact::use_item(&ctx, actor, 0, 0.0, 0.0);
+    assert_eq!(with_mob(&ctx, id, |m| m.boost), 0);
+    hold(&ctx, "minecraft:warped_fungus_on_a_stick", 1);
+    crate::interact::use_item(&ctx, actor, 0, 0.0, 0.0);
+    let boost = with_mob(&ctx, id, |m| (m.boost, m.boost_total));
+    assert!((140..=980).contains(&boost.0) && boost.0 == boost.1, "{boost:?}");
+    let held = lock(&ctx.inventories)[&STEVE].slots[36].clone().unwrap();
+    assert_eq!(held.damage, 1);
+}
+
+#[test]
+fn a_strider_walks_on_lava_and_is_cold_on_land() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 20.5]);
+    for x in -14..=22 {
+        for z in -14..=22 {
+            set(&ctx, [x, -61, z], "minecraft:lava");
+        }
+    }
+    let id = put(&ctx, Species::Strider, [2.5, -60.1, 2.5]);
+    // It stays on the lava (a stroll off it is cut short and it returns).
+    let mut on_lava = 0;
+    for _ in 0..300 {
+        run(&ctx, 1);
+        if mob_of(&ctx, id).is_some_and(|e| (e.pos[1] + 60.11).abs() < 0.05) {
+            on_lava += 1;
+        }
+    }
+    assert!(on_lava > 200, "on lava {on_lava} of 300");
+    assert!(with_mob(&ctx, id, |m| m.health) >= 20.0);
+    // Out on the flat ground it shivers.
+    let land = put(&ctx, Species::Strider, [30.5, -60.0, 30.5]);
+    run(&ctx, 5);
+    assert!(with_mob(&ctx, land, |m| m.cold));
+}
+
+fn villager_at(ctx: &ServerContext, pos: [f64; 3]) -> i32 {
+    let e = crate::trading::new_merchant(ctx, "minecraft:villager", pos).unwrap();
+    let id = e.id;
+    lock(&ctx.entities).push(e);
+    id
+}
+
+fn merchant_of(ctx: &ServerContext, id: i32) -> Box<mc_entity::trade::Merchant> {
+    let e = mob_of(ctx, id).expect("villager still there");
+    let Kind::Merchant(m) = e.kind else { panic!() };
+    m
+}
+
+/// Sets the time of day (the clocks run on from there).
+fn set_day(ctx: &ServerContext, t: i64) {
+    let mut time = lock(&ctx.time);
+    for c in &mut time.clocks {
+        c.ticks = t;
+        c.running = false;
+    }
+}
+
+fn run_all(ctx: &ServerContext, ticks: usize) {
+    for _ in 0..ticks {
+        lock(&ctx.time).age += 1;
+        let mut level = WorldLevel::new(ctx);
+        tick(ctx, &mut level);
+        drop(level);
+        crate::tick::run_scheduled_ticks(ctx);
+    }
+}
+
+fn bed_state(ctx: &ServerContext, at: [i32; 3]) -> Option<String> {
+    let s = ctx
+        .world
+        .block(mc_protocol::Position::new(at[0], at[1], at[2]), &ctx.data.blocks)?;
+    ctx.data.blocks.property(s, "occupied").map(str::to_owned)
+}
+
+#[test]
+fn villagers_lie_down_in_a_free_bed_at_night_and_get_up_by_day() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let blocks = &ctx.data.blocks;
+    let bed = blocks.default_state("minecraft:red_bed").unwrap();
+    let foot = blocks.with_property(bed, "facing", "east").unwrap();
+    let foot = blocks.with_property(foot, "part", "foot").unwrap();
+    let head = blocks.with_property(foot, "part", "head").unwrap();
+    set_state(&ctx, [6, -60, 3], foot);
+    set_state(&ctx, [7, -60, 3], head);
+    let id = villager_at(&ctx, [3.5, -60.0, 3.5]);
+    set_day(&ctx, 13000);
+    let mut slept = false;
+    for _ in 0..600 {
+        run_all(&ctx, 1);
+        if merchant_of(&ctx, id).walk.asleep {
+            slept = true;
+            break;
+        }
+    }
+    {
+        let m = merchant_of(&ctx, id);
+        let e = mob_of(&ctx, id).unwrap();
+        assert!(slept, "never went to bed: {:?} bed {:?} rest {} path {:?} pos {:?} age {}", m.walk.asleep, m.walk.bed, m.walk.rest, m.walk.nav.path, e.pos, lock(&ctx.time).age);
+    }
+    let e = mob_of(&ctx, id).unwrap();
+    assert!((e.pos[0] - 7.5).abs() < 0.01 && (e.pos[1] + 59.4375).abs() < 0.01, "{:?}", e.pos);
+    assert_eq!(bed_state(&ctx, [7, -60, 3]).as_deref(), Some("true"));
+    assert_eq!(bed_state(&ctx, [6, -60, 3]).as_deref(), Some("true"));
+    // Day comes: it gets up and the bed is free.
+    set_day(&ctx, 24100);
+    run_all(&ctx, 2);
+    assert!(!merchant_of(&ctx, id).walk.asleep);
+    assert_eq!(bed_state(&ctx, [7, -60, 3]).as_deref(), Some("false"));
+}
+
+#[test]
+fn a_bed_is_free_again_when_its_sleeper_is_gone() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let blocks = &ctx.data.blocks;
+    let bed = blocks.default_state("minecraft:red_bed").unwrap();
+    let foot = blocks.with_property(bed, "facing", "east").unwrap();
+    let foot = blocks.with_property(foot, "part", "foot").unwrap();
+    let head = blocks.with_property(foot, "part", "head").unwrap();
+    set_state(&ctx, [6, -60, 3], foot);
+    set_state(&ctx, [7, -60, 3], head);
+    let id = villager_at(&ctx, [5.5, -60.0, 3.5]);
+    set_day(&ctx, 13000);
+    for _ in 0..400 {
+        run_all(&ctx, 1);
+        if merchant_of(&ctx, id).walk.asleep {
+            break;
+        }
+    }
+    assert!(merchant_of(&ctx, id).walk.asleep);
+    lock(&ctx.entities).retain(|e| e.id != id);
+    run_all(&ctx, 40);
+    assert_eq!(bed_state(&ctx, [7, -60, 3]).as_deref(), Some("false"));
+}
+
+#[test]
+fn villagers_run_from_zombies() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = villager_at(&ctx, [10.5, -60.0, 10.5]);
+    let z = put(&ctx, Species::Zombie, [14.5, -60.0, 10.5]);
+    // The zombie stands still: it has no one to hunt but this.
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == z)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.persistent = true;
+        m.speed_attr = 0.0;
+    }
+    run_all(&ctx, 100);
+    let e = mob_of(&ctx, id).unwrap();
+    let far = e.pos[0] - 14.5;
+    assert!(far < -8.0, "villager at {:?}", e.pos);
+}
+
+#[test]
+fn a_cold_strider_heads_back_to_the_lava() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 20.5]);
+    for x in 5..=12 {
+        for z in -2..=6 {
+            set(&ctx, [x, -61, z], "minecraft:lava");
+        }
+    }
+    let id = put(&ctx, Species::Strider, [2.5, -60.0, 2.5]);
+    let mut back = false;
+    for _ in 0..800 {
+        run(&ctx, 1);
+        if mob_of(&ctx, id).is_some_and(|e| e.pos[0] > 5.0 && (e.pos[1] + 60.11).abs() < 0.05) {
+            back = true;
+            break;
+        }
+    }
+    assert!(back, "still at {:?}", mob_of(&ctx, id).map(|e| e.pos));
+}

@@ -272,6 +272,23 @@ pub(super) fn shade(m: &mut Mob, b: &Body, s: &Senses) -> Option<Cell> {
     None
 }
 
+/// A lava cell near a strider out of lava to walk back to.
+pub(super) fn lava(m: &mut Mob, b: &Body, s: &Senses) -> Option<Cell> {
+    let from = cell_of(b.pos);
+    let p = params(m);
+    for _ in 0..40 {
+        let c = [
+            from[0] + m.below(17) as i32 - 8,
+            from[1] + m.below(9) as i32 - 4,
+            from[2] + m.below(17) as i32 - 8,
+        ];
+        if s.world.liquid(c[0], c[1], c[2]) == Liquid::Lava && standable(s.world, c, &p) {
+            return Some(c);
+        }
+    }
+    None
+}
+
 /// Whether someone a sleeping fox would wake for is near: a player or a
 /// hostile mob within 12 blocks (6 up or down).
 pub(super) fn fox_alerted(b: &Body, s: &Senses) -> bool {

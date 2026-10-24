@@ -427,6 +427,8 @@ pub struct Mob {
     /// lasts in all (clients speed the pig up along it).
     pub boost: i32,
     pub boost_total: i32,
+    /// Strider: out of lava, cold and slow (shaking).
+    pub cold: bool,
     /// Zombies: may break doors (`CanBreakDoors`), and walk to them.
     pub breaks_doors: bool,
     /// Where the lead it is on is held (set by the world every tick).
@@ -532,6 +534,7 @@ impl Mob {
             drinking: 0,
             boost: 0,
             boost_total: 0,
+            cold: false,
             breaks_doors: false,
             leash: None,
             chested: false,

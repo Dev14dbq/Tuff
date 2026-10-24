@@ -1,6 +1,7 @@
 //! Villagers on foot (minecraft.wiki, "Villager"): they stroll about near
 //! where they stand, at a zombie's pace, and open the wooden doors in their
-//! way, closing them again behind them.
+//! way, closing them again behind them. At night they lie down in a bed, and
+//! they run from zombies and the like.
 
 use crate::nav::{Cell, Door, Nav, PathParams, Terrain, standable};
 use crate::physics::move_stepping;
@@ -14,12 +15,30 @@ const STEP: f64 = 0.6;
 /// A stroll starts one tick in this many.
 const STROLL: u64 = 120;
 
-/// What a villager does with a door.
+/// What a villager does to the world.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DoorOp {
+pub enum Op {
     Open(Cell),
     Close(Cell),
+    /// Lies down in the bed (its head) at the cell.
+    Sleep(Cell),
+    /// Gets up from the bed.
+    Wake(Cell),
 }
+
+/// What is going on around a villager.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Env<'a> {
+    /// Night: time for bed.
+    pub night: bool,
+    /// Where zombies and other monsters it fears are.
+    pub threats: &'a [[f64; 3]],
+}
+
+/// Blocks within which it sees a monster and runs.
+const FEAR: f64 = 8.0;
+/// Where a lying villager's body sits on a bed (its height).
+const BED_TOP: f64 = 0.5625;
 
 /// A walking villager's state.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -27,6 +46,11 @@ pub struct Walk {
     pub nav: Nav,
     /// Doors it opened and has not closed yet.
     pub opened: Vec<Cell>,
+    /// The bed it has chosen, and whether it lies in it.
+    pub bed: Option<Cell>,
+    pub asleep: bool,
+    /// Ticks to wait before looking for a bed again.
+    pub rest: u32,
     rng: u64,
 }
 
@@ -66,21 +90,83 @@ fn flat_dist(a: [f64; 3], c: Cell) -> f64 {
 /// One tick of a villager or wandering trader: gravity, a stroll when not
 /// `standing` (trading), and the doors on its way. Door changes are pushed
 /// to `ops`.
-pub fn step(entity: &mut Entity, world: &dyn Terrain, now: u32, standing: bool, ops: &mut Vec<DoorOp>) {
+pub fn step(
+    entity: &mut Entity,
+    world: &dyn Terrain,
+    now: u32,
+    standing: bool,
+    env: &Env,
+    ops: &mut Vec<Op>,
+) {
     let seed = u64::from(entity.id.unsigned_abs()) * 0x9E37_79B9 + 1;
     let (pos, on_ground) = (entity.pos, entity.on_ground);
     let Kind::Merchant(m) = &mut entity.kind else {
         return;
     };
     let walk = &mut m.walk;
+    let wandering = m.wandering;
     walk.nav.tick(pos, now);
     let from = [
         pos[0].floor() as i32,
         (pos[1] + 0.5).floor() as i32,
         pos[2].floor() as i32,
     ];
-    if standing {
+    let afraid = (!wandering)
+        .then(|| {
+            env.threats
+                .iter()
+                .filter(|t| {
+                    (t[0] - pos[0]).hypot(t[2] - pos[2]) < FEAR && (t[1] - pos[1]).abs() < 4.0
+                })
+                .min_by(|a, b| {
+                    let d = |t: &&[f64; 3]| (t[0] - pos[0]).hypot(t[2] - pos[2]);
+                    d(a).total_cmp(&d(b))
+                })
+                .copied()
+        })
+        .flatten();
+    // Getting up, from the day or a fright or a customer.
+    if walk.asleep && (!env.night || afraid.is_some() || standing) {
+        walk.asleep = false;
+        if let Some(b) = walk.bed.take() {
+            ops.push(Op::Wake(b));
+        }
+        walk.rest = 200;
+    }
+    if walk.asleep {
+        // Lies still where it is.
+        entity.vel = [0.0; 3];
+        entity.age += 1;
+        return;
+    }
+    if !env.night && walk.bed.is_some() {
+        walk.bed = None;
+    }
+    let mut hurry = 1.0;
+    if let Some(t) = afraid {
+        // Away from it, as far as it can.
+        hurry = 1.5;
+        if walk.nav.is_done() || now.is_multiple_of(20) {
+            let (dx, dz) = (pos[0] - t[0], pos[2] - t[2]);
+            let len = dx.hypot(dz).max(0.01);
+            let p = params();
+            for k in [12.0, 8.0, 5.0] {
+                let c = [
+                    from[0] + (dx / len * k).round() as i32,
+                    from[1],
+                    from[2] + (dz / len * k).round() as i32,
+                ];
+                if standable(world, c, &p) {
+                    walk.nav.stop();
+                    walk.nav.go_to(world, from, c, &p);
+                    break;
+                }
+            }
+        }
+    } else if standing {
         walk.nav.stop();
+    } else if env.night && !wandering {
+        night_walk(walk, world, pos, from, now, seed, ops);
     } else if walk.nav.is_done() && walk.next(seed) % STROLL == 0 {
         let p = params();
         for _ in 0..10 {
@@ -100,6 +186,10 @@ pub fn step(entity: &mut Entity, world: &dyn Terrain, now: u32, standing: bool, 
     // Where it heads this tick.
     let mut dir = None;
     let mut jump = false;
+    if walk.asleep {
+        entity.age += 1;
+        return;
+    }
     if let Some(c) = walk.nav.waypoint(pos, 0.4) {
         // Doors in the next two cells of the path open as it nears them.
         let index = walk.nav.index;
@@ -109,7 +199,7 @@ pub fn step(entity: &mut Entity, world: &dyn Terrain, now: u32, standing: bool, 
                 && !walk.opened.contains(&d)
             {
                 walk.opened.push(d);
-                ops.push(DoorOp::Open(d));
+                ops.push(Op::Open(d));
             }
         }
         let (dx, dz) = (f64::from(c[0]) + 0.5 - pos[0], f64::from(c[2]) + 0.5 - pos[2]);
@@ -123,12 +213,12 @@ pub fn step(entity: &mut Entity, world: &dyn Terrain, now: u32, standing: bool, 
     let near = |d: &Cell| flat_dist(pos, *d) < 2.0 && (f64::from(d[1]) - pos[1]).abs() < 2.5;
     let behind: Vec<Cell> = walk.opened.iter().copied().filter(|d| !near(d)).collect();
     walk.opened.retain(|d| near(d));
-    ops.extend(behind.into_iter().map(DoorOp::Close));
+    ops.extend(behind.into_iter().map(Op::Close));
     // Move.
     let mut vel = [0.0, entity.vel[1], 0.0];
     if let Some(d) = dir {
-        vel[0] = d[0] * SPEED;
-        vel[2] = d[1] * SPEED;
+        vel[0] = d[0] * SPEED * hurry;
+        vel[2] = d[1] * SPEED * hurry;
     }
     if jump {
         vel[1] = 0.42;
@@ -149,6 +239,81 @@ pub fn step(entity: &mut Entity, world: &dyn Terrain, now: u32, standing: bool, 
     vel[1] = if ground && vel[1] <= 0.0 { 0.0 } else { (vel[1] - GRAVITY) * 0.98 };
     entity.vel = [0.0, vel[1], 0.0];
     entity.age += 1;
+}
+
+/// At night: looks for a free bed, walks to it, lies down.
+fn night_walk(
+    walk: &mut Walk,
+    world: &dyn Terrain,
+    pos: [f64; 3],
+    from: Cell,
+    now: u32,
+    seed: u64,
+    ops: &mut Vec<Op>,
+) {
+    let Some(bed) = walk.bed else {
+        if walk.rest > 0 {
+            walk.rest -= 1;
+        } else if (u64::from(now) + seed).is_multiple_of(40) {
+            walk.rest = 0;
+            let mut best: Option<(i32, Cell)> = None;
+            for dx in -16..=16 {
+                for dz in -16..=16 {
+                    for dy in -4..=4 {
+                        let c = [from[0] + dx, from[1] + dy, from[2] + dz];
+                        if world.free_bed(c[0], c[1], c[2]) {
+                            let d = dx * dx + dz * dz + dy * dy;
+                            if best.is_none_or(|(b, _)| d < b) {
+                                best = Some((d, c));
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some((_, c)) = best {
+                walk.bed = Some(c);
+                let p = params();
+                let side = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                    .into_iter()
+                    .flat_map(|(dx, dz)| [0, -1, 1].map(|dy| [c[0] + dx, c[1] + dy, c[2] + dz]))
+                    .find(|s| standable(world, *s, &p));
+                match side {
+                    Some(s) => {
+                        walk.nav.stop();
+                        walk.nav.go_to(world, from, s, &p);
+                    }
+                    None => walk.bed = None,
+                }
+            } else {
+                walk.rest = 600;
+            }
+        }
+        return;
+    };
+    if !world.free_bed(bed[0], bed[1], bed[2]) {
+        walk.bed = None;
+        walk.rest = 100;
+        return;
+    }
+    let near = flat_dist(pos, bed) < 1.6 && (pos[1] - f64::from(bed[1])).abs() < 1.6;
+    if near {
+        walk.nav.stop();
+        walk.asleep = true;
+        ops.push(Op::Sleep(bed));
+    } else if walk.nav.is_done() {
+        // The way was too far or blocked: another time.
+        walk.bed = None;
+        walk.rest = 200;
+    }
+}
+
+/// Where a villager lies in the bed at `bed`.
+pub fn bed_spot(bed: Cell) -> [f64; 3] {
+    [
+        f64::from(bed[0]) + 0.5,
+        f64::from(bed[1]) + BED_TOP,
+        f64::from(bed[2]) + 0.5,
+    ]
 }
 
 #[cfg(test)]
@@ -219,18 +384,19 @@ mod tests {
         let mut farthest = 0.0f64;
         for t in 0..300 {
             let mut ops = Vec::new();
-            step(&mut e, &world, t, false, &mut ops);
+            step(&mut e, &world, t, false, &Env::default(), &mut ops);
             for op in ops {
                 match op {
-                    DoorOp::Open(_) => {
+                    Op::Open(_) => {
                         *world.open.borrow_mut() = true;
                         opened.get_or_insert(t);
                         *log.entry("open").or_default() += 1;
                     }
-                    DoorOp::Close(_) => {
+                    Op::Close(_) => {
                         *world.open.borrow_mut() = false;
                         closed.get_or_insert(t);
                     }
+                    _ => {}
                 }
             }
             farthest = farthest.max(e.pos[0]);
@@ -252,7 +418,7 @@ mod tests {
         let Kind::Merchant(m) = &mut e.kind else { panic!() };
         m.walk.nav.go_to(&world, [1, 0, 0], [2, 0, 6], &params());
         for t in 0..60 {
-            step(&mut e, &world, t, true, &mut Vec::new());
+            step(&mut e, &world, t, true, &Env::default(), &mut Vec::new());
         }
         assert_eq!(e.pos, [1.5, 0.0, 0.5]);
     }

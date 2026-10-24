@@ -2137,6 +2137,10 @@ pub mod play {
         pub const FLAGS: u8 = 0;
         /// Air left under water (VarInt), 300 when full.
         pub const AIR_SUPPLY: u8 = 1;
+        /// Body pose (Pose).
+        pub const POSE: u8 = 6;
+        /// Living entity: the bed it sleeps in (optional position).
+        pub const SLEEPING_POS: u8 = 14;
         /// Living entity health (Float).
         pub const HEALTH: u8 = 9;
         /// Living entity: the particles of its visible effects (Particles).
@@ -2180,6 +2184,10 @@ pub mod play {
         /// A registry id under its own serializer type (cat, cow, wolf, pig
         /// and chicken variants): (type id, value).
         Holder(i32, i32),
+        /// A body pose (0 standing, 2 sleeping).
+        Pose(i32),
+        /// A block position, or none (where someone sleeps).
+        OptPosition(Option<Position>),
     }
 
     impl MetadataValue {
@@ -2219,6 +2227,17 @@ pub mod play {
                     out.put_bool(uuid.is_some());
                     if let Some(u) = uuid {
                         out.put_uuid(*u);
+                    }
+                }
+                MetadataValue::Pose(pose) => {
+                    out.put_varint(20);
+                    out.put_varint(*pose);
+                }
+                MetadataValue::OptPosition(pos) => {
+                    out.put_varint(11);
+                    out.put_bool(pos.is_some());
+                    if let Some(p) = pos {
+                        out.put_position(*p);
                     }
                 }
                 MetadataValue::OptBlockState(state) => {
@@ -3068,6 +3087,42 @@ mod tests {
         expected.put_string("minecraft:overworld");
         expected.push(0);
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn block_destruction_layout() {
+        let packet = play::BlockDestruction {
+            entity_id: 300,
+            position: Position::new(1, 2, 3),
+            stage: 5,
+        };
+        let mut out = Vec::new();
+        packet.encode(&mut out);
+        // VarInt id, packed position (x << 38 | z << 12 | y), the stage.
+        assert_eq!(
+            out,
+            [0xac, 0x02, 0, 0, 0, 0x40, 0, 0, 0x30, 0x02, 5]
+        );
+    }
+
+    #[test]
+    fn sleeping_data_layout() {
+        let packet = play::SetEntityData {
+            entity_id: 5,
+            entries: vec![
+                (play::metadata::POSE, play::MetadataValue::Pose(2)),
+                (
+                    play::metadata::SLEEPING_POS,
+                    play::MetadataValue::OptPosition(Some(Position::new(1, 2, 3))),
+                ),
+            ],
+        };
+        let mut out = Vec::new();
+        packet.encode(&mut out);
+        assert_eq!(
+            out,
+            [5, 6, 20, 2, 14, 11, 1, 0, 0, 0, 0x40, 0, 0, 0x30, 0x02, 0xff]
+        );
     }
 
     #[test]

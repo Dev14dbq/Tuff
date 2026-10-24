@@ -140,6 +140,12 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             }
             v.push((a + 1, MetadataValue::Holder(holder::PIG, m.variant)));
         }
+        Strider => {
+            if m.boost > 0 {
+                v.push((a, MetadataValue::VarInt(m.boost_total)));
+            }
+            v.push((a + 1, MetadataValue::Boolean(m.cold)));
+        }
         Chicken => v.push((a, MetadataValue::Holder(holder::CHICKEN, m.variant))),
         Rabbit => v.push((a, MetadataValue::VarInt(m.variant))),
         Horse | Donkey | Mule => {

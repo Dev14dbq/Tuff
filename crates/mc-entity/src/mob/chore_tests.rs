@@ -278,8 +278,10 @@ fn a_lead_pulls_and_leads() {
 
 #[test]
 fn a_hostile_mob_wakes_a_sleeping_fox() {
-    let mut world = Yard::default();
-    world.roofed = true;
+    let world = Yard {
+        roofed: true,
+        ..Yard::default()
+    };
     let mut fox = mob(Species::Fox, [0.5, 0.0, 0.5]);
     let mut out = Vec::new();
     for t in 0..2000 {

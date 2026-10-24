@@ -40,10 +40,11 @@ pub fn steered_by(ctx: &ServerContext, e: &Entity) -> bool {
     };
     match m.species {
         Species::Horse | Species::Donkey | Species::Mule => m.saddled() && m.is_tame(),
-        Species::Pig => {
+        Species::Pig | Species::Strider => {
+            let stick = stick_of(m.species);
             m.saddled()
                 && uuid_of(ctx, rider).is_some_and(|u| {
-                    crate::held::find(ctx, u, |n| n == "minecraft:carrot_on_a_stick").is_some_and(
+                    crate::held::find(ctx, u, |n| n == stick).is_some_and(
                         |h| {
                             h.slot == 45 || {
                                 let inv = lock(&ctx.inventories);
@@ -58,11 +59,20 @@ pub fn steered_by(ctx: &ServerContext, e: &Entity) -> bool {
     }
 }
 
+/// The stick that steers a mob: carrot for pigs, warped fungus for striders.
+fn stick_of(species: Species) -> &'static str {
+    if species == Species::Strider {
+        "minecraft:warped_fungus_on_a_stick"
+    } else {
+        "minecraft:carrot_on_a_stick"
+    }
+}
+
 /// Whether the mob only lives this tick while its rider moves it. Kept
 /// cheap: the check of the rider's hands happens in [`steered_by`].
 pub fn steered(e: &Entity) -> bool {
     matches!(&e.kind, Kind::Mob(m) if !m.riders.is_empty() && m.saddled()
-        && (m.species.horse() && m.is_tame() || m.species == Species::Pig))
+        && (m.species.horse() && m.is_tame() || matches!(m.species, Species::Pig | Species::Strider)))
 }
 
 /// One tick of a ridden mob: it lives (grows, burns, makes sounds) but the
@@ -188,7 +198,7 @@ pub fn saddle(ctx: &ServerContext, e: &mut Entity, item: i32) -> bool {
         return false;
     };
     let fits = match m.species {
-        Species::Pig => true,
+        Species::Pig | Species::Strider => true,
         Species::Horse | Species::Donkey | Species::Mule => m.is_tame(),
         _ => false,
     };
@@ -203,6 +213,8 @@ pub fn saddle(ctx: &ServerContext, e: &mut Entity, item: i32) -> bool {
     m.persistent = true;
     let sound = if m.species == Species::Pig {
         "entity.pig.saddle"
+    } else if m.species == Species::Strider {
+        "entity.strider.saddle"
     } else {
         "entity.horse.saddle"
     };
@@ -217,17 +229,26 @@ pub fn saddle(ctx: &ServerContext, e: &mut Entity, item: i32) -> bool {
     true
 }
 
-/// A rider uses a carrot on a stick: the pig they steer speeds up for 7 to
-/// 49 seconds and the stick wears by 7 (a broken one leaves a fishing rod).
-/// `None` when it does nothing (not steering a pig, or it is still fast).
+/// A rider uses a carrot on a stick (or a warped fungus on a stick): the pig
+/// (strider) they steer speeds up for 7 to 49 seconds and the stick wears by
+/// 7 (1) (a broken one leaves a fishing rod). `None` when it does nothing
+/// (not steering one, or it is still fast).
 pub fn boost(ctx: &ServerContext, actor: &crate::interact::Actor, hand: i32) -> Option<()> {
     let held = crate::held::held(ctx, actor.uuid, hand)?;
-    if held.name != "minecraft:carrot_on_a_stick" {
+    if !matches!(
+        held.name.as_str(),
+        "minecraft:carrot_on_a_stick" | "minecraft:warped_fungus_on_a_stick"
+    ) {
         return None;
     }
+    let species = if held.name == "minecraft:carrot_on_a_stick" {
+        Species::Pig
+    } else {
+        Species::Strider
+    };
     let mut entities = lock(&ctx.entities);
     let e = entities.iter_mut().find(|e| {
-        matches!(&e.kind, Kind::Mob(m) if m.species == Species::Pig
+        matches!(&e.kind, Kind::Mob(m) if m.species == species
             && m.riders.first() == Some(&actor.entity_id))
             && !e.removed
     })?;
@@ -249,7 +270,7 @@ pub fn boost(ctx: &ServerContext, actor: &crate::interact::Actor, hand: i32) -> 
         fx::emit(ctx, fx::Fx::Data(p));
     }
     if actor.game_mode != 1 {
-        crate::held::wear_into(ctx, actor.uuid, held.slot, 7, "minecraft:fishing_rod");
+        crate::held::wear_into(ctx, actor.uuid, held.slot, if species == Species::Pig { 7 } else { 1 }, "minecraft:fishing_rod");
     }
     let _ = ctx.events.send(Event::Swing {
         uuid: actor.uuid,

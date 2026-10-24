@@ -189,6 +189,8 @@ pub enum Goal {
     },
     /// Foxes look for shade in the sun.
     Shelter { speed: f64, interval: i32 },
+    /// A strider out of lava heads back to it.
+    SeekLava { speed: f64, interval: i32 },
     /// A llama falls in behind a caravan (a leashed llama and those
     /// following it).
     Caravan { speed: f64 },
@@ -689,6 +691,24 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             m.caravan_head = Some(id);
             true
         }
+        Goal::SeekLava { interval, .. } => {
+            if !m.cold || !m.riders.is_empty() {
+                return false;
+            }
+            if *interval > 0 {
+                *interval -= 1;
+                return false;
+            }
+            *interval = 40;
+            match chores::lava(m, b, s) {
+                Some(c) => {
+                    m.nav.stop();
+                    m.goto = Some((center(c), 1.0));
+                    true
+                }
+                None => false,
+            }
+        }
         Goal::Shelter { interval, .. } => {
             if m.sitting || m.target.is_some() {
                 return false;
@@ -882,7 +902,7 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                 && spot.is_some_and(|c| chores::perch_ok(s, c, *bed))
                 && !m.sitting
         }
-        Goal::Shelter { .. } => !m.nav.is_done(),
+        Goal::Shelter { .. } | Goal::SeekLava { .. } => !m.nav.is_done(),
         Goal::Caravan { .. } => {
             m.leash.is_none()
                 && m.caravan_head
@@ -1047,7 +1067,7 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
             }
             m.nav.stop();
         }
-        Goal::Shelter { .. } => m.nav.stop(),
+        Goal::Shelter { .. } | Goal::SeekLava { .. } => m.nav.stop(),
         Goal::Caravan { .. } => {
             if let Some(head) = m.caravan_head.take() {
                 out.push(MobEvent::CaravanLeave { head });
@@ -1354,7 +1374,7 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
                 m.dirty = true;
             }
         }
-        Goal::Shelter { speed, .. } => {
+        Goal::Shelter { speed, .. } | Goal::SeekLava { speed, .. } => {
             if let Some(c) = m.nav.goal {
                 m.goto = Some((center(c), *speed));
             }

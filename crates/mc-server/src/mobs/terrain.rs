@@ -25,6 +25,8 @@ const HOLDABLE: u16 = 1024;
 const CHEST: u16 = 2048;
 const LIT_FURNACE: u16 = 4096;
 const BED: u16 = 8192;
+/// The head of a bed nobody lies in.
+const BED_FREE: u16 = 32768;
 /// A full cube that suffocates (not glass, not leaves).
 const SMOTHER: u16 = 16384;
 
@@ -92,6 +94,11 @@ fn flags(ctx: &ServerContext) -> &'static [u16] {
                 }
                 if name.ends_with("_bed") {
                     f |= BED;
+                    if blocks.property(state, "part") == Some("head")
+                        && blocks.property(state, "occupied") == Some("false")
+                    {
+                        f |= BED_FREE;
+                    }
                 }
                 use mc_tick::support::{BOTTOM_FULL, TOP_FULL};
                 let full = ctx.shapes.support(state) & (TOP_FULL | BOTTOM_FULL) == TOP_FULL | BOTTOM_FULL;
@@ -297,6 +304,10 @@ impl Terrain for Ground<'_> {
 
     fn holdable(&self, x: i32, y: i32, z: i32) -> bool {
         self.at(x, y, z) & HOLDABLE != 0
+    }
+
+    fn free_bed(&self, x: i32, y: i32, z: i32) -> bool {
+        self.at(x, y, z) & BED_FREE != 0
     }
 
     fn perch(&self, x: i32, y: i32, z: i32) -> Perch {

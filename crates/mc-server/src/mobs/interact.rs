@@ -504,7 +504,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
     }
     // Getting on.
     let rideable = match species {
-        Species::Pig => m.saddled(),
+        Species::Pig | Species::Strider => m.saddled(),
         Species::Horse | Species::Donkey | Species::Mule => !m.is_baby(),
         _ => false,
     };

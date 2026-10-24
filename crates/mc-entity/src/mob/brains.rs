@@ -209,6 +209,26 @@ pub(super) fn brain(species: Species) -> Brain {
     let (goals, targets) = match species {
         Cow | Mooshroom => (farm([2.0, 1.0, 1.25, 1.25, 1.0]), vec![]),
         Pig => (farm([1.25, 1.0, 1.2, 1.1, 1.0]), vec![]),
+        Strider => (
+            vec![
+                panic(1, 1.65),
+                breed(2, 1.0),
+                slot(
+                    4,
+                    MOVE,
+                    Goal::SeekLava {
+                        speed: 1.0,
+                        interval: 0,
+                    },
+                ),
+                tempt(3, 1.4),
+                follow_parent(4, 1.1),
+                stroll(5, 1.0),
+                look(7, 8.0),
+                random_look(8),
+            ],
+            vec![],
+        ),
         Chicken => (farm([1.4, 1.0, 1.0, 1.1, 1.0]), vec![]),
         Sheep => {
             let mut g = farm([1.25, 1.0, 1.1, 1.1, 1.0]);

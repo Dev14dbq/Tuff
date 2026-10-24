@@ -126,6 +126,91 @@ pub fn open_door(ctx: &ServerContext, level: &mut WorldLevel, cell: Cell, open: 
     fx::sound(ctx, &sound, fx::category::BLOCKS, centre(cell), 1.0, pitch);
 }
 
+/// The metadata of a villager asleep in the bed at `bed` (or up again).
+pub fn sleep_data(id: i32, bed: Option<Cell>) -> play::SetEntityData {
+    play::SetEntityData {
+        entity_id: id,
+        entries: vec![
+            (
+                play::metadata::POSE,
+                play::MetadataValue::Pose(if bed.is_some() { 2 } else { 0 }),
+            ),
+            (
+                play::metadata::SLEEPING_POS,
+                play::MetadataValue::OptPosition(bed.map(pos)),
+            ),
+        ],
+    }
+}
+
+/// Sets `occupied` of the bed whose head is at `cell` and of its foot.
+fn occupy(ctx: &ServerContext, level: &mut WorldLevel, cell: Cell, taken: bool) {
+    let blocks = &ctx.data.blocks;
+    let Some(state) = ctx.world.block(pos(cell), blocks) else {
+        return;
+    };
+    let value = if taken { "true" } else { "false" };
+    let Some(facing) = blocks.property(state, "facing") else {
+        return;
+    };
+    let (dx, dz) = match facing {
+        "north" => (0, 1),
+        "south" => (0, -1),
+        "west" => (1, 0),
+        _ => (-1, 0),
+    };
+    let foot = [cell[0] + dx, cell[1], cell[2] + dz];
+    let logic = level.logic();
+    for c in [cell, foot] {
+        let Some(s) = ctx.world.block(pos(c), blocks) else {
+            continue;
+        };
+        if blocks.property(s, "occupied") == Some(value) {
+            continue;
+        }
+        if let Some(to) = blocks.with_property(s, "occupied", value) {
+            mc_tick::updates::set_block(level, logic, to_pos(pos(c)), to, mc_tick::updates::Flags::ALL);
+        }
+    }
+}
+
+/// A villager lies down in the bed at `cell`.
+pub fn lie_down(ctx: &ServerContext, level: &mut WorldLevel, e: &mut Entity, cell: Cell) {
+    occupy(ctx, level, cell, true);
+    e.pos = mc_entity::villager::bed_spot(cell);
+    e.vel = [0.0; 3];
+    e.on_ground = true;
+    {
+        let mut watch = crate::tick::lock(&ctx.bed_watch);
+        watch.retain(|(c, _)| *c != cell);
+        watch.push((cell, e.id));
+    }
+    fx::emit(ctx, fx::Fx::Data(sleep_data(e.id, Some(cell))));
+}
+
+/// A villager gets up from the bed at `cell`.
+pub fn get_up(ctx: &ServerContext, level: &mut WorldLevel, id: i32, cell: Cell) {
+    occupy(ctx, level, cell, false);
+    crate::tick::lock(&ctx.bed_watch).retain(|(c, _)| *c != cell);
+    fx::emit(ctx, fx::Fx::Data(sleep_data(id, None)));
+}
+
+/// Once a second: beds whose sleeper is gone (killed, unloaded) are free.
+pub fn free_beds(ctx: &ServerContext, level: &mut WorldLevel, entities: &[Entity]) {
+    let watched: Vec<([i32; 3], i32)> = crate::tick::lock(&ctx.bed_watch).clone();
+    for (cell, id) in watched {
+        let asleep = entities.iter().any(|e| {
+            e.id == id
+                && !e.removed
+                && matches!(&e.kind, Kind::Merchant(m) if m.walk.asleep && m.walk.bed == Some(cell))
+        });
+        if !asleep {
+            occupy(ctx, level, cell, false);
+            crate::tick::lock(&ctx.bed_watch).retain(|(c, _)| *c != cell);
+        }
+    }
+}
+
 /// Once a second: doors a villager opened shut again when nothing stands
 /// by them (the villager may be gone, or far off by now).
 pub fn close_idle(

@@ -41,6 +41,7 @@ species! {
     Mooshroom => "minecraft:mooshroom", "Mooshroom";
     Sheep => "minecraft:sheep", "Sheep";
     Pig => "minecraft:pig", "Pig";
+    Strider => "minecraft:strider", "Strider";
     Chicken => "minecraft:chicken", "Chicken";
     Rabbit => "minecraft:rabbit", "Rabbit";
     Horse => "minecraft:horse", "Horse";
@@ -101,7 +102,7 @@ impl Species {
         use Species::*;
         match self {
             Cow | Mooshroom | Sheep | Pig | Chicken | Rabbit | Horse | Donkey | Mule | Llama
-            | TraderLlama | Wolf | Cat | Fox | Parrot => Category::Creature,
+            | TraderLlama | Wolf | Cat | Fox | Parrot | Strider => Category::Creature,
             _ => Category::Monster,
         }
     }
@@ -114,6 +115,7 @@ impl Species {
             Cow | Mooshroom => (0.9, 1.4),
             Sheep => (0.9, 1.3),
             Pig => (0.9, 0.9),
+            Strider => (0.9, 1.7),
             Chicken => (0.4, 0.7),
             Rabbit => (0.49, 0.6),
             Horse | Mule => (1.3964844, 1.6),
@@ -170,6 +172,7 @@ impl Species {
         match self {
             Cow | Mooshroom | Pig | Cat | Fox | Ghast => 10.0,
             Sheep | Wolf => 8.0,
+            Strider => 20.0,
             Chicken => 4.0,
             Rabbit => 3.0,
             Parrot => 6.0,
@@ -191,7 +194,7 @@ impl Species {
             Sheep | Zombie | Husk | Drowned | ZombieVillager | ZombifiedPiglin | Blaze => 0.23,
             Rabbit | Wolf | Cat | Fox | Spider | CaveSpider | Enderman => 0.3,
             Horse => 0.225,
-            Donkey | Mule | Llama | TraderLlama => 0.175,
+            Donkey | Mule | Llama | TraderLlama | Strider => 0.175,
             Parrot => 0.2,
             Piglin => 0.35,
             Phantom | Ghast => 0.7,
@@ -271,7 +274,7 @@ impl Species {
         use Species::*;
         matches!(
             self,
-            WitherSkeleton | Ghast | Blaze | MagmaCube | ZombifiedPiglin
+            WitherSkeleton | Ghast | Blaze | MagmaCube | ZombifiedPiglin | Strider
         )
     }
 
@@ -328,6 +331,7 @@ impl Species {
             Cow | Mooshroom => "minecraft:cow_food",
             Sheep => "minecraft:sheep_food",
             Pig => "minecraft:pig_food",
+            Strider => "minecraft:strider_food",
             Chicken => "minecraft:chicken_food",
             Rabbit => "minecraft:rabbit_food",
             Horse | Donkey | Mule => "minecraft:horse_food",
@@ -346,6 +350,7 @@ impl Species {
         match self {
             Horse | Donkey | Mule => Some("minecraft:horse_tempt_items"),
             Llama | TraderLlama => Some("minecraft:llama_tempt_items"),
+            Strider => Some("minecraft:strider_tempt_items"),
             Wolf | Parrot => None,
             _ => self.food_tag(),
         }
