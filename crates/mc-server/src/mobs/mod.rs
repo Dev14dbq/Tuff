@@ -555,6 +555,19 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         let Kind::Mob(m) = &mut e.kind else {
             continue;
         };
+        // A burning mob in a water or powder snow cauldron goes out.
+        if m.burning > 0 && !m.species.fire_immune() {
+            let cell = mc_tick::BlockPos::new(
+                e.pos[0].floor() as i32,
+                e.pos[1].floor() as i32,
+                e.pos[2].floor() as i32,
+            );
+            let top = e.pos[1] + m.size().1;
+            let logic = level.logic();
+            if mc_tick::cauldron::put_out(level, logic, cell, e.pos[1], top) {
+                m.burning = 0;
+            }
+        }
         if (e.pos, e.on_ground, m.yaw, m.pitch, m.head_yaw)
             != (before.0, before.1, before.2, before.3, before.4)
         {
