@@ -286,6 +286,14 @@ impl Spots<'_> {
         let half = (w / 2.0).ceil() as i32;
         let _ = half;
         let height = h.ceil() as i32;
+        // Aquatic (Claude): guardians swim in water, now and then in the
+        // open, mostly under a roof.
+        if matches!(species, Species::Guardian | Species::ElderGuardian) {
+            let water = |dy| self.ground.liquid(x, y + dy, z) == Liquid::Water;
+            return water(0)
+                && water(-1)
+                && (self.ctx.world.sky_light(Position::new(x, y, z)) < 15 || below(20) == 0);
+        }
         // Drowned rise from deep water.
         if species == Species::Drowned {
             let water = |dy| self.ground.liquid(x, y + dy, z) == Liquid::Water;
@@ -395,11 +403,25 @@ impl Spots<'_> {
             Category::Axolotls => &spawns.axolotls,
             Category::Misc => return,
         };
+        let x = chunk.0 * 16 + below(16) as i32;
+        let z = chunk.1 * 16 + below(16) as i32;
+        // Aquatic (Claude): inside an ocean monument its guardians spawn
+        // in place of the biome's monsters.
+        let monument;
+        let list = if category == Category::Monster && self.in_monument(x, z) {
+            monument = [Entry {
+                species: Species::Guardian,
+                weight: 1,
+                min: 2,
+                max: 4,
+            }];
+            &monument[..]
+        } else {
+            list
+        };
         let Some(entry) = pick(list) else {
             return;
         };
-        let x = chunk.0 * 16 + below(16) as i32;
-        let z = chunk.1 * 16 + below(16) as i32;
         if !self.ground.loaded(x, z) {
             return;
         }
@@ -660,6 +682,21 @@ fn in_category(e: &Entity, c: Category) -> bool {
 }
 
 impl Spots<'_> {
+    /// Whether the column is under an ocean monument's roof (its box, from
+    /// the sea floor up).
+    fn in_monument(&self, x: i32, z: i32) -> bool {
+        let Some(pipeline) = self.ctx.world.pipeline() else {
+            return false;
+        };
+        let sea = self.ctx.world.sea_level;
+        if self.ground.liquid(x, sea - 2, z) != Liquid::Water {
+            return false;
+        }
+        (self.ctx.world.min_y..sea)
+            .step_by(8)
+            .any(|y| pipeline.inside("minecraft:monument", x, y, z))
+    }
+
     /// Whether a water mob may spawn in this cell (minecraft.wiki, the
     /// spawning of each: the sea within thirteen blocks of its level, glow
     /// squids deep in the dark, axolotls over clay).
@@ -1083,10 +1120,12 @@ pub fn despawn(
         let Kind::Mob(m) = &mut e.kind else {
             continue;
         };
-        if m.species.category() != Category::Monster || e.removed {
+        // Aquatic (Claude): the water kinds go too, when nobody is about.
+        let category = m.species.category();
+        if !(category == Category::Monster || category.water()) || e.removed {
             continue;
         }
-        if difficulty == 0 {
+        if difficulty == 0 && category == Category::Monster {
             e.removed = true;
             gone.push(id);
             continue;
@@ -1112,7 +1151,13 @@ pub fn despawn(
             m.idle = 0;
             continue;
         }
-        if nearest > 128.0 * 128.0 || (m.idle > 600 && below(800) == 0) {
+        // Fish go beyond 64 blocks, the rest beyond 128.
+        let far = if category == Category::WaterAmbient {
+            64.0
+        } else {
+            128.0
+        };
+        if nearest > far * far || (m.idle > 600 && below(800) == 0) {
             e.removed = true;
             gone.push(id);
         }
@@ -1250,5 +1295,132 @@ mod tests {
             ticks += 1;
             assert!(ticks < 100_000);
         }
+    }
+
+    // Aquatic (Claude)
+
+    fn flat_ctx() -> Option<std::sync::Arc<ServerContext>> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let data = mc_data::McData::load(&dir).ok()?;
+        ServerContext::new(crate::Config::new(dir), data).ok()
+    }
+
+    fn mob_in(species: Species, pos: [f64; 3], idle: i32) -> Entity {
+        let mut mob = Mob::new(species, 3);
+        mob.idle = idle;
+        Entity {
+            id: 1,
+            uuid: 1,
+            kind: Kind::Mob(Box::new(mob)),
+            pos,
+            vel: [0.0; 3],
+            on_ground: false,
+            age: 0,
+            removed: false,
+            tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_biomes_hold_the_water_spawns() {
+        let Some(ctx) = flat_ctx() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let biomes = load_biomes(&ctx);
+        let warm = &biomes["minecraft:warm_ocean"];
+        let kinds = |list: &[Entry]| list.iter().map(|e| e.species).collect::<Vec<_>>();
+        assert_eq!(
+            kinds(&warm.water_ambient),
+            [Species::Pufferfish, Species::TropicalFish]
+        );
+        assert!(kinds(&warm.water_creature).contains(&Species::Squid));
+        assert!(kinds(&warm.water_creature).contains(&Species::Dolphin));
+        assert!(kinds(&warm.water_creature).contains(&Species::Nautilus));
+        assert_eq!(kinds(&warm.underground), [Species::GlowSquid]);
+        let lush = &biomes["minecraft:lush_caves"];
+        assert_eq!(kinds(&lush.axolotls), [Species::Axolotl]);
+        assert!(kinds(&biomes["minecraft:swamp"].creature).contains(&Species::Frog));
+        assert!(kinds(&biomes["minecraft:beach"].creature).contains(&Species::Turtle));
+        let cold = &biomes["minecraft:cold_ocean"];
+        assert!(kinds(&cold.water_ambient).contains(&Species::Cod));
+        assert!(kinds(&cold.water_ambient).contains(&Species::Salmon));
+    }
+
+    #[test]
+    fn water_mobs_spawn_in_open_water_within_thirteen_blocks_of_the_sea() {
+        let Some(ctx) = flat_ctx() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let sea = ctx.world.sea_level;
+        let _ = ctx
+            .world
+            .block(Position::new(40, 0, 40), &ctx.data.blocks);
+        let state = |n: &str| ctx.data.blocks.default_state(n).unwrap();
+        let put = |x: i32, y: i32, name: &str| {
+            let _ = ctx.world.set_block(
+                    Position::new(x, y, 40),
+                    state(name),
+                    &ctx.data.blocks,
+                    &ctx.rules,
+                );
+        };
+        let floor = ctx.world.min_y;
+        for y in floor..sea + 2 {
+            put(41, y, "minecraft:stone");
+            put(40, y, "minecraft:water");
+        }
+        put(40, sea, "minecraft:air");
+        put(40, floor, "minecraft:clay");
+        let ground = Ground::new(&ctx);
+        let spots = Spots {
+            ctx: &ctx,
+            ground: &ground,
+            targets: &[],
+            darken: 0,
+            raining: false,
+            thundering: false,
+            nether: false,
+            seed: None,
+            moon: 1.0,
+        };
+        let mid = sea - 2;
+        for s in [Species::Cod, Species::Squid, Species::Dolphin] {
+            assert!(spots.water_fits(s, 40, mid, 40, false), "{s:?} in the sea");
+            assert!(!spots.water_fits(s, 40, sea - 1, 40, false), "{s:?} at the top");
+            assert!(!spots.water_fits(s, 41, mid, 40, false), "{s:?} on dry land");
+        }
+        // Axolotls want clay within five blocks below.
+        assert!(spots.water_fits(Species::Axolotl, 40, mid, 40, false));
+        put(40, floor, "minecraft:stone");
+        let ground = Ground::new(&ctx);
+        let spots = Spots { ground: &ground, ..spots };
+        assert!(!spots.water_fits(Species::Axolotl, 40, mid, 40, false));
+    }
+
+    #[test]
+    fn water_mobs_far_from_everyone_go_but_buckets_and_peaceful_do_not() {
+        let player = Target::at(9, 9, [0.0; 3]);
+        let none = std::collections::HashSet::new();
+        let mut v = vec![
+            mob_in(Species::Cod, [200.0, 0.0, 0.0], 10),
+            mob_in(Species::Squid, [100.0, 0.0, 0.0], 10),
+            mob_in(Species::Dolphin, [200.0, 0.0, 0.0], 10),
+            mob_in(Species::Frog, [200.0, 0.0, 0.0], 10),
+        ];
+        for (i, e) in v.iter_mut().enumerate() {
+            e.id = i as i32 + 1;
+        }
+        if let Kind::Mob(m) = &mut v[2].kind {
+            m.persistent = true;
+        }
+        let gone = despawn(&mut v, std::slice::from_ref(&player), 2, &none);
+        // The cod is beyond 64, the dolphin is kept, the squid is within
+        // 128, and a frog is an animal.
+        assert_eq!(gone, [1]);
+        // Peaceful leaves the sea alone.
+        let mut v = vec![mob_in(Species::Cod, [10.0, 0.0, 0.0], 10)];
+        assert!(despawn(&mut v, &[player], 0, &none).is_empty());
     }
 }

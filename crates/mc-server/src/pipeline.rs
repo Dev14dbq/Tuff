@@ -243,6 +243,20 @@ impl Pipeline {
         out
     }
 
+    /// Whether the block `x, y, z` lies in the box of a structure named
+    /// `name` (a monument's guardians keep to it).
+    pub fn inside(&self, name: &str, x: i32, y: i32, z: i32) -> bool {
+        let at = P::new(x, y, z);
+        self.starts_in(x >> 4, z >> 4, 4)
+            .into_iter()
+            .any(|(_, cell)| {
+                cell.get().into_iter().flatten().any(|s| {
+                    let id = &self.features.structures.structures[s.structure].id;
+                    (id == name || Some(name) == id.strip_prefix("minecraft:")) && s.bbox.inside(at)
+                })
+            })
+    }
+
     /// `/locate structure`: the nearest of the structures named `wanted`
     /// from block `pos`, as vanilla searches (see
     /// [`mc_features::structure::Structures::locate`]): its name and the
