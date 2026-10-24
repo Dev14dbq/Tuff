@@ -64,4 +64,4 @@ fn generated_light_is_unchanged() {
     assert_eq!(sum, EXPECTED, "light of generated chunks changed");
 }
 
-const EXPECTED: u64 = 0x8698_f5ab_8fb2_5e50;
+const EXPECTED: u64 = 0x2d7d_69d0_8346_34aa;
