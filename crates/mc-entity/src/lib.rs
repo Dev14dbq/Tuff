@@ -10,6 +10,7 @@
 pub mod boss;
 pub mod effect;
 pub mod extra;
+pub mod gossip;
 pub mod mob;
 pub mod nav;
 pub mod physics;
@@ -137,6 +138,7 @@ impl Entity {
         match &self.kind {
             Kind::FallingBlock { .. } | Kind::Tnt { .. } => (0.98, 0.98),
             Kind::Item { .. } => (0.25, 0.25),
+            Kind::Merchant(m) if m.is_baby() => (0.3, 0.975),
             Kind::Merchant(_) => (0.6, 1.95),
             Kind::Mob(m) => m.species.size(),
             Kind::ExperienceOrb { .. } => (0.5, 0.5),

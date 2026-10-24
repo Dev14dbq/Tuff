@@ -60,6 +60,8 @@ pub struct Walk {
     pub golem_seen_until: i64,
     /// Game time it last gossiped.
     pub gossiped: Option<i64>,
+    /// A bell rang: until when (game time) it hides in the bed at the cell.
+    pub hiding: Option<(u32, Cell)>,
     rng: u64,
 }
 
@@ -146,8 +148,13 @@ pub fn step(
     } else {
         0
     };
-    // Getting up, from the day or a fright or a customer.
-    if walk.asleep && (!env.night || afraid.is_some() || standing) {
+    // A bell rang: it hides until the time is up.
+    if walk.hiding.is_some_and(|(until, _)| now >= until) {
+        walk.hiding = None;
+    }
+    let hiding = walk.hiding;
+    // Getting up, from the day or a fright or a customer or a bell.
+    if walk.asleep && (!env.night || afraid.is_some() || standing || hiding.is_some()) {
         walk.asleep = false;
         if let Some(b) = walk.bed.take() {
             ops.push(Op::Wake(b));
@@ -186,6 +193,14 @@ pub fn step(
         }
     } else if standing {
         walk.nav.stop();
+    } else if let Some((_, bed)) = hiding {
+        hurry = 1.5;
+        if walk.nav.is_done() && flat_dist(pos, bed) > 2.0 {
+            let p = params();
+            if let Some(s) = beside(world, bed, &p) {
+                walk.nav.go_to(world, from, s, &p);
+            }
+        }
     } else if env.night && !wandering {
         night_walk(walk, home, world, pos, from, now, seed, ops);
     } else if walk.nav.is_done() && walk.next(seed) % STROLL == 0 {
@@ -277,6 +292,14 @@ pub fn step(
     entity.age += 1;
 }
 
+/// A cell to stand in beside the bed.
+fn beside(world: &dyn Terrain, c: Cell, p: &PathParams) -> Option<Cell> {
+    [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        .into_iter()
+        .flat_map(|(dx, dz)| [0, -1, 1].map(|dy| [c[0] + dx, c[1] + dy, c[2] + dz]))
+        .find(|s| standable(world, *s, p))
+}
+
 /// At night: goes to the bed it has claimed (see the village's points of
 /// interest) and lies down in it. A villager with no bed stays up.
 #[allow(clippy::too_many_arguments)]
@@ -300,11 +323,7 @@ fn night_walk(
             };
             walk.bed = Some(c);
             let p = params();
-            let side = [(1, 0), (-1, 0), (0, 1), (0, -1)]
-                .into_iter()
-                .flat_map(|(dx, dz)| [0, -1, 1].map(|dy| [c[0] + dx, c[1] + dy, c[2] + dz]))
-                .find(|s| standable(world, *s, &p));
-            match side {
+            match beside(world, c, &p) {
                 Some(s) => {
                     walk.nav.stop();
                     walk.nav.go_to(world, from, s, &p);

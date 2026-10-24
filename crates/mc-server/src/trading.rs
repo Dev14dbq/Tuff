@@ -417,14 +417,17 @@ pub fn villager_data(ctx: &ServerContext, entity_id: i32, m: &Merchant) -> play:
     };
     play::SetEntityData {
         entity_id,
-        entries: vec![(
-            play::metadata::VILLAGER_DATA,
-            play::MetadataValue::VillagerData(
-                id("minecraft:villager_type", &m.variant),
-                profession,
-                m.level,
+        entries: vec![
+            (16, play::MetadataValue::Boolean(m.is_baby())),
+            (
+                play::metadata::VILLAGER_DATA,
+                play::MetadataValue::VillagerData(
+                    id("minecraft:villager_type", &m.variant),
+                    profession,
+                    m.level,
+                ),
             ),
-        )],
+        ],
     }
 }
 
@@ -435,21 +438,26 @@ fn hero_level(ctx: &ServerContext, uuid: u128) -> Option<i32> {
     vitals.get(&uuid)?.effects.get(kind).map(|i| i.amplifier)
 }
 
-/// Sets the discounts a player gets from this merchant.
+/// Sets the discounts a player gets from this merchant: Hero of the Village,
+/// and the villager's reputation of the player (each point moves the price
+/// by the trade's multiplier; a bad name makes it dearer).
 fn refresh_prices(ctx: &ServerContext, uuid: u128, m: &mut Merchant) {
     let hero = if m.wandering {
         None
     } else {
         hero_level(ctx, uuid)
     };
+    let reputation = m.gossip.reputation(uuid);
     for offer in &mut m.offers {
-        offer.special_price = match hero {
+        let hero = match hero {
             Some(amplifier) => {
                 let rate = 0.3 + 0.0625 * amplifier as f32;
                 -((rate * offer.cost_a.count as f32).floor() as i32).max(1)
             }
             None => 0,
         };
+        let fame = -(reputation as f32 * offer.price_multiplier).floor() as i32;
+        offer.special_price = hero + fame;
     }
 }
 
@@ -514,7 +522,8 @@ pub fn is_merchant(ctx: &ServerContext, entity_id: i32) -> bool {
 /// trade.
 pub fn open(ctx: &ServerContext, uuid: u128, entity_id: i32) -> Option<Snapshot> {
     with_merchant(ctx, entity_id, |m| {
-        if m.offers.is_empty() {
+        // A baby has nothing to sell.
+        if m.offers.is_empty() || m.is_baby() {
             return None;
         }
         refresh_prices(ctx, uuid, m);
@@ -621,6 +630,9 @@ pub fn complete(
         offer.uses += times;
         let (xp, reward) = (offer.xp * times, offer.reward_xp);
         if !m.wandering {
+            for _ in 0..times {
+                m.gossip.happen(uuid, Kind::Trading);
+            }
             m.xp += xp;
             if m.should_level_up() && m.level_up_in.is_none() {
                 m.level_up_in = Some(LEVEL_UP_DELAY);
@@ -710,6 +722,15 @@ pub fn tick(ctx: &ServerContext, entity: &mut Entity, now: i64) -> Option<play::
             }
         }
     }
+    // Babies grow up, grown villagers wait to breed again.
+    if m.age < 0 {
+        m.age += 1;
+        if m.age == 0 {
+            changed = true;
+        }
+    } else if m.age > 0 {
+        m.age -= 1;
+    }
     // The rest is slow, and spread over the villagers.
     if (age + id.unsigned_abs()) % 20 == 0 {
         // Players who left without closing the window.
@@ -740,7 +761,7 @@ pub fn tick(ctx: &ServerContext, entity: &mut Entity, now: i64) -> Option<play::
                     }
                 }
             }
-            None if (age + id.unsigned_abs()) % 100 == 0 => {
+            None if (age + id.unsigned_abs()) % 100 == 0 && !m.is_baby() => {
                 if let Some((at, profession)) = find_job(ctx, origin) {
                     m.job_site = Some(at);
                     m.profession = Some(profession.to_owned());

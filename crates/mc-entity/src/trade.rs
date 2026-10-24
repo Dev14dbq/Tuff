@@ -114,6 +114,15 @@ pub struct Merchant {
     pub restock_day: i64,
     /// Ticks until a villager that earned a level gets it (40, as vanilla).
     pub level_up_in: Option<i32>,
+    /// What it has heard about players.
+    pub gossip: crate::gossip::Gossips,
+    /// Vanilla's `Age`: below zero a baby (ticks until it grows up), above
+    /// zero ticks before a grown villager breeds again.
+    pub age: i32,
+    /// Nutrition points left over from food it ate, and the food it carries
+    /// (bread, carrots, potatoes, beetroots).
+    pub food: i32,
+    pub pantry: Vec<Cost>,
     /// Players trading now.
     pub trading: Vec<u128>,
     /// Its walking about.
@@ -137,9 +146,17 @@ impl Merchant {
             restocks_today: 0,
             restock_day: 0,
             level_up_in: None,
+            gossip: Default::default(),
+            age: 0,
+            food: 0,
+            pantry: Vec::new(),
             trading: Vec::new(),
             walk: Default::default(),
         }
+    }
+
+    pub fn is_baby(&self) -> bool {
+        self.age < 0
     }
 
     pub fn wandering_trader() -> Self {
