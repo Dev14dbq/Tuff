@@ -73,19 +73,8 @@ pub fn strike(c: &mut Crystal, by: Option<u128>, kind: &str) {
     c.struck = Some((by, explosion));
 }
 
-/// One tick of every crystal: new ones from world generation, fire, and
-/// those destroyed.
-pub fn tick_all(
-    ctx: &ServerContext,
-    level: &mut WorldLevel,
-    entities: &mut Vec<Entity>,
-    fresh: &mut Vec<Entity>,
-) {
-    for nbt in ctx.world.take_generated_entities() {
-        if let Some(e) = from_nbt(ctx, &nbt) {
-            fresh.push(e);
-        }
-    }
+/// One tick of every crystal: fire, and those destroyed.
+pub fn tick_all(ctx: &ServerContext, level: &mut WorldLevel, entities: &mut Vec<Entity>) {
     let end = ctx.world.dimension == "minecraft:the_end";
     let fire = ctx.data.blocks.default_state("minecraft:fire");
     let mut destroyed = Vec::new();

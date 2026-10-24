@@ -1154,15 +1154,14 @@ fn generated_pillars_carry_their_crystals() {
     );
     // And the crystals tick brings them into the world.
     lock(&end.players).clear();
-    let mut fresh = Vec::new();
     let mut level = WorldLevel::new(&end);
     let mut entities = Vec::new();
     for nbt in made {
-        if let Some(e) = crystal::from_nbt(&end, &nbt) {
+        if let Some(e) = crate::summon::from_saved(&end, &nbt) {
             entities.push(e);
         }
     }
-    crystal::tick_all(&end, &mut level, &mut entities, &mut fresh);
+    crystal::tick_all(&end, &mut level, &mut entities);
     drop(level);
     assert!(entities.iter().any(|e| matches!(e.kind, Kind::Crystal(_))));
     let _ = std::fs::remove_dir_all(folder);

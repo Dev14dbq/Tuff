@@ -855,7 +855,9 @@ impl World {
         }
     }
 
-    /// Entities world generation made since the last call (end crystals).
+    /// Entities world generation made since the last call (end crystals,
+    /// mineshafts' chest minecarts), as NBT; [`crate::summon::from_saved`]
+    /// turns them into entities.
     pub fn take_generated_entities(&self) -> Vec<mc_nbt::Compound> {
         self.pipeline()
             .map(crate::pipeline::Pipeline::take_entities)

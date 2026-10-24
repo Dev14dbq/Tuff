@@ -2235,6 +2235,7 @@ fn summon(r: &mut Run) -> Result<i32> {
         removed: false,
         tags: Vec::new(),
     };
+    crate::summon::stock(r.ctx, entity.id, &kind, &nbt);
     r.out.events.push(Event::EntitySpawned(entity.clone()));
     lock(&r.ctx.entities).push(entity.clone());
     let shown = target::everyone(r.ctx)

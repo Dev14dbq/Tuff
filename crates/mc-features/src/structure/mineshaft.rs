@@ -807,8 +807,9 @@ fn support(
     }
 }
 
-/// Mineshaft loot sits in a chest minecart; until there are entities it is
-/// a chest on the rails' spot.
+/// Mineshaft loot sits in a chest minecart on a rail put down for it: the
+/// rail runs either way by a coin flip, and the cart gets the loot table
+/// and a seed (the corridor piece's `createChest`).
 fn minecart_chest(
     f: &Frame,
     region: &mut dyn Region,
@@ -824,16 +825,26 @@ fn minecart_chest(
     {
         return;
     }
-    let Some(chest) = f.facts.default_state("minecraft:chest") else {
-        return;
+    let shape = if r.next_bool() {
+        "north_south"
+    } else {
+        "east_west"
     };
-    region.set(p, chest);
-    let mut be = Compound::new();
-    be.insert("id", Tag::String("minecraft:chest".into()));
-    be.insert(
+    f.set(region, st(f.facts, "rail", &[("shape", shape)]), x, y, z);
+    let mut cart = Compound::new();
+    cart.insert("id", Tag::String("minecraft:chest_minecart".into()));
+    cart.insert(
+        "Pos",
+        Tag::List(vec![
+            Tag::Double(f64::from(p.x) + 0.5),
+            Tag::Double(f64::from(p.y) + 0.5),
+            Tag::Double(f64::from(p.z) + 0.5),
+        ]),
+    );
+    cart.insert(
         "LootTable",
         Tag::String("minecraft:chests/abandoned_mineshaft".into()),
     );
-    be.insert("LootTableSeed", Tag::Long(r.next_long()));
-    region.set_block_entity(p, be);
+    cart.insert("LootTableSeed", Tag::Long(r.next_long()));
+    region.add_entity(cart);
 }
