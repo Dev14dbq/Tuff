@@ -354,7 +354,10 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 from[2] + e.vel[2] * f,
             ];
             match strike {
-                Strike::Block => e.vel = [0.0; 3],
+                Strike::Block { .. } => {
+                    hits::hit_block(t.ctx, &strike, e.pos, false);
+                    e.vel = [0.0; 3];
+                }
                 Strike::Player(i) => {
                     let id = t.players[i].entity_id;
                     *hooked = Some(id);

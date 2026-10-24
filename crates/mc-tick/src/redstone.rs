@@ -253,8 +253,35 @@ fn other_power(ctx: Ctx, state: u32) -> u8 {
     match ctx.shapes.block_name(state) {
         Some("minecraft:daylight_detector" | "minecraft:target") => level_of(ctx, state, "power"),
         Some("minecraft:lectern") if is(ctx, state, "powered") => 15,
+        // A struck lightning rod.
+        Some(_) if is_rod(ctx, state) && is(ctx, state, "powered") => 15,
         _ => 0,
     }
+}
+
+/// Lightning rods, whatever their age or wax.
+fn is_rod(ctx: Ctx, state: u32) -> bool {
+    ctx.shapes
+        .block_name(state)
+        .is_some_and(|n| n.ends_with("lightning_rod"))
+}
+
+/// Lightning struck the rod at `p`: it gives 15 for 8 ticks, strongly to the
+/// block it stands on (minecraft.wiki, "Lightning Rod"). Says whether there
+/// was a rod.
+pub fn rod_struck(level: &mut dyn Level, ctx: Ctx, p: BlockPos) -> bool {
+    let state = level.block(p);
+    if !is_rod(ctx, state) {
+        return false;
+    }
+    let new = with_bool(ctx, state, "powered", true);
+    set_block(level, ctx, p, new, Flags::ALL);
+    if let Some(f) = facing(ctx, new) {
+        update_neighbors_at(level, ctx, p.offset(f.opposite()));
+    }
+    let kind = ctx.shapes.block_index(new);
+    level.schedule_block_tick(p, kind, 8, 0);
+    true
 }
 
 /// Strong power the block `state` at `at` sends into its neighbour `toward`.
@@ -283,6 +310,12 @@ fn emitted_strong(
             level.comparator_output(at)
         }
         Part::Wire if wires && wire_points(ctx, state, toward) => wire_power(ctx, state),
+        _ if is_rod(ctx, state)
+            && is(ctx, state, "powered")
+            && facing(ctx, state).map(Dir::opposite) == Some(toward) =>
+        {
+            15
+        }
         _ if toward == Dir::Down
             && ctx.shapes.block_name(state) == Some("minecraft:trapped_chest") =>
         {
@@ -316,7 +349,9 @@ pub fn power_from(level: &dyn Level, ctx: Ctx, p: BlockPos, from: Dir, wires: bo
     let n = p.offset(from);
     let state = level.block(n);
     if ctx.shapes.conducts(state) {
-        conductor_power(level, ctx, n, wires)
+        // A target conducts, and gives its own signal on top of what it
+        // is powered with.
+        conductor_power(level, ctx, n, wires).max(other_power(ctx, state))
     } else {
         emitted(level, ctx, n, state, from.opposite(), wires)
     }
@@ -381,6 +416,13 @@ fn dust_connects_to(ctx: Ctx, state: u32, d: Dir) -> bool {
                         | "minecraft:detector_rail"
                         | "minecraft:comparator"
                         | "minecraft:lightning_rod"
+                        | "minecraft:exposed_lightning_rod"
+                        | "minecraft:weathered_lightning_rod"
+                        | "minecraft:oxidized_lightning_rod"
+                        | "minecraft:waxed_lightning_rod"
+                        | "minecraft:waxed_exposed_lightning_rod"
+                        | "minecraft:waxed_weathered_lightning_rod"
+                        | "minecraft:waxed_oxidized_lightning_rod"
                         | "minecraft:sculk_sensor"
                         | "minecraft:calibrated_sculk_sensor"
                 )
@@ -912,6 +954,29 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
         }
         return;
     }
+    if is_rod(ctx, state) {
+        // The rod is done giving its signal.
+        if is(ctx, state, "powered") {
+            set_block(
+                level,
+                ctx,
+                p,
+                with_bool(ctx, state, "powered", false),
+                Flags::ALL,
+            );
+            if let Some(f) = facing(ctx, state) {
+                update_neighbors_at(level, ctx, p.offset(f.opposite()));
+            }
+        }
+        return;
+    }
+    if ctx.shapes.block_name(state) == Some("minecraft:target") {
+        // The signal of a hit target runs out.
+        if level_of(ctx, state, "power") != 0 {
+            set_block(level, ctx, p, with(ctx, state, "power", "0"), Flags::ALL);
+        }
+        return;
+    }
     match part(ctx, state) {
         Part::Torch | Part::WallTorch => {
             let should = torch_should_light(level, ctx, p, state);
@@ -976,6 +1041,23 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     }
 }
 
+/// A projectile hit the target block at `p` with `strength` (1 to 15): it
+/// gives that signal until its tick `hold` ticks away, which a hit during
+/// the signal does not move (minecraft.wiki, "Target").
+pub fn target_hit(level: &mut dyn Level, ctx: Ctx, p: BlockPos, strength: u8, hold: i64) -> bool {
+    let state = level.block(p);
+    if ctx.shapes.block_name(state) != Some("minecraft:target") {
+        return false;
+    }
+    let new = with(ctx, state, "power", &strength.clamp(1, 15).to_string());
+    set_block(level, ctx, p, new, Flags::ALL);
+    let kind = ctx.shapes.block_index(state);
+    if !level.is_block_tick_scheduled(p, kind) {
+        level.schedule_block_tick(p, kind, hold, 0);
+    }
+    true
+}
+
 /// A component was placed or replaced: tell what it powers.
 pub fn on_place(level: &mut dyn Level, ctx: Ctx, p: BlockPos, old: u32, state: u32) {
     if is_bulb(ctx, state) && ctx.shapes.block_index(old) != ctx.shapes.block_index(state) {
@@ -1000,6 +1082,11 @@ pub fn on_place(level: &mut dyn Level, ctx: Ctx, p: BlockPos, old: u32, state: u
             }
             Part::Observer if is(ctx, s, "powered") && !placed => {
                 update_in_front(level, ctx, p, s);
+            }
+            Part::None if !placed && is_rod(ctx, s) && is(ctx, s, "powered") => {
+                if let Some(f) = facing(ctx, s) {
+                    update_neighbors_at(level, ctx, p.offset(f.opposite()));
+                }
             }
             // Only when a comparator comes or goes, not when it changes state.
             Part::Comparator if part(ctx, old) != part(ctx, state) => {

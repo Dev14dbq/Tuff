@@ -284,6 +284,9 @@ fn burn(ctx: &ServerContext, uuid: u128, mode: i32, pose: crate::context::Pose) 
         at[1].floor() as i32,
         at[2].floor() as i32,
     ];
+    if in_cauldron(ctx, uuid, at, feet) {
+        return;
+    }
     let in_lava = block_name(ctx, feet).as_deref() == Some("minecraft:lava");
     if fire % 20 == 0 && !in_lava {
         crate::vitals::hurt(ctx, uuid, 1.0, "minecraft:on_fire", "death.attack.onFire");
@@ -293,6 +296,26 @@ fn burn(ctx: &ServerContext, uuid: u128, mode: i32, pose: crate::context::Pose) 
     } else if let Some(v) = lock(&ctx.vitals).get_mut(&uuid) {
         v.fire -= 1;
     }
+}
+
+/// A burning player standing in a water or powder snow cauldron goes out
+/// (and the cauldron loses a layer).
+fn in_cauldron(ctx: &ServerContext, uuid: u128, at: [f64; 3], feet: [i32; 3]) -> bool {
+    if !block_name(ctx, feet).is_some_and(|n| n.ends_with("_cauldron")) {
+        return false;
+    }
+    let mut level = crate::level::WorldLevel::new(ctx);
+    let cell = mc_tick::BlockPos::new(feet[0], feet[1], feet[2]);
+    let logic = level.logic();
+    let out = mc_tick::cauldron::put_out(&mut level, logic, cell, at[1], at[1] + 1.8);
+    let changes = level.into_changes();
+    if !changes.is_empty() {
+        let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
+    }
+    if out {
+        extinguish(ctx, uuid);
+    }
+    out
 }
 
 /// The item and enchantments worn in each slot, to see what changed.
@@ -909,6 +932,41 @@ mod tests {
         set(&ctx, [0, -60, 0], "minecraft:water");
         tick(&ctx);
         assert_eq!(fire(&ctx), 0);
+    }
+
+    #[test]
+    fn a_water_or_powder_snow_cauldron_puts_a_burning_player_out() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        join(&ctx, U, 905, [0.5, -60.0, 0.5], 0);
+        let fire = |ctx: &ServerContext| lock(&ctx.vitals).get(&U).unwrap().fire;
+        let cauldron = |ctx: &ServerContext, name: &str, level: &str| {
+            let state = ctx.data.blocks.state_id(name, &[("level", level)]).unwrap();
+            let mut l = crate::level::WorldLevel::new(ctx);
+            l.set_block(Position::new(0, -60, 0), state);
+            let _ = l.into_changes();
+        };
+        cauldron(&ctx, "minecraft:water_cauldron", "2");
+        ignite(&ctx, U, 300);
+        tick(&ctx);
+        assert_eq!(fire(&ctx), 0);
+        // One layer less.
+        let here = ctx.world.block(Position::new(0, -60, 0), &ctx.data.blocks);
+        let here = ctx.data.blocks.describe(here.unwrap()).unwrap();
+        assert_eq!(here, "minecraft:water_cauldron[level=1]");
+        // The last layer empties it; powder snow leaves water.
+        ignite(&ctx, U, 300);
+        tick(&ctx);
+        assert_eq!(block(&ctx, [0, -60, 0]), "minecraft:cauldron");
+        cauldron(&ctx, "minecraft:powder_snow_cauldron", "3");
+        ignite(&ctx, U, 300);
+        tick(&ctx);
+        assert_eq!(fire(&ctx), 0);
+        let here = ctx.world.block(Position::new(0, -60, 0), &ctx.data.blocks);
+        let here = ctx.data.blocks.describe(here.unwrap()).unwrap();
+        assert_eq!(here, "minecraft:water_cauldron[level=2]");
     }
 
     #[test]

@@ -145,6 +145,7 @@ pub fn update_neighbor_shapes(
             }
             _ => {}
         }
+        new = crate::dripstone::update_shape(level, ctx, np, new, dir.opposite());
         new = crate::fire::update_shape(level, ctx, np, new);
         new = crate::portal::update_shape(level, ctx, np, new, dir.opposite(), state);
         crate::leaves::shape_updated(level, ctx, np, new);

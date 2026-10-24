@@ -152,7 +152,7 @@ fn skull_hit(t: &mut Tick, e: &Entity, strike: Strike, dangerous: bool) {
             with: Some(e.id),
             kind,
         }),
-        Strike::Block => {}
+        Strike::Block { .. } => hits::hit_block(t.ctx, &strike, e.pos, false),
     }
     t.out.blasts.push(crate::explosion::Blast {
         center: e.pos,

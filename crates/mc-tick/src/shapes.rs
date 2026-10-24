@@ -179,7 +179,11 @@ impl Shapes {
         );
         // Doors and tall plants: anything with half = lower/upper.
         for state in 0..states as u32 {
+            // A young pitcher crop is one block, its upper half grows later.
+            let young_pitcher = blocks.block_name(state) == Some("minecraft:pitcher_crop")
+                && matches!(blocks.property(state, "age"), Some("0" | "1" | "2"));
             if kind[state as usize] == Kind::Other
+                && !young_pitcher
                 && matches!(blocks.property(state, "half"), Some("lower" | "upper"))
             {
                 kind[state as usize] = Kind::TwoTall;

@@ -19,6 +19,8 @@ pub enum Behaviour {
     },
     /// Pumpkin and melon stems.
     Stem,
+    /// Pitcher crops: five stages, two blocks tall from the fourth.
+    Pitcher,
     /// Sugar cane grows up to three high.
     Column,
     /// Cactus grows up to three high and may flower.
@@ -63,6 +65,7 @@ impl Behaviour {
             "beetroots" => Self::Crop { max: 3 },
             "torchflower_crop" => Self::Crop { max: 2 },
             "pumpkin_stem" | "melon_stem" => Self::Stem,
+            "pitcher_crop" => Self::Pitcher,
             "sugar_cane" => Self::Column,
             "cactus" => Self::Cactus,
             "bamboo" => Self::Bamboo,
@@ -112,6 +115,7 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut 
         Behaviour::None => {}
         Behaviour::Crop { max } => crop(level, ctx, p, state, u32::from(max), rng),
         Behaviour::Stem => stem(level, ctx, p, state, rng),
+        Behaviour::Pitcher => pitcher(level, ctx, p, state, rng),
         Behaviour::Column => column(level, ctx, p, state),
         Behaviour::Cactus => cactus(level, ctx, p, state, rng),
         Behaviour::Bamboo => {
@@ -138,7 +142,10 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut 
                 grow_shoot(level, ctx, p);
             }
         }
-        Behaviour::Dripstone => crate::cauldron::dripstone_tick(level, ctx, p, rng),
+        Behaviour::Dripstone => {
+            crate::cauldron::dripstone_tick(level, ctx, p, rng);
+            crate::dripstone::tick(level, ctx, p, rng);
+        }
         Behaviour::Weathering => weather(level, ctx, p, state, rng),
         Behaviour::BuddingAmethyst => amethyst(level, ctx, p, rng),
         Behaviour::Mushroom => mushroom(level, ctx, p, state, rng),
@@ -301,6 +308,42 @@ fn crop(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, max: u32, rng:
     grow(level, ctx, p, state, age + 1);
 }
 
+/// A pitcher crop grows like wheat (only the lower half ticks) but in light
+/// 8 and up, a stage at a time from 0 to 4; from the fourth stage on it
+/// takes the block above as its upper half, which needs to be free.
+fn pitcher(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut Rng) {
+    if ctx.shapes.property(state, "half") != Some("lower") {
+        return;
+    }
+    let speed = growth_speed(level, ctx, p, state);
+    if rng.below((25.0 / speed) as u32 + 1) == 0 {
+        pitcher_grow(level, ctx, p, state, 1);
+    }
+}
+
+/// Grows the pitcher crop whose lower half is at `p` by `add` stages (at
+/// most to the fifth), if it is light enough and the upper half has room.
+/// Says whether it grew.
+pub fn pitcher_grow(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, add: u32) -> bool {
+    let age = int(ctx, state, "age");
+    let new = (age + add).min(4);
+    let above = p.offset(Dir::Up);
+    let room = {
+        let s = level.block(above);
+        ctx.shapes.is_air(s) || name(ctx, s) == "pitcher_crop"
+    };
+    if age >= 4 || level.brightness(p) < 8 || (new >= 3 && !room) {
+        return false;
+    }
+    let grown = ctx.shapes.with(state, "age", &new.to_string());
+    set_block(level, ctx, p, grown, Flags::SHAPES_ONLY);
+    if new >= 3 {
+        let upper = ctx.shapes.with(grown, "half", "upper");
+        set_block(level, ctx, above, upper, Flags::ALL);
+    }
+    true
+}
+
 fn stem(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut Rng) {
     if level.brightness(p) < 9 {
         return;
@@ -394,7 +437,7 @@ pub fn copper_age(name: &str) -> Option<usize> {
 
 /// [`copper_age`] for copper that really weathers (it has a next stage, or
 /// is fully oxidized): copper torches do not.
-fn weathering_age(ctx: Ctx, name: &str) -> Option<usize> {
+pub(crate) fn weathering_age(ctx: Ctx, name: &str) -> Option<usize> {
     let age = copper_age(name)?;
     (age == 3 || ctx.shapes.default_state(&next_copper(name, age)).is_some()).then_some(age)
 }

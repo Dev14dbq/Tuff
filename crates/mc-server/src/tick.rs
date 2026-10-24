@@ -19,8 +19,10 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use mc_command::text::translate;
+use mc_nbt::Tag;
 use mc_protocol::Position;
-use mc_protocol::packets::play::{ClockState, SetTime};
+use mc_protocol::packets::play::{ClockState, SetTime, TickingState};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, info, warn};
 
@@ -96,6 +98,73 @@ pub struct TickControl {
     pub times: [u64; 100],
     /// The tick time smoothed as vanilla does (ms).
     pub smoothed_ms: f32,
+    /// `/tick sprint`: running ticks without waiting.
+    pub sprint: Option<Sprint>,
+}
+
+/// A `/tick sprint` in progress.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sprint {
+    /// Ticks still to run.
+    pub remaining: u32,
+    /// Ticks run so far, and how long they took.
+    pub done: u32,
+    pub spent: Duration,
+    /// Whether the game was frozen when the sprint began (it is again after).
+    pub was_frozen: bool,
+}
+
+impl TickControl {
+    /// Starts a sprint of `ticks` (unfreezing the game); a sprint already
+    /// running is replaced. Says whether one was.
+    pub fn start_sprint(&mut self, ticks: u32) -> bool {
+        let before = self.sprint.take();
+        let was_frozen = before.as_ref().map_or(self.frozen, |s| s.was_frozen);
+        self.frozen = false;
+        self.steps = 0;
+        self.sprint = Some(Sprint {
+            remaining: ticks,
+            done: 0,
+            spent: Duration::ZERO,
+            was_frozen,
+        });
+        before.is_some()
+    }
+
+    /// Ends the sprint, as the game was before it, and gives its report.
+    pub fn finish_sprint(&mut self) -> Option<Tag> {
+        let sprint = self.sprint.take()?;
+        self.frozen = sprint.was_frozen;
+        let ms = sprint.spent.as_secs_f64() * 1000.0;
+        let done = f64::from(sprint.done.max(1));
+        let per_tick = ms / done;
+        let per_second = if per_tick > 0.0 {
+            1000.0 / per_tick
+        } else {
+            0.0
+        };
+        Some(translate(
+            "commands.tick.sprint.report",
+            vec![
+                Tag::String(format!("{per_second:.2}")),
+                Tag::String(format!("{per_tick:.2}")),
+            ],
+        ))
+    }
+
+    /// Counts a tick of the sprint that took `took`; its report when that
+    /// was the last one.
+    fn sprinted(&mut self, took: Duration) -> Option<Tag> {
+        let sprint = self.sprint.as_mut()?;
+        sprint.remaining = sprint.remaining.saturating_sub(1);
+        sprint.done += 1;
+        sprint.spent += took;
+        if sprint.remaining == 0 {
+            self.finish_sprint()
+        } else {
+            None
+        }
+    }
 }
 
 impl Default for TickControl {
@@ -106,6 +175,7 @@ impl Default for TickControl {
             steps: 0,
             times: [0; 100],
             smoothed_ms: 0.0,
+            sprint: None,
         }
     }
 }
@@ -228,7 +298,9 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
     while !stop.load(Ordering::Relaxed) {
         let interval = Duration::from_secs_f64(1.0 / f64::from(control.rate));
         let now = Instant::now();
-        if now < next {
+        if control.sprint.is_some() {
+            next = now;
+        } else if now < next {
             std::thread::sleep(next - now);
         } else if now - next > MAX_LAG {
             let behind = now - next;
@@ -342,6 +414,17 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             frozen: control.frozen,
         };
         let took = started.elapsed();
+        if let Some(report) = control.sprinted(took) {
+            let _ = ctx.events.send(Event::Chat(report));
+            let _ = ctx.events.send(Event::TickingState(TickingState {
+                tick_rate: control.rate,
+                frozen: control.frozen,
+            }));
+            *lock(&ctx.ticking) = TickingState {
+                tick_rate: control.rate,
+                frozen: control.frozen,
+            };
+        }
         let nanos = took.as_nanos() as u64;
         control.times[(count % 100) as usize] = nanos;
         control.smoothed_ms = control.smoothed_ms * 0.8 + nanos as f32 / 1.0e6 * 0.2;
@@ -1385,6 +1468,56 @@ mod tests {
                 -1
             )]
         );
+    }
+
+    #[test]
+    fn tick_sprint_runs_stops_and_restores_the_freeze() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let Ok(data) = mc_data::McData::load(&dir) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let ctx = ServerContext::new(crate::Config::new(dir), data).expect("context");
+        let mut control = TickControl::default();
+        // The console's feedback goes to the log, so the events and the
+        // state are what show.
+        let say = |control: &mut TickControl, line: &str| {
+            let out =
+                crate::commands::execute(&ctx, control, &crate::commands::Source::Console, line);
+            format!("{:?}", out.events)
+        };
+        // Nothing to stop.
+        assert!(!say(&mut control, "tick sprint stop").contains("sprint.report"));
+        // A frozen game sprints, and is frozen again afterwards.
+        say(&mut control, "tick freeze");
+        assert!(control.frozen);
+        say(&mut control, "tick sprint 3");
+        assert!(!control.frozen);
+        assert_eq!(control.sprint.as_ref().map(|s| s.remaining), Some(3));
+        // Ticks count down; the last one reports.
+        assert!(control.sprinted(Duration::from_millis(2)).is_none());
+        assert!(control.sprinted(Duration::from_millis(2)).is_none());
+        let report = format!("{:?}", control.sprinted(Duration::from_millis(2)));
+        assert!(report.contains("sprint.report") && report.contains("500.00"));
+        assert!(control.sprint.is_none() && control.frozen);
+        // A new sprint replaces the old one without a report; stopping
+        // reports and restores.
+        say(&mut control, "tick unfreeze");
+        say(&mut control, "tick sprint 100");
+        control.sprinted(Duration::from_millis(1));
+        let replaced = say(&mut control, "tick sprint 7");
+        assert!(!replaced.contains("sprint.report"), "{replaced}");
+        assert_eq!(
+            control.sprint.as_ref().map(|s| (s.remaining, s.done)),
+            Some((7, 0))
+        );
+        let stopped = say(&mut control, "tick sprint stop");
+        assert!(stopped.contains("sprint.report"), "{stopped}");
+        assert!(control.sprint.is_none() && !control.frozen);
+        // Freezing during a sprint ends it.
+        say(&mut control, "tick sprint 5");
+        say(&mut control, "tick freeze");
+        assert!(control.sprint.is_none() && control.frozen);
     }
 
     #[test]

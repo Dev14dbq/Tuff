@@ -64,7 +64,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 kind,
             });
         }
-        Strike::Block => {}
+        Strike::Block { .. } => hits::hit_block(t.ctx, &strike, e.pos, false),
     }
     if small {
         // Light the spot it hit.

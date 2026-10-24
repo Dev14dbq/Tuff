@@ -35,6 +35,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 from[1] + e.vel[1] * f,
                 from[2] + e.vel[2] * f,
             ];
+            hits::hit_block(ctx, &strike, e.pos, false);
             let who = match &strike {
                 Strike::Player(i) => Some(t.players[*i]),
                 _ => None,
@@ -113,7 +114,7 @@ fn land(
                     kind: "minecraft:spit",
                 });
             }
-            Strike::Block => {}
+            Strike::Block { .. } => {}
         },
         Shot::Pearl => {
             fx::particles(ctx, "minecraft:portal", e.pos, 0.3, 0.1, 32);

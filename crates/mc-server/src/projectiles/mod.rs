@@ -490,6 +490,121 @@ pub(crate) mod tests {
         assert_eq!(a.pickup, Pickup::Yes);
     }
 
+    fn power_of(ctx: &ServerContext, p: mc_protocol::Position) -> u32 {
+        let s = ctx.world.block(p, &ctx.data.blocks).unwrap();
+        ctx.shapes
+            .property(s, "power")
+            .and_then(|v| v.parse().ok())
+            .unwrap()
+    }
+
+    /// Ticks the world on, the way the tick thread does, `n` times.
+    fn pass(ctx: &ServerContext, n: usize) {
+        for _ in 0..n {
+            lock(&ctx.time).age += 1;
+            crate::tick::run_scheduled_ticks(ctx);
+        }
+    }
+
+    #[test]
+    fn a_target_gives_a_signal_by_how_near_the_middle_a_projectile_hit() {
+        // Dead centre of the face, and away from it towards the edge.
+        let cell = [5, -60, 0];
+        assert_eq!(hits::target_strength(cell, 4, [5.0, -59.5, 0.5]), 15);
+        assert_eq!(hits::target_strength(cell, 4, [5.0, -59.5, 0.75]), 8);
+        assert_eq!(hits::target_strength(cell, 1, [5.5, -59.0, 0.5]), 15);
+        assert_eq!(hits::target_strength(cell, 4, [5.0, -59.999, 0.5]), 1);
+        assert_eq!(hits::target_strength(cell, 2, [5.1, -59.2, 0.0]), 3);
+    }
+
+    #[test]
+    fn projectiles_power_a_target_for_eight_ticks_and_arrows_for_twenty() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let at = mc_protocol::Position::new(5, -60, 0);
+        let target = ctx.data.blocks.default_state("minecraft:target").unwrap();
+        crate::level::WorldLevel::new(&ctx).set_block(at, target);
+        assert_eq!(power_of(&ctx, at), 0);
+        let shot = |ctx: &ServerContext, e: &mut Entity| {
+            let mut hit = false;
+            for _ in 0..10 {
+                run(ctx, e, 1);
+                if power_of(ctx, at) > 0 {
+                    hit = true;
+                    break;
+                }
+            }
+            assert!(hit);
+        };
+        // A snowball straight at the middle.
+        let id = spawn(
+            &ctx,
+            Shot::Snowball,
+            None,
+            [0.5, -59.5, 0.5],
+            [0.9, 0.0, 0.0],
+        );
+        let mut e = {
+            let mut entities = lock(&ctx.entities);
+            let i = entities.iter().position(|e| e.id == id).unwrap();
+            entities.swap_remove(i)
+        };
+        shot(&ctx, &mut e);
+        assert!(power_of(&ctx, at) > 0);
+        pass(&ctx, 7);
+        assert!(power_of(&ctx, at) > 0);
+        pass(&ctx, 1);
+        assert_eq!(power_of(&ctx, at), 0);
+        // An arrow keeps it for 20.
+        let mut e = arrow_at(&ctx, [0.5, -59.5, 0.5], [1.5, 0.0, 0.0]);
+        shot(&ctx, &mut e);
+        pass(&ctx, 19);
+        assert!(power_of(&ctx, at) > 0);
+        pass(&ctx, 1);
+        assert_eq!(power_of(&ctx, at), 0);
+    }
+
+    #[test]
+    fn a_hit_target_powers_dust_and_pulses_an_observer() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let blocks = &ctx.data.blocks;
+        let put = |x: i32, name: &str, props: &[(&str, &str)]| {
+            let state = blocks.state_id(name, props).unwrap();
+            crate::level::WorldLevel::new(&ctx)
+                .set_block(mc_protocol::Position::new(x, -60, 0), state);
+        };
+        put(5, "minecraft:target", &[("power", "0")]);
+        put(4, "minecraft:redstone_wire", &[]);
+        put(
+            6,
+            "minecraft:observer",
+            &[("facing", "west"), ("powered", "false")],
+        );
+        let state = |x: i32| {
+            let p = mc_protocol::Position::new(x, -60, 0);
+            blocks
+                .describe(ctx.world.block(p, blocks).unwrap())
+                .unwrap()
+        };
+        assert!(state(4).contains("power=0"), "{}", state(4));
+        let strike = hits::Strike::Block {
+            cell: [5, -60, 0],
+            face: 4,
+        };
+        hits::hit_block(&ctx, &strike, [5.0, -59.5, 0.5], false);
+        assert!(state(4).contains("power=15"), "{}", state(4));
+        pass(&ctx, 2);
+        assert!(state(6).contains("powered=true"), "{}", state(6));
+        pass(&ctx, 6);
+        assert!(state(4).contains("power=0"), "{}", state(4));
+        assert!(state(6).contains("powered=false"), "{}", state(6));
+    }
+
     #[test]
     fn a_snowball_breaks_on_the_ground() {
         let Some(ctx) = flat() else {

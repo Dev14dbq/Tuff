@@ -226,6 +226,32 @@ fn bone_meal_grows_grass_tall() {
 }
 
 #[test]
+fn bone_meal_on_a_floor_under_water_plants_seagrass() {
+    let Some((ctx, actor)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    // The grass floor at y = -61, a pool over it.
+    for x in -1..=3 {
+        for z in -1..=3 {
+            put(
+                &ctx,
+                Position::new(x, -60, z),
+                "minecraft:water",
+                &[("level", "0")],
+            );
+        }
+    }
+    hold(&ctx, "minecraft:bone_meal", 2, None);
+    click(&ctx, actor, Position::new(1, -61, 1), 1);
+    assert_eq!(block(&ctx, Position::new(1, -60, 1)), "minecraft:seagrass");
+    assert_eq!(held(&ctx).1, 1);
+    // A side face of the floor block that has no water in front: nothing.
+    click(&ctx, actor, Position::new(-1, -61, -1), 4);
+    assert_eq!(held(&ctx).1, 1);
+}
+
+#[test]
 fn candles_stack_and_signs_take_dye() {
     let Some((ctx, actor)) = setup() else {
         eprintln!("skipped: no game data");

@@ -1521,3 +1521,31 @@ fn leads_snap_at_twelve_blocks_and_move_between_mobs() {
     run(&ctx, 1);
     assert!(leashes(&ctx).is_empty(), "{:?}", leashes(&ctx));
 }
+
+#[test]
+fn a_burning_mob_in_a_water_cauldron_goes_out() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [10.5, -60.0, 10.5]);
+    let state = ctx
+        .data
+        .blocks
+        .state_id("minecraft:water_cauldron", &[("level", "3")])
+        .unwrap();
+    WorldLevel::new(&ctx).set_block(mc_protocol::Position::new(0, -60, 0), state);
+    let id = put(&ctx, Species::Cow, [0.5, -60.0, 0.5]);
+    if let Some(Kind::Mob(m)) = lock(&ctx.entities).iter_mut().map(|e| &mut e.kind).next() {
+        m.burning = 200;
+        m.no_ai = true;
+    }
+    run(&ctx, 1);
+    assert_eq!(with_mob(&ctx, id, |m| m.burning), 0);
+    assert_eq!(block_name(&ctx, 0, -60, 0), "minecraft:water_cauldron");
+    let s = ctx
+        .world
+        .block(mc_protocol::Position::new(0, -60, 0), &ctx.data.blocks)
+        .unwrap();
+    assert_eq!(ctx.shapes.property(s, "level"), Some("2"));
+}

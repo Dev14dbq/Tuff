@@ -310,6 +310,159 @@ fn dripleaf(level: &mut WorldLevel, p: Position, facing: &str, height: i32) -> b
     true
 }
 
+/// Bone meal on a living sea pickle (minecraft.wiki, "Sea Pickle"): in the
+/// 5 by 4 (at most 6 in a row) blocks around it, two layers from the one
+/// below it up, each water block over a coral block has 1 chance in 6 to
+/// become a sea pickle of 1 to 4; the pickle itself becomes 4. The meal is
+/// used up whatever happens.
+fn sea_pickle(level: &mut WorldLevel, p: Position, state: u32) -> bool {
+    let ctx = level.logic();
+    if ctx.shapes.property(state, "waterlogged") != Some("true") {
+        return false;
+    }
+    let corals = level
+        .context()
+        .commands
+        .env
+        .tag("minecraft:block", "minecraft:coral_blocks");
+    let r = |n: u64| crate::util::random_u64() % n;
+    let (mut width, mut back) = (2, 0);
+    for (step, column) in (0..5).enumerate() {
+        for z in 0..width {
+            for y in [p.y - 1, p.y] {
+                let q = Position::new(p.x - 2 + column, y, p.z - back + z);
+                if r(6) != 0 || name_at(level, q) != "water" {
+                    continue;
+                }
+                if !corals.contains(&format!("minecraft:{}", name_at(level, at(q, 0, -1, 0)))) {
+                    continue;
+                }
+                if let Some(base) = named(level, "sea_pickle") {
+                    let pickles = (1 + r(4)).to_string();
+                    level.set_block(q, ctx.shapes.with(base, "pickles", &pickles));
+                }
+            }
+        }
+        if step < 2 {
+            width += 2;
+            back += 1;
+        } else {
+            width -= 2;
+            back -= 1;
+        }
+    }
+    level.set_block(p, ctx.shapes.with(state, "pickles", "4"));
+    true
+}
+
+/// Whether the block is a full cube to walk into.
+fn full_block(ctx: mc_tick::Ctx, state: u32) -> bool {
+    let s = ctx.shapes.support(state);
+    s & mc_tick::support::TOP_FULL != 0 && s & mc_tick::support::BOTTOM_FULL != 0
+}
+
+/// Whether a plant of `state` can stay at `p`; seagrass wants a sturdy top
+/// under it, anything but magma.
+fn survives(level: &WorldLevel, p: Position, state: u32) -> bool {
+    let ctx = level.logic();
+    if ctx.shapes.block_name(state) == Some("minecraft:seagrass") {
+        let below = level.block(to_pos(at(p, 0, -1, 0)));
+        return ctx.shapes.support(below) & mc_tick::support::TOP_FULL != 0
+            && ctx.shapes.block_name(below) != Some("minecraft:magma_block");
+    }
+    mc_tick::support::can_survive(level, ctx, to_pos(p), state)
+}
+
+/// A water block with all of its fluid (a source or falling water).
+fn full_water(level: &WorldLevel, p: Position) -> bool {
+    let ctx = level.logic();
+    let state = level.block(to_pos(p));
+    ctx.shapes.block_name(state) == Some("minecraft:water")
+        && ctx
+            .shapes
+            .property(state, "level")
+            .and_then(|l| l.parse::<u32>().ok())
+            .is_some_and(|l| l == 0 || l >= 8)
+}
+
+/// Bone meal on a solid face under water (minecraft.wiki, "Bone Meal" →
+/// "Fertilizer"): from the water block in front of `face` of `clicked`, 128
+/// tries (the later, the further they wander, through water) each plant
+/// seagrass in a full water block, and in warm oceans coral, coral fans
+/// and, on the first try, a wall coral on a horizontal face; seagrass
+/// already there is grown now and then. Says whether the meal is used.
+pub fn water_plants(level: &mut WorldLevel, clicked: Position, face: Option<Dir>) -> bool {
+    let ctx = level.logic();
+    let origin = match face {
+        Some(f) => {
+            let o = f.offset();
+            at(clicked, o.0, o.1, o.2)
+        }
+        None => clicked,
+    };
+    if !full_water(level, origin) {
+        return false;
+    }
+    let r = |n: u64| (crate::util::random_u64() % n) as i32;
+    let env = &level.context().commands.env;
+    let underwater = env.tag("minecraft:block", "minecraft:underwater_bonemeals");
+    let walls = env.tag("minecraft:block", "minecraft:wall_corals");
+    let server = level.context();
+    let warm_at = |q: Position| {
+        server
+            .world
+            .biome(q, &server.data.blocks)
+            .and_then(|b| server.world.biome_name(b))
+            == Some("minecraft:warm_ocean")
+    };
+    'tries: for i in 0..128 {
+        let mut q = origin;
+        let mut plant = "minecraft:seagrass".to_owned();
+        for _ in 0..i / 16 {
+            q = at(q, r(3) - 1, (r(3) - 1) * r(3) / 2, r(3) - 1);
+            if full_block(ctx, level.block(to_pos(q))) {
+                continue 'tries;
+            }
+        }
+        let mut facing = None;
+        if warm_at(q) {
+            if i == 0 && face.is_some_and(Dir::is_horizontal) {
+                if !walls.is_empty() {
+                    plant = walls[r(walls.len() as u64) as usize].clone();
+                    facing = face;
+                }
+            } else if r(4) == 0 && !underwater.is_empty() {
+                plant = underwater[r(underwater.len() as u64) as usize].clone();
+                facing = Some(Dir::HORIZONTAL[r(4) as usize]);
+            }
+        }
+        let Some(mut state) = ctx.shapes.default_state(&plant) else {
+            continue;
+        };
+        // A wall fan turns until it has something to hang on.
+        if ctx.shapes.property(state, "facing").is_some() {
+            let mut dir = facing.unwrap_or(Dir::North);
+            for _ in 0..5 {
+                state = ctx.shapes.with(state, "facing", dir.name());
+                if survives(level, q, state) {
+                    break;
+                }
+                dir = Dir::HORIZONTAL[r(4) as usize];
+            }
+        }
+        if !survives(level, q, state) {
+            continue;
+        }
+        if full_water(level, q) {
+            level.set_block(q, state);
+        } else if name_at(level, q) == "seagrass" && r(10) == 0 {
+            let here = level.block(to_pos(q));
+            let _ = bone_meal(level, q, here, "seagrass", crate::util::random_u64());
+        }
+    }
+    true
+}
+
 /// Bone meal on the block `state` named `name` at `p`; `None` if this
 /// module does not know the block.
 pub fn bone_meal(
@@ -466,6 +619,24 @@ pub fn bone_meal(
             let air = ctx.shapes.air();
             level.set_block(at(base, 0, 1, 0), air);
             dripleaf(level, base, &facing, 2 + (roll % 4) as i32)
+        }
+        "sea_pickle" => sea_pickle(level, p, state),
+        "pitcher_crop" => {
+            // Either half takes the meal for the crop: one stage, if it
+            // is light enough and the upper half has room.
+            let base = if prop("half").as_deref() == Some("upper") {
+                at(p, 0, -1, 0)
+            } else {
+                p
+            };
+            let lower = level.block(to_pos(base));
+            if name_at(level, base) != "pitcher_crop"
+                || ctx.shapes.property(lower, "age") == Some("4")
+            {
+                return Some(false);
+            }
+            mc_tick::random::pitcher_grow(level, ctx, to_pos(base), lower, 1);
+            true
         }
         "bamboo_sapling" => {
             if !is_air(level, up) {

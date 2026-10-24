@@ -1786,7 +1786,10 @@ fn tick(r: &mut Run, rest: &[&str]) -> Result<i32> {
         ["query"] => {
             let mspt = 1000.0 / r.tick.rate;
             let average = r.tick.smoothed_ms;
-            let status = if r.tick.frozen {
+            let sprinting = r.tick.sprint.is_some();
+            let status = if sprinting {
+                "commands.tick.status.sprinting"
+            } else if r.tick.frozen {
                 "commands.tick.status.frozen"
             } else if average > mspt {
                 "commands.tick.status.lagging"
@@ -1794,17 +1797,23 @@ fn tick(r: &mut Run, rest: &[&str]) -> Result<i32> {
                 "commands.tick.status.running"
             };
             r.success(translate(status, Vec::new()), false);
-            r.success(
+            let rate = Tag::String(format!("{:.1}", r.tick.rate));
+            let message = if sprinting {
+                translate(
+                    "commands.tick.query.rate.sprinting",
+                    vec![rate, Tag::String(format!("{average:.1}"))],
+                )
+            } else {
                 translate(
                     "commands.tick.query.rate.running",
                     vec![
-                        Tag::String(format!("{:.1}", r.tick.rate)),
+                        rate,
                         Tag::String(format!("{average:.1}")),
                         Tag::String(format!("{mspt:.1}")),
                     ],
-                ),
-                false,
-            );
+                )
+            };
+            r.success(message, false);
             let mut times = r.tick.times;
             times.sort_unstable();
             let ms = |i: usize| Tag::String(format!("{:.1}", times[i] as f64 / 1.0e6));
@@ -1838,6 +1847,10 @@ fn tick(r: &mut Run, rest: &[&str]) -> Result<i32> {
         }
         ["freeze"] | ["unfreeze"] => {
             let freeze = rest[0] == "freeze";
+            // Freezing or unfreezing ends a sprint.
+            if let Some(report) = r.tick.finish_sprint() {
+                r.out.events.push(Event::Chat(report));
+            }
             r.tick.frozen = freeze;
             if !freeze {
                 r.tick.steps = 0;
@@ -1873,6 +1886,34 @@ fn tick(r: &mut Run, rest: &[&str]) -> Result<i32> {
             r.tick.steps = 0;
             r.success(
                 translate("commands.tick.step.stop.success", Vec::new()),
+                true,
+            );
+            Ok(1)
+        }
+        ["sprint", "stop"] => {
+            let Some(report) = r.tick.finish_sprint() else {
+                return Err(err("commands.tick.sprint.stop.fail", Vec::new()));
+            };
+            r.out.events.push(Event::Chat(report));
+            r.out.events.push(state(r.tick));
+            r.success(
+                translate("commands.tick.sprint.stop.success", Vec::new()),
+                true,
+            );
+            Ok(1)
+        }
+        ["sprint", "time"] => {
+            let ticks = r.int("time").unwrap_or(1).max(1) as u32;
+            let replaced = r.tick.start_sprint(ticks);
+            r.out.events.push(state(r.tick));
+            if replaced {
+                r.success(
+                    translate("commands.tick.sprint.stop.success", Vec::new()),
+                    true,
+                );
+            }
+            r.success(
+                translate("commands.tick.status.sprinting", Vec::new()),
                 true,
             );
             Ok(1)

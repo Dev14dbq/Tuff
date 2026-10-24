@@ -203,8 +203,13 @@ pub fn first_solid(
 }
 
 /// What a flying thing runs into first.
+#[derive(Clone, Copy, Debug)]
 pub enum Strike {
-    Block,
+    /// A block: its position and the face hit (0 down .. 5 east).
+    Block {
+        cell: [i32; 3],
+        face: usize,
+    },
     Player(usize),
     Target(usize),
 }
@@ -220,7 +225,8 @@ pub fn trace(
     ignore: Option<u128>,
     skip: &[i32],
 ) -> Option<(f64, Strike)> {
-    let mut best = first_solid(t.ctx, from, to).map(|(f, _, _)| (f, Strike::Block));
+    let mut best =
+        first_solid(t.ctx, from, to).map(|(f, cell, face)| (f, Strike::Block { cell, face }));
     let mut consider = |frac: f64, strike: Strike| {
         if best.as_ref().is_none_or(|(b, _)| frac < *b) {
             best = Some((frac, strike));
@@ -243,6 +249,51 @@ pub fn trace(
         }
     }
     best
+}
+
+/// The signal a projectile that stopped at `point` on the `face` of the
+/// block at `cell` gives a target block there: 15 from the middle of the
+/// face down to 1 at its edge (minecraft.wiki, "Target").
+pub fn target_strength(cell: [i32; 3], face: usize, point: [f64; 3]) -> u8 {
+    let off = |i: usize| {
+        let v = point[i] - f64::from(cell[i]);
+        (v - v.floor() - 0.5).abs()
+    };
+    let far = match face {
+        0 | 1 => off(0).max(off(2)),
+        2 | 3 => off(0).max(off(1)),
+        _ => off(1).max(off(2)),
+    };
+    let share = ((0.5 - far) / 0.5).clamp(0.0, 1.0);
+    ((15.0 * share).ceil() as u8).max(1)
+}
+
+/// A projectile stopped at `point` against a block: a target block gives a
+/// signal for 8 ticks (20 for an arrow or a trident, `long`).
+pub fn hit_block(ctx: &ServerContext, strike: &Strike, point: [f64; 3], long: bool) {
+    let Strike::Block { cell, face } = *strike else {
+        return;
+    };
+    if block_at(ctx, cell).and_then(|s| ctx.data.blocks.block_name(s)) != Some("minecraft:target") {
+        return;
+    }
+    let mut level = crate::level::WorldLevel::new(ctx);
+    let logic = level.logic();
+    let strength = target_strength(cell, face, point);
+    let hold = if long { 20 } else { 8 };
+    mc_tick::redstone::target_hit(
+        &mut level,
+        logic,
+        crate::level::to_pos(Position::new(cell[0], cell[1], cell[2])),
+        strength,
+        hold,
+    );
+    let changes = level.into_changes();
+    if !changes.is_empty() {
+        let _ = ctx
+            .events
+            .send(crate::context::Event::BlocksChanged { by: 0, changes });
+    }
 }
 
 /// The name of a player, for death messages.

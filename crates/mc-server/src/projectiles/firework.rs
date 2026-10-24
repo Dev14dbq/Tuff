@@ -142,7 +142,8 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 ];
                 // A block stops a rocket without stars; anything else
                 // sets it off.
-                burst = !matches!(strike, Strike::Block) || stars > 0;
+                hits::hit_block(t.ctx, &strike, e.pos, false);
+                burst = !matches!(strike, Strike::Block { .. }) || stars > 0;
             }
         }
     }

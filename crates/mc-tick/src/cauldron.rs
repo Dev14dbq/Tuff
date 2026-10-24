@@ -73,6 +73,33 @@ pub fn precipitation(level: &mut dyn Level, ctx: Ctx, p: BlockPos, rain: bool, r
     }
 }
 
+/// A burning entity whose feet are at `y` and whose box reaches up to `top`
+/// is in the block `p`: in a water or powder snow cauldron whose contents it
+/// touches (below the surface, above the floor) the fire goes out and the
+/// cauldron loses a layer (powder snow turns to water on the way). Says
+/// whether it did.
+pub fn put_out(level: &mut dyn Level, ctx: Ctx, p: BlockPos, y: f64, top: f64) -> bool {
+    let here = level.block(p);
+    let kind = name(ctx, here);
+    if kind != "minecraft:water_cauldron" && kind != "minecraft:powder_snow_cauldron" {
+        return false;
+    }
+    let l = layers(ctx, here);
+    let floor = f64::from(p.y);
+    if y > floor + (6.0 + 3.0 * f64::from(l)) / 16.0 || top <= floor + 0.25 {
+        return false;
+    }
+    let new = if l <= 1 {
+        ctx.shapes.default_state("minecraft:cauldron")
+    } else {
+        state(ctx, "minecraft:water_cauldron", Some(l - 1))
+    };
+    if let Some(new) = new {
+        set_block(level, ctx, p, new, Flags::ALL);
+    }
+    true
+}
+
 fn is_down_dripstone(ctx: Ctx, state: u32) -> bool {
     name(ctx, state) == "minecraft:pointed_dripstone"
         && ctx.shapes.property(state, "vertical_direction") == Some("down")
