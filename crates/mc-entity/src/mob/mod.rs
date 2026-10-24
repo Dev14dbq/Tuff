@@ -85,8 +85,6 @@ pub struct Target {
     /// Who last hurt them, and whom they last hit (entity ids), for pets.
     pub hurt_by: Option<i32>,
     pub hit: Option<i32>,
-    /// Has a bad name with the villagers: golems go for them.
-    pub notorious: bool,
 }
 
 impl Target {
@@ -105,7 +103,6 @@ impl Target {
             pitch: 0.0,
             hurt_by: None,
             hit: None,
-            notorious: false,
         }
     }
 }
@@ -313,6 +310,8 @@ pub enum MobEvent {
     },
     /// Entity event for clients (`EntityEvent` status).
     Status(u8),
+    /// The baby villager with this id took the poppy an iron golem held out.
+    FlowerTaken(i32),
     /// The mob took damage not from an entity (burning, falling).
     Hurt {
         amount: f32,
@@ -420,6 +419,10 @@ pub struct Quirks {
     pub lifetime: i32,
     /// Iron golem: built by a player (it never goes for players).
     pub player_made: bool,
+    /// Iron golem: the players some villager near it (10 blocks sideways,
+    /// 8 up and down) holds a reputation of -100 or less of; it goes for
+    /// them. Set by the server, not saved.
+    pub scorned: Vec<u128>,
     /// Snow golem: still wears its pumpkin.
     pub pumpkin: bool,
     // Land animals (Cursor)
@@ -507,6 +510,8 @@ pub struct Mob {
     /// Ticks left of a conversion (zombie to drowned, zombie villager
     /// cured, skeleton to stray), or -1.
     pub conversion: i32,
+    /// The player who gave a zombie villager the golden apple.
+    pub curer: Option<u128>,
     /// Ticks spent with the head under water (zombies), or in powder snow.
     pub soaked: i32,
     /// Slimes, magma cubes and phantoms grow in size.
@@ -655,6 +660,7 @@ impl Mob {
             can_pick_up: false,
             anger: 0,
             conversion: -1,
+            curer: None,
             soaked: 0,
             size: 1,
             carried: None,

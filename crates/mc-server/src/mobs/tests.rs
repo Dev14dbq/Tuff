@@ -4,6 +4,7 @@ use crate::combat::Blow;
 mod critters;
 // Land animals (Cursor)
 mod land;
+mod villages;
 
 #[test]
 fn darkness_follows_the_day() {

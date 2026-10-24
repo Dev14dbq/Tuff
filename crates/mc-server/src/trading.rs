@@ -11,7 +11,7 @@
 //! (`spawn_delay`, `spawn_chance`), where 26.1 moved them out of level.dat.
 //! `WanderingTraderId` was removed in that change.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -47,6 +47,23 @@ const WORKSTATIONS: &[(&str, &str)] = &[
     ("minecraft:loom", "shepherd"),
     ("minecraft:smithing_table", "toolsmith"),
     ("minecraft:grindstone", "weaponsmith"),
+];
+
+/// The professions workstations give.
+pub const PROFESSIONS: &[&str] = &[
+    "armorer",
+    "butcher",
+    "cartographer",
+    "cleric",
+    "farmer",
+    "fisherman",
+    "fletcher",
+    "leatherworker",
+    "librarian",
+    "mason",
+    "shepherd",
+    "toolsmith",
+    "weaponsmith",
 ];
 
 /// The profession a workstation block gives.
@@ -400,26 +417,18 @@ pub fn villager_data(ctx: &ServerContext, entity_id: i32, m: &Merchant) -> play:
     };
     play::SetEntityData {
         entity_id,
-        entries: vec![(
-            play::metadata::VILLAGER_DATA,
-            play::MetadataValue::VillagerData(
-                id("minecraft:villager_type", &m.variant),
-                profession,
-                m.level,
+        entries: vec![
+            (16, play::MetadataValue::Boolean(m.is_baby())),
+            (
+                play::metadata::VILLAGER_DATA,
+                play::MetadataValue::VillagerData(
+                    id("minecraft:villager_type", &m.variant),
+                    profession,
+                    m.level,
+                ),
             ),
-        )],
+        ],
     }
-}
-
-/// A workstation's profession if the block at `at` is one.
-fn workstation_at(
-    ctx: &ServerContext,
-    level: &mut crate::level::WorldLevel,
-    at: (i32, i32, i32),
-) -> Option<&'static str> {
-    use mc_tick::Level as _;
-    let state = level.block(mc_tick::BlockPos::new(at.0, at.1, at.2));
-    profession_for(ctx.data.blocks.block_name(state)?)
 }
 
 /// Hero of the Village makes villagers' prices drop.
@@ -429,21 +438,26 @@ fn hero_level(ctx: &ServerContext, uuid: u128) -> Option<i32> {
     vitals.get(&uuid)?.effects.get(kind).map(|i| i.amplifier)
 }
 
-/// Sets the discounts a player gets from this merchant.
+/// Sets the discounts a player gets from this merchant: Hero of the Village,
+/// and the villager's reputation of the player (each point moves the price
+/// by the trade's multiplier; a bad name makes it dearer).
 fn refresh_prices(ctx: &ServerContext, uuid: u128, m: &mut Merchant) {
     let hero = if m.wandering {
         None
     } else {
         hero_level(ctx, uuid)
     };
+    let reputation = m.gossip.reputation(uuid);
     for offer in &mut m.offers {
-        offer.special_price = match hero {
+        let hero = match hero {
             Some(amplifier) => {
                 let rate = 0.3 + 0.0625 * amplifier as f32;
                 -((rate * offer.cost_a.count as f32).floor() as i32).max(1)
             }
             None => 0,
         };
+        let fame = -(reputation as f32 * offer.price_multiplier).floor() as i32;
+        offer.special_price = hero + fame;
     }
 }
 
@@ -508,7 +522,8 @@ pub fn is_merchant(ctx: &ServerContext, entity_id: i32) -> bool {
 /// trade.
 pub fn open(ctx: &ServerContext, uuid: u128, entity_id: i32) -> Option<Snapshot> {
     with_merchant(ctx, entity_id, |m| {
-        if m.offers.is_empty() {
+        // A baby has nothing to sell.
+        if m.offers.is_empty() || m.is_baby() {
             return None;
         }
         refresh_prices(ctx, uuid, m);
@@ -615,6 +630,9 @@ pub fn complete(
         offer.uses += times;
         let (xp, reward) = (offer.xp * times, offer.reward_xp);
         if !m.wandering {
+            for _ in 0..times {
+                m.gossip.happen(uuid, mc_entity::gossip::Kind::Trading);
+            }
             m.xp += xp;
             if m.should_level_up() && m.level_up_in.is_none() {
                 m.level_up_in = Some(LEVEL_UP_DELAY);
@@ -676,13 +694,7 @@ pub fn offers_packet(window: i32, s: &Snapshot) -> play::MerchantOffers {
 }
 
 /// One tick of a merchant; the metadata to send if its look changed.
-pub fn tick(
-    ctx: &ServerContext,
-    level: &mut crate::level::WorldLevel,
-    entity: &mut Entity,
-    claimed: &mut HashSet<(i32, i32, i32)>,
-    now: i64,
-) -> Option<play::SetEntityData> {
+pub fn tick(ctx: &ServerContext, entity: &mut Entity, now: i64) -> Option<play::SetEntityData> {
     let (id, age) = (entity.id, entity.age);
     let origin = entity.block_pos();
     let Kind::Merchant(m) = &mut entity.kind else {
@@ -710,6 +722,15 @@ pub fn tick(
             }
         }
     }
+    // Babies grow up, grown villagers wait to breed again.
+    if m.age < 0 {
+        m.age += 1;
+        if m.age == 0 {
+            changed = true;
+        }
+    } else if m.age > 0 {
+        m.age -= 1;
+    }
     // The rest is slow, and spread over the villagers.
     if (age + id.unsigned_abs()) % 20 == 0 {
         // Players who left without closing the window.
@@ -721,12 +742,13 @@ pub fn tick(
             Some(profession) => {
                 let still = m
                     .job_site
-                    .and_then(|at| workstation_at(ctx, level, at))
+                    .and_then(|(x, y, z)| crate::tick::lock(&ctx.poi).get([x, y, z]))
+                    .and_then(|r| crate::poi::profession_of(r.kind))
                     .is_some_and(|p| p == profession);
                 if !still && m.xp == 0 && m.level == 1 {
                     // Never traded: the job goes with the workstation.
-                    if let Some(at) = m.job_site.take() {
-                        claimed.remove(&at);
+                    if let Some((x, y, z)) = m.job_site.take() {
+                        crate::poi::release(ctx, [x, y, z]);
                     }
                     m.profession = None;
                     m.offers.clear();
@@ -739,9 +761,8 @@ pub fn tick(
                     }
                 }
             }
-            None if (age + id.unsigned_abs()) % 100 == 0 => {
-                if let Some((at, profession)) = find_job(ctx, level, origin, claimed) {
-                    claimed.insert(at);
+            None if (age + id.unsigned_abs()) % 100 == 0 && !m.is_baby() => {
+                if let Some((at, profession)) = find_job(ctx, origin) {
                     m.job_site = Some(at);
                     m.profession = Some(profession.to_owned());
                     m.offers = ctx.trades.level_offers(profession, m.level, &m.variant);
@@ -754,40 +775,18 @@ pub fn tick(
     changed.then(|| villager_data(ctx, id, m))
 }
 
-/// The nearest free workstation around `origin`.
+/// The nearest free workstation around `origin`, its ticket taken.
 fn find_job(
     ctx: &ServerContext,
-    level: &mut crate::level::WorldLevel,
     origin: (i32, i32, i32),
-    claimed: &HashSet<(i32, i32, i32)>,
 ) -> Option<((i32, i32, i32), &'static str)> {
-    let mut best: Option<(i32, (i32, i32, i32), &'static str)> = None;
-    for dy in -SEARCH_HEIGHT..=SEARCH_HEIGHT {
-        for dz in -SEARCH_RADIUS..=SEARCH_RADIUS {
-            for dx in -SEARCH_RADIUS..=SEARCH_RADIUS {
-                let at = (origin.0 + dx, origin.1 + dy, origin.2 + dz);
-                let distance = dx * dx + dy * dy + dz * dz;
-                if best.is_some_and(|(d, ..)| d <= distance) || claimed.contains(&at) {
-                    continue;
-                }
-                if let Some(profession) = workstation_at(ctx, level, at) {
-                    best = Some((distance, at, profession));
-                }
-            }
-        }
-    }
-    best.map(|(_, at, p)| (at, p))
-}
-
-/// Job sites villagers have taken.
-pub fn claimed_sites(entities: &[Entity]) -> HashSet<(i32, i32, i32)> {
-    entities
-        .iter()
-        .filter_map(|e| match &e.kind {
-            Kind::Merchant(m) => m.job_site,
-            _ => None,
-        })
-        .collect()
+    let (at, kind) = crate::tick::lock(&ctx.poi).take_nearest(
+        [origin.0, origin.1, origin.2],
+        SEARCH_RADIUS,
+        SEARCH_HEIGHT,
+        |k| crate::poi::profession_of(k).is_some(),
+    )?;
+    Some(((at[0], at[1], at[2]), crate::poi::profession_of(kind)?))
 }
 
 /// The wandering trader's visits (minecraft.wiki, "Wandering Trader",
@@ -1018,6 +1017,12 @@ mod tests {
         ServerContext::new(crate::Config::new(dir), data).ok()
     }
 
+    /// One tick of the villager, the points of interest caught up first.
+    fn settle(ctx: &ServerContext, e: &mut Entity, now: i64) {
+        crate::poi::sync(ctx);
+        tick(ctx, e, now);
+    }
+
     fn villager(ctx: &ServerContext) -> Entity {
         new_merchant(ctx, "minecraft:villager", [0.5, -60.0, 0.5]).expect("villager")
     }
@@ -1067,31 +1072,78 @@ mod tests {
         let mut level = WorldLevel::new(&ctx);
         level.set_block(mc_protocol::Position::new(3, -60, 2), composter);
         let mut e = villager(&ctx);
-        let mut claimed = HashSet::new();
         for _ in 0..200 {
             e.age += 1;
-            tick(&ctx, &mut level, &mut e, &mut claimed, 3000);
+            settle(&ctx, &mut e, 3000);
         }
         let m = merchant(&mut e);
         assert_eq!(m.profession.as_deref(), Some("farmer"));
         assert_eq!(m.job_site, Some((3, -60, 2)));
         assert_eq!(m.offers.len(), 2);
-        assert!(claimed.contains(&(3, -60, 2)));
+        assert!(!crate::poi::claim(&ctx, [3, -60, 2]));
         // A second villager finds it taken.
         let mut other = villager(&ctx);
         for _ in 0..200 {
             other.age += 1;
-            tick(&ctx, &mut level, &mut other, &mut claimed, 3000);
+            settle(&ctx, &mut other, 3000);
         }
         assert_eq!(merchant(&mut other).profession, None);
         // The workstation goes; a villager that never traded loses the job.
         level.set_block(mc_protocol::Position::new(3, -60, 2), 0);
         for _ in 0..40 {
             e.age += 1;
-            tick(&ctx, &mut level, &mut e, &mut claimed, 3000);
+            settle(&ctx, &mut e, 3000);
         }
         let m = merchant(&mut e);
         assert_eq!((m.profession.clone(), m.offers.len()), (None, 0));
+    }
+
+    #[test]
+    fn prices_follow_what_the_villager_thinks_of_the_player() {
+        use mc_entity::gossip::Kind as Gossip;
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut e = villager(&ctx);
+        let m = merchant(&mut e);
+        m.offers = ctx.trades.level_offers("farmer", 1, "minecraft:plains");
+        let (cheap, dear) = (m.offers[0].clone(), m.offers[1].clone());
+        assert!(cheap.price_multiplier > 0.0 && dear.price_multiplier > 0.0);
+        // A stranger pays the plain price.
+        refresh_prices(&ctx, 1, m);
+        assert!(m.offers.iter().all(|o| o.special_price == 0));
+        // Cured and fond: 5 * 20 + 25 + 25 = 150 points of good name.
+        m.gossip.happen(1, Gossip::MajorPositive);
+        m.gossip.happen(1, Gossip::MinorPositive);
+        for _ in 0..7 {
+            m.gossip.happen(1, Gossip::Trading);
+        }
+        let name = m.gossip.reputation(1);
+        assert_eq!(name, 100 + 25 + 25);
+        refresh_prices(&ctx, 1, m);
+        for (o, base) in m.offers.iter().zip([&cheap, &dear]) {
+            let off = (name as f32 * base.price_multiplier).floor() as i32;
+            assert_eq!(o.special_price, -off);
+            let plain = base.cost_a.count;
+            assert_eq!(o.price_a(64), (plain - off).clamp(1, 64));
+        }
+        // Somebody else is as much a stranger as before.
+        refresh_prices(&ctx, 2, m);
+        assert!(m.offers.iter().all(|o| o.special_price == 0));
+        // A bad name makes everything dearer, rounding up.
+        for _ in 0..3 {
+            m.gossip.happen(2, Gossip::MajorNegative);
+        }
+        m.gossip.happen(2, Gossip::MinorNegative);
+        let name = m.gossip.reputation(2);
+        assert_eq!(name, -5 * 75 - 25);
+        refresh_prices(&ctx, 2, m);
+        for (o, base) in m.offers.iter().zip([&cheap, &dear]) {
+            let more = -(name as f32 * base.price_multiplier).floor() as i32;
+            assert!(more > 0);
+            assert_eq!(o.special_price, more);
+        }
     }
 
     #[test]
@@ -1108,10 +1160,9 @@ mod tests {
         let mut level = WorldLevel::new(&ctx);
         level.set_block(mc_protocol::Position::new(3, -60, 2), composter);
         let mut e = villager(&ctx);
-        let mut claimed = HashSet::new();
         for _ in 0..100 {
             e.age += 1;
-            tick(&ctx, &mut level, &mut e, &mut claimed, 3000);
+            settle(&ctx, &mut e, 3000);
         }
         let id = e.id;
         merchant(&mut e).offers[0].xp = 10;
@@ -1121,8 +1172,15 @@ mod tests {
         assert_eq!(snap.xp, 10);
         let mut e = ctx.entities.lock().unwrap().pop().unwrap();
         assert_eq!(merchant(&mut e).level_up_in, Some(LEVEL_UP_DELAY));
+        // The villager remembers the trade.
+        assert_eq!(
+            merchant(&mut e)
+                .gossip
+                .value(1, mc_entity::gossip::Kind::Trading),
+            4
+        );
         for _ in 0..LEVEL_UP_DELAY {
-            tick(&ctx, &mut level, &mut e, &mut claimed, 3000);
+            settle(&ctx, &mut e, 3000);
         }
         let m = merchant(&mut e);
         assert_eq!(m.level, 2);
@@ -1130,7 +1188,7 @@ mod tests {
         // Restocking in the morning resets uses and raises demand.
         m.offers[0].uses = m.offers[0].max_uses;
         e.age = 20 - e.id.unsigned_abs() % 20;
-        tick(&ctx, &mut level, &mut e, &mut claimed, 3000);
+        settle(&ctx, &mut e, 3000);
         let m = merchant(&mut e);
         assert_eq!(m.offers[0].uses, 0);
         assert!(m.offers[0].demand > 0);

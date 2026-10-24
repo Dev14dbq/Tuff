@@ -26,6 +26,7 @@ pub mod ride;
 mod spawn;
 mod spawner;
 mod terrain;
+pub mod village;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -91,6 +92,10 @@ enum Pending {
         by: Actor,
         hand: i32,
     },
+    /// A bell rang.
+    Bell {
+        at: mc_protocol::Position,
+    },
     /// Damage from something other than a blow (Thorns).
     Harm {
         target: i32,
@@ -116,13 +121,10 @@ pub struct MobState {
     pub trial_configs: Mutex<HashMap<String, crate::trials::Config>>,
     /// Health of villagers and wandering traders (full when not listed).
     villagers: Mutex<HashMap<i32, hurt::MerchantHealth>>,
-    /// What the villagers think of each player, below zero when bad.
-    standing: Mutex<HashMap<u128, i32>>,
+    /// Villagers killed by a player: who and where, until the tick tells
+    /// the villagers that saw (see [`village::witnesses`]).
+    murders: Mutex<Vec<(usize, u128, [f64; 3])>>,
 }
-
-/// Standing at or below which iron golems go for a player (the wiki's
-/// reputation of -100).
-const NOTORIOUS: i32 = -100;
 
 impl MobState {
     /// A player hit the entity with this id with `blow` (nothing happens
@@ -156,29 +158,20 @@ impl MobState {
             .push(Pending::Use { target, by, hand });
     }
 
-    /// The player did something the villagers hold against them (hitting
-    /// one costs 25, killing one 125); iron golems go for the notorious.
-    pub fn offend(&self, player: u128, amount: i32) {
-        let mut all = lock(&self.standing);
-        let s = all.entry(player).or_insert(0);
-        *s = (*s - amount).max(-200);
+    /// The player killed a villager at `at`: the villagers that saw it
+    /// remember (hitting one is noted by the villager itself, in
+    /// `hurt::merchant_hurt`; what each remembers is in
+    /// [`mc_entity::gossip`]).
+    pub fn offend(&self, dim: usize, player: u128, at: [f64; 3]) {
+        lock(&self.murders).push((dim, player, at));
     }
 
-    /// Whether the villagers think so badly of the player that golems go
-    /// for them.
-    pub fn notorious(&self, player: u128) -> bool {
-        lock(&self.standing)
-            .get(&player)
-            .is_some_and(|&s| s <= NOTORIOUS)
-    }
-
-    /// A day passed: what the villagers hold against players fades by 20.
-    pub fn forgive(&self) {
-        let mut all = lock(&self.standing);
-        for s in all.values_mut() {
-            *s = (*s + 20).min(0);
-        }
-        all.retain(|_, s| *s != 0);
+    /// A bell at `at` rang.
+    pub fn bell(&self, dim: usize, at: mc_protocol::Position) {
+        lock(&self.pending)
+            .entry(dim)
+            .or_default()
+            .push(Pending::Bell { at });
     }
 
     /// Health of the villager or wandering trader with this id.
@@ -348,7 +341,6 @@ fn players(ctx: &ServerContext) -> Vec<Target> {
     drop((vitals, inventories, players));
     for t in &mut out {
         (t.hurt_by, t.hit) = crate::combat::recent(ctx, t.uuid);
-        t.notorious = ctx.mobs.notorious(t.uuid);
     }
     out
 }
@@ -392,13 +384,13 @@ fn others(entities: &[Entity]) -> Vec<Other> {
                     alive: m.dying.is_none() && !m.is_dead() && !e.removed,
                 })
             }
-            Kind::Merchant(_) => Some(Other {
+            Kind::Merchant(m) => Some(Other {
                 id: e.id,
                 species: None,
                 pos: e.pos,
-                width: 0.6,
-                height: 1.95,
-                baby: false,
+                width: e.size().0,
+                height: e.size().1,
+                baby: m.is_baby(),
                 in_love: false,
                 owner: None,
                 alive: !e.removed,
@@ -483,6 +475,7 @@ fn apply_pending(ctx: &ServerContext, entities: &mut [Entity], pending: Vec<Pend
                 }
                 hurt::player_blow(ctx, entities, i, &by, &blow, now);
             }
+            Pending::Bell { at } => village::ring(ctx, entities, at, now),
             Pending::Harm {
                 target,
                 amount,
@@ -555,9 +548,8 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     let mut out = Outcome::default();
 
     apply_pending(ctx, &mut entities, pending, now);
-    if now % 24000 == 0 {
-        ctx.mobs.forgive();
-    }
+    village::witnesses(ctx, &mut entities);
+    village::scorn(&mut entities, now);
     crate::decor::leash::tell_mobs(ctx, &mut entities);
     if now % 20 == 0 {
         blocks::close_idle(ctx, level, &entities, &targets);
@@ -735,6 +727,8 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     let spawned = spawn::tick(ctx, &ground, &mut entities, &targets, now, day, difficulty);
     out.fresh.extend(spawned);
     golems::villagers(ctx, &ground, &mut entities, now, &mut out.fresh);
+    village::claims(ctx, &mut entities, now);
+    village::tend(ctx, &ground, &mut entities, now, &mut out.fresh);
     let made = spawner::tick(ctx, &ground, &entities, &targets, difficulty);
     out.fresh.extend(made);
     let made = crate::trials::tick(ctx, &ground, &entities, &targets, difficulty, now);
@@ -755,6 +749,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             out.removed.push(e.id);
         }
     }
+    village::release_removed(ctx, &mut entities);
     entities.retain(|e| !e.removed);
     for e in &out.fresh {
         let _ = ctx.events.send(Event::EntitySpawned(e.clone()));
@@ -860,6 +855,7 @@ fn handle(
             }
         }
         MobEvent::Cured => hurt::cure(ctx, &mut entities[i]),
+        MobEvent::FlowerTaken(child) => village::flower_taken(ctx, child),
         MobEvent::CaravanJoin { head } | MobEvent::CaravanLeave { head } => {
             let join = matches!(ev, MobEvent::CaravanJoin { .. });
             if let Some(Kind::Mob(h)) = entities

@@ -448,7 +448,12 @@ fn merchant(ctx: &ServerContext, e: &Entity, m: &Merchant, c: &mut Compound) {
         &[("max_health", 20.0), ("movement_speed", 0.5)],
     );
     let mut memories = Compound::new();
-    if let Some((x, y, z)) = m.job_site {
+    for (name, site) in [
+        ("minecraft:home", m.home),
+        ("minecraft:meeting_point", m.meeting),
+        ("minecraft:job_site", m.job_site),
+    ] {
+        let Some((x, y, z)) = site else { continue };
         let mut at = Compound::new();
         at.insert("pos", Tag::IntArray(vec![x, y, z]));
         at.insert(
@@ -457,7 +462,7 @@ fn merchant(ctx: &ServerContext, e: &Entity, m: &Merchant, c: &mut Compound) {
         );
         let mut memory = Compound::new();
         memory.insert("value", Tag::Compound(at));
-        memories.insert("minecraft:job_site", Tag::Compound(memory));
+        memories.insert(name, Tag::Compound(memory));
     }
     let mut brain = Compound::new();
     brain.insert("memories", Tag::Compound(memories));
@@ -507,6 +512,26 @@ fn merchant(ctx: &ServerContext, e: &Entity, m: &Merchant, c: &mut Compound) {
     c.insert("Xp", Tag::Int(m.xp));
     c.insert("LastRestock", Tag::Long(m.last_restock));
     c.insert("RestocksToday", Tag::Int(m.restocks_today));
+    c.insert("Age", Tag::Int(m.age));
+    c.insert("FoodLevel", Tag::Byte(m.food.clamp(0, 127) as i8));
+    let inventory: Vec<Tag> = m
+        .pantry
+        .iter()
+        .filter_map(|&cost| cost_tag(ctx, cost))
+        .collect();
+    c.insert("Inventory", Tag::List(inventory));
+    let gossips: Vec<Tag> = m
+        .gossip
+        .entries()
+        .map(|(about, kind, value)| {
+            let mut g = Compound::new();
+            g.insert("Target", uuid_tag(about));
+            g.insert("Type", Tag::String(kind.name().to_owned()));
+            g.insert("Value", Tag::Int(value));
+            Tag::Compound(g)
+        })
+        .collect();
+    c.insert("Gossips", Tag::List(gossips));
 }
 
 /// `potion_contents` of a list of effects and a colour.
@@ -1005,13 +1030,46 @@ fn read_merchant(ctx: &ServerContext, c: &Compound, m: &mut Merchant) {
     }
     m.last_restock = long(c, "LastRestock").unwrap_or(0);
     m.restocks_today = int(c, "RestocksToday").unwrap_or(0);
+    m.age = int(c, "Age").unwrap_or(0);
+    m.food = int(c, "FoodLevel").unwrap_or(0);
+    if let Some(Tag::List(list)) = c.get("Inventory") {
+        m.pantry = list
+            .iter()
+            .filter_map(|t| stack_of(ctx, Some(t)))
+            .map(|s| Cost {
+                item: s.item,
+                count: s.count,
+            })
+            .collect();
+    }
+    if let Some(Tag::List(list)) = c.get("Gossips") {
+        for g in list {
+            let Tag::Compound(g) = g else { continue };
+            let (Some(about), Some(Tag::String(kind)), Some(value)) =
+                (uuid_of(g.get("Target")), g.get("Type"), int(g, "Value"))
+            else {
+                continue;
+            };
+            if let Some(kind) = mc_entity::gossip::Kind::from_name(kind) {
+                m.gossip.add(about, kind, value);
+            }
+        }
+    }
     if let Some(Tag::Compound(brain)) = c.get("Brain")
         && let Some(Tag::Compound(mem)) = brain.get("memories")
-        && let Some(Tag::Compound(site)) = mem.get("minecraft:job_site")
-        && let Some(Tag::Compound(value)) = site.get("value")
-        && let Some(p) = int3(value, "pos")
     {
-        m.job_site = Some((p[0], p[1], p[2]));
+        let site = |name: &str| {
+            let Some(Tag::Compound(site)) = mem.get(name) else {
+                return None;
+            };
+            let Some(Tag::Compound(value)) = site.get("value") else {
+                return None;
+            };
+            int3(value, "pos").map(|p| (p[0], p[1], p[2]))
+        };
+        m.job_site = site("minecraft:job_site");
+        m.home = site("minecraft:home");
+        m.meeting = site("minecraft:meeting_point");
     }
     let Some(Tag::Compound(offers)) = c.get("Offers") else {
         return;

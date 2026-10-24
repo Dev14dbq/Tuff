@@ -31,10 +31,14 @@ pub enum Op {
 pub struct Env<'a> {
     /// Night: time for bed.
     pub night: bool,
+    /// The afternoon (9000 to 12000): villagers meet at their bell.
+    pub gather: bool,
     /// Where zombies and other monsters it fears are.
     pub threats: &'a [[f64; 3]],
 }
 
+/// Blocks from the bell it is satisfied to be at in the afternoon.
+const MEET: f64 = 4.0;
 /// Blocks within which it sees a monster and runs.
 const FEAR: f64 = 8.0;
 /// Where a lying villager's body sits on a bed (its height).
@@ -60,6 +64,11 @@ pub struct Walk {
     pub golem_seen_until: i64,
     /// Game time it last gossiped.
     pub gossiped: Option<i64>,
+    /// Game time it last talked with another villager (and told it what
+    /// it has heard).
+    pub chatted: Option<i64>,
+    /// A bell rang: until when (game time) it hides in the bed at the cell.
+    pub hiding: Option<(u32, Cell)>,
     rng: u64,
 }
 
@@ -118,6 +127,11 @@ pub fn step(
     let Kind::Merchant(m) = &mut entity.kind else {
         return;
     };
+    let home = m.home.map(|(x, y, z)| [x, y, z]);
+    let meeting = m
+        .meeting
+        .filter(|_| env.gather && !m.wandering)
+        .map(|(x, y, z)| [x, y, z]);
     let walk = &mut m.walk;
     let wandering = m.wandering;
     walk.nav.tick(pos, now);
@@ -145,8 +159,13 @@ pub fn step(
     } else {
         0
     };
-    // Getting up, from the day or a fright or a customer.
-    if walk.asleep && (!env.night || afraid.is_some() || standing) {
+    // A bell rang: it hides until the time is up.
+    if walk.hiding.is_some_and(|(until, _)| now >= until) {
+        walk.hiding = None;
+    }
+    let hiding = walk.hiding;
+    // Getting up, from the day or a fright or a customer or a bell.
+    if walk.asleep && (!env.night || afraid.is_some() || standing || hiding.is_some()) {
         walk.asleep = false;
         if let Some(b) = walk.bed.take() {
             ops.push(Op::Wake(b));
@@ -185,8 +204,24 @@ pub fn step(
         }
     } else if standing {
         walk.nav.stop();
+    } else if let Some((_, bed)) = hiding {
+        hurry = 1.5;
+        if walk.nav.is_done() && flat_dist(pos, bed) > 2.0 {
+            let p = params();
+            if let Some(s) = beside(world, bed, &p) {
+                walk.nav.go_to(world, from, s, &p);
+            }
+        }
+    } else if let Some(bell) = meeting.filter(|b| flat_dist(pos, *b) > MEET) {
+        // The afternoon: it goes to the bell.
+        if walk.nav.is_done() {
+            let p = params();
+            if let Some(s) = beside(world, bell, &p) {
+                walk.nav.go_to(world, from, s, &p);
+            }
+        }
     } else if env.night && !wandering {
-        night_walk(walk, world, pos, from, now, seed, ops);
+        night_walk(walk, home, world, pos, from, now, seed, ops);
     } else if walk.nav.is_done() && walk.next(seed) % STROLL == 0 {
         let p = params();
         for _ in 0..10 {
@@ -276,9 +311,35 @@ pub fn step(
     entity.age += 1;
 }
 
-/// At night: looks for a free bed, walks to it, lies down.
+/// Sets it walking to the cell, if it is not on its way somewhere.
+pub fn head_for(entity: &mut Entity, world: &dyn Terrain, to: Cell) {
+    let from = [
+        entity.pos[0].floor() as i32,
+        (entity.pos[1] + 0.5).floor() as i32,
+        entity.pos[2].floor() as i32,
+    ];
+    let Kind::Merchant(m) = &mut entity.kind else {
+        return;
+    };
+    if m.walk.nav.is_done() && !m.walk.asleep {
+        m.walk.nav.go_to(world, from, to, &params());
+    }
+}
+
+/// A cell to stand in beside the bed.
+fn beside(world: &dyn Terrain, c: Cell, p: &PathParams) -> Option<Cell> {
+    [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        .into_iter()
+        .flat_map(|(dx, dz)| [0, -1, 1].map(|dy| [c[0] + dx, c[1] + dy, c[2] + dz]))
+        .find(|s| standable(world, *s, p))
+}
+
+/// At night: goes to the bed it has claimed (see the village's points of
+/// interest) and lies down in it. A villager with no bed stays up.
+#[allow(clippy::too_many_arguments)]
 fn night_walk(
     walk: &mut Walk,
+    home: Option<Cell>,
     world: &dyn Terrain,
     pos: [f64; 3],
     from: Cell,
@@ -290,37 +351,18 @@ fn night_walk(
         if walk.rest > 0 {
             walk.rest -= 1;
         } else if (u64::from(now) + seed).is_multiple_of(40) {
-            walk.rest = 0;
-            let mut best: Option<(i32, Cell)> = None;
-            for dx in -16..=16 {
-                for dz in -16..=16 {
-                    for dy in -4..=4 {
-                        let c = [from[0] + dx, from[1] + dy, from[2] + dz];
-                        if world.free_bed(c[0], c[1], c[2]) {
-                            let d = dx * dx + dz * dz + dy * dy;
-                            if best.is_none_or(|(b, _)| d < b) {
-                                best = Some((d, c));
-                            }
-                        }
-                    }
+            let Some(c) = home.filter(|c| world.free_bed(c[0], c[1], c[2])) else {
+                walk.rest = 100;
+                return;
+            };
+            walk.bed = Some(c);
+            let p = params();
+            match beside(world, c, &p) {
+                Some(s) => {
+                    walk.nav.stop();
+                    walk.nav.go_to(world, from, s, &p);
                 }
-            }
-            if let Some((_, c)) = best {
-                walk.bed = Some(c);
-                let p = params();
-                let side = [(1, 0), (-1, 0), (0, 1), (0, -1)]
-                    .into_iter()
-                    .flat_map(|(dx, dz)| [0, -1, 1].map(|dy| [c[0] + dx, c[1] + dy, c[2] + dz]))
-                    .find(|s| standable(world, *s, &p));
-                match side {
-                    Some(s) => {
-                        walk.nav.stop();
-                        walk.nav.go_to(world, from, s, &p);
-                    }
-                    None => walk.bed = None,
-                }
-            } else {
-                walk.rest = 600;
+                None => walk.bed = None,
             }
         }
         return;

@@ -494,8 +494,8 @@ impl Default for MerchantHealth {
 }
 
 /// Hurts a villager or wandering trader: whether that killed it, or `None`
-/// when the hit did not count. Players who hit a villager lose standing
-/// with the village.
+/// when the hit did not count. A villager remembers who hit it (gossip),
+/// and those who see it killed remember who did it.
 fn merchant_hurt(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> Option<bool> {
     let Kind::Merchant(v) = &e.kind else {
         return None;
@@ -544,10 +544,16 @@ fn merchant_hurt(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> Option<bool> 
     };
     let sound = format!("entity.{who}.{}", if dead { "death" } else { "hurt" });
     fx::sound(ctx, &sound, fx::category::NEUTRAL, pos, 1.0, 1.0);
+    // Hitting a villager is remembered by it; killing one by the
+    // villagers that saw (see `village::witnesses`).
     if let Some(p) = h.player
         && !wandering
     {
-        ctx.mobs.offend(p, if dead { 125 } else { 25 });
+        if dead {
+            ctx.mobs.offend(ctx.dim, p, pos);
+        } else if let Kind::Merchant(v) = &mut e.kind {
+            v.gossip.happen(p, mc_entity::gossip::Kind::MinorNegative);
+        }
     }
     Some(dead)
 }
@@ -1050,6 +1056,7 @@ pub fn cure(ctx: &ServerContext, e: &mut Entity) {
         return;
     };
     let data = m.villager.clone();
+    let curer = m.curer;
     let Some(mut v) = crate::trading::new_merchant(ctx, "minecraft:villager", e.pos) else {
         return;
     };
@@ -1057,6 +1064,11 @@ pub fn cure(ctx: &ServerContext, e: &mut Entity) {
         mv.variant = kind;
         mv.profession = profession;
         mv.level = level;
+    }
+    // Whoever cured it is thanked for good.
+    if let (Kind::Merchant(mv), Some(p)) = (&mut v.kind, curer) {
+        mv.gossip.happen(p, mc_entity::gossip::Kind::MajorPositive);
+        mv.gossip.happen(p, mc_entity::gossip::Kind::MinorPositive);
     }
     e.removed = true;
     fx::status(ctx, v.id, 16);

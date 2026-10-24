@@ -528,6 +528,7 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
     control: Option<&'a mut TickControl>,
 ) {
     crate::persist::load_stored(ctx);
+    crate::poi::sync(ctx);
     let now = lock(&ctx.time).age;
     for (p, id) in ctx.world.take_woken() {
         match id.as_str() {
@@ -957,11 +958,14 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     let mut crossed = Vec::new();
     let (mut blasts, mut fuses) = (std::mem::take(&mut *lock(&ctx.pending_blasts)), Vec::new());
     let now = lock(&ctx.time).age;
-    let mut claimed = crate::trading::claimed_sites(&entities);
     // What villagers see: night for the bed, zombies to run from.
     let night = {
         let t = crate::mobs::day_time(ctx).rem_euclid(24000);
         ctx.world.dimension == "minecraft:overworld" && (12000..23000).contains(&t)
+    };
+    let gather = {
+        let t = crate::mobs::day_time(ctx).rem_euclid(24000);
+        ctx.world.dimension == "minecraft:overworld" && (9000..12000).contains(&t)
     };
     let threats: Vec<[f64; 3]> = entities
         .iter()
@@ -1077,6 +1081,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                         !m.trading.is_empty(),
                         &mc_entity::villager::Env {
                             night,
+                            gather,
                             threats: &threats,
                         },
                         &mut ops,
@@ -1101,7 +1106,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                         }
                     }
                 }
-                fuses.extend(crate::trading::tick(ctx, level, entity, &mut claimed, now));
+                fuses.extend(crate::trading::tick(ctx, entity, now));
             }
             // Mobs have their own tick, and so do crystals.
             mc_entity::Kind::Mob(_) | mc_entity::Kind::Crystal(_) => {}
@@ -1245,6 +1250,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         let _ = ctx.events.send(Event::EntitySpawned(entity.clone()));
         lock(&ctx.entities).push(entity);
     }
+    crate::mobs::village::release_removed(ctx, &mut entities);
     entities.retain(|e| !e.removed);
     if !gone.is_empty() {
         let mut board = lock(&ctx.scoreboard);

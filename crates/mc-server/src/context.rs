@@ -539,6 +539,8 @@ pub struct ServerContext {
     pub forced: Mutex<crate::forced::Forced>,
     /// The dragon fight (in the End) and the bosses' bars.
     pub bosses: Mutex<crate::bosses::State>,
+    /// The points of interest (beds, workstations, bells) of this dimension.
+    pub poi: Mutex<crate::poi::Poi>,
 }
 
 impl Deref for ServerContext {
@@ -772,6 +774,7 @@ impl ServerContext {
         };
         let folder = world.folder().map(Path::to_owned);
         let version = self.data.version.world_version;
+        let poi = Mutex::new(crate::poi::Poi::new(world.poi_dir()));
         Ok(Arc::new(ServerContext {
             shared: Arc::clone(&self.shared),
             dim: index,
@@ -811,6 +814,7 @@ impl ServerContext {
             )),
             events: self.shared.hub.for_dim(index),
             bosses: Mutex::default(),
+            poi,
         }))
     }
 
@@ -1097,6 +1101,7 @@ impl ServerContext {
             hub: hub.clone(),
             portals: Mutex::default(),
         });
+        let poi = Mutex::new(crate::poi::Poi::new(world.poi_dir()));
         let overworld = Arc::new(ServerContext {
             shared: Arc::clone(&shared),
             dim: 0,
@@ -1130,6 +1135,7 @@ impl ServerContext {
             border: Mutex::new(border),
             forced: Mutex::new(forced),
             bosses: Mutex::default(),
+            poi,
         });
         *shared.dims[0].lock().expect("dimensions lock") = Some(Arc::clone(&overworld));
         Ok(overworld)
