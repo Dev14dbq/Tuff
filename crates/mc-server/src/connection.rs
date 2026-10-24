@@ -62,7 +62,12 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
             let result = play(&mut reader, &mut writer, &player).await;
             {
                 let ctx = ctx.clone();
-                tokio::task::spawn_blocking(move || crate::save_player(&ctx, uuid)).await?;
+                tokio::task::spawn_blocking(move || {
+                    crate::stats::custom(&ctx, uuid, "leave_game", 1);
+                    crate::save_player(&ctx, uuid);
+                    crate::stats::forget(&ctx, uuid);
+                })
+                .await?;
             }
             // What they rode leaves with them (their file keeps it).
             let dimension = ctx
@@ -483,6 +488,7 @@ async fn play(
     // Subscribe before reading the player list, so nobody slips through.
     let mut events = ctx.events.subscribe();
     crate::commands::load_progress(&ctx, uuid, &me.extra.recipes);
+    crate::stats::load(&ctx, uuid);
     let mut pose = session
         .saved
         .as_ref()
@@ -775,6 +781,7 @@ async fn play(
                         play::Serverbound::SetCreativeModeSlot { slot: -1, item: Some(stack) } if game_mode == CREATIVE => {
                             // Dropped out of the creative inventory.
                             if stack.count > 0 {
+                                crate::stats::threw(&ctx, uuid, &stack);
                                 crate::tick::throw_item_aged(&ctx, pose, stack, crate::dropped::LIFETIME - 1200);
                             }
                         }
@@ -862,6 +869,7 @@ async fn play(
                         }
                         play::Serverbound::PlayerCommand { action: action @ (1 | 2), .. } => {
                             crate::combat::set_sprinting(&ctx, uuid, action == 1);
+                            crate::stats::set_sprinting(&ctx, uuid, action == 1);
                         }
                         play::Serverbound::PlayerCommand { action: 6, .. } => {
                             crate::worn::start_gliding(&ctx, uuid);
@@ -883,6 +891,7 @@ async fn play(
                                 }
                             });
                             if let Some(stack) = thrown {
+                                crate::stats::threw(&ctx, uuid, &stack);
                                 crate::tick::throw_item(&ctx, pose, stack);
                             }
                             if let Some((slot, item)) = changed_slot {
@@ -960,6 +969,7 @@ async fn play(
                         }
                         play::Serverbound::PlayerInput { flags } => {
                             sneaking = flags & 0x20 != 0;
+                            crate::stats::set_sneaking(&ctx, uuid, sneaking);
                             if sneaking && riding.is_some() {
                                 let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                                 let action = Action::Vehicle(crate::vehicles::Act::Dismount);
@@ -1137,9 +1147,8 @@ async fn play(
                             }
                         }
                         play::Serverbound::ClientCommand { action: 1 } => {
-                            // No statistics are kept yet: an empty list, so the
-                            // menu opens instead of waiting.
-                            writer.queue(&play::AwardStats::default())?;
+                            // Everything counted so far (the menu waits for it).
+                            writer.queue(&crate::stats::packet(&ctx, uuid))?;
                         }
                         play::Serverbound::BlockEntityTagQuery { transaction, position } => {
                             if crate::commands::level(&ctx, uuid, &me.profile.name) >= 2 {

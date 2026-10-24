@@ -35,7 +35,11 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 from[1] + e.vel[1] * f,
                 from[2] + e.vel[2] * f,
             ];
-            hits::hit_block(ctx, &strike, e.pos, false);
+            if hits::hit_block(ctx, &strike, e.pos, false)
+                && let Some(o) = owner
+            {
+                crate::stats::custom(ctx, o, "target_hit", 1);
+            }
             let who = match &strike {
                 Strike::Player(i) => Some(t.players[*i]),
                 _ => None,

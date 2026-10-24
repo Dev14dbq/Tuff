@@ -361,6 +361,7 @@ impl Windows {
         if click.window == 0 {
             let mut thrown = Vec::new();
             let mut result = None;
+            let mut crafted = None;
             let mut undone = None;
             let creative = ctx
                 .players
@@ -386,18 +387,25 @@ impl Windows {
                     })
                 });
                 if bound_off && !creative {
-                    *hands = before;
+                    *hands = before.clone();
                     thrown.clear();
                     undone = Some((hands.slots.clone(), hands.carried.clone()));
                 }
                 // The 2×2 grid's result.
+                if click.slot == 0 {
+                    crafted = crate::stats::crafts(&before.slots[..5], &hands.slots[..5]);
+                }
                 let made = ctx.recipes.craft(&hands.slots[1..5], 2);
                 if made != hands.slots[0] {
                     hands.slots[0] = made.clone();
                     result = Some(made);
                 }
             });
+            if let Some((item, count)) = crafted {
+                crate::stats::item(ctx, uuid, crate::stats::CRAFTED, item, count);
+            }
             for stack in thrown {
+                crate::stats::threw(ctx, uuid, &stack);
                 crate::tick::throw_item(ctx, pose, stack);
             }
             if let Some((slots, carried)) = undone {
@@ -457,7 +465,9 @@ impl Windows {
             };
             if let Some(stack) = before {
                 let count = if click.button == 1 { stack.count } else { 1 };
-                crate::tick::throw_item(ctx, pose, ItemStack { count, ..stack });
+                let stack = ItemStack { count, ..stack };
+                crate::stats::threw(ctx, uuid, &stack);
+                crate::tick::throw_item(ctx, pose, stack);
             }
         }
         // What both sides held before, for the stacks' damage.
@@ -500,6 +510,7 @@ impl Windows {
             );
         });
         for stack in thrown {
+            crate::stats::threw(ctx, uuid, &stack);
             crate::tick::throw_item(ctx, pose, stack);
         }
         let id = open.id;
@@ -530,9 +541,15 @@ impl Windows {
                 }
             }
             Kind::Crafting { grid } => {
+                let before = grid.clone();
                 for (s, stack) in theirs {
                     let known: Vec<&ItemStack> = hand_stacks.iter().chain(&window_stacks).collect();
                     grid[s] = stack.map(|h| h.resolve(known.iter().copied()));
+                }
+                if click.slot == 0
+                    && let Some((item, count)) = crate::stats::crafts(&before[..10], &grid[..10])
+                {
+                    crate::stats::item(ctx, uuid, crate::stats::CRAFTED, item, count);
                 }
                 let made = ctx.recipes.craft(&grid[1..10], 3);
                 if made != grid[0] {

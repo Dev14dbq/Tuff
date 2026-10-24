@@ -27,6 +27,7 @@ const BAD_OMEN_TICKS: i32 = 120_000;
 /// A player finished eating or drinking `stack` (as it was before one was
 /// taken from it).
 pub fn eaten(ctx: &ServerContext, uuid: u128, stack: &ItemStack) {
+    crate::stats::item(ctx, uuid, crate::stats::USED, stack.item, 1);
     let pos = lock(&ctx.players)
         .get(&uuid)
         .and_then(|p| p.pose)

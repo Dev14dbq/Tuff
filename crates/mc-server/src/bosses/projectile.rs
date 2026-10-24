@@ -167,7 +167,9 @@ fn skull_hit(t: &mut Tick, e: &Entity, strike: Strike, dangerous: bool) {
                 });
             }
         }
-        Strike::Block { .. } => hits::hit_block(t.ctx, &strike, e.pos, false),
+        Strike::Block { .. } => {
+            hits::hit_block(t.ctx, &strike, e.pos, false);
+        }
     }
     t.out.blasts.push(crate::explosion::Blast {
         center: e.pos,

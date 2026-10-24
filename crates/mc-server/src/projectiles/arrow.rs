@@ -31,6 +31,7 @@ pub fn fire_bow(ctx: &crate::context::ServerContext, actor: Actor, hand: i32, ti
     if power < 0.1 {
         return;
     }
+    crate::stats::item(ctx, actor.uuid, crate::stats::USED, bow.stack.item, 1);
     let (item, name, comps) = match &ammo {
         Some(a) => (a.stack.item, a.name.as_str(), a.comps.as_ref()),
         None => (
@@ -150,7 +151,11 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             e.pos = add(from, e.vel, f);
             match strike {
                 Strike::Block { .. } => {
-                    hits::hit_block(ctx, &strike, e.pos, true);
+                    if hits::hit_block(ctx, &strike, e.pos, true)
+                        && let Some(o) = owner
+                    {
+                        crate::stats::custom(ctx, o, "target_hit", 1);
+                    }
                     crate::pots::projectile(ctx, from, to);
                     fx::sound(
                         ctx,

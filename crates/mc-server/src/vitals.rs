@@ -485,7 +485,7 @@ pub fn try_hurt_by_entity(
     }
     // Before the vitals are locked: the attributes read them.
     let (armor, toughness) = crate::damage::worn_armor(ctx, uuid);
-    let (packet, died) = {
+    let (packet, died, tally) = {
         let mut all = lock(&ctx.vitals);
         let v = all.get_mut(&uuid)?;
         if v.dead || crate::effects::fire_proof(&v.effects, damage_type) {
@@ -512,6 +512,7 @@ pub fn try_hurt_by_entity(
         } else {
             amount
         };
+        let before_cuts = amount;
         let amount = crate::damage::armor_reduce(amount, armor, toughness, damage_type);
         let amount = crate::effects::reduce_damage(&v.effects, amount, damage_type);
         let amount = if amount > 0.0 {
@@ -519,6 +520,7 @@ pub fn try_hurt_by_entity(
         } else {
             amount
         };
+        let resisted = (before_cuts - amount).max(0.0);
         // Fully resisted still counts as a hit (vanilla's /damage succeeds).
         if amount <= 0.0 {
             return Some(false);
@@ -538,6 +540,7 @@ pub fn try_hurt_by_entity(
             });
         }
         let amount = amount - absorbed;
+        let tally = [amount, absorbed, resisted].map(|d| (d * 10.0).round() as i32);
         v.health = (v.health - amount).max(0.0);
         v.exhaust(crate::damage::exhaustion(ctx, damage_type));
         if let Some(by) = attacker {
@@ -546,8 +549,14 @@ pub fn try_hurt_by_entity(
         }
         let died = v.health <= 0.0;
         v.dead = died;
-        (v.packet(), died)
+        (v.packet(), died, tally)
     };
+    for (stat, n) in ["damage_taken", "damage_absorbed", "damage_resisted"]
+        .into_iter()
+        .zip(tally)
+    {
+        crate::stats::custom(ctx, uuid, stat, n);
+    }
     let _ = ctx.events.send(Event::Health {
         uuid,
         health: packet,
@@ -559,6 +568,7 @@ pub fn try_hurt_by_entity(
         direct,
     });
     if died {
+        crate::stats::died(ctx, uuid, attacker);
         let _ = ctx.events.send(Event::Died {
             uuid,
             entity_id,
@@ -597,6 +607,7 @@ pub fn moved(ctx: &ServerContext, uuid: u128, before: Pose, after: Pose, in_wate
         }
     };
     if let Some(fell) = landed_from {
+        crate::stats::fell(ctx, uuid, fell);
         let (safe, floating, assist) = {
             let all = lock(&ctx.vitals);
             all.get(&uuid).map_or((3.0, false, None), |v| {

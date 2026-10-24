@@ -465,6 +465,8 @@ pub struct Shared {
     /// `/stopwatch`: when each one started.
     /// State of the rarer commands (`/posteffect`, `/waypoint`...).
     pub rare: Mutex<crate::commands::rare::State>,
+    /// Statistics of the players online.
+    pub stats: Mutex<crate::stats::All>,
     /// Bows being drawn and bobbers cast.
     pub shooting: Mutex<crate::projectiles::State>,
     /// Leads: who holds each leashed entity.
@@ -1087,6 +1089,7 @@ impl ServerContext {
             scoreboard: Mutex::new(scoreboard),
             storage: Mutex::new(storage),
             rare: Mutex::default(),
+            stats: Mutex::default(),
             shooting: Mutex::default(),
             leashes: Mutex::default(),
             stopwatches: Mutex::default(),

@@ -29,6 +29,9 @@ pub fn use_rod(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f3
     });
     let cast = lock(&ctx.shooting).bobbers.remove(&actor.uuid);
     let comps = held::held(ctx, actor.uuid, hand).and_then(|h| h.comps);
+    if let Some(h) = held::held(ctx, actor.uuid, hand) {
+        crate::stats::item(ctx, actor.uuid, crate::stats::USED, h.stack.item, 1);
+    }
     if let Some(id) = cast {
         reel(ctx, actor, hand, id);
         return outcome;
@@ -231,7 +234,11 @@ fn catch(ctx: &ServerContext, actor: Actor, at: [f64; 3], luck: i32, open_water:
         ..crate::loot::LootCtx::default()
     };
     let env = crate::commands::loot::Env(ctx);
-    for drop in ctx.loot.roll(&env, &table, &cx) {
+    let drops = ctx.loot.roll(&env, &table, &cx);
+    if !drops.is_empty() {
+        crate::stats::custom(ctx, actor.uuid, "fish_caught", 1);
+    }
+    for drop in drops {
         let d = [
             actor.pose.x - at[0],
             actor.pose.y - at[1],
@@ -640,7 +647,9 @@ mod tests {
         }
         lock(&ctx.entities).push(e);
         lock(&ctx.shooting).bobbers.insert(ME, 5000);
+        crate::stats::load(&ctx, ME);
         use_rod(&ctx, actor(), 0, 0.0, 0.0);
+        assert_eq!(crate::stats::get(&ctx, ME, crate::stats::CUSTOM, "fish_caught"), 1);
         let after = lock(&ctx.entities);
         // The catch and the orb.
         assert!(after.iter().any(|e| matches!(e.kind, Kind::Item { .. })));

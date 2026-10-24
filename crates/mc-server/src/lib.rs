@@ -70,6 +70,7 @@ mod random_ticks;
 mod respawn;
 pub mod rules;
 mod scoreboard;
+mod stats;
 mod storage;
 mod structure_blocks;
 mod summon;
@@ -322,6 +323,7 @@ pub(crate) fn save_player(ctx: &ServerContext, uuid: u128) {
         tracing::warn!("saving {}: {err:#}", crate::util::uuid_string(uuid));
     }
     commands::save_advancements(ctx, uuid);
+    stats::save(ctx, uuid);
 }
 
 /// Reads commands from standard input until it closes; each runs on the
