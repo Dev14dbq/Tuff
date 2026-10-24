@@ -12,6 +12,7 @@
 //! - [`goals`]: the goals and the selector;
 //! - [`body`]: steering, walking, swimming and flying.
 
+pub mod aqua;
 mod body;
 pub use body::ENDERMITE_LIFE;
 mod brains;
@@ -85,6 +86,9 @@ pub struct Target {
     /// Who last hurt them, and whom they last hit (entity ids), for pets.
     pub hurt_by: Option<i32>,
     pub hit: Option<i32>,
+    /// Swimming (sprinting in water) or riding a boat: dolphins come along.
+    pub swimming: bool,
+    pub boating: bool,
 }
 
 impl Target {
@@ -103,6 +107,8 @@ impl Target {
             pitch: 0.0,
             hurt_by: None,
             hit: None,
+            swimming: false,
+            boating: false,
         }
     }
 }
@@ -406,6 +412,39 @@ pub enum MobEvent {
     },
     /// A goat rams a block that snaps a horn off.
     Horn,
+    // Aquatic (Claude)
+    /// A squid squirts ink.
+    Ink,
+    /// A pufferfish stings: damage, and ticks of poison.
+    Sting {
+        target: i32,
+        damage: f32,
+        poison: i32,
+    },
+    /// Magic damage on top of a blow (a guardian's beam).
+    MagicAttack {
+        target: i32,
+        damage: f32,
+    },
+    /// An elder guardian curses the players near.
+    Curse,
+    /// A frog swallows the prey its tongue caught.
+    Eat {
+        target: i32,
+    },
+    /// A turtle lays eggs in a nest at this cell.
+    LayEgg {
+        cell: Cell,
+        count: i32,
+    },
+    /// A frog lays frogspawn at this cell.
+    LaySpawn {
+        cell: Cell,
+    },
+    /// A dolphin gives this player its grace.
+    Grace {
+        player: i32,
+    },
 }
 
 /// State only some kinds keep: the silverfish's call, the endermite's
@@ -427,6 +466,8 @@ pub struct Quirks {
     pub pumpkin: bool,
     // Land animals (Cursor)
     pub land: land::Land,
+    // Aquatic (Claude)
+    pub aqua: aqua::Aqua,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -747,6 +788,8 @@ impl Mob {
                 land::set_genes(&mut mob, main, hidden);
             }
             Species::Armadillo => mob.quirks.land.scute_in = mob.rand_range(6000, 12000),
+            // Aquatic (Claude)
+            _ if species.swims() => aqua::init(&mut mob),
             _ => {}
         }
         mob
@@ -847,6 +890,9 @@ impl Mob {
                 (w * k, h * k)
             }
             // Land animals (Cursor): the box shrinks for the leap.
+            // Aquatic (Claude)
+            Species::Pufferfish => aqua::puff_size(self.quirks.aqua.puff),
+            Species::Salmon => aqua::salmon_size(self.variant),
             Species::Goat if self.quirks.land.jumping => {
                 let (w, h) = (0.63, 0.91);
                 if self.is_baby() {
@@ -887,7 +933,7 @@ impl Mob {
         self.idle = 0;
         if let Some(by) = attacker {
             self.revenge = Some((by, 100));
-        } else if self.species.category() == Category::Creature {
+        } else if self.species.category().animal() {
             // Hurt by something else: animals run all the same.
             self.revenge = Some((-1, 100));
         }
@@ -896,6 +942,7 @@ impl Mob {
         if self.species != Species::Wolf || attacker.is_some() {
             self.sitting = false;
         }
+        aqua::hurt_hook(self, amount, attacker);
         self.dirty = true;
         true
     }
@@ -1071,6 +1118,7 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
     }
     body::life(m, &mut b, s, out);
     land::pulse(m, &b, s, out);
+    aqua::pulse(m, &mut b, s, out);
     if m.is_dead() || entity.removed {
         return;
     }

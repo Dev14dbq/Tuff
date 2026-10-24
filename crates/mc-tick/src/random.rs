@@ -55,6 +55,8 @@ pub enum Behaviour {
     SnowLayer,
     Farmland,
     Lava,
+    /// A turtle egg cracks and hatches.
+    TurtleEgg,
 }
 
 impl Behaviour {
@@ -86,6 +88,7 @@ impl Behaviour {
             "snow" => Self::SnowLayer,
             "farmland" => Self::Farmland,
             "lava" => Self::Lava,
+            "turtle_egg" => Self::TurtleEgg,
             _ if name.ends_with("_leaves") => Self::Leaves,
             "oak_sapling" | "spruce_sapling" | "birch_sapling" | "jungle_sapling"
             | "acacia_sapling" | "dark_oak_sapling" | "pale_oak_sapling" | "cherry_sapling"
@@ -236,6 +239,7 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut 
         }
         Behaviour::Farmland => farmland(level, ctx, p, state),
         Behaviour::Lava => lava(level, ctx, p, rng),
+        Behaviour::TurtleEgg => crate::hatching::egg_tick(level, ctx, p, state, rng),
     }
 }
 

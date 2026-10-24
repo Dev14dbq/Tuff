@@ -20,6 +20,7 @@ pub mod hurt;
 pub mod infest;
 pub mod interact;
 mod land;
+mod aqua;
 pub mod meta;
 pub mod nbt;
 pub mod ride;
@@ -437,8 +438,14 @@ impl mc_entity::mob::Items for ItemSense<'_> {
 /// The sound category of a mob's sounds.
 pub fn category(species: Species) -> i32 {
     match species.category() {
+        Category::Monster if species == Species::ZombieNautilus => fx::category::NEUTRAL,
         Category::Monster => 5,
-        Category::Creature | Category::Misc => fx::category::NEUTRAL,
+        Category::Creature
+        | Category::Misc
+        | Category::WaterCreature
+        | Category::WaterAmbient
+        | Category::UndergroundWater
+        | Category::Axolotls => fx::category::NEUTRAL,
     }
 }
 
@@ -909,6 +916,21 @@ fn handle(
             knockback,
         } => land::ram(ctx, entities, i, target, damage, knockback, targets),
         MobEvent::Horn => land::horn(ctx, &mut entities[i]),
+        // Aquatic (Claude)
+        MobEvent::Ink => aqua::ink(ctx, &entities[i]),
+        MobEvent::Sting {
+            target,
+            damage,
+            poison,
+        } => aqua::sting(ctx, entities, i, target, damage, poison, targets, difficulty),
+        MobEvent::MagicAttack { target, damage } => {
+            aqua::magic(ctx, entities, i, target, damage, targets, difficulty);
+        }
+        MobEvent::Curse => aqua::curse(ctx, &entities[i], targets),
+        MobEvent::Eat { target } => aqua::eat(ctx, entities, i, target),
+        MobEvent::LayEgg { cell, count } => aqua::lay_egg(ctx, level, cell, count),
+        MobEvent::LaySpawn { cell } => aqua::lay_spawn(ctx, level, cell),
+        MobEvent::Grace { player } => aqua::grace(ctx, player, targets),
     }
 }
 

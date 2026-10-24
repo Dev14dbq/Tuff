@@ -3,7 +3,7 @@
 use super::body::{params, yaw_to};
 use super::chores;
 use super::{
-    Body, Category, Missile, Mob, MobEvent, PLAYER_EYE, Seen, Senses, Species, Target, cell_of,
+    Body, Missile, Mob, MobEvent, PLAYER_EYE, Seen, Senses, Species, Target, cell_of,
     dist_sq, line_clear, slot,
 };
 use crate::nav::{Cell, Graze, Liquid, standable};
@@ -264,6 +264,8 @@ pub enum Goal {
     },
     // Land animals (Cursor)
     Land(super::land::Act),
+    // Aquatic (Claude)
+    Aqua(super::aqua::Act),
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -429,7 +431,7 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         Goal::Float => body_wet(m, b, s),
         Goal::Panic { .. } => {
             (m.revenge.is_some() || m.burning > 0)
-                && m.species.category() == Category::Creature
+                && m.species.category().animal()
                 && !(m.is_tame() && m.species == Species::Wolf)
         }
         Goal::Stroll { interval, .. } => m.below(*interval) == 0,
@@ -900,6 +902,7 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::can_use(act, m, b, s),
+        Goal::Aqua(act) => super::aqua::can_use(act, m, b, s),
     }
 }
 
@@ -1104,6 +1107,7 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::can_continue(act, m),
+        Goal::Aqua(act) => super::aqua::can_continue(act, m, b, s),
     }
 }
 
@@ -1201,6 +1205,7 @@ fn start(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobE
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::start(act, m, out),
+        Goal::Aqua(act) => super::aqua::start(act, m, b, out),
         _ => {}
     }
 }
@@ -1293,6 +1298,7 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::stop(act, m),
+        Goal::Aqua(act) => super::aqua::stop(act, m),
         _ => {}
     }
 }
@@ -1668,6 +1674,7 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
         }
         // Land animals (Cursor)
         Goal::Land(act) => super::land::tick(act, m, b, s, out),
+        Goal::Aqua(act) => super::aqua::tick(act, m, b, s, out),
     }
 }
 

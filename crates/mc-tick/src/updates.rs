@@ -71,6 +71,7 @@ fn set_with_limit(
     redstone::on_place(level, ctx, p, old, state);
     crate::sponge::on_place(level, ctx, p, old, state);
     crate::tripwire::on_place(level, ctx, p, old, state);
+    crate::hatching::on_place(level, ctx, p, old, state);
     if ctx.shapes.block_index(old) != ctx.shapes.block_index(state) {
         crate::rails::on_place(level, ctx, p, state);
         crate::hopper::on_place(level, ctx, p, state);
@@ -227,6 +228,7 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     crate::tripwire::block_tick(level, ctx, p, kind);
     crate::command_block::block_tick(level, ctx, p, kind);
     crate::frosted_ice::block_tick(level, ctx, p, kind);
+    crate::hatching::block_tick(level, ctx, p, kind);
     let state = level.block(p);
     if ctx.shapes.block_index(state) == kind
         && crate::support::check(ctx, state) == crate::support::Check::Tick

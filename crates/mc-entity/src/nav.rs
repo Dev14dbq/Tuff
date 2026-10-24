@@ -118,6 +118,9 @@ pub enum Feature {
     Bamboo,
     Moss,
     Cake,
+    // Aquatic (Claude)
+    /// Sand, red sand: a turtle nests there.
+    Sand,
 }
 
 /// What a walker is like.

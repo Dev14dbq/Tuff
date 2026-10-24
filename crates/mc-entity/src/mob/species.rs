@@ -10,6 +10,15 @@ pub enum Category {
     /// Neither: golems. They do not spawn with the biomes, do not despawn
     /// and give no experience.
     Misc,
+    // Aquatic (Claude): the water categories, each with its own cap.
+    /// Squids, dolphins, nautiluses (`water_creature`).
+    WaterCreature,
+    /// Fish (`water_ambient`).
+    WaterAmbient,
+    /// Glow squids (`underground_water_creature`).
+    UndergroundWater,
+    /// Axolotls (`axolotls`).
+    Axolotls,
 }
 
 macro_rules! species {
@@ -95,6 +104,22 @@ species! {
     Camel => "minecraft:camel", "Camel";
     CamelHusk => "minecraft:camel_husk", "Camel Husk";
     Sniffer => "minecraft:sniffer", "Sniffer";
+    // Aquatic (Claude)
+    Cod => "minecraft:cod", "Cod";
+    Salmon => "minecraft:salmon", "Salmon";
+    Pufferfish => "minecraft:pufferfish", "Pufferfish";
+    TropicalFish => "minecraft:tropical_fish", "Tropical Fish";
+    Squid => "minecraft:squid", "Squid";
+    GlowSquid => "minecraft:glow_squid", "Glow Squid";
+    Dolphin => "minecraft:dolphin", "Dolphin";
+    Turtle => "minecraft:turtle", "Turtle";
+    Axolotl => "minecraft:axolotl", "Axolotl";
+    Frog => "minecraft:frog", "Frog";
+    Tadpole => "minecraft:tadpole", "Tadpole";
+    Guardian => "minecraft:guardian", "Guardian";
+    ElderGuardian => "minecraft:elder_guardian", "Elder Guardian";
+    Nautilus => "minecraft:nautilus", "Nautilus";
+    ZombieNautilus => "minecraft:zombie_nautilus", "Zombie Nautilus";
 }
 
 /// Which sound of a mob.
@@ -104,6 +129,24 @@ pub enum Sound {
     Hurt,
     Death,
     Step,
+}
+
+impl Category {
+    /// The water categories.
+    pub fn water(self) -> bool {
+        matches!(
+            self,
+            Category::WaterCreature
+                | Category::WaterAmbient
+                | Category::UndergroundWater
+                | Category::Axolotls
+        )
+    }
+
+    /// Animals: everything that is not a monster or a golem.
+    pub fn animal(self) -> bool {
+        !matches!(self, Category::Monster | Category::Misc)
+    }
 }
 
 impl Species {
@@ -130,6 +173,12 @@ impl Species {
             Goat | PolarBear | Ocelot | SkeletonHorse | ZombieHorse | Armadillo | Panda | Camel
             | Sniffer => Category::Creature,
             IronGolem | SnowGolem => Category::Misc,
+            // Aquatic (Claude)
+            Turtle | Frog | Tadpole => Category::Creature,
+            Squid | Dolphin | Nautilus => Category::WaterCreature,
+            Cod | Salmon | Pufferfish | TropicalFish => Category::WaterAmbient,
+            GlowSquid => Category::UndergroundWater,
+            Axolotl => Category::Axolotls,
             _ => Category::Monster,
         }
     }
@@ -181,6 +230,22 @@ impl Species {
             Panda => (1.3, 1.25),
             Camel | CamelHusk => (1.7, 2.375),
             Sniffer => (1.9, 1.75),
+            // Aquatic (Claude)
+            Cod => (0.5, 0.3),
+            // The medium one; see `Mob::size` for the others.
+            Salmon => (0.7, 0.4),
+            // Small; the puffed ones are in `Mob::size`.
+            Pufferfish => (0.35, 0.35),
+            TropicalFish => (0.5, 0.4),
+            Squid | GlowSquid => (0.8, 0.8),
+            Dolphin => (0.9, 0.6),
+            Turtle => (1.2, 0.4),
+            Axolotl => (0.75, 0.42),
+            Frog => (0.5, 0.5),
+            Tadpole => (0.4, 0.3),
+            Guardian => (0.85, 0.85),
+            ElderGuardian => (1.9975, 1.9975),
+            Nautilus | ZombieNautilus => (0.875, 0.95),
         }
     }
 
@@ -213,6 +278,9 @@ impl Species {
             Goat => 0.95,
             Ocelot => 0.5,
             PiglinBrute => 1.79 / 1.95,
+            // Aquatic (Claude)
+            Squid | GlowSquid | Dolphin | Cod | Salmon | Pufferfish | TropicalFish => 0.5,
+            Guardian | ElderGuardian => 0.5,
             _ => 0.85,
         }
     }
@@ -246,6 +314,14 @@ impl Species {
             SkeletonHorse | ZombieHorse => 15.0,
             Hoglin | Zoglin => 40.0,
             PiglinBrute => 50.0,
+            // Aquatic (Claude)
+            Cod | Salmon | Pufferfish | TropicalFish => 3.0,
+            Squid | GlowSquid | Dolphin | Frog => 10.0,
+            Turtle | Guardian => 30.0,
+            Axolotl => 14.0,
+            Tadpole => 6.0,
+            ElderGuardian => 80.0,
+            Nautilus | ZombieNautilus => 15.0,
             _ => 20.0,
         }
     }
@@ -273,6 +349,14 @@ impl Species {
             Panda => 0.15,
             Camel | CamelHusk => 0.09,
             Sniffer => 0.1,
+            // Aquatic (Claude)
+            Cod | Salmon | TropicalFish | Axolotl | Frog | Tadpole | Nautilus => 1.0,
+            Pufferfish => 0.7,
+            Squid | GlowSquid | Dolphin => 1.2,
+            ZombieNautilus => 1.1,
+            Turtle => 0.25,
+            Guardian => 0.5,
+            ElderGuardian => 0.3,
             _ => 0.25,
         }
     }
@@ -315,6 +399,12 @@ impl Species {
             Ocelot => 3.0,
             Panda => 2.0,
             PiglinBrute => 7.0,
+            // Aquatic (Claude)
+            Dolphin | Nautilus | ZombieNautilus => 3.0,
+            Axolotl => 2.0,
+            Frog => 10.0,
+            Guardian => 6.0,
+            ElderGuardian => 8.0,
             _ => 0.0,
         }
     }
@@ -334,6 +424,7 @@ impl Species {
         match self {
             Species::IronGolem => 1.0,
             Species::Hoglin | Species::Zoglin => 0.6,
+            Species::Squid | Species::GlowSquid => 0.85,
             _ => 0.0,
         }
     }
@@ -357,6 +448,7 @@ impl Species {
                 | ZombieHorse
                 | Zoglin
                 | CamelHusk
+                | ZombieNautilus
         )
     }
 
@@ -422,6 +514,8 @@ impl Species {
             Species::Horse | Species::Donkey | Species::Mule => 4.0,
             // Land animals (Cursor): 10 HP less fall damage than the usual 3.
             Species::Goat => 13.0,
+            // Aquatic (Claude): frogs take 5 less.
+            Species::Frog => 8.0,
             Species::SkeletonHorse | Species::ZombieHorse => 4.0,
             _ => 3.0,
         }
@@ -429,8 +523,19 @@ impl Species {
 
     /// Can have babies (`AgeableMob`).
     pub fn ageable(self) -> bool {
-        self.category() == Category::Creature && self != Species::Parrot
-            || matches!(self, Species::Hoglin | Species::Zoglin | Species::CamelHusk)
+        self.category() == Category::Creature && !matches!(self, Species::Parrot | Species::Tadpole)
+            || matches!(
+                self,
+                Species::Hoglin
+                    | Species::Zoglin
+                    | Species::CamelHusk
+                    // Aquatic (Claude)
+                    | Species::Squid
+                    | Species::GlowSquid
+                    | Species::Dolphin
+                    | Species::Axolotl
+                    | Species::Nautilus
+            )
     }
 
     /// Babies of these grow up; zombies and piglins stay babies.
@@ -467,6 +572,12 @@ impl Species {
             Panda => "minecraft:panda_food",
             Camel => "minecraft:camel_food",
             Sniffer => "minecraft:sniffer_food",
+            // Aquatic (Claude)
+            Turtle => "minecraft:turtle_food",
+            Axolotl => "minecraft:axolotl_food",
+            Frog => "minecraft:frog_food",
+            Nautilus | ZombieNautilus => "minecraft:nautilus_food",
+            Dolphin => "minecraft:fishes",
             _ => return None,
         })
     }
@@ -549,12 +660,17 @@ impl Species {
     pub fn xp_reward(self) -> (i32, i32) {
         use Species::*;
         match self.category() {
-            Category::Creature => (1, 3),
             Category::Misc => (0, 0),
+            Category::Creature
+            | Category::WaterCreature
+            | Category::WaterAmbient
+            | Category::UndergroundWater
+            | Category::Axolotls => (1, 3),
             Category::Monster => match self {
                 Blaze => (10, 10),
                 Endermite => (3, 3),
                 PiglinBrute => (20, 20),
+                Guardian | ElderGuardian => (10, 10),
                 Wither => (50, 50),
                 // The dragon's experience comes out as it dies.
                 Slime | MagmaCube | EnderDragon => (0, 0),
@@ -567,6 +683,10 @@ impl Species {
     /// own.
     pub fn sound(self, which: Sound, baby: bool) -> Option<String> {
         use Species::*;
+        // Aquatic (Claude): their voices have names of their own.
+        if let Some(voice) = super::aqua::voice(self, which, baby) {
+            return voice;
+        }
         let base = match self {
             Mooshroom => "cow",
             CaveSpider => "spider",

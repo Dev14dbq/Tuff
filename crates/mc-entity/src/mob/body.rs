@@ -386,8 +386,12 @@ pub(super) struct Input {
 pub(super) fn drive(m: &mut Mob, b: &mut Body, s: &Senses) -> Option<Input> {
     m.nav.tick(b.pos, s.tick as u32);
     let (point, speed) = m.goto.take()?;
+    // Aquatic (Claude): an axolotl playing dead lies still.
+    if m.quirks.aqua.dead_play > 0 {
+        return None;
+    }
     // Fliers and swimmers head straight for the point.
-    let swims = m.species == Species::Drowned && in_water(b, s);
+    let swims = (m.species == Species::Drowned || m.species.swims()) && in_water(b, s);
     if m.species.flies() || swims {
         let d = [
             point[0] - b.pos[0],
@@ -471,7 +475,11 @@ pub(super) fn physics(
     let in_lava = s.world.liquid(cell[0], cell[1], cell[2]) == Liquid::Lava;
     let speed_attr = m.movement_speed() * SPEED_SCALE;
     let flies = m.species.flies() && !m.sitting;
-    if flies {
+    // Aquatic (Claude): the ones that swim in three dimensions.
+    let swimming = wet && m.species.swims() && !flies;
+    if swimming {
+        super::aqua::swim_physics(m, b, input.as_ref());
+    } else if flies {
         // Fliers: no gravity, a slow drift towards where they go.
         match &input {
             Some(i) => {
@@ -522,7 +530,7 @@ pub(super) fn physics(
                 };
                 // A strider out of lava is slowed (-0.34 of its speed).
                 let chill = if m.cold { 0.66 } else { 1.0 };
-                let speed = (m.movement_speed() + bonus) * i.speed * chill;
+                let speed = (m.movement_speed() + bonus) * i.speed * chill * super::aqua::land_factor(m);
                 let want = speed * speed * GROUND;
                 let control = if b.on_ground || wet { 0.5 } else { 0.1 };
                 b.vel[0] += (i.dir[0] * want - b.vel[0]) * control;

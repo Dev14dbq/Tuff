@@ -626,6 +626,33 @@ impl Level for WorldLevel<'_> {
         crate::crafter::craft(self, to_position(p));
     }
 
+    fn hatch(&mut self, p: BlockPos, species: &str, count: i32) {
+        let Some(species) = mc_entity::Species::from_id(species) else {
+            return;
+        };
+        for i in 0..count {
+            let jitter = |n: i32| (f64::from((i * 7 + n) % 5) - 2.0) * 0.1;
+            let pos = [
+                f64::from(p.x) + 0.5 + jitter(1),
+                f64::from(p.y),
+                f64::from(p.z) + 0.5 + jitter(3),
+            ];
+            let mut e = crate::mobs::new_mob_in(self.ctx, species, pos, None);
+            if let mc_entity::Kind::Mob(m) = &mut e.kind {
+                if species == mc_entity::Species::Turtle {
+                    m.set_baby(true);
+                    mc_entity::mob::aqua::home_at(m, [p.x, p.y, p.z]);
+                }
+                m.persistent = true;
+            }
+            self.spawned.push(e);
+        }
+    }
+
+    fn day_time(&self) -> i64 {
+        crate::mobs::day_time(self.ctx)
+    }
+
     fn spawn_falling_block(&mut self, p: BlockPos, state: u32) {
         let entity = mc_entity::Entity {
             id: self.ctx.next_entity_id(),

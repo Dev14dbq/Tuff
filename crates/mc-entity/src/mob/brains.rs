@@ -2,6 +2,7 @@
 //! section of each mob's page).
 
 use super::goals::{Avoidee, Goal, Ranged, Slot};
+use super::aqua::Act as Aq;
 use super::land::Act;
 use super::{Brain, JUMP, LOOK, MOVE, Species, TARGET};
 
@@ -849,6 +850,251 @@ pub(super) fn brain(species: Species) -> Brain {
             ],
             vec![],
         ),
+        // Aquatic (Claude)
+        Cod | Salmon | Pufferfish | TropicalFish | Squid | GlowSquid | Dolphin | Turtle
+        | Axolotl | Frog | Tadpole | Guardian | ElderGuardian | Nautilus | ZombieNautilus => {
+            aquatic(species)
+        }
     };
     Brain { goals, targets }
+}
+
+// Aquatic (Claude)
+
+const AXOLOTL_PREY: &[Species] = &[
+    Species::TropicalFish,
+    Species::Pufferfish,
+    Species::Salmon,
+    Species::Cod,
+    Species::Squid,
+    Species::GlowSquid,
+    Species::Tadpole,
+];
+const AXOLOTL_HOSTILES: &[Species] = &[Species::Drowned, Species::Guardian, Species::ElderGuardian];
+const FROG_PREY: &[Species] = &[Species::Slime, Species::MagmaCube];
+const PUFFERFISH: &[Species] = &[Species::Pufferfish];
+const SQUIDS_AND_AXOLOTLS: &[Species] = &[Species::Squid, Species::GlowSquid, Species::Axolotl];
+
+fn aq(priority: u8, flags: u8, act: Aq) -> Slot {
+    slot(priority, flags, Goal::Aqua(act))
+}
+
+/// Swims to some spot of water now and then.
+fn swim(p: u8, speed: f64, interval: i32) -> Slot {
+    aq(
+        p,
+        MOVE,
+        Aq::Swim {
+            speed,
+            interval,
+            h: 10,
+            v: 7,
+            scared: false,
+            to: None,
+            left: 0,
+        },
+    )
+}
+
+/// Bolts away through the water when hurt.
+fn bolt(p: u8, speed: f64) -> Slot {
+    aq(
+        p,
+        MOVE,
+        Aq::Swim {
+            speed,
+            interval: 1,
+            h: 8,
+            v: 4,
+            scared: true,
+            to: None,
+            left: 0,
+        },
+    )
+}
+
+fn hunt(p: u8, kinds: &'static [Species], hostile: &'static [Species], small: bool, wait: bool) -> Slot {
+    aq(
+        p,
+        TARGET,
+        Aq::Hunt {
+            kinds,
+            hostile,
+            small,
+            wait,
+        },
+    )
+}
+
+fn aquatic(species: Species) -> (Vec<Slot>, Vec<Slot>) {
+    use Species::*;
+    match species {
+        Cod | Salmon | TropicalFish => (
+            vec![
+                bolt(1, 1.25),
+                aq(
+                    2,
+                    MOVE,
+                    Aq::Flee {
+                        range: 8.0,
+                        walk: 1.6,
+                        sprint: 1.4,
+                        to: None,
+                        from: None,
+                    },
+                ),
+                swim(4, 1.0, 40),
+                aq(5, MOVE, Aq::School { leader: None }),
+            ],
+            vec![],
+        ),
+        Pufferfish => (vec![bolt(1, 1.25), swim(2, 1.0, 40)], vec![]),
+        Squid | GlowSquid => (vec![aq(0, MOVE, Aq::Squid { time: 0 })], vec![]),
+        Dolphin => (
+            vec![
+                aq(0, MOVE, Aq::Breathe { to: None }),
+                aq(
+                    0,
+                    MOVE,
+                    Aq::ToWater {
+                        to: None,
+                        left: 0,
+                    },
+                ),
+                aq(1, MOVE, Aq::Treasure { left: 0 }),
+                aq(
+                    4,
+                    MOVE | LOOK,
+                    Aq::Escort {
+                        player: None,
+                        grace: 0,
+                    },
+                ),
+                swim(5, 1.0, 10),
+                look(6, 6.0),
+                random_look(7),
+                melee(8, 1.2, false),
+            ],
+            vec![hurt_by(1, true)],
+        ),
+        Turtle => (
+            vec![
+                bolt(0, 1.2),
+                panic(1, 1.2),
+                breed(2, 1.0),
+                aq(3, MOVE | LOOK, Aq::LayEgg { left: 0 }),
+                tempt(4, 1.1),
+                aq(
+                    5,
+                    MOVE,
+                    Aq::ToWater {
+                        to: None,
+                        left: 0,
+                    },
+                ),
+                aq(
+                    6,
+                    MOVE,
+                    Aq::Home {
+                        to: None,
+                        left: 0,
+                    },
+                ),
+                aq(
+                    7,
+                    MOVE,
+                    Aq::Swim {
+                        speed: 1.0,
+                        interval: 40,
+                        h: 16,
+                        v: 3,
+                        scared: false,
+                        to: None,
+                        left: 0,
+                    },
+                ),
+                stroll(8, 1.0),
+            ],
+            vec![],
+        ),
+        Axolotl => (
+            vec![
+                bolt(0, 1.0),
+                breed(1, 1.0),
+                tempt(2, 1.1),
+                melee(3, 1.0, false),
+                follow_parent(4, 1.1),
+                aq(
+                    5,
+                    MOVE,
+                    Aq::ToWater {
+                        to: None,
+                        left: 0,
+                    },
+                ),
+                swim(6, 1.0, 30),
+                stroll(7, 1.0),
+                look(8, 6.0),
+                random_look(9),
+            ],
+            vec![hunt(1, AXOLOTL_PREY, AXOLOTL_HOSTILES, false, true)],
+        ),
+        Frog => (
+            vec![
+                panic(1, 2.0),
+                aq(2, MOVE | LOOK, Aq::Tongue { range: 5.0 }),
+                breed(3, 1.0),
+                tempt(4, 1.25),
+                aq(
+                    5,
+                    MOVE,
+                    Aq::LaySpawn {
+                        to: None,
+                        left: 0,
+                    },
+                ),
+                swim(6, 1.0, 40),
+                stroll(7, 1.0),
+                look(8, 6.0),
+                random_look(9),
+            ],
+            vec![hunt(1, FROG_PREY, &[], true, false)],
+        ),
+        Tadpole => (vec![bolt(1, 1.25), tempt(2, 1.25), swim(3, 1.0, 40)], vec![]),
+        Guardian | ElderGuardian => {
+            let duration = if species == ElderGuardian { 60 } else { 80 };
+            (
+                vec![
+                    aq(
+                        4,
+                        MOVE | LOOK,
+                        Aq::Beam {
+                            duration,
+                            hold: 6.0,
+                        },
+                    ),
+                    swim(7, 0.5, 80),
+                ],
+                vec![
+                    nearest(1, 16.0, false),
+                    prey(2, SQUIDS_AND_AXOLOTLS, false, false),
+                ],
+            )
+        }
+        Nautilus | ZombieNautilus => (
+            vec![
+                follow_owner(0, 1.0, 10.0, 3.0),
+                breed(1, 1.0),
+                tempt(2, 1.0),
+                aq(3, MOVE | LOOK, Aq::Dash { speed: 1.5 }),
+                follow_parent(4, 1.1),
+                swim(5, 1.0, 40),
+            ],
+            vec![
+                hurt_by(1, false),
+                hunt(2, PUFFERFISH, &[], false, true),
+            ],
+        ),
+        _ => (vec![], vec![]),
+    }
 }

@@ -47,6 +47,11 @@ struct Entry {
 struct BiomeSpawns {
     creature: Vec<Entry>,
     monster: Vec<Entry>,
+    // Aquatic (Claude)
+    water_creature: Vec<Entry>,
+    water_ambient: Vec<Entry>,
+    underground: Vec<Entry>,
+    axolotls: Vec<Entry>,
     /// Chance of animals when a chunk is generated.
     probability: f64,
 }
@@ -117,6 +122,10 @@ fn load_biomes(ctx: &ServerContext) -> HashMap<String, BiomeSpawns> {
             BiomeSpawns {
                 creature: entries(&spawns["creature"]),
                 monster: entries(&spawns["monster"]),
+                water_creature: entries(&spawns["water_creature"]),
+                water_ambient: entries(&spawns["water_ambient"]),
+                underground: entries(&spawns["underground_water_creature"]),
+                axolotls: entries(&spawns["axolotls"]),
                 probability: attrs["minecraft:gameplay/creature_world_gen_spawn_probability"]
                     .as_f64()
                     .unwrap_or(0.1),
@@ -173,6 +182,9 @@ fn spawnable_on(species: Species) -> &'static str {
         Species::Parrot => "minecraft:parrots_spawnable_on",
         // Land animals (Cursor)
         Species::Goat => "minecraft:goats_spawnable_on",
+        // Aquatic (Claude)
+        Species::Turtle => "minecraft:sand",
+        Species::Frog => "minecraft:frogs_spawnable_on",
         _ => "minecraft:animals_spawnable_on",
     }
 }
@@ -282,6 +294,10 @@ impl Spots<'_> {
                 && self.ctx.world.block_light(Position::new(x, y, z)) == 0
                 && below(15) == 0;
         }
+        // Aquatic (Claude): the water kinds live in water.
+        if species.category().water() {
+            return self.water_fits(species, x, y, z, check_players);
+        }
         // Room for the body, not in a liquid or fire, on firm ground.
         for dy in 0..height {
             if self.ground.solid(x, y + dy, z)
@@ -308,7 +324,15 @@ impl Spots<'_> {
         match species.category() {
             // Golems come from villagers and players, never from here.
             Category::Misc => false,
+            Category::WaterCreature
+            | Category::WaterAmbient
+            | Category::UndergroundWater
+            | Category::Axolotls => false,
             Category::Creature => {
+                // Turtles keep to the beach.
+                if species == Species::Turtle && y >= self.ctx.world.sea_level + 4 {
+                    return false;
+                }
                 // Its kind of ground underfoot, in the light.
                 let below = self
                     .ctx
@@ -365,6 +389,10 @@ impl Spots<'_> {
         let list = match category {
             Category::Creature => &spawns.creature,
             Category::Monster => &spawns.monster,
+            Category::WaterCreature => &spawns.water_creature,
+            Category::WaterAmbient => &spawns.water_ambient,
+            Category::UndergroundWater => &spawns.underground,
+            Category::Axolotls => &spawns.axolotls,
             Category::Misc => return,
         };
         let Some(entry) = pick(list) else {
@@ -382,7 +410,13 @@ impl Spots<'_> {
         // is mostly caves.
         let y = match category {
             Category::Creature | Category::Misc => top + 1,
-            Category::Monster => {
+            // Aquatic (Claude): the fish and squids of the open sea keep to
+            // the upper thirteen blocks; the others come from anywhere.
+            Category::WaterCreature | Category::WaterAmbient => {
+                let sea = self.ctx.world.sea_level;
+                (sea - 13 + below(14) as i32).min(top)
+            }
+            Category::Monster | Category::UndergroundWater | Category::Axolotls => {
                 let min = self.ctx.world.min_y;
                 min + below((top + 2 - min).max(1) as u32) as i32
             }
@@ -489,6 +523,7 @@ fn spawn_round(
     let chunks: HashSet<(i32, i32)> = list.iter().copied().collect();
     let n = chunks.len() as i32;
     let (mut creatures, mut monsters) = (0, 0);
+    let mut water = [0_i32; 4];
     for e in entities.iter() {
         if let Kind::Mob(m) = &e.kind
             && m.dying.is_none()
@@ -501,6 +536,7 @@ fn spawn_round(
                 Category::Creature => creatures += 1,
                 Category::Monster => monsters += 1,
                 Category::Misc => {}
+                c => water[water_slot(c)] += 1,
             }
         }
     }
@@ -568,6 +604,21 @@ fn spawn_round(
         difficulty,
         &mut out,
     );
+    // Aquatic (Claude): the water kinds, every tick, in a few chunks.
+    for category in WATER_CATEGORIES {
+        let cap = water_cap(category) * n / 289;
+        let slot = water_slot(category);
+        for _ in 0..WATER_TRIES {
+            let have = water[slot] + out.iter().filter(|e| in_category(e, category)).count() as i32;
+            if have >= cap.max(1) {
+                break;
+            }
+            let chunk = list[below(list.len() as u32) as usize];
+            if let Some(b) = in_biome(chunk.0 * 16 + 8, chunk.1 * 16 + 8, biomes) {
+                spots.try_pack(&b, category, chunk, false, &mut out);
+            }
+        }
+    }
     // Monsters, every tick, in a few chunks picked at random.
     if difficulty > 0 && monsters < monster_cap && ctx.game_rule_bool("minecraft:spawn_monsters") {
         for _ in 0..MONSTER_TRIES {
@@ -581,6 +632,95 @@ fn spawn_round(
         }
     }
     out
+}
+
+/// The water categories and how many of each live per 289 chunks.
+const WATER_CATEGORIES: [Category; 4] = [
+    Category::WaterCreature,
+    Category::WaterAmbient,
+    Category::UndergroundWater,
+    Category::Axolotls,
+];
+/// Chunks tried for each water category each tick.
+const WATER_TRIES: usize = 2;
+
+fn water_cap(c: Category) -> i32 {
+    match c {
+        Category::WaterAmbient => 20,
+        _ => 5,
+    }
+}
+
+fn water_slot(c: Category) -> usize {
+    WATER_CATEGORIES.iter().position(|w| *w == c).unwrap_or(0)
+}
+
+fn in_category(e: &Entity, c: Category) -> bool {
+    matches!(&e.kind, Kind::Mob(m) if m.species.category() == c)
+}
+
+impl Spots<'_> {
+    /// Whether a water mob may spawn in this cell (minecraft.wiki, the
+    /// spawning of each: the sea within thirteen blocks of its level, glow
+    /// squids deep in the dark, axolotls over clay).
+    fn water_fits(&self, species: Species, x: i32, y: i32, z: i32, check_players: bool) -> bool {
+        if self.nether || !self.ground.loaded(x, z) {
+            return false;
+        }
+        let water = |dy: i32| self.ground.liquid(x, y + dy, z) == Liquid::Water;
+        let solid = |dy: i32| self.ground.solid(x, y + dy, z);
+        let sea = self.ctx.world.sea_level;
+        let height = species.size().1.ceil() as i32;
+        if !(0..height).all(|dy| water(dy) && !solid(dy)) {
+            return false;
+        }
+        if check_players {
+            let c = [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5];
+            if self.targets.iter().any(|t| {
+                (t.pos[0] - c[0]).powi(2) + (t.pos[1] - c[1]).powi(2) + (t.pos[2] - c[2]).powi(2)
+                    < MIN_PLAYER_DISTANCE * MIN_PLAYER_DISTANCE
+            }) {
+                return false;
+            }
+        }
+        let p = Position::new(x, y, z);
+        match species.category() {
+            // Open water above and below, within thirteen blocks of the sea.
+            Category::WaterCreature | Category::WaterAmbient => {
+                let (low, high) = if species == Species::Nautilus {
+                    (38, 58)
+                } else {
+                    (sea - 13, sea)
+                };
+                (low..=high).contains(&y) && water(-1) && water(1)
+            }
+            Category::UndergroundWater => {
+                y <= sea - 33
+                    && self
+                        .ctx
+                        .world
+                        .sky_light(p)
+                        .max(self.ctx.world.block_light(p))
+                        == 0
+            }
+            // Clay less than five blocks down in the same column of water.
+            Category::Axolotls => {
+                let clay = self
+                    .ctx
+                    .commands
+                    .env
+                    .tag("minecraft:block", "minecraft:axolotls_spawnable_on");
+                (1..=5).any(|d| {
+                    self.ctx
+                        .world
+                        .block(Position::new(x, y - d, z), &self.ctx.data.blocks)
+                        .and_then(|s| self.ctx.data.blocks.block_name(s))
+                        .is_some_and(|n| clay.iter().any(|c| c == n))
+                })
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Whether a biome is in a biome tag.
@@ -752,6 +892,12 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
             });
         }
         Cat | Cow | Wolf | Pig | Chicken => m.variant = pick_variant(ctx, species, biome, m),
+        // Aquatic (Claude): frogs and zombie nautiluses take their biome's
+        // look; a few squids and dolphins come as young.
+        Frog | ZombieNautilus => m.variant = pick_variant(ctx, species, biome, m),
+        Squid | GlowSquid if biome.is_some() && m.below(100) < 5 => m.set_baby(true),
+        Dolphin if biome.is_some() && m.below(10) == 0 => m.set_baby(true),
+        Turtle if biome.is_some() && m.below(100) < 5 => m.set_baby(true),
         Horse => m.variant = m.below(7) as i32 | (m.below(5) as i32) << 8,
         Parrot => m.variant = m.below(5) as i32,
         Fox => {

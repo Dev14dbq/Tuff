@@ -60,6 +60,15 @@ pub trait Level {
     /// A block sound (`block.copper_bulb.turn_on`...) at `p`.
     fn sound(&mut self, _name: &str, _p: BlockPos) {}
 
+    /// Young mobs (`minecraft:turtle`, `minecraft:tadpole`) hatch at `p`.
+    fn hatch(&mut self, _p: BlockPos, _species: &str, _count: i32) {}
+
+    /// The time of day in ticks; the game time unless the world keeps its
+    /// own clock.
+    fn day_time(&self) -> i64 {
+        self.game_time()
+    }
+
     /// A world event (sound and particles clients play) at `p`.
     fn level_event(&mut self, _event: i32, _p: BlockPos, _data: i32) {}
 

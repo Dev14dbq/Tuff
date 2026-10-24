@@ -327,7 +327,7 @@ pub(super) fn follow_lead(m: &mut Mob, b: &mut Body, holder: [f64; 3]) {
         }
         return;
     }
-    let panicking = m.revenge.is_some() && m.species.category() == super::Category::Creature;
+    let panicking = m.revenge.is_some() && m.species.category().animal();
     if panicking || m.species == Species::Parrot && m.sitting {
         return;
     }

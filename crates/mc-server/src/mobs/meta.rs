@@ -32,6 +32,9 @@ mod holder {
     pub const CHICKEN: i32 = 30;
     pub const SNIFFER_STATE: i32 = 35;
     pub const ARMADILLO_STATE: i32 = 36;
+    // Aquatic (Claude)
+    pub const FROG: i32 = 27;
+    pub const ZOMBIE_NAUTILUS: i32 = 32;
 }
 
 /// The data-driven variant registry of a kind, if it has one.
@@ -42,6 +45,9 @@ pub fn variant_registry(species: Species) -> Option<&'static str> {
         Species::Wolf => "minecraft:wolf_variant",
         Species::Pig => "minecraft:pig_variant",
         Species::Chicken => "minecraft:chicken_variant",
+        // Aquatic (Claude)
+        Species::Frog => "minecraft:frog_variant",
+        Species::ZombieNautilus => "minecraft:zombie_nautilus_variant",
         _ => return None,
     })
 }
@@ -281,6 +287,54 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
         Panda => {
             v.push((a + 3, MetadataValue::Byte(m.quirks.land.main_gene as i8)));
             v.push((a + 4, MetadataValue::Byte(m.quirks.land.hidden_gene as i8)));
+        }
+        // Aquatic (Claude): fields as minecraft.wiki lists them for 26.3.
+        Cod => v.push((16, MetadataValue::Boolean(m.quirks.aqua.from_bucket))),
+        Salmon => {
+            v.push((16, MetadataValue::Boolean(m.quirks.aqua.from_bucket)));
+            v.push((17, MetadataValue::VarInt(m.variant)));
+        }
+        Pufferfish => {
+            v.push((16, MetadataValue::Boolean(m.quirks.aqua.from_bucket)));
+            v.push((17, MetadataValue::VarInt(i32::from(m.quirks.aqua.puff))));
+        }
+        TropicalFish => {
+            v.push((16, MetadataValue::Boolean(m.quirks.aqua.from_bucket)));
+            v.push((17, MetadataValue::VarInt(m.variant)));
+        }
+        GlowSquid => v.push((18, MetadataValue::VarInt(m.quirks.aqua.dark))),
+        Dolphin => {
+            v.push((18, MetadataValue::Boolean(m.quirks.aqua.got_fish)));
+            v.push((19, MetadataValue::VarInt(m.quirks.aqua.air)));
+        }
+        Turtle => {
+            v.push((18, MetadataValue::Boolean(m.quirks.aqua.has_egg)));
+            v.push((19, MetadataValue::Boolean(m.quirks.aqua.laying > 0)));
+        }
+        Axolotl => {
+            v.push((18, MetadataValue::VarInt(m.variant)));
+            v.push((19, MetadataValue::Boolean(m.quirks.aqua.dead_play > 0)));
+            v.push((20, MetadataValue::Boolean(m.quirks.aqua.from_bucket)));
+        }
+        Frog => {
+            v.push((18, MetadataValue::Holder(holder::FROG, m.variant)));
+            v.push((19, MetadataValue::OptVarInt(m.quirks.aqua.caught)));
+        }
+        Tadpole => {
+            v.push((16, MetadataValue::Boolean(m.quirks.aqua.from_bucket)));
+            v.push((17, MetadataValue::Boolean(false)));
+        }
+        Guardian | ElderGuardian => {
+            v.push((16, MetadataValue::Boolean(m.quirks.aqua.retract)));
+            v.push((17, MetadataValue::VarInt(m.quirks.aqua.beam)));
+        }
+        Nautilus | ZombieNautilus => {
+            v.push((a, tame_flags(m)));
+            v.push((a + 1, MetadataValue::OptUuid(m.owner)));
+            v.push((a + 2, MetadataValue::Boolean(m.quirks.aqua.dashing > 0)));
+            if m.species == ZombieNautilus {
+                v.push((a + 3, MetadataValue::Holder(holder::ZOMBIE_NAUTILUS, m.variant)));
+            }
         }
         _ => {}
     }

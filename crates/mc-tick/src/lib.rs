@@ -12,6 +12,7 @@ pub mod fire;
 pub mod fluids;
 pub mod frosted_ice;
 pub mod gravity;
+pub mod hatching;
 pub mod hopper;
 pub mod leaves;
 pub mod level;

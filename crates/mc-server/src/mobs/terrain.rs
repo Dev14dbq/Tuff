@@ -417,6 +417,8 @@ impl Terrain for Ground<'_> {
             Feature::HornSnap => block_in_tag(self.ctx, "minecraft:snaps_goat_horn", name),
             Feature::Diggable => block_in_tag(self.ctx, "minecraft:sniffer_diggable_block", name),
             Feature::Repellent => block_in_tag(self.ctx, "minecraft:hoglin_repellents", name),
+            // Aquatic (Claude)
+            Feature::Sand => block_in_tag(self.ctx, "minecraft:sand", name),
         }
     }
 }
