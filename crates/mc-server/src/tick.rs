@@ -335,6 +335,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
                 crate::furnaces::tick(d);
                 crate::brewing::tick(d);
                 crate::campfires::tick(d);
+                crate::jukeboxes::tick(d);
                 crate::test_blocks::tick(d, lock(&d.time).age);
                 crate::crafter::tick(d);
                 crate::beacons::tick(d, count as i64);
@@ -535,6 +536,7 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
             "minecraft:campfire" => crate::campfires::wake(ctx, p),
             "minecraft:crafter" => crate::crafter::wake(ctx, p),
             "minecraft:brushable_block" => crate::archaeology::loaded(ctx, p),
+            "minecraft:jukebox" => crate::jukeboxes::wake(ctx, p),
             _ => crate::furnaces::wake(ctx, p),
         }
     }

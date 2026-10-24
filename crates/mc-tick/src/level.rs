@@ -131,6 +131,11 @@ pub trait Level {
         None
     }
 
+    /// Whether the jukebox at `p` has a song playing (it gives a signal).
+    fn jukebox_playing(&self, _p: BlockPos) -> bool {
+        false
+    }
+
     /// How many players have the container at `p` open.
     fn viewers(&self, _p: BlockPos) -> u8 {
         0

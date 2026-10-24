@@ -16,7 +16,7 @@ mod item;
 mod living;
 pub(crate) mod loot;
 pub(crate) mod place;
-mod places;
+pub(crate) mod places;
 mod progress;
 mod provider;
 pub(crate) mod rare;

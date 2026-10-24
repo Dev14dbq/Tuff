@@ -467,7 +467,7 @@ pub fn dig(
                 components: mc_nbt::Compound::new(),
             },
         ));
-        crate::fx::level_event(ctx, 1011, centre(position), 0);
+        crate::jukeboxes::stop(ctx, position);
     }
     let shown = pot.as_ref().map(|h| h.shown).unwrap_or(state);
     if let Some(harvest) = pot {

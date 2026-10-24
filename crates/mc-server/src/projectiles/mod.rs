@@ -10,6 +10,7 @@
 
 pub mod arrow;
 pub mod crossbow;
+pub mod eye;
 pub mod fireball;
 pub mod firework;
 pub mod fishing;
@@ -150,6 +151,7 @@ enum Class {
     Wind,
     Fireball,
     Thrown,
+    Eye,
     Firework,
     Bobber,
     Cloud,
@@ -167,6 +169,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         Shot::Lightning { .. } => Class::Lightning,
         Shot::WindCharge { .. } => Class::Wind,
         Shot::Fireball { .. } => Class::Fireball,
+        Shot::Eye { .. } => Class::Eye,
         Shot::Firework(_) => Class::Firework,
         Shot::Bobber { .. } => Class::Bobber,
         Shot::Cloud { .. } => Class::Cloud,
@@ -180,6 +183,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         Class::Wind => wind::tick(t, e),
         Class::Fireball => fireball::tick(t, e),
         Class::Thrown => thrown::tick(t, e),
+        Class::Eye => eye::tick(t, e),
         Class::Firework => firework::tick(t, e),
         Class::Bobber => fishing::tick(t, e),
         Class::Cloud => potions::tick_cloud(t, e),
@@ -301,6 +305,9 @@ pub fn use_item(
         "minecraft:snowball" => (Shot::Snowball, 1.5, 0.0, "entity.snowball.throw"),
         "minecraft:egg" => (Shot::Egg, 1.5, 0.0, "entity.egg.throw"),
         "minecraft:ender_pearl" => (Shot::Pearl, 1.5, 0.0, "entity.ender_pearl.throw"),
+        "minecraft:experience_bottle" => {
+            (Shot::Bottle, 0.7, -20.0, "entity.experience_bottle.throw")
+        }
         "minecraft:splash_potion" | "minecraft:lingering_potion" => {
             let lingering = name == "minecraft:lingering_potion";
             let contents = potions::contents(held.comps.as_ref());
@@ -320,6 +327,7 @@ pub fn use_item(
                 },
             )
         }
+        "minecraft:ender_eye" => return Some(eye::throw(ctx, actor, held.slot)),
         "minecraft:fishing_rod" => return Some(fishing::use_rod(ctx, actor, hand, yaw, pitch)),
         "minecraft:firework_rocket" => {
             // In the air a rocket does something only for a gliding player.

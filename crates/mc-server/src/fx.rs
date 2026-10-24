@@ -244,6 +244,12 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                 Shot::Pearl => {
                     s.meta.extend(item("minecraft:ender_pearl"));
                 }
+                Shot::Eye { .. } => {
+                    s.meta.extend(item("minecraft:ender_eye"));
+                }
+                Shot::Bottle => {
+                    s.meta.extend(item("minecraft:experience_bottle"));
+                }
                 Shot::Potion { item, color, .. } => {
                     s.meta.push((
                         play::metadata::ITEM,
@@ -468,6 +474,8 @@ pub fn type_name(kind: &Kind) -> Option<String> {
             Shot::Spit => "llama_spit",
             Shot::Egg => "egg",
             Shot::Pearl => "ender_pearl",
+            Shot::Eye { .. } => "eye_of_ender",
+            Shot::Bottle => "experience_bottle",
             Shot::Potion {
                 lingering: true, ..
             } => "lingering_potion",

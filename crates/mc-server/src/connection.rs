@@ -2623,31 +2623,17 @@ fn respawn_target(ctx: &ServerContext, uuid: u128) -> (String, Pose) {
                 on_ground: true,
             },
         ),
-        // A bed or a charged anchor that is still there.
-        Some(r) => {
-            let there = ctx.in_dimension(&r.dimension);
-            let at = Position::new(r.pos.0, r.pos.1, r.pos.2);
-            let blocks = &ctx.data.blocks;
-            let state = there.as_ref().and_then(|d| d.world.block(at, blocks));
-            let name = state.and_then(|s| blocks.block_name(s));
-            let anchor_ok = name == Some("minecraft:respawn_anchor")
-                && state.is_some_and(|s| blocks.property(s, "charges") != Some("0"));
-            if name.is_some_and(|n| n.ends_with("_bed")) || anchor_ok {
-                (
-                    r.dimension.clone(),
-                    Pose {
-                        x: f64::from(r.pos.0) + 0.5,
-                        y: f64::from(r.pos.1) + if anchor_ok { 1.0 } else { 0.6 },
-                        z: f64::from(r.pos.2) + 0.5,
-                        yaw: r.yaw,
-                        pitch: 0.0,
-                        on_ground: true,
-                    },
-                )
-            } else {
-                spawn_target(ctx, uuid)
-            }
-        }
+        // A bed or a charged anchor that is still there, with room beside
+        // it; if not, the player is told and the point is forgotten.
+        Some(r) => crate::respawn::find(ctx, &r).unwrap_or_else(|| {
+            update_player(ctx, uuid, |p| p.extra.respawn = None);
+            let _ = ctx.events.send(Event::Message {
+                uuid,
+                line: mc_protocol::text::translate("block.minecraft.spawn.not_valid", Vec::new()),
+                overlay: false,
+            });
+            spawn_target(ctx, uuid)
+        }),
         None => spawn_target(ctx, uuid),
     }
 }
@@ -2697,6 +2683,37 @@ mod tests {
                 "view distance {radius}"
             );
         }
+    }
+
+    #[test]
+    fn a_missing_bed_clears_the_spawn_point_and_tells_the_player() {
+        let Some(ctx) = crate::testkit::flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let uuid = 0x7701;
+        crate::testkit::join(&ctx, uuid, 7801, [0.5, -60.0, 0.5], 0);
+        let mut events = ctx.events.subscribe();
+        update_player(&ctx, uuid, |p| {
+            p.extra.respawn = Some(crate::players::Respawn {
+                dimension: ctx.world.dimension.clone(),
+                pos: (60, -60, 60),
+                yaw: 0.0,
+                pitch: 0.0,
+                forced: false,
+            });
+        });
+        let (dimension, _) = respawn_target(&ctx, uuid);
+        assert_eq!(dimension, ctx.world.dimension);
+        assert!(ctx.players.lock().unwrap()[&uuid].extra.respawn.is_none());
+        let mut told = false;
+        while let Some(event) = events.try_changed() {
+            if let Event::Message { uuid: to, line, .. } = event {
+                told |=
+                    to == uuid && format!("{line:?}").contains("block.minecraft.spawn.not_valid");
+            }
+        }
+        assert!(told);
     }
 
     #[test]

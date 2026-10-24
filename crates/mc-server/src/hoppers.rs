@@ -137,10 +137,73 @@ pub fn transfer(
     to: Position,
     to_side: Dir,
 ) -> bool {
+    if let Some(done) = jukebox_transfer(ctx, from, from_side, to, to_side) {
+        return done;
+    }
     let (Some(src), Some(dst)) = (store_at(ctx, from), store_at(ctx, to)) else {
         return false;
     };
     move_one(ctx, src, from_side, dst, to_side)
+}
+
+/// Hoppers and jukeboxes: a hopper pointing into an empty one puts a disc
+/// in, and one under it takes the disc out. `None` if neither end is a
+/// jukebox.
+fn jukebox_transfer(
+    ctx: &ServerContext,
+    from: Position,
+    from_side: Dir,
+    to: Position,
+    to_side: Dir,
+) -> Option<bool> {
+    let blocks = &ctx.data.blocks;
+    let jukebox = |p: Position| {
+        ctx.world
+            .block(p, blocks)
+            .is_some_and(|s| blocks.block_name(s) == Some("minecraft:jukebox"))
+    };
+    if jukebox(to) {
+        let Some(src) = store_at(ctx, from) else {
+            return Some(false);
+        };
+        let slots = containers::slots(ctx, src.at, src.kind);
+        let pick = sided_slots(src.name, slots.len(), from_side, false)
+            .into_iter()
+            .find_map(|i| {
+                let s = slots[i].clone()?;
+                let name = ctx.items.name(s.item)?;
+                crate::jukeboxes::song_of(ctx, name).map(|_| (i, s))
+            });
+        let Some((slot, stack)) = pick else {
+            return Some(false);
+        };
+        if !crate::jukeboxes::insert(ctx, to, &stack) {
+            return Some(false);
+        }
+        let left = (stack.count > 1).then(|| stack.with_count(stack.count - 1));
+        containers::put(ctx, src.at, src.kind, &[(slot, left)]);
+        return Some(true);
+    }
+    if jukebox(from) {
+        // Out of the bottom only, and the signal keeps hoppers still while
+        // a song plays.
+        if from_side != Dir::Down || crate::jukeboxes::playing(ctx, from) {
+            return Some(false);
+        }
+        let (Some(dst), Some(disc)) = (store_at(ctx, to), crate::jukeboxes::record(ctx, from))
+        else {
+            return Some(false);
+        };
+        let Some(item) = ctx.items.id(&disc) else {
+            return Some(false);
+        };
+        if !insert_one(ctx, dst, to_side, &ItemStack::new(item, 1)) {
+            return Some(false);
+        }
+        crate::jukeboxes::take(ctx, from);
+        return Some(true);
+    }
+    None
 }
 
 /// Moves one item from `src` (out through `from_side`) into `dst` (in
@@ -653,6 +716,13 @@ fn transfer_from_slot(
 /// Puts one of `stack` into whatever holds items at `p`, through its face
 /// `side`. `false` if there is nothing there or no room.
 pub fn insert_at(ctx: &ServerContext, p: Position, side: Dir, stack: &ItemStack) -> bool {
+    if ctx
+        .world
+        .block(p, &ctx.data.blocks)
+        .is_some_and(|s| ctx.data.blocks.block_name(s) == Some("minecraft:jukebox"))
+    {
+        return crate::jukeboxes::insert(ctx, p, stack);
+    }
     store_at(ctx, p).is_some_and(|dst| insert_one(ctx, dst, side, stack))
 }
 
