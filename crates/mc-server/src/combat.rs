@@ -445,7 +445,12 @@ pub fn hurt_player(ctx: &ServerContext, uuid: u128, hit: &Hit) -> Option<bool> {
                 0.8 + crate::hits::rnd() as f32 * 0.4,
             );
         }
-        crate::stats::custom(ctx, uuid, "damage_blocked_by_shield", (hit.amount * 10.0).round() as i32);
+        crate::stats::custom(
+            ctx,
+            uuid,
+            "damage_blocked_by_shield",
+            (hit.amount * 10.0).round() as i32,
+        );
         if hit.amount >= 3.0 {
             crate::held::wear(ctx, uuid, slot, 1 + hit.amount.floor() as i32);
         }

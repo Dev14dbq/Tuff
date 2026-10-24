@@ -290,17 +290,13 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             v.push((16, MetadataValue::Boolean(q.celebrating)));
             match m.species {
                 Pillager => v.push((17, MetadataValue::Boolean(q.charging))),
-                Evoker | Illusioner => v.push((
-                    17,
-                    MetadataValue::Byte(q.spell.map_or(0, |s| s as i8)),
-                )),
+                Evoker | Illusioner => {
+                    v.push((17, MetadataValue::Byte(q.spell.map_or(0, |s| s as i8))))
+                }
                 _ => {}
             }
         }
-        Vex => v.push((
-            16,
-            MetadataValue::Byte(i8::from(m.quirks.illager.lunging)),
-        )),
+        Vex => v.push((16, MetadataValue::Byte(i8::from(m.quirks.illager.lunging)))),
         _ => {}
     }
     v

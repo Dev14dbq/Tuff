@@ -30,9 +30,7 @@ pub fn tend(entities: &mut [Entity]) {
     let owners: Vec<(i32, Option<i32>)> = entities
         .iter()
         .filter_map(|e| match &e.kind {
-            Kind::Mob(m) if m.species == Species::Evoker && !m.is_dead() => {
-                Some((e.id, m.target))
-            }
+            Kind::Mob(m) if m.species == Species::Evoker && !m.is_dead() => Some((e.id, m.target)),
             _ => None,
         })
         .collect();
@@ -46,10 +44,7 @@ pub fn tend(entities: &mut [Entity]) {
                 m.quirks.illager.blue_sheep = sheep
                     .iter()
                     .filter(|(_, p)| dist_sq(*p, pos) <= 16.0 * 16.0)
-                    .min_by(|a, b| {
-                        dist_sq(a.1, pos)
-                            .total_cmp(&dist_sq(b.1, pos))
-                    })
+                    .min_by(|a, b| dist_sq(a.1, pos).total_cmp(&dist_sq(b.1, pos)))
                     .map(|(id, _)| *id);
             }
             Species::Vex => {
@@ -94,9 +89,12 @@ pub fn summon_vexes(ctx: &ServerContext, e: &Entity, fresh: &mut Vec<Entity>) {
             e.pos[1] + 1.0,
             e.pos[2] + r(5) - 2.0 + 0.5,
         ];
-        let at = Position::new(pos[0].floor() as i32, pos[1].floor() as i32, pos[2].floor() as i32);
-        if crate::hits::block_at(ctx, [at.x, at.y, at.z])
-            .is_none_or(|s| ctx.rules.blocks_motion(s))
+        let at = Position::new(
+            pos[0].floor() as i32,
+            pos[1].floor() as i32,
+            pos[2].floor() as i32,
+        );
+        if crate::hits::block_at(ctx, [at.x, at.y, at.z]).is_none_or(|s| ctx.rules.blocks_motion(s))
         {
             continue;
         }

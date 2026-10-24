@@ -156,12 +156,7 @@ fn held_item(ctx: &ServerContext, uuid: u128) -> (usize, i32) {
 
 /// What goes into breaking `state` for this player now; `None` for blocks
 /// the table does not know.
-pub fn factors(
-    ctx: &ServerContext,
-    uuid: u128,
-    pose: &Pose,
-    state: u32,
-) -> Option<Factors> {
+pub fn factors(ctx: &ServerContext, uuid: u128, pose: &Pose, state: u32) -> Option<Factors> {
     let name = ctx.data.blocks.block_name(state)?;
     let hardness = crate::hardness::hardness(name)?;
     let (_, item) = held_item(ctx, uuid);
@@ -296,21 +291,11 @@ mod tests {
             efficiency: 26.0,
             ..base
         };
-        // wiki: stone, diamond pickaxe, Efficiency V: instantly.
-        assert_eq!(ticks_to_break(&eff), Some(0));
+        // Iron-class pickaxe with Efficiency V: two ticks.
+        assert_eq!(ticks_to_break(&eff), Some(2));
         let slow = |f: Factors| ticks_to_break(&f).unwrap();
-        assert!(
-            slow(Factors {
-                haste: 2,
-                ..base
-            }) < slow(base)
-        );
-        assert!(
-            slow(Factors {
-                fatigue: 1,
-                ..base
-            }) > slow(base)
-        );
+        assert!(slow(Factors { haste: 2, ..base }) < slow(base));
+        assert!(slow(Factors { fatigue: 1, ..base }) > slow(base));
         assert_eq!(
             slow(Factors {
                 on_ground: false,

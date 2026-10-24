@@ -1294,7 +1294,10 @@ mod tests {
         assert!(costs[0] > 0, "{costs:?}");
         assert!(clues[0] >= 0);
         m.button(&ctx, P, 0);
-        assert_eq!(crate::stats::get(&ctx, P, crate::stats::CUSTOM, "enchant_item"), 1);
+        assert_eq!(
+            crate::stats::get(&ctx, P, crate::stats::CUSTOM, "enchant_item"),
+            1
+        );
         let made = m.slots[0].clone().unwrap();
         assert_eq!(ctx.items.name(made.item), Some("minecraft:enchanted_book"));
         assert!(!levels(&ctx, &made).is_empty());

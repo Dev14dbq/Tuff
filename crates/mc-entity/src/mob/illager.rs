@@ -273,7 +273,11 @@ pub(super) fn start(act: &mut Act, m: &mut Mob, b: &Body, s: &Senses, out: &mut 
                     home[1] + m.next_f64() * 11.0 - 5.5,
                     home[2] + m.next_f64() * 15.0 - 7.5,
                 ];
-                if !s.world.solid(p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32) {
+                if !s.world.solid(
+                    p[0].floor() as i32,
+                    p[1].floor() as i32,
+                    p[2].floor() as i32,
+                ) {
                     m.goto = Some((p, 0.25));
                     break;
                 }
@@ -449,10 +453,9 @@ fn cast_spell(spell: Spell, m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<Mob
             }
         }
         Spell::Mirror => {
-            m.effects.active.insert(
-                "invisibility",
-                crate::effect::Instance::new(0, 1200, true),
-            );
+            m.effects
+                .active
+                .insert("invisibility", crate::effect::Instance::new(0, 1200, true));
             m.dirty = true;
         }
     }
@@ -477,7 +480,8 @@ pub fn fangs(b: &Body, s: &Senses, target: [f64; 3]) -> Vec<([f64; 3], f32, i32)
             put(b.pos[0] + a.cos() * 1.5, b.pos[2] + a.sin() * 1.5, a, 0);
         }
         for i in 0..8 {
-            let a = angle + f64::from(i) * std::f64::consts::PI * 2.0 / 8.0
+            let a = angle
+                + f64::from(i) * std::f64::consts::PI * 2.0 / 8.0
                 + std::f64::consts::PI * 2.0 / 5.0;
             put(b.pos[0] + a.cos() * 2.5, b.pos[2] + a.sin() * 2.5, a, 3);
         }
