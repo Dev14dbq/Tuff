@@ -214,6 +214,8 @@ pub fn player_blow(
     if !landed {
         return;
     }
+    let (target, on_ground) = (entities[i].id, entities[i].on_ground);
+    crate::combat::after_blow(ctx, by.uuid, blow, target, target_pos, on_ground, entities);
     crate::combat::note_hit(ctx, by.uuid, entities[i].id);
     crate::combat::wear_weapon(ctx, by.uuid, by.game_mode);
     if blow.sweep {
@@ -256,9 +258,17 @@ fn hit_with_blow(
     } else {
         0.0
     };
+    let aquatic = blow.impaling > 0.0
+        && ctx
+            .commands
+            .env
+            .tag("minecraft:entity_type", "minecraft:sensitive_to_impaling")
+            .iter()
+            .any(|t| t == m.species.id());
+    let bonus = bonus + if aquatic { blow.impaling } else { 0.0 };
     let h = Harm {
         amount: damage + bonus,
-        kind: "minecraft:player_attack",
+        kind: blow.kind(),
         by: Some(by.entity_id),
         player: Some(by.uuid),
         direct: None,
@@ -268,7 +278,7 @@ fn hit_with_blow(
         weapon,
         killer: Some("minecraft:player".into()),
     };
-    harm(ctx, e, &h)
+    crate::damage::with_breach(blow.breach, || harm(ctx, e, &h))
 }
 
 /// The enchantments of a stack's components, for loot conditions.

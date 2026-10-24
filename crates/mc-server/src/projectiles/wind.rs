@@ -271,12 +271,6 @@ pub fn burst(ctx: &ServerContext, entities: &mut [Entity], g: &Gust) {
     });
 }
 
-/// [`burst`] outside the entity tick (a mace's Wind Burst).
-pub fn burst_now(ctx: &ServerContext, g: &Gust) {
-    let mut entities = lock(&ctx.entities);
-    burst(ctx, &mut entities, g);
-}
-
 /// Blocks the burst flips: levers, buttons, doors (by their lower half),
 /// trapdoors and fence gates within its radius, not iron ones and none
 /// that `blocks_wind_charge_explosions` shields.

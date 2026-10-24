@@ -180,7 +180,8 @@ pub fn first_solid(
     // A segment crosses at most a few dozen cells.
     for _ in 0..256 {
         let axis = (0..3).min_by(|&a, &b| t_max[a].total_cmp(&t_max[b]))?;
-        if t_max[axis] > 1.0 {
+        // A segment ending right on a face does not enter the block.
+        if t_max[axis] >= 1.0 {
             return None;
         }
         let t = t_max[axis];

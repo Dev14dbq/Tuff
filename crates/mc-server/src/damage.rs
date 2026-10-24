@@ -56,7 +56,22 @@ pub fn armor_reduce(amount: f32, armor: f32, toughness: f32, damage_type: &str) 
     }
     let f = 2.0 + toughness / 4.0;
     let points = (armor - amount / f).clamp(armor * 0.2, 20.0);
-    amount * (1.0 - points / 25.0)
+    let share = (points / 25.0 + BREACH.with(std::cell::Cell::get)).clamp(0.0, 1.0);
+    amount * (1.0 - share)
+}
+
+thread_local! {
+    /// What the weapon of the hit being worked out takes off the share
+    /// of damage armor stops (`armor_effectiveness`, Breach).
+    static BREACH: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
+/// Runs `f` with armor counting for `delta` less of the damage (Breach).
+pub fn with_breach<R>(delta: f32, f: impl FnOnce() -> R) -> R {
+    let before = BREACH.with(|b| b.replace(delta));
+    let r = f();
+    BREACH.with(|b| b.set(before));
+    r
 }
 
 /// A player's armor points and toughness from what they wear (slots 5–8),
