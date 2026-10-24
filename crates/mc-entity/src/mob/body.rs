@@ -579,7 +579,12 @@ pub(super) fn physics(
         max: [b.pos[0] + w / 2.0, b.pos[1] + h, b.pos[2] + w / 2.0],
     };
     let step = if flies { 0.0 } else { STEP };
-    let (moved, ground) = move_stepping(aabb, b.vel, s.world, step, b.on_ground);
+    // A vex goes through blocks.
+    let (moved, ground) = if m.species == Species::Vex {
+        (b.vel, false)
+    } else {
+        move_stepping(aabb, b.vel, s.world, step, b.on_ground)
+    };
     let blocked_h = (moved[0] - b.vel[0]).abs() > 1e-9 || (moved[2] - b.vel[2]).abs() > 1e-9;
     for (axis, &d) in moved.iter().enumerate() {
         b.pos[axis] += d;

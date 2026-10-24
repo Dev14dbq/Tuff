@@ -404,7 +404,18 @@ pub fn mob_attacks(
             knockback: 0.0,
             disables_shield: disables,
         };
-        if crate::combat::hurt_player(ctx, t.uuid, &hit).is_some() {
+        let landed = crate::combat::hurt_player(ctx, t.uuid, &hit);
+        // A shield stuns a ravager half the time.
+        if landed == Some(false)
+            && species == Species::Ravager
+            && let Kind::Mob(m) = &mut entities[i].kind
+        {
+            mc_entity::mob::illager::stun(m);
+            if m.quirks.illager.stun_tick > 0 {
+                fx::status(ctx, id, 39);
+            }
+        }
+        if landed.is_some() {
             if throws {
                 let (dx, dz) = (t.pos[0] - pos[0], t.pos[2] - pos[2]);
                 let len = dx.hypot(dz).max(1e-4);

@@ -887,6 +887,8 @@ async fn play(
                         }
                         play::Serverbound::PlayerAction { status: status @ (3 | 4), .. } => {
                             // Q: drop one (4) or the whole stack (3) from the main hand.
+                            let received = std::time::Instant::now();
+                            debug!(%uuid, status, "drop key: packet received");
                             let mut thrown = None;
                             let mut changed_slot = None;
                             change_hands(&ctx, uuid, entity_id, |hands| {
@@ -901,6 +903,13 @@ async fn play(
                                     changed_slot = Some((slot, hands.slots[slot].clone()));
                                 }
                             });
+                            debug!(
+                                %uuid,
+                                status,
+                                thrown = thrown.as_ref().map(|s| s.count),
+                                took_us = received.elapsed().as_micros() as u64,
+                                "drop key: handled",
+                            );
                             if let Some(stack) = thrown {
                                 crate::stats::threw(&ctx, uuid, &stack);
                                 crate::tick::throw_item(&ctx, pose, stack);

@@ -19,6 +19,7 @@ mod brains;
 mod chores;
 pub mod cube;
 pub mod goals;
+pub mod illager;
 pub mod land;
 pub mod species;
 
@@ -287,6 +288,8 @@ pub enum Missile {
     WindCharge,
     /// A shulker's homing bullet.
     ShulkerBullet,
+    /// A pillager's crossbow bolt (an arrow, shot harder).
+    Bolt,
 }
 
 /// What a mob did that the world must act on.
@@ -415,6 +418,22 @@ pub enum MobEvent {
     },
     /// A goat rams a block that snaps a horn off.
     Horn,
+    /// Evoker fangs come up at these spots (facing in degrees, delay).
+    Fangs(Vec<([f64; 3], f32, i32)>),
+    /// An evoker calls up three vexes.
+    SummonVexes,
+    /// An evoker turns this blue sheep red.
+    Wololo {
+        sheep: i32,
+    },
+    /// An illusioner blinds its target.
+    Blind {
+        target: i32,
+    },
+    /// A ravager roars: what stands near is hurt and thrown back.
+    Roar,
+    /// A ravager walked into something: leaves and crops there give way.
+    Crush,
 }
 
 /// State only some kinds keep: the silverfish's call, the endermite's
@@ -438,6 +457,8 @@ pub struct Quirks {
     pub land: land::Land,
     // Flying mobs (flying-mobs)
     pub air: air::Air,
+    /// Illagers, vexes and ravagers.
+    pub illager: illager::Illager,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1085,10 +1106,11 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
     body::life(m, &mut b, s, out);
     land::pulse(m, &b, s, out);
     air::pulse(m, &b, s, out);
+    illager::pulse(m, &mut b, s, out);
     if m.is_dead() || entity.removed {
         return;
     }
-    if m.no_ai {
+    if m.no_ai || illager::held(m) {
         body::physics(m, &mut b, s, None, out);
     } else if cube::of(m).is_some() {
         // A sulfur cube holding a block only rolls.
@@ -1101,6 +1123,7 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
         goals::run(&mut brain.targets, m, &mut b, s, out);
         goals::run(&mut brain.goals, m, &mut b, s, out);
         m.brain = brain;
+        illager::freeze(m);
         if m.target != target {
             m.target_since = m.age;
             if m.target.is_none() && m.stared {

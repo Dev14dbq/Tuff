@@ -3,6 +3,7 @@
 
 use super::air;
 use super::goals::{Avoidee, Goal, Ranged, Slot};
+use super::illager::{Act as Cast, Spell};
 use super::land::Act;
 use super::{Brain, JUMP, LOOK, MOVE, Species, TARGET};
 
@@ -952,6 +953,105 @@ pub(super) fn brain(species: Species) -> Brain {
             vec![slot(1, MOVE | LOOK | JUMP, Goal::Hop { delay: 0 })],
             vec![],
         ),
+        // Illagers and their kin
+        Pillager => (
+            vec![
+                float(),
+                cast(
+                    3,
+                    Cast::Crossbow {
+                        stage: 0,
+                        timer: 0,
+                        seen: 0,
+                    },
+                ),
+                stroll(8, 0.6),
+                look(9, 15.0),
+                random_look(10),
+            ],
+            raider_targets(16.0),
+        ),
+        Vindicator => (
+            vec![
+                float(),
+                melee(4, 1.0, false),
+                stroll(8, 0.6),
+                look(9, 3.0),
+                random_look(10),
+            ],
+            raider_targets(12.0),
+        ),
+        Evoker => (
+            vec![
+                float(),
+                avoid(2, Avoidee::Players, 8.0, 0.6, 1.0),
+                spell(4, Spell::Vexes),
+                spell(5, Spell::Fangs),
+                spell(6, Spell::Wololo),
+                stroll(8, 0.6),
+                look(9, 3.0),
+                random_look(10),
+            ],
+            raider_targets(12.0),
+        ),
+        Illusioner => (
+            vec![
+                float(),
+                spell(4, Spell::Mirror),
+                spell(5, Spell::Blindness),
+                ranged(6, Ranged::Bow, 20, 15.0),
+                stroll(8, 0.6),
+                look(9, 3.0),
+                random_look(10),
+            ],
+            raider_targets(18.0),
+        ),
+        Vex => (
+            vec![
+                float(),
+                cast(4, Cast::Charge),
+                cast(8, Cast::Drift),
+                look(9, 3.0),
+            ],
+            // The evoker's target is set on it by the world.
+            vec![hurt_by(1, true)],
+        ),
+        Ravager => (
+            vec![
+                float(),
+                melee(4, 1.0, true),
+                stroll(5, 0.4),
+                look(6, 6.0),
+                random_look(10),
+            ],
+            vec![
+                hurt_by(2, true),
+                nearest(3, 32.0, false),
+                prey(4, &[], true, false),
+                prey(4, IRON_GOLEMS, false, false),
+            ],
+        ),
     };
     Brain { goals, targets }
+}
+
+fn cast(p: u8, act: Cast) -> Slot {
+    slot(p, MOVE | LOOK, Goal::Illager(act))
+}
+
+/// A spell takes no hold of moving or looking: it starts even while the
+/// caster flees, and the caster stands still while it casts.
+fn spell(p: u8, spell: Spell) -> Slot {
+    slot(p, 0, Goal::Illager(Cast::Cast { spell, left: 0 }))
+}
+
+/// Raiders fight back with their friends and go for players, villagers and
+/// wandering traders, and iron golems.
+fn raider_targets(range: f64) -> Vec<Slot> {
+    vec![
+        hurt_by(1, true),
+        nearest(2, range, false),
+        prey(3, &[], true, false),
+        prey(3, IRON_GOLEMS, false, false),
+    ]
 }

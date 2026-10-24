@@ -649,7 +649,10 @@ mod tests {
         lock(&ctx.shooting).bobbers.insert(ME, 5000);
         crate::stats::load(&ctx, ME);
         use_rod(&ctx, actor(), 0, 0.0, 0.0);
-        assert_eq!(crate::stats::get(&ctx, ME, crate::stats::CUSTOM, "fish_caught"), 1);
+        assert_eq!(
+            crate::stats::get(&ctx, ME, crate::stats::CUSTOM, "fish_caught"),
+            1
+        );
         let after = lock(&ctx.entities);
         // The catch and the orb.
         assert!(after.iter().any(|e| matches!(e.kind, Kind::Item { .. })));

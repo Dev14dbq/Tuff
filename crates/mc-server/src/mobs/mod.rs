@@ -22,6 +22,7 @@ pub mod eggs;
 pub mod endermite;
 pub mod golems;
 pub mod hurt;
+mod illager;
 pub mod infest;
 pub mod interact;
 mod land;
@@ -571,6 +572,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         copper::tick(ctx, level, &mut entities, now);
         cube::tick(ctx, &mut entities, &targets, now);
     }
+    illager::tend(&mut entities);
 
     let ground = Ground::new(ctx);
     let items = ItemSense {
@@ -928,6 +930,12 @@ fn handle(
             knockback,
         } => land::ram(ctx, entities, i, target, damage, knockback, targets),
         MobEvent::Horn => land::horn(ctx, &mut entities[i]),
+        MobEvent::Fangs(spots) => illager::fangs(ctx, &entities[i], spots, &mut out.fresh),
+        MobEvent::SummonVexes => illager::summon_vexes(ctx, &entities[i], &mut out.fresh),
+        MobEvent::Wololo { sheep } => illager::wololo(ctx, entities, sheep),
+        MobEvent::Blind { target } => illager::blind(ctx, entities, targets, target),
+        MobEvent::Roar => illager::roar(ctx, entities, i, targets, difficulty),
+        MobEvent::Crush => illager::crush(ctx, level, &entities[i]),
     }
 }
 
@@ -986,11 +994,11 @@ fn shoot(
         crate::projectiles::spawn_by_mob(ctx, shot, me, from, vel)
     };
     match missile {
-        Missile::Arrow { .. } | Missile::Tipped(..) => {
+        Missile::Arrow { .. } | Missile::Bolt | Missile::Tipped(..) => {
             let (damage, slowness, tipped) = match missile {
                 Missile::Arrow { damage, slowness } => (damage, slowness, None),
                 Missile::Tipped(effect, ticks) => (2.0, false, Some((effect, ticks))),
-                _ => return,
+                _ => (2.0, false, None),
             };
             let Some(item) = ctx.items.id("minecraft:arrow") else {
                 return;

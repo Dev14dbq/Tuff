@@ -264,7 +264,7 @@ fn type_id(e: &Entity) -> Option<String> {
         Kind::ExperienceOrb { .. } => "minecraft:experience_orb".into(),
         // Neither a bobber nor a bolt of lightning outlives its moment.
         Kind::Projectile(Projectile {
-            shot: Shot::Bobber { .. } | Shot::Lightning { .. },
+            shot: Shot::Bobber { .. } | Shot::Lightning { .. } | Shot::Fangs { .. },
             ..
         }) => return None,
         other => format!("minecraft:{}", crate::fx::type_name(other)?),
@@ -737,7 +737,8 @@ fn projectile(ctx: &ServerContext, e: &Entity, p: &Projectile, c: &mut Compound)
         | Shot::ShulkerBullet { .. }
         | Shot::Breath { .. }
         | Shot::Lightning { .. }
-        | Shot::Bobber { .. } => {}
+        | Shot::Bobber { .. }
+        | Shot::Fangs { .. } => {}
     }
 }
 

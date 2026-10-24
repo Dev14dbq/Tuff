@@ -354,6 +354,21 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             v.push((a + 3, MetadataValue::Byte(m.quirks.land.main_gene as i8)));
             v.push((a + 4, MetadataValue::Byte(m.quirks.land.hidden_gene as i8)));
         }
+        // Illagers and their kin: 16 is a raider cheering; then a
+        // pillager's loading, a caster's spell. A vex's 16 is its flags
+        // (1: lunging).
+        Pillager | Vindicator | Evoker | Illusioner | Ravager => {
+            let q = &m.quirks.illager;
+            v.push((16, MetadataValue::Boolean(q.celebrating)));
+            match m.species {
+                Pillager => v.push((17, MetadataValue::Boolean(q.charging))),
+                Evoker | Illusioner => {
+                    v.push((17, MetadataValue::Byte(q.spell.map_or(0, |s| s as i8))))
+                }
+                _ => {}
+            }
+        }
+        Vex => v.push((16, MetadataValue::Byte(i8::from(m.quirks.illager.lunging)))),
         _ => {}
     }
     v

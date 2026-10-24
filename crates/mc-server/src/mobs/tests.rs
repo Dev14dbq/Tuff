@@ -4,6 +4,7 @@ use crate::combat::Blow;
 mod air;
 mod critters;
 // Land animals (Cursor)
+mod illagers;
 mod land;
 mod villages;
 

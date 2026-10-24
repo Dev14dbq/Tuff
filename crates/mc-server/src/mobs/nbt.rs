@@ -39,14 +39,14 @@ fn float(c: &Compound, key: &str) -> Option<f32> {
     }
 }
 
-fn cell(c: &Compound, key: &str) -> Option<[i32; 3]> {
+fn icell(c: &Compound, key: &str) -> Option<[i32; 3]> {
     match c.get(key)? {
         Tag::IntArray(v) if v.len() == 3 => Some([v[0], v[1], v[2]]),
         _ => None,
     }
 }
 
-fn cell_tag(c: [i32; 3]) -> Tag {
+fn icell_tag(c: [i32; 3]) -> Tag {
     Tag::IntArray(c.to_vec())
 }
 
@@ -270,8 +270,8 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
             Species::Bee => {
                 air.nectar = flag(nbt, "HasNectar").unwrap_or(false);
                 air.stung = flag(nbt, "HasStung").unwrap_or(false);
-                air.hive = cell(nbt, "hive_pos");
-                air.flower = cell(nbt, "flower_pos");
+                air.hive = icell(nbt, "hive_pos");
+                air.flower = icell(nbt, "flower_pos");
                 air.cannot_enter = int(nbt, "CannotEnterHiveTicks").unwrap_or(0);
                 air.since_pollination = int(nbt, "TicksSincePollination").unwrap_or(0);
                 air.crops = int(nbt, "CropsGrownSincePollination").unwrap_or(0);
@@ -286,7 +286,7 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
                 air.peek = int(nbt, "Peek").unwrap_or(0);
                 air.color = int(nbt, "Color").unwrap_or(16).clamp(0, 16) as u8;
             }
-            Species::Creaking => air.home = cell(nbt, "home_pos"),
+            Species::Creaking => air.home = icell(nbt, "home_pos"),
             Species::SulfurCube => {
                 air.fuse = int(nbt, "fuse").unwrap_or(-1);
                 air.pickup_timer = int(nbt, "pickup_timer").unwrap_or(0);
@@ -306,6 +306,27 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
             }
             _ => {}
         }
+    }
+    // Illagers and their kin
+    if s.raider() {
+        let q = &mut m.quirks.illager;
+        q.patrol_leader = flag(nbt, "PatrolLeader").unwrap_or(false);
+        q.patrolling = flag(nbt, "Patrolling").unwrap_or(false);
+        q.can_join_raid = flag(nbt, "CanJoinRaid").unwrap_or(false);
+        q.wave = int(nbt, "Wave").unwrap_or(0);
+        q.patrol_target = cell_tag(nbt, "patrol_target");
+    }
+    if s == Species::Vex {
+        m.quirks.illager.bound = cell_tag(nbt, "bound_pos");
+        if let Some(t) = int(nbt, "life_ticks") {
+            m.quirks.illager.life = t;
+        }
+    }
+    if s == Species::Ravager {
+        let q = &mut m.quirks.illager;
+        q.attack_tick = int(nbt, "AttackTick").unwrap_or(0);
+        q.stun_tick = int(nbt, "StunTick").unwrap_or(0);
+        q.roar_tick = int(nbt, "RoarTick").unwrap_or(0);
     }
     if let Some(v) = int(nbt, "Lifetime")
         && s == Species::Endermite
@@ -622,10 +643,10 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
             c.insert("HasNectar", Tag::Byte(i8::from(air.nectar)));
             c.insert("HasStung", Tag::Byte(i8::from(air.stung)));
             if let Some(h) = air.hive {
-                c.insert("hive_pos", cell_tag(h));
+                c.insert("hive_pos", icell_tag(h));
             }
             if let Some(f) = air.flower {
-                c.insert("flower_pos", cell_tag(f));
+                c.insert("flower_pos", icell_tag(f));
             }
             c.insert("CannotEnterHiveTicks", Tag::Int(air.cannot_enter));
             c.insert("TicksSincePollination", Tag::Int(air.since_pollination));
@@ -658,7 +679,7 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
         }
         Species::Creaking => {
             if let Some(h) = m.quirks.air.home {
-                c.insert("home_pos", cell_tag(h));
+                c.insert("home_pos", icell_tag(h));
             }
         }
         Species::CopperGolem => {
@@ -667,7 +688,54 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
             c.insert("weather_state", Tag::String(name.into()));
             c.insert("next_weather_age", Tag::Long(m.quirks.air.next_weather));
         }
+        Species::Vex => {
+            let q = &m.quirks.illager;
+            if let Some(p) = q.bound {
+                c.insert("bound_pos", cell_of(p));
+            }
+            if q.life > 0 {
+                c.insert("life_ticks", Tag::Int(q.life));
+            }
+        }
+        Species::Ravager => {
+            let q = &m.quirks.illager;
+            c.insert("AttackTick", Tag::Int(q.attack_tick));
+            c.insert("StunTick", Tag::Int(q.stun_tick));
+            c.insert("RoarTick", Tag::Int(q.roar_tick));
+        }
         _ => {}
+    }
+    // Illagers and their kin
+    if m.species.raider() {
+        let q = &m.quirks.illager;
+        c.insert("PatrolLeader", Tag::Byte(i8::from(q.patrol_leader)));
+        c.insert("Patrolling", Tag::Byte(i8::from(q.patrolling)));
+        c.insert("CanJoinRaid", Tag::Byte(i8::from(q.can_join_raid)));
+        c.insert("Wave", Tag::Int(q.wave));
+        if let Some(p) = q.patrol_target {
+            c.insert("patrol_target", cell_of(p));
+        }
+    }
+}
+
+/// A block position as an int array.
+fn cell_of(p: [f64; 3]) -> Tag {
+    Tag::IntArray(vec![
+        p[0].floor() as i32,
+        p[1].floor() as i32,
+        p[2].floor() as i32,
+    ])
+}
+
+/// A block position from an int array, as the middle of its bottom.
+fn cell_tag(c: &Compound, key: &str) -> Option<[f64; 3]> {
+    match c.get(key) {
+        Some(Tag::IntArray(a)) if a.len() == 3 => Some([
+            f64::from(a[0]) + 0.5,
+            f64::from(a[1]),
+            f64::from(a[2]) + 0.5,
+        ]),
+        _ => None,
     }
 }
 

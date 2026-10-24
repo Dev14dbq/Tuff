@@ -111,6 +111,13 @@ species! {
     Creaking => "minecraft:creaking", "Creaking";
     CopperGolem => "minecraft:copper_golem", "Copper Golem";
     SulfurCube => "minecraft:sulfur_cube", "Sulfur Cube";
+    // Illagers and their kin
+    Pillager => "minecraft:pillager", "Pillager";
+    Vindicator => "minecraft:vindicator", "Vindicator";
+    Evoker => "minecraft:evoker", "Evoker";
+    Illusioner => "minecraft:illusioner", "Illusioner";
+    Vex => "minecraft:vex", "Vex";
+    Ravager => "minecraft:ravager", "Ravager";
 }
 
 /// Which sound of a mob.
@@ -213,6 +220,10 @@ impl Species {
             Creaking => (0.9, 2.7),
             CopperGolem => (0.49, 0.98),
             SulfurCube => (0.98, 0.98),
+            // Illagers and their kin
+            Pillager | Vindicator | Evoker | Illusioner => (0.6, 1.95),
+            Vex => (0.4, 0.8),
+            Ravager => (1.95, 2.2),
         }
     }
 
@@ -255,6 +266,10 @@ impl Species {
             Creaking => 2.3 / 2.7,
             CopperGolem => 0.8125 / 0.98,
             SulfurCube => 0.625,
+            // Illagers and their kin
+            Pillager | Vindicator | Evoker | Illusioner => 1.62 / 1.95,
+            Vex => 0.51875 / 0.8,
+            Ravager => 2.1 / 2.2,
             _ => 0.85,
         }
     }
@@ -298,6 +313,11 @@ impl Species {
             Creaking => 1.0,
             CopperGolem => 12.0,
             SulfurCube => 8.0,
+            // Illagers and their kin
+            Pillager | Vindicator | Evoker => 24.0,
+            Illusioner => 32.0,
+            Vex => 14.0,
+            Ravager => 100.0,
             _ => 20.0,
         }
     }
@@ -335,6 +355,11 @@ impl Species {
             Creaking => 0.3,
             CopperGolem => 0.2,
             SulfurCube => 0.4,
+            // Illagers and their kin
+            Pillager | Vindicator => 0.35,
+            Evoker | Illusioner => 0.5,
+            Vex => 0.6,
+            Ravager => 0.3,
             _ => 0.25,
         }
     }
@@ -355,6 +380,10 @@ impl Species {
             Bee | Allay => 48.0,
             Breeze => 24.0,
             Creaking => 32.0,
+            // Illagers and their kin
+            Pillager | Ravager => 32.0,
+            Vindicator | Evoker => 12.0,
+            Illusioner => 18.0,
             _ => 16.0,
         }
     }
@@ -385,6 +414,10 @@ impl Species {
             Bee | Allay | Bogged | Parched => 2.0,
             Giant => 50.0,
             Creaking => 3.0,
+            // Illagers and their kin
+            Pillager | Vindicator => 5.0,
+            Vex => 4.0,
+            Ravager => 12.0,
             _ => 0.0,
         }
     }
@@ -406,6 +439,7 @@ impl Species {
             Species::Hoglin | Species::Zoglin => 0.6,
             // Flying mobs (flying-mobs): a shulker never budges.
             Species::Shulker => 1.0,
+            Species::Ravager => 0.75,
             _ => 0.0,
         }
     }
@@ -476,6 +510,7 @@ impl Species {
                 | Species::Bee
                 | Species::Allay
                 | Species::HappyGhast
+                | Species::Vex
         )
     }
 
@@ -501,6 +536,7 @@ impl Species {
                 | Species::Breeze
                 | Species::Shulker
                 | Species::CopperGolem
+                | Species::Vex
         )
     }
 
@@ -637,6 +673,19 @@ impl Species {
         )
     }
 
+    /// Illagers: pillagers, vindicators, evokers, illusioners.
+    pub fn illager(self) -> bool {
+        matches!(
+            self,
+            Species::Pillager | Species::Vindicator | Species::Evoker | Species::Illusioner
+        )
+    }
+
+    /// Those that fight in raids: illagers, witches and ravagers.
+    pub fn raider(self) -> bool {
+        self.illager() || matches!(self, Species::Witch | Species::Ravager)
+    }
+
     /// Arthropods: Bane of Arthropods hurts them more and slows them.
     pub fn arthropod(self) -> bool {
         matches!(
@@ -659,11 +708,13 @@ impl Species {
             Category::Monster => match self {
                 Blaze => (10, 10),
                 Endermite => (3, 3),
-                PiglinBrute => (20, 20),
+
                 // Flying mobs (flying-mobs)
                 Breeze => (10, 10),
                 Creaking => (0, 0),
                 SulfurCube => (1, 2),
+                PiglinBrute | Ravager => (20, 20),
+                Evoker => (10, 10),
                 Wither => (50, 50),
                 // The dragon's experience comes out as it dies.
                 Slime | MagmaCube | EnderDragon => (0, 0),
@@ -725,6 +776,7 @@ impl Species {
                     | Parched
                     | Creaking
                     | CopperGolem
+                    | Ravager
             ),
             Sound::Hurt | Sound::Death => true,
         };
