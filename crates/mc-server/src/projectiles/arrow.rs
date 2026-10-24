@@ -149,7 +149,8 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         Some((f, strike)) => {
             e.pos = add(from, e.vel, f);
             match strike {
-                Strike::Block => {
+                Strike::Block { .. } => {
+                    hits::hit_block(ctx, &strike, e.pos, true);
                     fx::sound(
                         ctx,
                         hit_sound(a),

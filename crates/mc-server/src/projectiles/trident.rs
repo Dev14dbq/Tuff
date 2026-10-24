@@ -452,7 +452,8 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 from[2] + e.vel[2] * f,
             ];
             match strike {
-                Strike::Block => {
+                Strike::Block { .. } => {
+                    hits::hit_block(ctx, &strike, e.pos, true);
                     fx::sound(
                         ctx,
                         "item.trident.hit_ground",

@@ -305,7 +305,9 @@ pub fn power_from(level: &dyn Level, ctx: Ctx, p: BlockPos, from: Dir, wires: bo
     let n = p.offset(from);
     let state = level.block(n);
     if ctx.shapes.conducts(state) {
-        conductor_power(level, ctx, n, wires)
+        // A target conducts, and gives its own signal on top of what it
+        // is powered with.
+        conductor_power(level, ctx, n, wires).max(other_power(ctx, state))
     } else {
         emitted(level, ctx, n, state, from.opposite(), wires)
     }
@@ -854,6 +856,13 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     if ctx.shapes.block_index(state) != kind {
         return;
     }
+    if ctx.shapes.block_name(state) == Some("minecraft:target") {
+        // The signal of a hit target runs out.
+        if level_of(ctx, state, "power") != 0 {
+            set_block(level, ctx, p, with(ctx, state, "power", "0"), Flags::ALL);
+        }
+        return;
+    }
     match part(ctx, state) {
         Part::Torch | Part::WallTorch => {
             let should = torch_should_light(level, ctx, p, state);
@@ -916,6 +925,23 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
         }
         _ => {}
     }
+}
+
+/// A projectile hit the target block at `p` with `strength` (1 to 15): it
+/// gives that signal until its tick `hold` ticks away, which a hit during
+/// the signal does not move (minecraft.wiki, "Target").
+pub fn target_hit(level: &mut dyn Level, ctx: Ctx, p: BlockPos, strength: u8, hold: i64) -> bool {
+    let state = level.block(p);
+    if ctx.shapes.block_name(state) != Some("minecraft:target") {
+        return false;
+    }
+    let new = with(ctx, state, "power", &strength.clamp(1, 15).to_string());
+    set_block(level, ctx, p, new, Flags::ALL);
+    let kind = ctx.shapes.block_index(state);
+    if !level.is_block_tick_scheduled(p, kind) {
+        level.schedule_block_tick(p, kind, hold, 0);
+    }
+    true
 }
 
 /// A component was placed or replaced: tell what it powers.
