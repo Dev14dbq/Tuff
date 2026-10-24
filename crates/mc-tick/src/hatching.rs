@@ -61,6 +61,24 @@ pub fn egg_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &
     }
 }
 
+/// Something stepped on the egg at `p`: one egg of the clutch breaks, and
+/// the last one takes the block with it. False when there is no egg.
+pub fn trample_egg(level: &mut dyn Level, ctx: Ctx, p: BlockPos) -> bool {
+    let state = level.block(p);
+    if name(ctx, state) != "turtle_egg" {
+        return false;
+    }
+    level.sound("block.turtle_egg.break", p);
+    let eggs = int(ctx, state, "eggs");
+    if eggs > 1 {
+        let next = ctx.shapes.with(state, "eggs", &(eggs - 1).to_string());
+        set_block(level, ctx, p, next, Flags::NONE);
+    } else {
+        set_block(level, ctx, p, ctx.shapes.air(), Flags::ALL);
+    }
+    true
+}
+
 /// Frogspawn placed at `p` asks for its tick 3600 to 11999 ticks later.
 pub fn on_place(level: &mut dyn Level, ctx: Ctx, p: BlockPos, old: u32, state: u32) {
     if ctx.shapes.block_index(old) == ctx.shapes.block_index(state)

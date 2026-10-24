@@ -650,3 +650,33 @@ fn give_empty_bucket(ctx: &ServerContext, by: &Actor) {
 fn give_empty_water_bucket(ctx: &ServerContext, by: &Actor) {
     give_empty_bucket(ctx, by);
 }
+
+/// A mob that lands on a turtle egg breaks one a third of the time, one
+/// that stands on it a hundredth of the time each tick. Turtles and what
+/// flies leave them alone, and so does a world that forbids mob griefing.
+pub fn trample_eggs(
+    ctx: &ServerContext,
+    level: &mut WorldLevel,
+    m: &mc_entity::Mob,
+    pos: [f64; 3],
+    fell: Option<f64>,
+) {
+    if matches!(m.species, Species::Turtle)
+        || m.species.flies()
+        || m.is_dead()
+        || !ctx.game_rule_bool("mob_griefing")
+    {
+        return;
+    }
+    let chance = if fell.is_some() { 3 } else { 100 };
+    if crate::util::random_u64() % chance != 0 {
+        return;
+    }
+    let at = mc_protocol::Position::new(
+        pos[0].floor() as i32,
+        (pos[1] + 0.01).floor() as i32,
+        pos[2].floor() as i32,
+    );
+    let logic = level.logic();
+    mc_tick::hatching::trample_egg(level, logic, crate::level::to_pos(at));
+}

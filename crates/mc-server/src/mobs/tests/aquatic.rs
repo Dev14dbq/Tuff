@@ -667,6 +667,41 @@ fn turtle_eggs_rest_by_day_and_off_the_sand() {
     assert_eq!(block(&ctx, [0, -60, 0]), "minecraft:turtle_egg");
 }
 
+/// Mobs break turtle eggs one at a time by standing on them; turtles do not.
+#[test]
+fn walkers_trample_turtle_eggs_one_by_one_but_turtles_do_not() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let egg = ctx
+        .data
+        .blocks
+        .state_id("minecraft:turtle_egg", &[("eggs", "2"), ("hatch", "0")])
+        .unwrap();
+    let p = mc_protocol::Position::new(0, -60, 0);
+    ctx.world.set_block(p, egg, &ctx.data.blocks, &ctx.rules);
+    let eggs = |ctx: &ServerContext| {
+        ctx.world
+            .block(p, &ctx.data.blocks)
+            .and_then(|s| ctx.data.blocks.property(s, "eggs").map(str::to_owned))
+    };
+    let mut level = WorldLevel::new(&ctx);
+    let turtle = Mob::new(Species::Turtle, 1);
+    for _ in 0..2000 {
+        crate::mobs::aqua::trample_eggs(&ctx, &mut level, &turtle, [0.5, -60.0, 0.5], None);
+    }
+    drop(level);
+    assert_eq!(eggs(&ctx).as_deref(), Some("2"));
+    let cow = Mob::new(Species::Cow, 1);
+    let mut level = WorldLevel::new(&ctx);
+    for _ in 0..3000 {
+        crate::mobs::aqua::trample_eggs(&ctx, &mut level, &cow, [0.5, -60.0, 0.5], None);
+    }
+    drop(level);
+    assert_eq!(block(&ctx, [0, -60, 0]), "minecraft:air");
+}
+
 #[test]
 fn frogspawn_hatches_into_two_to_five_tadpoles() {
     let Some(ctx) = flat() else {

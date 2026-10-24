@@ -616,6 +616,9 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             out.removed.push(e.id);
             continue;
         }
+        if e.on_ground {
+            aqua::trample_eggs(ctx, level, m, e.pos, None);
+        }
         let before = (
             e.pos,
             e.on_ground,
@@ -851,7 +854,10 @@ fn handle(
             let harm = hurt::Harm::new(amount, kind);
             hurt::harm(ctx, &mut entities[i], &harm);
         }
-        MobEvent::Landed { distance } => trample_farmland(ctx, level, m, pos, distance),
+        MobEvent::Landed { distance } => {
+            trample_farmland(ctx, level, m, pos, distance);
+            aqua::trample_eggs(ctx, level, m, pos, Some(distance));
+        }
         MobEvent::Breed { partner } => {
             if let Some(baby) = hurt::breed(ctx, entities, i, partner) {
                 out.fresh.push(baby);
