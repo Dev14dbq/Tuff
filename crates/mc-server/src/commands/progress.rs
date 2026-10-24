@@ -331,6 +331,8 @@ pub fn load_progress(
     recipes: &[String],
     saved: &crate::players::BookState,
 ) {
+    // Reading every advancement takes a while: do it here, not in a tick.
+    book(ctx);
     let mut done: HashMap<String, BTreeSet<String>> = HashMap::new();
     if let Some(file) = advancements_file(ctx, uuid)
         && let Ok(text) = std::fs::read_to_string(&file)
