@@ -43,6 +43,10 @@ pub fn part(ctx: Ctx, state: u32) -> Part {
         Some("minecraft:redstone_wall_torch") => Part::WallTorch,
         Some("minecraft:lever") => Part::Lever,
         Some("minecraft:redstone_block") => Part::Block,
+        // A start-mode test block gives power like a block of redstone.
+        Some("minecraft:test_block") if ctx.shapes.property(state, "mode") == Some("start") => {
+            Part::Block
+        }
         Some("minecraft:redstone_lamp") => Part::Lamp,
         Some("minecraft:repeater") => Part::Repeater,
         Some("minecraft:observer") => Part::Observer,

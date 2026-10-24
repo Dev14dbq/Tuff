@@ -380,6 +380,10 @@ impl Level for WorldLevel<'_> {
         crate::structure_blocks::power(self.ctx, to_position(p), powered);
     }
 
+    fn test_block_power(&mut self, p: BlockPos, powered: bool) {
+        crate::test_blocks::power(self.ctx, to_position(p), powered);
+    }
+
     fn command_block_tick(&mut self, p: BlockPos) {
         crate::command_blocks::tick(self, to_position(p));
     }

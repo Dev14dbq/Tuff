@@ -63,6 +63,7 @@ mod scoreboard;
 mod storage;
 mod structure_blocks;
 mod summon;
+mod test_blocks;
 mod tick;
 mod trials;
 mod trading;

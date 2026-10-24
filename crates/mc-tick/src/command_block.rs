@@ -36,6 +36,11 @@ pub fn neighbor_changed(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
         level.structure_block_power(p, powered);
         return;
     }
+    if ctx.shapes.block_name(state) == Some("minecraft:test_block") {
+        let powered = redstone::received(level, ctx, p, true) > 0;
+        level.test_block_power(p, powered);
+        return;
+    }
     let Some(mode) = mode(ctx, state) else {
         return;
     };

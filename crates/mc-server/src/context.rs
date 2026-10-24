@@ -72,6 +72,8 @@ pub enum Direct {
     /// A command block's data, which opens its window.
     BlockEntityData(mc_protocol::packets::play::BlockEntityData),
     EntityEvent(mc_protocol::packets::play::EntityEvent),
+    TestStatus(mc_protocol::packets::play::TestInstanceBlockStatus),
+    TestHighlight(mc_protocol::packets::play::GameTestHighlightPos),
     /// A push (knockback): the player's own velocity.
     Motion(mc_protocol::packets::play::SetEntityMotion),
 }

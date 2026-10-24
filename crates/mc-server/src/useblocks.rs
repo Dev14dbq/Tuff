@@ -210,6 +210,18 @@ pub fn try_use(
                 None => false,
             }
         }
+        id @ ("minecraft:test_block" | "minecraft:test_instance_block") => {
+            match crate::test_blocks::open(ctx, actor.uuid, actor.game_mode, clicked, id) {
+                Some(packet) => {
+                    outcome.events.push(Event::Direct {
+                        uuid: actor.uuid,
+                        packet: crate::context::Direct::BlockEntityData(packet),
+                    });
+                    true
+                }
+                None => false,
+            }
+        }
         _ => false,
     };
     if reacted {

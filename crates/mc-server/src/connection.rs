@@ -1126,6 +1126,16 @@ async fn play(
                         let action = Action::SetJigsaw { position, name, target, pool, final_state, joint, selection_priority, placement_priority };
                         let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                     }
+                    play::Serverbound::SetTestBlock { position, mode, message } => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::SetTestBlock { position, mode, message };
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                    }
+                    play::Serverbound::TestInstanceBlockAction { position, action, test, size, rotation, ignore_entities } => {
+                        let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                        let action = Action::TestInstance { position, action, test, size, rotation, ignore_entities };
+                        let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
+                    }
                     play::Serverbound::JigsawGenerate { position, levels, .. } => {
                         let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                         let action = Action::GenerateJigsaw { position, levels };
@@ -1520,6 +1530,8 @@ async fn play(
                             Direct::GameEvent(p) => writer.queue(&p)?,
                             Direct::BlockEntityData(p) => writer.queue(&p)?,
                             Direct::EntityEvent(p) => writer.queue(&p)?,
+                            Direct::TestStatus(p) => writer.queue(&p)?,
+                            Direct::TestHighlight(p) => writer.queue(&p)?,
                             Direct::Motion(p) => writer.queue(&p)?,
                         }
                     }

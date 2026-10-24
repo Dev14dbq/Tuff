@@ -585,6 +585,22 @@ pub mod play {
             selection_priority: i32,
             placement_priority: i32,
         },
+        /// A test block's window: `mode` 0 start, 1 log, 2 fail, 3 accept.
+        SetTestBlock {
+            position: Position,
+            mode: i32,
+            message: String,
+        },
+        /// A test instance block's window. `action`: 0 init, 1 query, 2 set,
+        /// 3 reset, 4 save, 5 export, 6 run; `rotation`: quarter turns.
+        TestInstanceBlockAction {
+            position: Position,
+            action: i32,
+            test: Option<String>,
+            size: [i32; 3],
+            rotation: i32,
+            ignore_entities: bool,
+        },
         /// "Generate" in a jigsaw block's window.
         JigsawGenerate {
             position: Position,
@@ -964,6 +980,19 @@ pub mod play {
                     joint: r.string(32767)?,
                     selection_priority: r.varint()?,
                     placement_priority: r.varint()?,
+                },
+                "minecraft:set_test_block" => Serverbound::SetTestBlock {
+                    position: r.position()?,
+                    mode: r.varint()?,
+                    message: r.string(32767)?,
+                },
+                "minecraft:test_instance_block_action" => Serverbound::TestInstanceBlockAction {
+                    position: r.position()?,
+                    action: r.varint()?,
+                    test: if r.bool()? { Some(r.string(32767)?) } else { None },
+                    size: [r.varint()?, r.varint()?, r.varint()?],
+                    rotation: r.varint()?,
+                    ignore_entities: r.bool()?,
                 },
                 "minecraft:jigsaw_generate" => Serverbound::JigsawGenerate {
                     position: r.position()?,
@@ -1605,6 +1634,40 @@ pub mod play {
             out.put_position(self.position);
             out.put_varint(self.kind);
             put_nbt(out, &mc_nbt::Tag::Compound(self.data.clone()));
+        }
+    }
+
+    /// Test Instance Block Status: the text a test instance block's window
+    /// shows, and the size of its test when known.
+    #[derive(Clone, Debug)]
+    pub struct TestInstanceBlockStatus {
+        pub status: Tag,
+        pub size: Option<[i32; 3]>,
+    }
+    packet!(TestInstanceBlockStatus, Play, "minecraft:test_instance_block_status");
+    impl Encode for TestInstanceBlockStatus {
+        fn encode(&self, out: &mut Vec<u8>) {
+            put_nbt(out, &self.status);
+            out.put_bool(self.size.is_some());
+            if let Some(size) = self.size {
+                for v in size {
+                    out.put_varint(v);
+                }
+            }
+        }
+    }
+
+    /// Game Test Highlight Pos: marks a block where a test failed.
+    #[derive(Clone, Debug)]
+    pub struct GameTestHighlightPos {
+        pub absolute: Position,
+        pub relative: Position,
+    }
+    packet!(GameTestHighlightPos, Play, "minecraft:game_test_highlight_pos");
+    impl Encode for GameTestHighlightPos {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_position(self.absolute);
+            out.put_position(self.relative);
         }
     }
 

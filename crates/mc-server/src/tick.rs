@@ -167,6 +167,21 @@ pub enum Action {
         position: Position,
         levels: i32,
     },
+    /// A test block's window was done.
+    SetTestBlock {
+        position: Position,
+        mode: i32,
+        message: String,
+    },
+    /// A test instance block's window asked for something.
+    TestInstance {
+        position: Position,
+        action: i32,
+        test: Option<String>,
+        size: [i32; 3],
+        rotation: i32,
+        ignore_entities: bool,
+    },
     /// A structure block's window was done.
     SetStructure {
         position: Position,
@@ -245,6 +260,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
                 crate::furnaces::tick(d);
                 crate::brewing::tick(d);
                 crate::campfires::tick(d);
+                crate::test_blocks::tick(d, lock(&d.time).age);
                 crate::crafter::tick(d);
                 crate::beacons::tick(d, count as i64);
                 lock(&d.border).tick();
@@ -1132,6 +1148,38 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             ),
             ..Outcome::default()
         },
+        Action::SetTestBlock {
+            position,
+            mode,
+            message,
+        } => Outcome {
+            messages: crate::test_blocks::set_test_block(
+                ctx,
+                actor.uuid,
+                actor.game_mode,
+                position,
+                mode,
+                &message,
+            ),
+            ..Outcome::default()
+        },
+        Action::TestInstance {
+            position,
+            action,
+            test,
+            size,
+            rotation,
+            ignore_entities,
+        } => crate::test_blocks::instance_action(
+            ctx,
+            actor,
+            position,
+            action,
+            test,
+            size,
+            rotation,
+            ignore_entities,
+        ),
         Action::SetStructure {
             position,
             action,

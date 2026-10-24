@@ -29,7 +29,7 @@ const LIMIT: i32 = 48;
 /// A corner block is looked for this far from the save block.
 const DETECT: i32 = 80;
 
-fn text(s: &str) -> Tag {
+pub(crate) fn text(s: &str) -> Tag {
     Tag::String(s.to_owned())
 }
 
@@ -244,7 +244,7 @@ pub fn generate_jigsaw(
     }
 }
 
-fn apply(ctx: &ServerContext, changes: Vec<(Position, u32)>, entities: Vec<(Position, Compound)>) {
+pub(crate) fn apply(ctx: &ServerContext, changes: Vec<(Position, u32)>, entities: Vec<(Position, Compound)>) {
     let mut out = crate::commands::Output::default();
     crate::commands::world::apply(ctx, changes, false, &mut out);
     for (p, nbt) in entities {
@@ -277,7 +277,7 @@ fn mirror(name: &str) -> Mirror {
 }
 
 /// `namespace:path` of a structure's name, if it is a valid one.
-fn template_id(name: &str) -> Option<String> {
+pub(crate) fn template_id(name: &str) -> Option<String> {
     let id = if name.contains(':') {
         name.to_owned()
     } else {
@@ -297,7 +297,7 @@ fn template_id(name: &str) -> Option<String> {
 }
 
 /// Where a saved structure's file lives.
-fn file_of(ctx: &ServerContext, id: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn file_of(ctx: &ServerContext, id: &str) -> Option<std::path::PathBuf> {
     let (ns, path) = id.split_once(':')?;
     Some(
         ctx.world
@@ -310,7 +310,7 @@ fn file_of(ctx: &ServerContext, id: &str) -> Option<std::path::PathBuf> {
 }
 
 /// The structure `id`: one a structure block saved, else the data pack's.
-fn load(ctx: &ServerContext, id: &str) -> Option<std::sync::Arc<Template>> {
+pub(crate) fn load(ctx: &ServerContext, id: &str) -> Option<std::sync::Arc<Template>> {
     let features = crate::commands::place::features(ctx)?;
     if let Some(path) = file_of(ctx, id)
         && let Some(t) = Template::load(&path, &features.facts)
@@ -339,7 +339,7 @@ fn palette_entry(ctx: &ServerContext, state: u32) -> Compound {
 }
 
 /// The template of the box from `min` of `size`, as the file keeps it.
-fn capture(ctx: &ServerContext, min: Position, size: [i32; 3]) -> Compound {
+pub(crate) fn capture(ctx: &ServerContext, min: Position, size: [i32; 3]) -> Compound {
     let blocks = &ctx.data.blocks;
     let mut palette: Vec<Compound> = Vec::new();
     let mut index: std::collections::HashMap<u32, i32> = std::collections::HashMap::new();
@@ -386,7 +386,7 @@ fn capture(ctx: &ServerContext, min: Position, size: [i32; 3]) -> Compound {
     root
 }
 
-fn write_file(path: &std::path::Path, root: Compound) -> bool {
+pub(crate) fn write_file(path: &std::path::Path, root: Compound) -> bool {
     use std::io::Write as _;
     let mut bytes = Vec::new();
     if mc_nbt::write_named("", &Tag::Compound(root), &mut bytes).is_err() {

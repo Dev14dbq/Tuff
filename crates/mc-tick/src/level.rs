@@ -213,6 +213,8 @@ pub trait Level {
     /// The structure block at `p` is powered (or not): a save or load block
     /// starts when the power comes.
     fn structure_block_power(&mut self, _p: BlockPos, _powered: bool) {}
+    /// A test block's power changed.
+    fn test_block_power(&mut self, _p: BlockPos, _powered: bool) {}
 
     /// The due tick of the command block at `p`: it runs.
     fn command_block_tick(&mut self, _p: BlockPos) {}
