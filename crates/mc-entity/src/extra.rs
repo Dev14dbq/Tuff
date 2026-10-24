@@ -94,6 +94,8 @@ pub enum Shot {
         target: [f64; 3],
         survive: bool,
     },
+    /// A bottle o' enchanting: breaks into experience.
+    Bottle,
     /// A llama's spit.
     Spit,
     Potion {

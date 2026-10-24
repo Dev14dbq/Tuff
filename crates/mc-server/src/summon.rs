@@ -190,6 +190,7 @@ pub fn build(
         "snowball" => shot(Shot::Snowball),
         "egg" => shot(Shot::Egg),
         "ender_pearl" => shot(Shot::Pearl),
+        "experience_bottle" => shot(Shot::Bottle),
         "eye_of_ender" => shot(Shot::Eye {
             target: at,
             survive: true,

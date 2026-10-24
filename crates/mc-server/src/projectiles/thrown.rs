@@ -45,7 +45,9 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             return;
         }
     }
-    let gravity = if matches!(shot, Shot::Potion { .. }) {
+    let gravity = if matches!(shot, Shot::Bottle) {
+        0.07
+    } else if matches!(shot, Shot::Potion { .. }) {
         0.05
     } else if matches!(shot, Shot::Spit) {
         0.06
@@ -149,6 +151,11 @@ fn land(
                 1.0,
             );
         }
+        Shot::Bottle => {
+            // Splash particles of water's colour, then 3 to 11 points.
+            fx::level_event(ctx, 2002, e.pos, 0x385dc6);
+            crate::xp::spawn(ctx, e.pos, bottle_points());
+        }
         Shot::Potion {
             effects,
             color,
@@ -159,6 +166,12 @@ fn land(
         }
         _ => {}
     }
+}
+
+/// What a bottle o' enchanting is worth: 3 and two rolls of 0 to 4
+/// (minecraft.wiki, "Bottle o' Enchanting").
+fn bottle_points() -> i32 {
+    3 + (hits::rnd() * 5.0) as i32 + (hits::rnd() * 5.0) as i32
 }
 
 /// A spot a player fits at, near where a pearl came down: backed out of
@@ -175,4 +188,77 @@ fn fit(ctx: &crate::context::ServerContext, at: [f64; 3]) -> [f64; 3] {
         p[1] = p[1].floor();
     }
     at
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::projectiles::{spawn, tests::flat};
+    use crate::tick::lock;
+
+    fn orb_points(ctx: &crate::context::ServerContext) -> i32 {
+        lock(&ctx.entities)
+            .iter()
+            .map(|e| match e.kind {
+                Kind::ExperienceOrb { value, count } => value * count,
+                _ => 0,
+            })
+            .sum()
+    }
+
+    #[test]
+    fn a_bottle_is_worth_three_to_eleven_points() {
+        let (mut low, mut high) = (i32::MAX, 0);
+        for _ in 0..2000 {
+            let n = bottle_points();
+            (low, high) = (low.min(n), high.max(n));
+        }
+        assert_eq!((low, high), (3, 11));
+    }
+
+    #[test]
+    fn a_thrown_bottle_breaks_on_the_ground_into_orbs() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut rx = ctx.events.subscribe();
+        let id = spawn(
+            &ctx,
+            Shot::Bottle,
+            None,
+            [0.5, -58.0, 0.5],
+            [0.0, -0.5, 0.0],
+        );
+        let mut e = {
+            let mut entities = lock(&ctx.entities);
+            let i = entities.iter().position(|e| e.id == id).unwrap();
+            entities.swap_remove(i)
+        };
+        let mut out = hits::Out::default();
+        for _ in 0..20 {
+            let mut t = Tick {
+                ctx: &ctx,
+                players: &[],
+                targets: &[],
+                out: &mut out,
+                shooter: None,
+            };
+            crate::projectiles::tick(&mut t, &mut e);
+            if e.removed {
+                break;
+            }
+        }
+        assert!(e.removed);
+        let points = orb_points(&ctx);
+        assert!((3..=11).contains(&points), "{points}");
+        // The splash is shown in water's colour.
+        let mut splashed = false;
+        while let Some(ev) = rx.try_changed() {
+            if let Event::Fx(fx::Fx::Level(l)) = ev {
+                splashed |= l.event == 2002 && l.data == 0x385dc6;
+            }
+        }
+        assert!(splashed);
+    }
 }

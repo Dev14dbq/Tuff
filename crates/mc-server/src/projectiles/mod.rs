@@ -305,6 +305,9 @@ pub fn use_item(
         "minecraft:snowball" => (Shot::Snowball, 1.5, 0.0, "entity.snowball.throw"),
         "minecraft:egg" => (Shot::Egg, 1.5, 0.0, "entity.egg.throw"),
         "minecraft:ender_pearl" => (Shot::Pearl, 1.5, 0.0, "entity.ender_pearl.throw"),
+        "minecraft:experience_bottle" => {
+            (Shot::Bottle, 0.7, -20.0, "entity.experience_bottle.throw")
+        }
         "minecraft:splash_potion" | "minecraft:lingering_potion" => {
             let lingering = name == "minecraft:lingering_potion";
             let contents = potions::contents(held.comps.as_ref());

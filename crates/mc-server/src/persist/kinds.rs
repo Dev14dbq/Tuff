@@ -610,10 +610,11 @@ fn projectile(ctx: &ServerContext, e: &Entity, p: &Projectile, c: &mut Compound)
                 c.insert("DealtDamage", Tag::Byte(0));
             }
         }
-        Shot::Snowball | Shot::Egg | Shot::Pearl | Shot::Eye { .. } => {
+        Shot::Snowball | Shot::Egg | Shot::Pearl | Shot::Bottle | Shot::Eye { .. } => {
             let name = match p.shot {
                 Shot::Snowball => "minecraft:snowball",
                 Shot::Egg => "minecraft:egg",
+                Shot::Bottle => "minecraft:experience_bottle",
                 Shot::Eye { .. } => "minecraft:ender_eye",
                 _ => "minecraft:ender_pearl",
             };

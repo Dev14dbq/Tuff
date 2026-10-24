@@ -385,6 +385,7 @@ fn everything(ctx: &ServerContext) -> Vec<Entity> {
         "snowball",
         "egg",
         "ender_pearl",
+        "experience_bottle",
         "splash_potion",
         "lingering_potion",
     ]
