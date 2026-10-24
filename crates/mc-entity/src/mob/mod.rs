@@ -14,6 +14,7 @@
 
 mod body;
 mod brains;
+mod chores;
 pub mod goals;
 pub mod species;
 
@@ -114,6 +115,13 @@ pub struct Other {
     pub in_love: bool,
     pub owner: Option<u128>,
     pub alive: bool,
+    /// On a lead.
+    pub leashed: bool,
+    /// A llama in a caravan, with someone behind it, and whether the line
+    /// it is in is held by a leashed llama at its head.
+    pub in_caravan: bool,
+    pub has_tail: bool,
+    pub chain_held: bool,
 }
 
 /// Item facts the mobs need, answered by the server's item tables.
@@ -155,6 +163,11 @@ pub struct Senses<'a> {
     pub raining: bool,
     /// In the Nether (piglins and hoglins do not turn into zombies there).
     pub nether: bool,
+    /// Bright outside: day, and no thunderstorm (rain is no matter).
+    pub day: bool,
+    /// The `mob_griefing` game rule: zombies break doors, endermen move
+    /// blocks.
+    pub griefing: bool,
 }
 
 impl std::fmt::Debug for Senses<'_> {
@@ -257,13 +270,18 @@ pub enum Missile {
     SmallFireball,
     /// A witch's splash potion (`minecraft:harming`).
     Potion(&'static str),
+    /// A llama's spit.
+    Spit,
 }
 
 /// What a mob did that the world must act on.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MobEvent {
     /// A bite or a blow at the entity with this id.
-    Attack { target: i32, damage: f32 },
+    Attack {
+        target: i32,
+        damage: f32,
+    },
     /// A projectile at the entity with this id: from the mob's eyes towards
     /// `aim`.
     Shoot {
@@ -272,19 +290,33 @@ pub enum MobEvent {
         missile: Missile,
     },
     /// The creeper blows up.
-    Explode { power: f32 },
+    Explode {
+        power: f32,
+    },
     /// Drops an item it makes (a chicken's egg).
-    Lay { item: &'static str },
+    Lay {
+        item: &'static str,
+    },
     /// A sheep grazed: the plant, or the grass block under it, goes.
-    Graze { cell: Cell, block: bool },
+    Graze {
+        cell: Cell,
+        block: bool,
+    },
     /// Entity event for clients (`EntityEvent` status).
     Status(u8),
     /// The mob took damage not from an entity (burning, falling).
-    Hurt { amount: f32, kind: &'static str },
+    Hurt {
+        amount: f32,
+        kind: &'static str,
+    },
     /// Landed a fall of this many blocks.
-    Landed { distance: f64 },
+    Landed {
+        distance: f64,
+    },
     /// Two in love made a baby; this mob found `partner`.
-    Breed { partner: i32 },
+    Breed {
+        partner: i32,
+    },
     /// A sound of the mob (`entity.cow.ambient`, without `minecraft:`).
     Sound {
         name: String,
@@ -296,19 +328,55 @@ pub enum MobEvent {
     /// Turns into another kind (a zombie under water into a drowned).
     Convert(Species),
     /// Calls the others of its kind nearby on its target.
-    Alert { target: i32 },
-    /// A zombie broke this door.
-    BreakDoor { cell: Cell },
+    Alert {
+        target: i32,
+    },
+    /// A zombie broke this door (its top half).
+    BreakDoor {
+        cell: Cell,
+    },
+    /// A zombie bashes a door: the cracks (0..10, or -1 to clear them).
+    DoorCrack {
+        cell: Cell,
+        stage: i32,
+    },
+    /// The door shakes under a zombie's blows.
+    DoorBash {
+        cell: Cell,
+    },
+    /// A villager opens or closes a door.
+    OpenDoor {
+        cell: Cell,
+        open: bool,
+    },
+    /// An enderman takes the block at this cell.
+    TakeBlock {
+        cell: Cell,
+    },
+    /// An enderman sets its block down here (if the spot takes it).
+    PlaceBlock {
+        cell: Cell,
+    },
     /// Moved far at once: clients see a teleport.
     Teleported,
     /// Heals itself (a witch's potion).
     Heal(f32),
     /// Wears the item in a slot (a helmet in the sun).
-    Wear { slot: usize, amount: i32 },
+    Wear {
+        slot: usize,
+        amount: i32,
+    },
     /// A horse throws its rider off.
     Buck,
     /// A zombie villager is cured: it becomes a villager.
     Cured,
+    /// A llama falls in behind this one (a caravan), or leaves it.
+    CaravanJoin {
+        head: i32,
+    },
+    CaravanLeave {
+        head: i32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -370,6 +438,8 @@ pub struct Mob {
     pub sitting: bool,
     /// A horse let a rider stay on (it may also have no owner).
     pub tame: bool,
+    /// Llamas: strength 1 to 5, three chest slots per point.
+    pub strength: i32,
     /// Horses: how close it is to letting the rider stay.
     pub temper: i32,
     /// A variant number as clients know it (cat, parrot, horse, rabbit,
@@ -395,8 +465,37 @@ pub struct Mob {
     pub carried: Option<u32>,
     /// Witch: ticks left of drinking.
     pub drinking: i32,
-    /// Pig: ticks of a carrot-on-a-stick boost.
+    /// Pig: ticks of a carrot-on-a-stick boost, and how long the boost
+    /// lasts in all (clients speed the pig up along it).
     pub boost: i32,
+    pub boost_total: i32,
+    /// Strider: out of lava, cold and slow (shaking).
+    pub cold: bool,
+    /// Zombies: may break doors (`CanBreakDoors`), and walk to them.
+    pub breaks_doors: bool,
+    /// Where the lead it is on is held (set by the world every tick).
+    pub leash: Option<[f64; 3]>,
+    /// Donkeys and mules: a chest on the back (its items are a container
+    /// of the server's, keyed by the entity).
+    pub chested: bool,
+    /// The chest's `Items` as saved (slots counted from the chest's first),
+    /// kept up to date from the window's container; set from NBT before it
+    /// is first loaded into one.
+    pub chest_items: Option<mc_nbt::Tag>,
+    pub chest_loaded: bool,
+    /// Enderman: a player looks it in the eyes.
+    pub stared: bool,
+    /// Cat: lying down (on a bed), or sitting on a block it chose.
+    pub lying: bool,
+    pub perched: bool,
+    /// When (its age) it last changed target.
+    pub target_since: u32,
+    /// Walked into something sideways last tick.
+    pub bumped: bool,
+    /// Llamas in a caravan: the one it follows, and whether another follows
+    /// it.
+    pub caravan_head: Option<i32>,
+    pub caravan_tail: bool,
     /// A zombie villager's former self: type, profession and level.
     pub villager: Option<(String, Option<String>, i32)>,
     /// Players riding it (entity ids).
@@ -493,6 +592,7 @@ impl Mob {
             sitting: false,
             tame: false,
             temper: 0,
+            strength: 0,
             variant: 0,
             collar: 14,
             gear: Default::default(),
@@ -505,6 +605,20 @@ impl Mob {
             carried: None,
             drinking: 0,
             boost: 0,
+            boost_total: 0,
+            cold: false,
+            breaks_doors: false,
+            leash: None,
+            chested: false,
+            chest_items: None,
+            chest_loaded: false,
+            stared: false,
+            lying: false,
+            perched: false,
+            target_since: 0,
+            bumped: false,
+            caravan_head: None,
+            caravan_tail: false,
             villager: None,
             riders: Vec::new(),
             speed_attr: species.speed(),
@@ -545,6 +659,12 @@ impl Mob {
                     mob.set_max_health(hp);
                     mob.jump_strength = 0.5;
                 }
+            }
+            Species::Llama | Species::TraderLlama => {
+                let hp = 15.0 + mob.below(8) as f32 + mob.below(9) as f32;
+                mob.set_max_health(hp);
+                mob.strength = 1 + mob.below(5) as i32;
+                mob.variant = mob.below(4) as i32;
             }
             Species::Slime | Species::MagmaCube => {
                 let size = 1 << mob.below(3);
@@ -856,10 +976,21 @@ pub fn tick(entity: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
     } else {
         // Goals.
         m.look = None;
+        let target = m.target;
         let mut brain = std::mem::take(&mut m.brain);
         goals::run(&mut brain.targets, m, &mut b, s, out);
         goals::run(&mut brain.goals, m, &mut b, s, out);
         m.brain = brain;
+        if m.target != target {
+            m.target_since = m.age;
+            if m.target.is_none() && m.stared {
+                m.stared = false;
+                m.dirty = true;
+            }
+        }
+        if let Some(holder) = m.leash {
+            chores::follow_lead(m, &mut b, holder);
+        }
         let aggressive = m.target.is_some();
         m.set_aggressive(aggressive);
         let input = body::drive(m, &mut b, s);
@@ -913,6 +1044,8 @@ pub fn random_teleport(entity: &mut Entity, world: &dyn Terrain, range: i32) -> 
         sunny: false,
         raining: false,
         nether: false,
+        day: false,
+        griefing: false,
     };
     let at = b.pos;
     if goals::teleport_near(m, &mut b, &s, at, range) {
@@ -926,3 +1059,6 @@ pub fn random_teleport(entity: &mut Entity, world: &dyn Terrain, range: i32) -> 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod chore_tests;

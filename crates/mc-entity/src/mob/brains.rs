@@ -154,6 +154,21 @@ fn follow_owner(p: u8, speed: f64, start: f64, stop: f64) -> Slot {
     slot(p, MOVE | LOOK, Goal::FollowOwner { speed, start, stop })
 }
 
+fn perch(p: u8, bed: bool, speed: f64) -> Slot {
+    slot(
+        p,
+        MOVE | JUMP,
+        Goal::Perch {
+            bed,
+            speed,
+            spot: None,
+            countdown: 0,
+            tries: 0,
+            stay: 0,
+        },
+    )
+}
+
 fn leap(p: u8, up: f64) -> Slot {
     slot(p, MOVE | JUMP, Goal::Leap { up })
 }
@@ -184,6 +199,7 @@ const WOLF_PREY: &[Species] = &[Species::Sheep, Species::Rabbit, Species::Fox];
 const SKELETONS: &[Species] = &[Species::Skeleton, Species::Stray, Species::WitherSkeleton];
 const CATS: &[Species] = &[Species::Cat];
 const WOLVES: &[Species] = &[Species::Wolf];
+const LLAMAS: &[Species] = &[Species::Llama, Species::TraderLlama];
 const FOX_PREY: &[Species] = &[Species::Chicken, Species::Rabbit];
 const RABBITS: &[Species] = &[Species::Rabbit];
 const NONE: &[Species] = &[];
@@ -193,6 +209,26 @@ pub(super) fn brain(species: Species) -> Brain {
     let (goals, targets) = match species {
         Cow | Mooshroom => (farm([2.0, 1.0, 1.25, 1.25, 1.0]), vec![]),
         Pig => (farm([1.25, 1.0, 1.2, 1.1, 1.0]), vec![]),
+        Strider => (
+            vec![
+                panic(1, 1.65),
+                breed(2, 1.0),
+                slot(
+                    4,
+                    MOVE,
+                    Goal::SeekLava {
+                        speed: 1.0,
+                        interval: 0,
+                    },
+                ),
+                tempt(3, 1.4),
+                follow_parent(4, 1.1),
+                stroll(5, 1.0),
+                look(7, 8.0),
+                random_look(8),
+            ],
+            vec![],
+        ),
         Chicken => (farm([1.4, 1.0, 1.0, 1.1, 1.0]), vec![]),
         Sheep => {
             let mut g = farm([1.25, 1.0, 1.1, 1.1, 1.0]);
@@ -212,6 +248,21 @@ pub(super) fn brain(species: Species) -> Brain {
             ],
             vec![],
         ),
+        Llama | TraderLlama => (
+            vec![
+                float(),
+                slot(2, MOVE, Goal::Caravan { speed: 2.1 }),
+                ranged(3, Ranged::Spit, 40, 20.0),
+                panic(4, 1.2),
+                breed(5, 1.0),
+                tempt(6, 1.25),
+                follow_parent(6, 1.0),
+                stroll(7, 0.7),
+                look(8, 6.0),
+                random_look(9),
+            ],
+            vec![hurt_by(1, false), prey(2, WOLVES, false, true)],
+        ),
         Horse | Donkey | Mule => (
             vec![
                 float(),
@@ -230,6 +281,7 @@ pub(super) fn brain(species: Species) -> Brain {
                 float(),
                 sit(2),
                 leap(4, 0.4),
+                avoid(4, Avoidee::Kinds(LLAMAS), 24.0, 1.5, 1.5),
                 melee(5, 1.0, false),
                 follow_owner(6, 1.0, 10.0, 2.0),
                 breed(7, 1.0),
@@ -251,12 +303,15 @@ pub(super) fn brain(species: Species) -> Brain {
                 panic(1, 1.5),
                 sit(2),
                 tempt(4, 0.6),
+                avoid(4, Avoidee::Players, 16.0, 0.8, 1.33),
+                perch(5, true, 1.1),
                 follow_owner(6, 1.0, 10.0, 5.0),
-                leap(7, 0.3),
-                melee(8, 1.0, false),
-                breed(9, 0.8),
-                stroll(10, 0.8),
-                look(11, 10.0),
+                perch(7, false, 0.8),
+                leap(8, 0.3),
+                melee(9, 1.0, false),
+                breed(10, 0.8),
+                stroll(11, 0.8),
+                look(12, 10.0),
             ],
             vec![prey(1, RABBITS, false, true)],
         ),
@@ -267,10 +322,18 @@ pub(super) fn brain(species: Species) -> Brain {
                 breed(3, 1.0),
                 avoid(4, Avoidee::Players, 16.0, 1.6, 1.4),
                 avoid(4, Avoidee::Kinds(WOLVES), 8.0, 1.6, 1.4),
-                leap(5, 0.4),
-                melee(6, 1.2, false),
-                follow_parent(7, 1.25),
-                slot(8, MOVE | LOOK | JUMP, Goal::Sleep),
+                slot(
+                    6,
+                    MOVE,
+                    Goal::Shelter {
+                        speed: 1.25,
+                        interval: 100,
+                    },
+                ),
+                melee(7, 1.2, false),
+                slot(7, MOVE | LOOK | JUMP, Goal::Sleep),
+                follow_parent(8, 1.25),
+                leap(10, 0.4),
                 stroll(11, 1.0),
                 look(12, 24.0),
             ],
@@ -297,6 +360,15 @@ pub(super) fn brain(species: Species) -> Brain {
         Zombie | Husk | ZombieVillager => (
             vec![
                 float(),
+                slot(
+                    1,
+                    0,
+                    Goal::BreakDoor {
+                        door: None,
+                        time: 0,
+                        stage: -1,
+                    },
+                ),
                 melee(2, 1.0, false),
                 stroll(7, 1.0),
                 look(8, 8.0),
@@ -362,12 +434,26 @@ pub(super) fn brain(species: Species) -> Brain {
         Enderman => (
             vec![
                 float(),
+                slot(1, MOVE | JUMP, Goal::Freeze),
                 melee(2, 1.0, false),
                 stroll(7, 1.0),
                 look(8, 8.0),
                 random_look(8),
+                slot(10, 0, Goal::LeaveBlock),
+                slot(11, 0, Goal::TakeBlock),
             ],
-            vec![slot(1, TARGET, Goal::Stare), hurt_by(2, false)],
+            vec![
+                slot(
+                    1,
+                    TARGET,
+                    Goal::Stare {
+                        pending: None,
+                        aggro: 0,
+                        far: 0,
+                    },
+                ),
+                hurt_by(2, false),
+            ],
         ),
         Witch => (
             vec![

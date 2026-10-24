@@ -33,6 +33,7 @@ pub enum Fx {
     Damage(play::DamageEvent),
     Swing(play::SwingAnimation),
     Data(play::SetEntityData),
+    Cracks(play::BlockDestruction),
 }
 
 impl Fx {
@@ -61,6 +62,11 @@ impl Fx {
                 f64::from(p.position.z),
             ]),
             Fx::Particles(p) => Some(p.pos),
+            Fx::Cracks(p) => Some([
+                f64::from(p.position.x),
+                f64::from(p.position.y),
+                f64::from(p.position.z),
+            ]),
             _ => None,
         }
     }
@@ -276,6 +282,7 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                         s.meta.push((10, MetadataValue::Particle(bytes)));
                     }
                 }
+                Shot::Spit => {}
                 Shot::Cloud { radius, .. } => {
                     s.meta.push((8, MetadataValue::Float(*radius)));
                 }
@@ -458,6 +465,7 @@ pub fn type_name(kind: &Kind) -> Option<String> {
             Shot::Breath { .. } => "area_effect_cloud",
             Shot::Arrow(_) => "arrow",
             Shot::Snowball => "snowball",
+            Shot::Spit => "llama_spit",
             Shot::Egg => "egg",
             Shot::Pearl => "ender_pearl",
             Shot::Potion {

@@ -87,6 +87,8 @@ pub struct Ent {
     pub vehicle: Option<String>,
     /// What it holds in the main hand.
     pub mainhand: Option<Tool>,
+    /// A fishing bobber in open water.
+    pub open_water: Option<bool>,
 }
 
 /// The tool in a hand.
@@ -697,6 +699,9 @@ impl Eval<'_> {
                     n == name && want.as_str().is_some_and(|w| w == have || full(w) == *have)
                 })
             }),
+            "minecraft:type_specific/fishing_hook" => v["in_open_water"]
+                .as_bool()
+                .is_none_or(|want| e.open_water == Some(want)),
             "minecraft:type_specific/sheep" => v["sheared"]
                 .as_bool()
                 .is_none_or(|want| e.sheared == Some(want)),

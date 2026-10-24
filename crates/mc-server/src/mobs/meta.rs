@@ -88,7 +88,7 @@ pub fn type_id(ctx: &ServerContext, species: Species) -> i32 {
 
 fn tame_flags(m: &Mob) -> MetadataValue {
     let mut f = 0;
-    if m.sitting {
+    if m.sitting || m.perched {
         f |= 1;
     }
     if m.is_tame() {
@@ -133,8 +133,18 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
         Cow => v.push((a, MetadataValue::Holder(holder::COW, m.variant))),
         Mooshroom => v.push((a, MetadataValue::VarInt(m.variant))),
         Pig => {
-            v.push((a, MetadataValue::VarInt(m.boost)));
+            // Clients run the boost themselves from its length: sent only
+            // while it lasts, as a fresh value starts it over.
+            if m.boost > 0 {
+                v.push((a, MetadataValue::VarInt(m.boost_total)));
+            }
             v.push((a + 1, MetadataValue::Holder(holder::PIG, m.variant)));
+        }
+        Strider => {
+            if m.boost > 0 {
+                v.push((a, MetadataValue::VarInt(m.boost_total)));
+            }
+            v.push((a + 1, MetadataValue::Boolean(m.cold)));
         }
         Chicken => v.push((a, MetadataValue::Holder(holder::CHICKEN, m.variant))),
         Rabbit => v.push((a, MetadataValue::VarInt(m.variant))),
@@ -146,7 +156,15 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             v.push((a, MetadataValue::Byte(f)));
             if m.species == Horse {
                 v.push((a + 1, MetadataValue::VarInt(m.variant)));
+            } else {
+                v.push((a + 1, MetadataValue::Boolean(m.chested)));
             }
+        }
+        Llama | TraderLlama => {
+            v.push((a, MetadataValue::Byte(if m.is_tame() { 2 } else { 0 })));
+            v.push((a + 1, MetadataValue::Boolean(m.chested)));
+            v.push((a + 2, MetadataValue::VarInt(m.strength)));
+            v.push((a + 3, MetadataValue::VarInt(m.variant)));
         }
         Wolf => {
             v.push((a, tame_flags(m)));
@@ -166,6 +184,7 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             v.push((a, tame_flags(m)));
             v.push((a + 1, MetadataValue::OptUuid(m.owner)));
             v.push((a + 2, MetadataValue::Holder(holder::CAT, m.variant)));
+            v.push((a + 3, MetadataValue::Boolean(m.lying)));
             v.push((a + 5, MetadataValue::VarInt(i32::from(m.collar))));
         }
         Parrot => {
@@ -211,10 +230,8 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
         Spider | CaveSpider => v.push((16, MetadataValue::Byte(i8::from(m.climbing)))),
         Enderman => {
             v.push((16, MetadataValue::OptBlockState(m.carried)));
-            v.push((
-                17,
-                MetadataValue::Boolean(m.anger > 0 && m.target.is_some()),
-            ));
+            v.push((17, MetadataValue::Boolean(m.target.is_some())));
+            v.push((18, MetadataValue::Boolean(m.stared)));
         }
         Witch => v.push((17, MetadataValue::Boolean(m.drinking > 0))),
         Slime | MagmaCube => v.push((18, MetadataValue::VarInt(m.size))),

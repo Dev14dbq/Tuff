@@ -136,6 +136,37 @@ pub fn wear(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32) {
     }
 }
 
+/// Wears the stack in `slot` by `amount`; one that breaks turns into
+/// `into` (a worn-out carrot on a stick leaves its fishing rod).
+pub fn wear_into(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32, into: &str) {
+    let Some(rod) = ctx.items.id(into) else {
+        return wear(ctx, uuid, slot, amount);
+    };
+    {
+        let mut inventories = lock(&ctx.inventories);
+        let Some(stack) = inventories
+            .get_mut(&uuid)
+            .and_then(|h| h.slots[slot].as_mut())
+        else {
+            return;
+        };
+        let max = ctx.items.max_damage(stack.item);
+        if max == 0 {
+            return;
+        }
+        let amount = crate::enchant_effects::wear(ctx, stack, amount);
+        if stack.damage + amount >= max {
+            let mut fresh = ItemStack::new(rod, 1);
+            fresh.components = stack.components.clone();
+            fresh.damage = 0;
+            *stack = fresh;
+        } else {
+            stack.damage += amount;
+        }
+    }
+    changed(ctx, uuid, &[slot]);
+}
+
 /// Puts a stack in the inventory; what does not fit is returned.
 pub fn give(ctx: &ServerContext, uuid: u128, stack: &ItemStack) -> i32 {
     let max = ctx.items.max_stack(stack.item);

@@ -38,9 +38,11 @@ pub(super) fn yaw_to(dx: f64, dz: f64) -> f32 {
 
 pub(super) fn params(m: &Mob) -> PathParams {
     let mut p = PathParams::walker(m.size().1.ceil() as i32);
+    p.doors = m.breaks_doors;
     if m.species.fire_immune() {
         p.water_cost = 8.0;
     }
+    p.lava = m.species == Species::Strider;
     p
 }
 
@@ -128,8 +130,20 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
             kind: "minecraft:lava",
         });
     }
+    if m.species == Species::Enderman {
+        super::chores::daylight_teleport(m, b, s, out);
+    }
+    // Striders are cold out of lava and hate water.
+    if m.species == Species::Strider {
+        let lava = s.world.liquid(c[0], c[1], c[2]) == Liquid::Lava
+            || s.world.liquid(c[0], c[1] - 1, c[2]) == Liquid::Lava;
+        if m.cold == lava {
+            m.cold = !lava;
+            m.dirty = true;
+        }
+    }
     // Endermen hate water.
-    if m.species == Species::Enderman
+    if matches!(m.species, Species::Enderman | Species::Strider)
         && (wet || s.raining && sky_above(m, b, s))
         && m.age.is_multiple_of(10)
     {
@@ -258,17 +272,8 @@ pub(super) fn in_wall(m: &Mob, b: &Body, s: &Senses) -> bool {
         (b.pos[2] - half).floor() as i32,
         (b.pos[2] + half).floor() as i32,
     ];
-    xs.iter().any(|&x| {
-        zs.iter().any(|&z| {
-            [y, y - 1].into_iter().any(|cy| {
-                s.world.span(x, cy, z).is_some_and(|(bottom, top)| {
-                    let (lo, hi) = (f64::from(cy) + bottom, f64::from(cy) + top);
-                    // Fences and the like do not smother.
-                    top - bottom >= 1.0 && top <= 1.0 && lo < eye && eye < hi
-                })
-            })
-        })
-    })
+    xs.iter()
+        .any(|&x| zs.iter().any(|&z| s.world.smothers(x, y, z)))
 }
 
 fn sky_above(m: &Mob, b: &Body, s: &Senses) -> bool {
@@ -436,14 +441,31 @@ pub(super) fn physics(
             b.vel[1] -= 0.02;
         }
     } else {
-        if in_lava {
+        if in_lava && m.species == Species::Strider {
+            // It walks on lava: floats at the surface when nothing is above.
+            let above = s.world.liquid(cell[0], cell[1] + 1, cell[2]) == Liquid::Lava;
+            if above {
+                b.vel[1] = 0.1;
+            } else {
+                b.pos[1] = f64::from(cell[1]) + 8.0 / 9.0;
+                b.vel[1] = 0.0;
+            }
+        } else if in_lava {
             b.vel[1] = b.vel[1] * 0.5 + 0.02;
         }
         // Horizontal velocity.
         let friction = if b.on_ground { 0.546 } else { 0.91 };
         match &input {
             Some(i) => {
-                let speed = m.speed_attr * i.speed;
+                // An enderman after someone is quicker (+0.15).
+                let bonus = if m.species == Species::Enderman && m.target.is_some() {
+                    0.15
+                } else {
+                    0.0
+                };
+                // A strider out of lava is slowed (-0.34 of its speed).
+                let chill = if m.cold { 0.66 } else { 1.0 };
+                let speed = (m.speed_attr + bonus) * i.speed * chill;
                 let want = speed * speed * GROUND;
                 let control = if b.on_ground || wet { 0.5 } else { 0.1 };
                 b.vel[0] += (i.dir[0] * want - b.vel[0]) * control;
@@ -479,7 +501,10 @@ pub(super) fn physics(
         }
     }
     // Gravity pulls after the move, as in vanilla (a jump rises 1.25).
-    let falls = !flies && !wet;
+    let on_lava = m.species == Species::Strider
+        && in_lava
+        && s.world.liquid(cell[0], cell[1] + 1, cell[2]) != Liquid::Lava;
+    let falls = !flies && !wet && !on_lava;
     m.jump = false;
     let before = b.pos;
     let aabb = Aabb {
@@ -504,6 +529,7 @@ pub(super) fn physics(
     }
     let climbs = matches!(m.species, Species::Spider | Species::CaveSpider);
     let was_climbing = m.climbing;
+    m.bumped = blocked_h;
     m.climbing = climbs && blocked_h;
     if m.climbing != was_climbing {
         m.dirty = true;
@@ -514,7 +540,7 @@ pub(super) fn physics(
         b.vel[1] = 0.2;
     }
     let was_on_ground = b.on_ground;
-    b.on_ground = ground;
+    b.on_ground = ground || on_lava;
     // Steps.
     if ground && !wet {
         let walked = (b.pos[0] - before[0]).hypot(b.pos[2] - before[2]);

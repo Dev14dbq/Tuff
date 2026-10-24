@@ -1,6 +1,7 @@
 //! Goals and the goal selector (see the module comment of [`super`]).
 
 use super::body::{params, yaw_to};
+use super::chores;
 use super::{
     Body, Category, Missile, Mob, MobEvent, PLAYER_EYE, Seen, Senses, Species, Target, cell_of,
     dist_sq, line_clear, slot,
@@ -28,6 +29,8 @@ pub enum Ranged {
     Fireball,
     /// Blazes: three small fireballs, or a burn up close.
     Blaze,
+    /// Llamas spit at whoever they have a grudge against.
+    Spit,
 }
 
 /// Whom a mob keeps away from.
@@ -152,8 +155,45 @@ pub enum Goal {
     OwnerHurtBy,
     /// ...and whatever its owner hits.
     OwnerHurt,
-    /// Endermen go after a player who looks at them.
-    Stare,
+    /// Endermen go after a player who looks at them for a quarter of a
+    /// second, and teleport about them.
+    Stare {
+        /// The player looking, before it is the target.
+        pending: Option<i32>,
+        /// Ticks of being looked at left before it turns on them.
+        aggro: i32,
+        /// Ticks its target has been far off.
+        far: i32,
+    },
+    // Goals that deal with blocks (see `chores`).
+    /// A zombie that may break doors bashes one it walks into.
+    BreakDoor {
+        door: Option<Cell>,
+        time: i32,
+        stage: i32,
+    },
+    /// An enderman stands still while its target looks at it.
+    Freeze,
+    /// Endermen take blocks...
+    TakeBlock,
+    /// ...and set them down.
+    LeaveBlock,
+    /// A tamed cat lies on a bed (`bed`) or sits on a chest or furnace.
+    Perch {
+        bed: bool,
+        speed: f64,
+        spot: Option<Cell>,
+        countdown: i32,
+        tries: i32,
+        stay: i32,
+    },
+    /// Foxes look for shade in the sun.
+    Shelter { speed: f64, interval: i32 },
+    /// A strider out of lava heads back to it.
+    SeekLava { speed: f64, interval: i32 },
+    /// A llama falls in behind a caravan (a leashed llama and those
+    /// following it).
+    Caravan { speed: f64 },
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -387,7 +427,7 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                 Ranged::Bow => holds(m, s, "minecraft:bow"),
                 Ranged::Trident => holds(m, s, "minecraft:trident"),
                 Ranged::Potion => m.drinking == 0,
-                Ranged::Fireball | Ranged::Blaze => true,
+                Ranged::Fireball | Ranged::Blaze | Ranged::Spit => true,
             };
             armed && target(m, s).is_some()
         }
@@ -477,12 +517,14 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         Goal::Hover { .. } => m.below(20) == 0 || m.nav.goal.is_none() && m.below(5) == 0,
         Goal::Swoop { .. } => true,
         Goal::Sleep => {
-            s.sunny
+            s.day
                 && m.target.is_none()
                 && m.revenge.is_none()
                 && b.on_ground
-                && m.below(140) == 0
-                && s.nearest(b.pos, 6.0, |p| p.targetable).is_none()
+                && m.below(70) == 0
+                && !body_wet(m, b, s)
+                && chores::sheltered(m, b, s)
+                && !chores::fox_alerted(b, s)
         }
         Goal::Admire => m.charge > 0,
         Goal::HurtBy { .. } => {
@@ -579,17 +621,124 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             m.target = Some(id);
             true
         }
-        Goal::Stare => {
+        Goal::Stare { pending, .. } => {
+            if m.below(10) != 0 {
+                return false;
+            }
             let e = eye(m, b.pos);
-            let found = s
+            *pending = s
                 .nearest(b.pos, 64.0, |p| p.targetable && looks_at(p, e, s))
                 .map(|p| p.id);
-            found.is_some_and(|id| {
-                m.target = Some(id);
-                true
-            })
+            pending.is_some()
+        }
+        Goal::BreakDoor { door, time, stage } => {
+            if !m.breaks_doors || s.difficulty < 3 || !s.griefing || !m.bumped {
+                return false;
+            }
+            *door = chores::door_ahead(m, b, s);
+            *time = 0;
+            *stage = -1;
+            door.is_some()
+        }
+        Goal::Freeze => stared_by_target(m, b, s),
+        Goal::TakeBlock => m.carried.is_none() && s.griefing && m.below(10) == 0,
+        Goal::LeaveBlock => m.carried.is_some() && s.griefing && m.below(1000) == 0,
+        Goal::Perch {
+            bed,
+            spot,
+            countdown,
+            ..
+        } => {
+            if !m.is_tame() || m.sitting || *bed && m.lying {
+                return false;
+            }
+            if *countdown > 0 {
+                *countdown -= 1;
+                return false;
+            }
+            *countdown = if *bed { 40 } else { 100 + m.below(100) as i32 };
+            *spot = chores::find_perch(b, s, *bed);
+            spot.is_some()
+        }
+        Goal::Caravan { .. } => {
+            if m.leash.is_some() || m.caravan_head.is_some() || m.sitting {
+                return false;
+            }
+            let me = b.id;
+            let near = |o: &super::Other| {
+                o.id != me
+                    && o.alive
+                    && o.species.is_some_and(|k| k.llama())
+                    && (o.pos[0] - b.pos[0]).abs() <= 9.0
+                    && (o.pos[1] - b.pos[1]).abs() <= 4.0
+                    && (o.pos[2] - b.pos[2]).abs() <= 9.0
+            };
+            let nearest = |pick: &dyn Fn(&super::Other) -> bool| {
+                s.mobs
+                    .iter()
+                    .filter(|o| near(o) && !o.has_tail && pick(o))
+                    .min_by(|a, c| dist_sq(b.pos, a.pos).total_cmp(&dist_sq(b.pos, c.pos)))
+                    .map(|o| (o.id, o.pos, o.leashed, o.chain_held))
+            };
+            let Some((id, pos, leashed, held)) =
+                nearest(&|o| o.in_caravan).or_else(|| nearest(&|o| o.leashed))
+            else {
+                return false;
+            };
+            if dist_sq(b.pos, pos) < 16.0 || !(leashed || held) {
+                return false;
+            }
+            m.caravan_head = Some(id);
+            true
+        }
+        Goal::SeekLava { interval, .. } => {
+            if !m.cold || !m.riders.is_empty() {
+                return false;
+            }
+            if *interval > 0 {
+                *interval -= 1;
+                return false;
+            }
+            *interval = 40;
+            match chores::lava(m, b, s) {
+                Some(c) => {
+                    m.nav.stop();
+                    m.goto = Some((center(c), 1.0));
+                    true
+                }
+                None => false,
+            }
+        }
+        Goal::Shelter { interval, .. } => {
+            if m.sitting || m.target.is_some() {
+                return false;
+            }
+            if *interval > 0 {
+                *interval -= 1;
+                return false;
+            }
+            *interval = 100;
+            if !s.day || chores::sheltered(m, b, s) {
+                return false;
+            }
+            match chores::shade(m, b, s) {
+                Some(c) => {
+                    m.nav.stop();
+                    m.goto = Some((center(c), 1.0));
+                    true
+                }
+                None => false,
+            }
         }
     }
+}
+
+/// Whether an enderman's target, within 16 blocks, looks it in the eyes.
+fn stared_by_target(m: &Mob, b: &Body, s: &Senses) -> bool {
+    let e = eye(m, b.pos);
+    m.target
+        .and_then(|id| s.player(id))
+        .is_some_and(|p| p.targetable && dist_sq(p.pos, b.pos) <= 256.0 && looks_at(p, e, s))
 }
 
 /// Whether a player looks an enderman in the eyes (no pumpkin on).
@@ -684,7 +833,13 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         }
         Goal::Hop { .. } | Goal::Swoop { .. } => true,
         Goal::Hover { .. } => !m.nav.is_done() && m.below(200) != 0,
-        Goal::Sleep => s.sunny && m.revenge.is_none() && m.target.is_none(),
+        Goal::Sleep => {
+            s.day
+                && m.revenge.is_none()
+                && m.target.is_none()
+                && !body_wet(m, b, s)
+                && !chores::fox_alerted(b, s)
+        }
         Goal::Admire => m.charge > 0,
         Goal::HurtBy { .. } | Goal::OwnerHurtBy | Goal::OwnerHurt => {
             target(m, s).is_some_and(|t| dist_sq(b.pos, t.pos) <= m.species.follow_range().powi(2))
@@ -717,7 +872,43 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             }
             *unseen <= 60
         }
-        Goal::Stare => target(m, s).is_some(),
+        Goal::Stare { pending, .. } => match *pending {
+            Some(id) => {
+                let e = eye(m, b.pos);
+                match s.player(id) {
+                    Some(p) if p.targetable && looks_at(p, e, s) => {
+                        m.look = Some([p.pos[0], p.pos[1] + PLAYER_EYE, p.pos[2]]);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            None => target(m, s).is_some(),
+        },
+        Goal::BreakDoor { door, time, .. } => {
+            door.is_some_and(|d| chores::door_holds(b, s, d, *time))
+        }
+        Goal::Freeze => stared_by_target(m, b, s),
+        Goal::TakeBlock | Goal::LeaveBlock => false,
+        Goal::Perch {
+            bed,
+            spot,
+            tries,
+            stay,
+            ..
+        } => {
+            *tries >= -*stay
+                && *tries <= 1200
+                && spot.is_some_and(|c| chores::perch_ok(s, c, *bed))
+                && !m.sitting
+        }
+        Goal::Shelter { .. } | Goal::SeekLava { .. } => !m.nav.is_done(),
+        Goal::Caravan { .. } => {
+            m.leash.is_none()
+                && m.caravan_head.and_then(|id| s.mob(id)).is_some_and(|o| {
+                    o.alive && (o.leashed || o.chain_held) && dist_sq(b.pos, o.pos) <= 676.0
+                })
+        }
     }
 }
 
@@ -778,14 +969,26 @@ fn start(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobE
                 }
             }
         }
-        Goal::Stare => {
-            m.anger = 400 + m.below(400) as i32;
-            m.dirty = true;
-            out.push(MobEvent::Sound {
-                name: "entity.enderman.stare".into(),
-                volume: 1.0,
-                pitch: 1.0,
-            });
+        Goal::Stare { aggro, far, .. } => {
+            *aggro = 5;
+            *far = 0;
+            if !m.stared {
+                m.stared = true;
+                m.dirty = true;
+            }
+        }
+        Goal::Caravan { .. } => {
+            if let Some(head) = m.caravan_head {
+                out.push(MobEvent::CaravanJoin { head });
+            }
+        }
+        Goal::Freeze => m.nav.stop(),
+        Goal::TakeBlock => chores::take_block(m, b, s, out),
+        Goal::LeaveBlock => chores::leave_block(m, b, out),
+        Goal::Perch { tries, stay, .. } => {
+            *tries = 0;
+            let r = m.below(1200) + 1200;
+            *stay = (m.below(r) + 1200) as i32;
         }
         _ => {}
     }
@@ -799,7 +1002,7 @@ fn neutral(k: Species) -> bool {
     )
 }
 
-fn stop(g: &mut Goal, m: &mut Mob) {
+fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
     match g {
         Goal::Panic { .. }
         | Goal::Stroll { .. }
@@ -839,10 +1042,37 @@ fn stop(g: &mut Goal, m: &mut Mob) {
             *unseen = 0;
             m.target = None;
         }
-        Goal::HurtBy { .. } | Goal::OwnerHurtBy | Goal::OwnerHurt | Goal::Stare
+        Goal::Stare { pending, .. } => {
+            *pending = None;
+            if m.anger == 0 {
+                m.target = None;
+            }
+        }
+        Goal::HurtBy { .. } | Goal::OwnerHurtBy | Goal::OwnerHurt
             if m.anger == 0 || !neutral(m.species) =>
         {
             m.target = None;
+        }
+        Goal::BreakDoor { door, .. } => {
+            if let Some(cell) = door.take() {
+                out.push(MobEvent::DoorCrack { cell, stage: -1 });
+            }
+        }
+        Goal::Perch { spot, .. } => {
+            *spot = None;
+            if m.perched || m.lying {
+                m.perched = false;
+                m.lying = false;
+                m.dirty = true;
+            }
+            m.nav.stop();
+        }
+        Goal::Shelter { .. } | Goal::SeekLava { .. } => m.nav.stop(),
+        Goal::Caravan { .. } => {
+            if let Some(head) = m.caravan_head.take() {
+                out.push(MobEvent::CaravanLeave { head });
+            }
+            m.nav.stop();
         }
         _ => {}
     }
@@ -1067,7 +1297,118 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
         Goal::Swoop { timer, angle } => swoop(m, b, s, timer, angle, out),
         Goal::Sleep | Goal::Admire => m.nav.stop(),
         Goal::HurtBy { .. } | Goal::Nearest { .. } | Goal::Prey { .. } => {}
-        Goal::OwnerHurtBy | Goal::OwnerHurt | Goal::Stare => {}
+        Goal::OwnerHurtBy | Goal::OwnerHurt => {}
+        Goal::Stare {
+            pending,
+            aggro,
+            far,
+        } => {
+            if let Some(id) = *pending {
+                *aggro -= 1;
+                if *aggro <= 0 {
+                    m.target = Some(id);
+                    m.anger = 400 + m.below(400) as i32;
+                    m.dirty = true;
+                    *pending = None;
+                }
+            } else if let Some(t) = target(m, s).filter(|t| t.player) {
+                let e = eye(m, b.pos);
+                let staring = s.player(t.id).is_some_and(|p| looks_at(p, e, s));
+                let d = dist_sq(t.pos, b.pos);
+                if staring {
+                    if d < 16.0 && chores::teleport_random(m, b, s) {
+                        out.push(MobEvent::Teleported);
+                    }
+                    *far = 0;
+                } else if d > 256.0 {
+                    *far += 1;
+                    if *far >= 30
+                        && chores::teleport_towards(m, b, s, [t.pos[0], t.pos[1] + t.eye, t.pos[2]])
+                    {
+                        out.push(MobEvent::Teleported);
+                        *far = 0;
+                    }
+                }
+            }
+        }
+        Goal::BreakDoor { door, time, stage } => {
+            if let Some(d) = *door {
+                chores::bash_door(m, s, d, time, stage, out);
+            }
+        }
+        Goal::Freeze => {
+            m.nav.stop();
+            if let Some(p) = m.target.and_then(|id| s.player(id)) {
+                m.look = Some([p.pos[0], p.pos[1] + PLAYER_EYE, p.pos[2]]);
+            }
+        }
+        Goal::TakeBlock | Goal::LeaveBlock => {}
+        Goal::Perch {
+            bed,
+            speed,
+            spot,
+            tries,
+            ..
+        } => {
+            let Some(c) = *spot else {
+                return;
+            };
+            let above = [c[0], c[1] + 1, c[2]];
+            let at = [
+                f64::from(above[0]) + 0.5,
+                f64::from(above[1]) + 0.5,
+                f64::from(above[2]) + 0.5,
+            ];
+            let reached = dist_sq(at, b.pos) < 1.0;
+            if reached {
+                *tries -= 1;
+                m.nav.stop();
+            } else {
+                *tries += 1;
+                m.goto = Some((center(above), *speed));
+            }
+            let (lying, perched) = if *bed {
+                (reached, false)
+            } else {
+                (false, reached)
+            };
+            if (m.lying, m.perched) != (lying, perched) {
+                m.lying = lying;
+                m.perched = perched;
+                m.dirty = true;
+            }
+        }
+        Goal::Shelter { speed, .. } | Goal::SeekLava { speed, .. } => {
+            if let Some(c) = m.nav.goal {
+                m.goto = Some((center(c), *speed));
+            }
+        }
+        Goal::Caravan { speed } => {
+            // Keeps two blocks behind the one in front.
+            if let Some(o) = m.caravan_head.and_then(|id| s.mob(id)) {
+                let d = [
+                    o.pos[0] - b.pos[0],
+                    o.pos[1] - b.pos[1],
+                    o.pos[2] - b.pos[2],
+                ];
+                let f = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                let k = if f > 1e-6 {
+                    (f - 2.0).max(0.0) / f
+                } else {
+                    0.0
+                };
+                m.goto = (k > 0.0).then(|| {
+                    (
+                        [
+                            b.pos[0] + d[0] * k,
+                            b.pos[1] + d[1] * k,
+                            b.pos[2] + d[2] * k,
+                        ],
+                        *speed,
+                    )
+                });
+            }
+        }
     }
 }
 
@@ -1160,6 +1501,30 @@ fn ranged(
                 *timer = interval;
             } else if *timer < 0 {
                 *timer = interval / 2 + m.below(interval as u32 / 2 + 1) as i32;
+            }
+        }
+        Ranged::Spit => {
+            // Stands off at 20 blocks and spits every two seconds.
+            if d <= range * range && visible {
+                m.nav.stop();
+            } else {
+                m.goto = Some((t.pos, 1.25));
+            }
+            *timer -= 1;
+            if *timer <= 0 {
+                if visible && d <= range * range {
+                    out.push(MobEvent::Shoot {
+                        target: t.id,
+                        aim: [t.pos[0], t.pos[1] + t.eye / 3.0, t.pos[2]],
+                        missile: Missile::Spit,
+                    });
+                    out.push(MobEvent::Sound {
+                        name: "entity.llama.spit".into(),
+                        volume: 1.0,
+                        pitch: 1.0,
+                    });
+                }
+                *timer = interval;
             }
         }
         Ranged::Fireball => {
@@ -1357,7 +1722,7 @@ pub fn run(list: &mut [Slot], m: &mut Mob, b: &mut Body, s: &Senses, out: &mut V
     for slot in list.iter_mut() {
         if slot.running && !can_continue(&mut slot.goal, m, b, s) {
             slot.running = false;
-            stop(&mut slot.goal, m);
+            stop(&mut slot.goal, m, out);
         }
     }
     // Start those that can, by priority: every other tick, as vanilla's
@@ -1381,7 +1746,7 @@ pub fn run(list: &mut [Slot], m: &mut Mob, b: &mut Body, s: &Senses, out: &mut V
         for o in list.iter_mut() {
             if o.running && o.flags & flags != 0 {
                 o.running = false;
-                stop(&mut o.goal, m);
+                stop(&mut o.goal, m, out);
             }
         }
         start(&mut list[i].goal, m, b, s, out);

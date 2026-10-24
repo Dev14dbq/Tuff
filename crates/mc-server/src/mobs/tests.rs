@@ -465,6 +465,894 @@ fn mobs_suffocate_inside_blocks() {
     assert!(with_mob(&ctx, id, |m| m.health) < 10.0);
 }
 
+/// Sets blocks by name.
+fn set(ctx: &ServerContext, at: [i32; 3], name: &str) {
+    let state = ctx.data.blocks.default_state(name).unwrap();
+    set_state(ctx, at, state);
+}
+
+fn set_state(ctx: &ServerContext, at: [i32; 3], state: u32) {
+    ctx.world
+        .set_block(
+            mc_protocol::Position::new(at[0], at[1], at[2]),
+            state,
+            &ctx.data.blocks,
+            &ctx.rules,
+        )
+        .unwrap();
+}
+
+fn block(ctx: &ServerContext, at: [i32; 3]) -> String {
+    let s = ctx
+        .world
+        .block(
+            mc_protocol::Position::new(at[0], at[1], at[2]),
+            &ctx.data.blocks,
+        )
+        .unwrap();
+    ctx.data.blocks.block_name(s).unwrap().to_owned()
+}
+
+/// How many of `n` pigs penned in one block get hurt.
+fn crushed(n: usize) -> usize {
+    let ctx = flat().unwrap();
+    let _ = join(&ctx, [20.5, -60.0, 20.5]);
+    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+        for y in -60..=-59 {
+            set(&ctx, [dx, y, dz], "minecraft:stone");
+        }
+    }
+    for _ in 0..n {
+        put(&ctx, Species::Pig, [0.5, -60.0, 0.5]);
+    }
+    run(&ctx, 60);
+    mobs_of(&ctx, Species::Pig)
+        .iter()
+        .filter(|e| matches!(&e.kind, Kind::Mob(m) if m.health < m.max_health))
+        .count()
+}
+
+#[test]
+fn cramming_starts_past_the_game_rule() {
+    if flat().is_none() {
+        eprintln!("skipped: no game data");
+        return;
+    }
+    // max_entity_cramming 24: 23 others in the space are fine, 24 crush.
+    assert_eq!(crushed(24), 0);
+    assert!(crushed(26) > 0);
+}
+
+#[test]
+fn glass_and_leaves_do_not_smother() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [10.5, -60.0, 10.5]);
+    for y in -60..=-58 {
+        set(&ctx, [0, y, 0], "minecraft:glass");
+        set(&ctx, [3, y, 0], "minecraft:oak_leaves");
+    }
+    let a = put(&ctx, Species::Cow, [0.5, -60.0, 0.5]);
+    let b = put(&ctx, Species::Cow, [3.5, -60.0, 0.5]);
+    run(&ctx, 30);
+    assert_eq!(with_mob(&ctx, a, |m| m.health), 10.0);
+    assert_eq!(with_mob(&ctx, b, |m| m.health), 10.0);
+}
+
+#[test]
+fn a_zombie_breaks_a_door_in_the_world() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    ctx.difficulty
+        .store(3, std::sync::atomic::Ordering::Relaxed);
+    let _ = join(&ctx, [8.5, -60.0, 0.5]);
+    for z in -8..=8 {
+        for y in -60..=-58 {
+            if z != 0 || y == -58 {
+                set(&ctx, [3, y, z], "minecraft:stone");
+            }
+        }
+    }
+    let lower = ctx.data.blocks.default_state("minecraft:oak_door").unwrap();
+    let upper = ctx
+        .data
+        .blocks
+        .with_property(lower, "half", "upper")
+        .unwrap();
+    set_state(&ctx, [3, -60, 0], lower);
+    set_state(&ctx, [3, -59, 0], upper);
+    let id = put(&ctx, Species::Zombie, [0.5, -60.0, 0.5]);
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.breaks_doors = true;
+        m.target = Some(7000);
+    }
+    run(&ctx, 400);
+    assert_eq!(block(&ctx, [3, -59, 0]), "minecraft:air");
+    assert_eq!(block(&ctx, [3, -60, 0]), "minecraft:air");
+}
+
+#[test]
+fn an_enderman_puts_its_block_on_firm_ground_only() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [10.5, -60.0, 10.5]);
+    let id = put(&ctx, Species::Enderman, [0.5, -60.0, 0.5]);
+    let dirt = ctx.data.blocks.default_state("minecraft:dirt").unwrap();
+    let mut entities = std::mem::take(&mut *lock(&ctx.entities));
+    let i = entities.iter().position(|e| e.id == id).unwrap();
+    if let Kind::Mob(m) = &mut entities[i].kind {
+        m.carried = Some(dirt);
+    }
+    let mut level = WorldLevel::new(&ctx);
+    // Not in the air, and not where it stands.
+    blocks::place(&ctx, &mut level, &mut entities, i, [5, -58, 0], &[]);
+    blocks::place(&ctx, &mut level, &mut entities, i, [0, -60, 0], &[]);
+    assert_eq!(block(&ctx, [5, -58, 0]), "minecraft:air");
+    assert_eq!(block(&ctx, [0, -60, 0]), "minecraft:air");
+    blocks::place(&ctx, &mut level, &mut entities, i, [5, -60, 0], &[]);
+    assert_eq!(block(&ctx, [5, -60, 0]), "minecraft:dirt");
+    let Kind::Mob(m) = &mut entities[i].kind else {
+        panic!()
+    };
+    assert_eq!(m.carried, None);
+    // And it takes a block back up.
+    blocks::take(&ctx, &mut level, &mut entities[i], [5, -60, 0]);
+    assert_eq!(block(&ctx, [5, -60, 0]), "minecraft:air");
+    let Kind::Mob(m) = &entities[i].kind else {
+        panic!()
+    };
+    assert_eq!(m.carried, Some(dirt));
+}
+
+#[test]
+fn a_carrot_on_a_stick_boosts_the_pig_and_wears_to_a_rod() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = put(&ctx, Species::Pig, [0.5, -60.0, 0.5]);
+    let saddle = ctx.items.id("minecraft:saddle").unwrap();
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.gear[mc_entity::mob::slot::SADDLE] = Some(mc_entity::mob::Gear {
+            item: saddle,
+            count: 1,
+            damage: 0,
+        });
+        m.riders.push(7000);
+    }
+    hold(&ctx, "minecraft:carrot_on_a_stick", 1);
+    let actor = actor_at([0.5, -60.0, 0.5]);
+    let held = |ctx: &ServerContext| lock(&ctx.inventories)[&STEVE].slots[36].clone().unwrap();
+    for n in 1..=3 {
+        crate::interact::use_item(&ctx, actor, 0, 0.0, 0.0);
+        let boost = with_mob(&ctx, id, |m| (m.boost, m.boost_total));
+        assert!(
+            (140..=980).contains(&boost.0) && boost.0 == boost.1,
+            "{boost:?}"
+        );
+        assert_eq!(held(&ctx).damage, 7 * n);
+        // Still fast: another use does nothing.
+        crate::interact::use_item(&ctx, actor, 0, 0.0, 0.0);
+        assert_eq!(held(&ctx).damage, 7 * n);
+        if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+            && let Kind::Mob(m) = &mut e.kind
+        {
+            m.boost = 0;
+        }
+    }
+    crate::interact::use_item(&ctx, actor, 0, 0.0, 0.0);
+    assert_eq!(
+        ctx.items.name(held(&ctx).item),
+        Some("minecraft:fishing_rod")
+    );
+}
+
+fn move_steve(ctx: &ServerContext, pos: [f64; 3]) {
+    if let Some(p) = lock(&ctx.players).get_mut(&STEVE)
+        && let Some(pose) = &mut p.pose
+    {
+        (pose.x, pose.y, pose.z) = (pos[0], pos[1], pos[2]);
+    }
+}
+
+#[test]
+fn a_lead_ties_leads_and_snaps() {
+    use crate::decor::leash::Holder;
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let cow = put(&ctx, Species::Cow, [2.5, -60.0, 0.5]);
+    hold(&ctx, "minecraft:lead", 2);
+    ctx.mobs.use_on(ctx.dim, cow, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert_eq!(
+        lock(&ctx.leashes).links.get(&cow),
+        Some(&Holder::Player(STEVE))
+    );
+    assert_eq!(
+        lock(&ctx.inventories)[&STEVE].slots[36]
+            .as_ref()
+            .map(|s| s.count),
+        Some(1)
+    );
+    // A zombie takes no lead.
+    let z = put(&ctx, Species::Zombie, [0.5, -60.0, 2.5]);
+    ctx.mobs.use_on(ctx.dim, z, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert!(!lock(&ctx.leashes).links.contains_key(&z));
+    // Walking off, the player leads the cow along.
+    move_steve(&ctx, [9.5, -60.0, 0.5]);
+    run(&ctx, 200);
+    let x = mob_of(&ctx, cow).unwrap().pos[0];
+    assert!(x > 5.0, "cow at {x}");
+    assert!(lock(&ctx.leashes).links.contains_key(&cow));
+    // Far off at once, the lead snaps and falls.
+    move_steve(&ctx, [40.5, -60.0, 0.5]);
+    run(&ctx, 1);
+    crate::decor::leash::tick(&ctx);
+    assert!(!lock(&ctx.leashes).links.contains_key(&cow));
+    assert_eq!(items_of(&ctx, "minecraft:lead"), 1);
+}
+
+#[test]
+fn the_holder_takes_a_lead_off() {
+    use crate::decor::leash::Holder;
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let pig = put(&ctx, Species::Pig, [2.5, -60.0, 0.5]);
+    crate::decor::leash::attach(&ctx, pig, Holder::Player(STEVE));
+    ctx.mobs.use_on(ctx.dim, pig, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert!(!lock(&ctx.leashes).links.contains_key(&pig));
+    assert_eq!(items_of(&ctx, "minecraft:lead"), 1);
+}
+
+fn tame_donkey(ctx: &ServerContext) -> i32 {
+    let id = put(ctx, Species::Donkey, [2.5, -60.0, 0.5]);
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.owner = Some(STEVE);
+        m.tame = true;
+    }
+    id
+}
+
+#[test]
+fn a_chest_goes_on_a_tame_donkey_and_its_window_mirrors_the_saddle() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = tame_donkey(&ctx);
+    let wild = put(&ctx, Species::Donkey, [4.5, -60.0, 0.5]);
+    hold(&ctx, "minecraft:chest", 2);
+    let mut actor = actor_at([0.5, -60.0, 0.5]);
+    // A wild one takes no chest.
+    let out = crate::hits::use_entity(&ctx, actor, wild, 0, false, None);
+    assert!(out.open_mount.is_none());
+    assert!(!with_mob(&ctx, wild, |m| m.chested));
+    crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    assert!(with_mob(&ctx, id, |m| m.chested));
+    assert_eq!(
+        lock(&ctx.inventories)[&STEVE].slots[36]
+            .as_ref()
+            .map(|s| s.count),
+        Some(1)
+    );
+    // Sneaking opens the window: 2 + 15 slots.
+    actor.sneaking = true;
+    let out = crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    assert_eq!(out.open_mount, Some((id, 5)));
+    let key = crate::containers::entity_key(id);
+    let kind = crate::containers::Kind {
+        entity: "",
+        slots: 17,
+        menu: "",
+        title: "",
+    };
+    let slots = crate::containers::open(&ctx, STEVE, key, kind);
+    assert_eq!(slots.len(), 17);
+    // A saddle put in the first slot saddles it; a stack in the chest is
+    // dropped when it dies.
+    let saddle = ctx.items.id("minecraft:saddle").unwrap();
+    let dirt = ctx.items.id("minecraft:dirt").unwrap();
+    {
+        let mut all = lock(&ctx.containers);
+        let open = all.get_mut(&(key.x, key.y, key.z)).unwrap();
+        open.slots[0] = Some(mc_protocol::packets::play::ItemStack::new(saddle, 1));
+        open.slots[5] = Some(mc_protocol::packets::play::ItemStack::new(dirt, 3));
+    }
+    run(&ctx, 1);
+    assert!(with_mob(&ctx, id, |m| m.saddled()));
+    ctx.mobs.hit(
+        ctx.dim,
+        id,
+        steve([2.5, -60.0, 0.5]),
+        blow(1000.0, [2.5, -60.0, 0.5]),
+    );
+    run(&ctx, 1);
+    assert_eq!(items_of(&ctx, "minecraft:dirt"), 3);
+    assert_eq!(items_of(&ctx, "minecraft:chest"), 1);
+}
+
+fn orb_points(ctx: &ServerContext) -> i32 {
+    lock(&ctx.entities)
+        .iter()
+        .map(|e| match e.kind {
+            Kind::ExperienceOrb { value, count } => value * count,
+            _ => 0,
+        })
+        .sum()
+}
+
+fn clear_orbs(ctx: &ServerContext) {
+    lock(&ctx.entities).retain(|e| !matches!(e.kind, Kind::ExperienceOrb { .. }));
+}
+
+/// The experience a mob's death gives when a player did it.
+fn kill_xp(ctx: &ServerContext, species: Species, baby: bool) -> i32 {
+    clear_orbs(ctx);
+    let id = put(ctx, species, [0.5, -60.0, 0.5]);
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.set_baby(baby);
+    }
+    ctx.mobs.hit(
+        ctx.dim,
+        id,
+        steve([0.5, -60.0, 0.5]),
+        blow(1000.0, [0.5, -60.0, 0.5]),
+    );
+    run(ctx, 1);
+    orb_points(ctx)
+}
+
+#[test]
+fn kills_pay_the_vanilla_experience() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    ctx.difficulty
+        .store(2, std::sync::atomic::Ordering::Relaxed);
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    for _ in 0..5 {
+        assert!((1..=3).contains(&kill_xp(&ctx, Species::Cow, false)));
+        assert_eq!(kill_xp(&ctx, Species::Cow, true), 0, "calves pay nothing");
+        assert_eq!(kill_xp(&ctx, Species::Creeper, false), 5);
+        assert_eq!(kill_xp(&ctx, Species::Blaze, false), 10);
+        // A baby zombie pays 12 (2.5 times 5, rounded down).
+        assert_eq!(kill_xp(&ctx, Species::Zombie, true), 12);
+    }
+    // A slime pays its size.
+    clear_orbs(&ctx);
+    let id = put(&ctx, Species::Slime, [0.5, -60.0, 0.5]);
+    let size = with_mob(&ctx, id, |m| m.size);
+    ctx.mobs.hit(
+        ctx.dim,
+        id,
+        steve([0.5, -60.0, 0.5]),
+        blow(1000.0, [0.5, -60.0, 0.5]),
+    );
+    run(&ctx, 1);
+    assert_eq!(orb_points(&ctx), size);
+}
+
+#[test]
+fn breeding_pays_one_to_seven() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    for _ in 0..8 {
+        clear_orbs(&ctx);
+        let a = put(&ctx, Species::Cow, [0.5, -60.0, 0.5]);
+        let b = put(&ctx, Species::Cow, [1.0, -60.0, 0.5]);
+        for id in [a, b] {
+            if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+                && let Kind::Mob(m) = &mut e.kind
+            {
+                m.fall_in_love(Some(STEVE));
+            }
+        }
+        run(&ctx, 200);
+        let xp = orb_points(&ctx);
+        assert!((1..=7).contains(&xp), "bred for {xp}");
+        lock(&ctx.entities).retain(|e| !matches!(e.kind, Kind::Mob(_)));
+    }
+}
+
+#[test]
+fn villagers_open_and_close_wooden_doors_but_not_iron_ones() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let blocks = &ctx.data.blocks;
+    for (name, opens) in [("minecraft:oak_door", true), ("minecraft:iron_door", false)] {
+        let lower = blocks.default_state(name).unwrap();
+        let upper = blocks.with_property(lower, "half", "upper").unwrap();
+        set_state(&ctx, [5, -60, 5], lower);
+        set_state(&ctx, [5, -59, 5], upper);
+        let mut level = WorldLevel::new(&ctx);
+        self::blocks::open_door(&ctx, &mut level, [5, -60, 5], true);
+        drop(level);
+        let state = |y| {
+            let s = ctx
+                .world
+                .block(mc_protocol::Position::new(5, y, 5), &ctx.data.blocks)
+                .unwrap();
+            ctx.data.blocks.property(s, "open") == Some("true")
+        };
+        assert_eq!((state(-60), state(-59)), (opens, opens), "{name}");
+        if opens {
+            let mut level = WorldLevel::new(&ctx);
+            self::blocks::open_door(&ctx, &mut level, [5, -59, 5], false);
+            drop(level);
+            assert_eq!((state(-60), state(-59)), (false, false));
+        }
+    }
+}
+
+#[test]
+fn llamas_are_tamed_with_hay_and_carry_a_chest_and_a_carpet() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = put(&ctx, Species::Llama, [2.5, -60.0, 0.5]);
+    let (strength, health) = with_mob(&ctx, id, |m| (m.strength, m.max_health));
+    assert!((1..=5).contains(&strength) && (15.0..=30.0).contains(&health));
+    let mut actor = actor_at([0.5, -60.0, 0.5]);
+    // A chest does not go on a wild one.
+    hold(&ctx, "minecraft:chest", 1);
+    crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    assert!(!with_mob(&ctx, id, |m| m.chested));
+    // Hay bales tame it in the end (temper reaches 30 after five).
+    hold(&ctx, "minecraft:hay_block", 8);
+    for _ in 0..8 {
+        ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 0.5]), 0);
+        run(&ctx, 1);
+        if with_mob(&ctx, id, |m| m.is_tame()) {
+            break;
+        }
+    }
+    assert_eq!(with_mob(&ctx, id, |m| m.owner), Some(STEVE));
+    hold(&ctx, "minecraft:chest", 1);
+    crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    assert!(with_mob(&ctx, id, |m| m.chested));
+    hold(&ctx, "minecraft:red_carpet", 1);
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    assert!(with_mob(&ctx, id, |m| m.gear[mc_entity::mob::slot::BODY].is_some()));
+    // Its window has a column of three chest slots for each point of
+    // strength.
+    actor.sneaking = true;
+    let out = crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    assert_eq!(out.open_mount, Some((id, strength)));
+}
+
+#[test]
+fn a_chest_and_its_items_round_trip_through_nbt() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let mut nbt = mc_nbt::Compound::new();
+    nbt.insert("ChestedHorse", mc_nbt::Tag::Byte(1));
+    let mut item = mc_nbt::Compound::new();
+    item.insert("Slot", mc_nbt::Tag::Byte(3));
+    item.insert("id", mc_nbt::Tag::String("minecraft:dirt".into()));
+    item.insert("count", mc_nbt::Tag::Int(5));
+    nbt.insert(
+        "Items",
+        mc_nbt::Tag::List(vec![mc_nbt::Tag::Compound(item)]),
+    );
+    nbt.insert("CanBreakDoors", mc_nbt::Tag::Byte(1));
+    let mut e = new_mob(&ctx, Species::Donkey, [2.5, -60.0, 0.5]);
+    let Kind::Mob(m) = &mut e.kind else { panic!() };
+    nbt::apply(&ctx, m, &nbt);
+    assert!(m.chested && !m.breaks_doors, "doors are for zombies");
+    let id = e.id;
+    lock(&ctx.entities).push(e);
+    run(&ctx, 2);
+    // The saved slot 3 is window slot 5.
+    let key = crate::containers::entity_key(id);
+    let kind = crate::containers::Kind {
+        entity: "",
+        slots: 17,
+        menu: "",
+        title: "",
+    };
+    let slots = crate::containers::open(&ctx, STEVE, key, kind);
+    let dirt = ctx.items.id("minecraft:dirt").unwrap();
+    assert_eq!(
+        slots[5].as_ref().map(|s| (s.item, s.count)),
+        Some((dirt, 5))
+    );
+    // And it is written out the same way.
+    run(&ctx, 1);
+    let mut c = mc_nbt::Compound::new();
+    let m = with_mob(&ctx, id, |m| m.clone());
+    nbt::write(&ctx, &m, &mut c);
+    let Some(mc_nbt::Tag::List(list)) = c.get("Items") else {
+        panic!("no Items")
+    };
+    assert_eq!(list.len(), 1);
+    let mc_nbt::Tag::Compound(first) = &list[0] else {
+        panic!()
+    };
+    assert_eq!(first.get("Slot"), Some(&mc_nbt::Tag::Byte(3)));
+    assert_eq!(c.get("ChestedHorse"), Some(&mc_nbt::Tag::Byte(1)));
+    // A zombie keeps its door breaking.
+    let mut z = new_mob(&ctx, Species::Zombie, [0.0; 3]);
+    let Kind::Mob(zm) = &mut z.kind else { panic!() };
+    nbt::apply(&ctx, zm, &nbt);
+    assert!(zm.breaks_doors);
+    let mut c = mc_nbt::Compound::new();
+    nbt::write(&ctx, zm, &mut c);
+    assert_eq!(c.get("CanBreakDoors"), Some(&mc_nbt::Tag::Byte(1)));
+}
+
+#[test]
+fn a_door_a_villager_left_open_shuts_once_nobody_is_near() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [20.5, -60.0, 20.5]);
+    let blocks = &ctx.data.blocks;
+    let lower = blocks.default_state("minecraft:oak_door").unwrap();
+    let upper = blocks.with_property(lower, "half", "upper").unwrap();
+    set_state(&ctx, [5, -60, 5], lower);
+    set_state(&ctx, [5, -59, 5], upper);
+    let mut level = WorldLevel::new(&ctx);
+    self::blocks::open_door(&ctx, &mut level, [5, -60, 5], true);
+    drop(level);
+    let open = |ctx: &ServerContext| {
+        let s = ctx
+            .world
+            .block(mc_protocol::Position::new(5, -60, 5), &ctx.data.blocks)
+            .unwrap();
+        ctx.data.blocks.property(s, "open") == Some("true")
+    };
+    // Someone standing in the doorway keeps it open.
+    let pig = put(&ctx, Species::Pig, [5.5, -60.0, 5.5]);
+    if let Some(Kind::Mob(m)) = lock(&ctx.entities)
+        .iter_mut()
+        .find(|e| e.id == pig)
+        .map(|e| &mut e.kind)
+    {
+        m.no_ai = true;
+    }
+    run(&ctx, 60);
+    assert!(open(&ctx));
+    lock(&ctx.entities).retain(|e| e.id != pig);
+    run(&ctx, 40);
+    assert!(!open(&ctx));
+    assert!(lock(&ctx.door_watch).is_empty());
+}
+
+#[test]
+fn a_hurt_llama_spits_at_the_player_and_it_stings() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    ctx.difficulty
+        .store(2, std::sync::atomic::Ordering::Relaxed);
+    let uuid = join(&ctx, [0.5, -60.0, 3.5]);
+    let id = put(&ctx, Species::Llama, [0.5, -60.0, 0.5]);
+    // A blow too light to kill: the llama has a grudge now.
+    ctx.mobs.hit(
+        ctx.dim,
+        id,
+        steve([0.5, -60.0, 3.5]),
+        blow(0.5, [0.5, -60.0, 3.5]),
+    );
+    run(&ctx, 1);
+    move_steve(&ctx, [0.5, -60.0, 8.5]);
+    let mut spat = false;
+    for _ in 0..120 {
+        run(&ctx, 1);
+        crate::tick::run_scheduled_ticks(&ctx);
+        spat |= lock(&ctx.entities).iter().any(
+            |e| matches!(&e.kind, Kind::Projectile(p) if p.shot == mc_entity::extra::Shot::Spit),
+        );
+    }
+    assert!(spat, "no spit");
+    let health = lock(&ctx.vitals)[&uuid].health;
+    assert!(health < 20.0, "health {health}");
+    // The llama is unhurt by its own spit.
+    assert!(with_mob(&ctx, id, |m| m.health) > 0.0);
+}
+
+#[test]
+fn a_wandering_trader_brings_two_leashed_llamas_that_leave_with_it() {
+    use crate::decor::leash::Holder;
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let trader =
+        crate::trading::new_merchant(&ctx, "minecraft:wandering_trader", [10.5, -60.0, 10.5])
+            .unwrap();
+    let tid = trader.id;
+    crate::trading::spawn(&ctx, trader);
+    crate::trading::bring_llamas(&ctx, tid, [10.5, -60.0, 10.5]);
+    let llamas = mobs_of(&ctx, Species::TraderLlama);
+    assert_eq!(llamas.len(), 2);
+    for l in &llamas {
+        assert_eq!(
+            lock(&ctx.leashes).links.get(&l.id),
+            Some(&Holder::Knot(tid))
+        );
+    }
+    // The trader goes; so do its llamas, and no lead is left behind.
+    lock(&ctx.entities).retain(|e| e.id != tid);
+    crate::decor::leash::tick(&ctx);
+    assert!(
+        mobs_of(&ctx, Species::TraderLlama)
+            .iter()
+            .all(|e| e.removed)
+    );
+    assert_eq!(items_of(&ctx, "minecraft:lead"), 0);
+}
+
+#[test]
+fn a_warped_fungus_on_a_stick_boosts_the_strider_and_wears_by_one() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = put(&ctx, Species::Strider, [0.5, -60.0, 0.5]);
+    let saddle = ctx.items.id("minecraft:saddle").unwrap();
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.gear[mc_entity::mob::slot::SADDLE] = Some(mc_entity::mob::Gear {
+            item: saddle,
+            count: 1,
+            damage: 0,
+        });
+        m.riders.push(7000);
+    }
+    // A carrot on a stick does nothing to a strider.
+    hold(&ctx, "minecraft:carrot_on_a_stick", 1);
+    let actor = actor_at([0.5, -60.0, 0.5]);
+    crate::interact::use_item(&ctx, actor, 0, 0.0, 0.0);
+    assert_eq!(with_mob(&ctx, id, |m| m.boost), 0);
+    hold(&ctx, "minecraft:warped_fungus_on_a_stick", 1);
+    crate::interact::use_item(&ctx, actor, 0, 0.0, 0.0);
+    let boost = with_mob(&ctx, id, |m| (m.boost, m.boost_total));
+    assert!(
+        (140..=980).contains(&boost.0) && boost.0 == boost.1,
+        "{boost:?}"
+    );
+    let held = lock(&ctx.inventories)[&STEVE].slots[36].clone().unwrap();
+    assert_eq!(held.damage, 1);
+}
+
+#[test]
+fn a_strider_walks_on_lava_and_is_cold_on_land() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 20.5]);
+    for x in -14..=22 {
+        for z in -14..=22 {
+            set(&ctx, [x, -61, z], "minecraft:lava");
+        }
+    }
+    let id = put(&ctx, Species::Strider, [2.5, -60.1, 2.5]);
+    // It stays on the lava (a stroll off it is cut short and it returns).
+    let mut on_lava = 0;
+    for _ in 0..300 {
+        run(&ctx, 1);
+        if mob_of(&ctx, id).is_some_and(|e| (e.pos[1] + 60.11).abs() < 0.05) {
+            on_lava += 1;
+        }
+    }
+    assert!(on_lava > 200, "on lava {on_lava} of 300");
+    assert!(with_mob(&ctx, id, |m| m.health) >= 20.0);
+    // Out on the flat ground it shivers.
+    let land = put(&ctx, Species::Strider, [30.5, -60.0, 30.5]);
+    run(&ctx, 5);
+    assert!(with_mob(&ctx, land, |m| m.cold));
+}
+
+fn villager_at(ctx: &ServerContext, pos: [f64; 3]) -> i32 {
+    let e = crate::trading::new_merchant(ctx, "minecraft:villager", pos).unwrap();
+    let id = e.id;
+    lock(&ctx.entities).push(e);
+    id
+}
+
+fn merchant_of(ctx: &ServerContext, id: i32) -> Box<mc_entity::trade::Merchant> {
+    let e = mob_of(ctx, id).expect("villager still there");
+    let Kind::Merchant(m) = e.kind else { panic!() };
+    m
+}
+
+/// Sets the time of day (the clocks run on from there).
+fn set_day(ctx: &ServerContext, t: i64) {
+    let mut time = lock(&ctx.time);
+    for c in &mut time.clocks {
+        c.ticks = t;
+        c.running = false;
+    }
+}
+
+fn run_all(ctx: &ServerContext, ticks: usize) {
+    for _ in 0..ticks {
+        lock(&ctx.time).age += 1;
+        let mut level = WorldLevel::new(ctx);
+        tick(ctx, &mut level);
+        drop(level);
+        crate::tick::run_scheduled_ticks(ctx);
+    }
+}
+
+fn bed_state(ctx: &ServerContext, at: [i32; 3]) -> Option<String> {
+    let s = ctx.world.block(
+        mc_protocol::Position::new(at[0], at[1], at[2]),
+        &ctx.data.blocks,
+    )?;
+    ctx.data.blocks.property(s, "occupied").map(str::to_owned)
+}
+
+#[test]
+fn villagers_lie_down_in_a_free_bed_at_night_and_get_up_by_day() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let blocks = &ctx.data.blocks;
+    let bed = blocks.default_state("minecraft:red_bed").unwrap();
+    let foot = blocks.with_property(bed, "facing", "east").unwrap();
+    let foot = blocks.with_property(foot, "part", "foot").unwrap();
+    let head = blocks.with_property(foot, "part", "head").unwrap();
+    set_state(&ctx, [6, -60, 3], foot);
+    set_state(&ctx, [7, -60, 3], head);
+    let id = villager_at(&ctx, [3.5, -60.0, 3.5]);
+    set_day(&ctx, 13000);
+    let mut slept = false;
+    for _ in 0..600 {
+        run_all(&ctx, 1);
+        if merchant_of(&ctx, id).walk.asleep {
+            slept = true;
+            break;
+        }
+    }
+    {
+        let m = merchant_of(&ctx, id);
+        let e = mob_of(&ctx, id).unwrap();
+        assert!(
+            slept,
+            "never went to bed: {:?} bed {:?} rest {} path {:?} pos {:?} age {}",
+            m.walk.asleep,
+            m.walk.bed,
+            m.walk.rest,
+            m.walk.nav.path,
+            e.pos,
+            lock(&ctx.time).age
+        );
+    }
+    let e = mob_of(&ctx, id).unwrap();
+    assert!(
+        (e.pos[0] - 7.5).abs() < 0.01 && (e.pos[1] + 59.4375).abs() < 0.01,
+        "{:?}",
+        e.pos
+    );
+    assert_eq!(bed_state(&ctx, [7, -60, 3]).as_deref(), Some("true"));
+    assert_eq!(bed_state(&ctx, [6, -60, 3]).as_deref(), Some("true"));
+    // Day comes: it gets up and the bed is free.
+    set_day(&ctx, 24100);
+    run_all(&ctx, 2);
+    assert!(!merchant_of(&ctx, id).walk.asleep);
+    assert_eq!(bed_state(&ctx, [7, -60, 3]).as_deref(), Some("false"));
+}
+
+#[test]
+fn a_bed_is_free_again_when_its_sleeper_is_gone() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let blocks = &ctx.data.blocks;
+    let bed = blocks.default_state("minecraft:red_bed").unwrap();
+    let foot = blocks.with_property(bed, "facing", "east").unwrap();
+    let foot = blocks.with_property(foot, "part", "foot").unwrap();
+    let head = blocks.with_property(foot, "part", "head").unwrap();
+    set_state(&ctx, [6, -60, 3], foot);
+    set_state(&ctx, [7, -60, 3], head);
+    let id = villager_at(&ctx, [5.5, -60.0, 3.5]);
+    set_day(&ctx, 13000);
+    for _ in 0..400 {
+        run_all(&ctx, 1);
+        if merchant_of(&ctx, id).walk.asleep {
+            break;
+        }
+    }
+    assert!(merchant_of(&ctx, id).walk.asleep);
+    lock(&ctx.entities).retain(|e| e.id != id);
+    run_all(&ctx, 40);
+    assert_eq!(bed_state(&ctx, [7, -60, 3]).as_deref(), Some("false"));
+}
+
+#[test]
+fn villagers_run_from_zombies() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = villager_at(&ctx, [10.5, -60.0, 10.5]);
+    let z = put(&ctx, Species::Zombie, [14.5, -60.0, 10.5]);
+    // The zombie stands still: it has no one to hunt but this.
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == z)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.persistent = true;
+        m.speed_attr = 0.0;
+    }
+    run_all(&ctx, 100);
+    let e = mob_of(&ctx, id).unwrap();
+    let far = e.pos[0] - 14.5;
+    assert!(far < -8.0, "villager at {:?}", e.pos);
+}
+
+#[test]
+fn a_cold_strider_heads_back_to_the_lava() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 20.5]);
+    for x in 5..=12 {
+        for z in -2..=6 {
+            set(&ctx, [x, -61, z], "minecraft:lava");
+        }
+    }
+    let id = put(&ctx, Species::Strider, [2.5, -60.0, 2.5]);
+    let mut back = false;
+    for _ in 0..800 {
+        run(&ctx, 1);
+        if mob_of(&ctx, id).is_some_and(|e| e.pos[0] > 5.0 && (e.pos[1] + 60.11).abs() < 0.05) {
+            back = true;
+            break;
+        }
+    }
+    assert!(back, "still at {:?}", mob_of(&ctx, id).map(|e| e.pos));
+}
+
 fn block_name(ctx: &ServerContext, x: i32, y: i32, z: i32) -> String {
     let p = mc_protocol::Position::new(x, y, z);
     let s = ctx.world.block(p, &ctx.data.blocks).unwrap();

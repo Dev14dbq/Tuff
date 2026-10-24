@@ -13,6 +13,7 @@ pub mod mob;
 pub mod nav;
 pub mod physics;
 pub mod trade;
+pub mod villager;
 
 pub use mob::{Mob, Species};
 pub use physics::{Aabb, Collide, move_entity};

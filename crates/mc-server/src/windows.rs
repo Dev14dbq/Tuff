@@ -135,14 +135,30 @@ impl Windows {
         own: Vec<Option<ItemStack>>,
         kind: Kind,
     ) -> anyhow::Result<()> {
+        self.show_with(writer, who, Some((menu, title)), own, kind)
+    }
+
+    /// As [`Self::show`]; without a `menu` the window is a mount's, whose
+    /// opening packet the caller has queued with the id from
+    /// [`Self::next_window`].
+    fn show_with(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        menu: Option<(&str, &str)>,
+        own: Vec<Option<ItemStack>>,
+        kind: Kind,
+    ) -> anyhow::Result<()> {
         let Who { ctx, uuid, .. } = who;
-        self.next_id = self.next_id % 100 + 1;
-        let menu = ctx.data.builtin.id("minecraft:menu", menu).unwrap_or(0);
-        writer.queue(&play::OpenScreen {
-            window: self.next_id,
-            menu,
-            title: text::plain(title),
-        })?;
+        if let Some((menu, title)) = menu {
+            self.next_window();
+            let menu = ctx.data.builtin.id("minecraft:menu", menu).unwrap_or(0);
+            writer.queue(&play::OpenScreen {
+                window: self.next_id,
+                menu,
+                title: text::plain(title),
+            })?;
+        }
         let hands = ctx
             .inventories
             .lock()
@@ -164,6 +180,46 @@ impl Windows {
             kind,
         });
         Ok(())
+    }
+
+    fn next_window(&mut self) {
+        self.next_id = self.next_id % 100 + 1;
+    }
+
+    /// Opens the inventory of a horse, donkey or mule: saddle, armor and
+    /// the chest's 5 columns.
+    pub fn open_mount(
+        &mut self,
+        writer: &mut PacketWriter,
+        who: Who,
+        entity: i32,
+        columns: i32,
+    ) -> anyhow::Result<()> {
+        let Who { ctx, uuid, .. } = who;
+        self.close_current(writer, who)?;
+        let position = containers::entity_key(entity);
+        let kind = containers::Kind {
+            entity: "",
+            slots: 2 + 3 * columns as usize,
+            menu: "minecraft:generic_9x3",
+            title: "",
+        };
+        let slots = containers::open(ctx, uuid, position, kind);
+        self.next_window();
+        writer.queue(&play::MountScreenOpen {
+            window: self.next_id,
+            columns,
+            entity_id: entity,
+        })?;
+        self.show_with(
+            writer,
+            who,
+            None,
+            slots,
+            Kind::Container {
+                parts: vec![(position, kind.slots)],
+            },
+        )
     }
 
     pub fn open_container(

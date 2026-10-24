@@ -41,11 +41,14 @@ species! {
     Mooshroom => "minecraft:mooshroom", "Mooshroom";
     Sheep => "minecraft:sheep", "Sheep";
     Pig => "minecraft:pig", "Pig";
+    Strider => "minecraft:strider", "Strider";
     Chicken => "minecraft:chicken", "Chicken";
     Rabbit => "minecraft:rabbit", "Rabbit";
     Horse => "minecraft:horse", "Horse";
     Donkey => "minecraft:donkey", "Donkey";
     Mule => "minecraft:mule", "Mule";
+    Llama => "minecraft:llama", "Llama";
+    TraderLlama => "minecraft:trader_llama", "Trader Llama";
     Wolf => "minecraft:wolf", "Wolf";
     Cat => "minecraft:cat", "Cat";
     Fox => "minecraft:fox", "Fox";
@@ -100,8 +103,8 @@ impl Species {
     pub fn category(self) -> Category {
         use Species::*;
         match self {
-            Cow | Mooshroom | Sheep | Pig | Chicken | Rabbit | Horse | Donkey | Mule | Wolf
-            | Cat | Fox | Parrot => Category::Creature,
+            Cow | Mooshroom | Sheep | Pig | Chicken | Rabbit | Horse | Donkey | Mule | Llama
+            | TraderLlama | Wolf | Cat | Fox | Parrot | Strider => Category::Creature,
             _ => Category::Monster,
         }
     }
@@ -114,9 +117,11 @@ impl Species {
             Cow | Mooshroom => (0.9, 1.4),
             Sheep => (0.9, 1.3),
             Pig => (0.9, 0.9),
+            Strider => (0.9, 1.7),
             Chicken => (0.4, 0.7),
             Rabbit => (0.49, 0.6),
             Horse | Mule => (1.3964844, 1.6),
+            Llama | TraderLlama => (0.9, 1.87),
             Donkey => (1.3964844, 1.5),
             Wolf => (0.6, 0.85),
             Cat => (0.6, 0.7),
@@ -171,10 +176,11 @@ impl Species {
         match self {
             Cow | Mooshroom | Pig | Cat | Fox | Ghast => 10.0,
             Sheep | Wolf => 8.0,
+            Strider => 20.0,
             Chicken => 4.0,
             Rabbit => 3.0,
             Parrot => 6.0,
-            Horse | Donkey | Mule => 22.0,
+            Horse | Donkey | Mule | Llama | TraderLlama => 22.0,
             Spider | Piglin => 16.0,
             CaveSpider => 12.0,
             Enderman => 40.0,
@@ -194,7 +200,7 @@ impl Species {
             Sheep | Zombie | Husk | Drowned | ZombieVillager | ZombifiedPiglin | Blaze => 0.23,
             Rabbit | Wolf | Cat | Fox | Spider | CaveSpider | Enderman => 0.3,
             Horse => 0.225,
-            Donkey | Mule => 0.175,
+            Donkey | Mule | Llama | TraderLlama | Strider => 0.175,
             Parrot => 0.2,
             Piglin => 0.35,
             Phantom | Ghast => 0.7,
@@ -278,7 +284,14 @@ impl Species {
         use Species::*;
         matches!(
             self,
-            WitherSkeleton | Ghast | Blaze | MagmaCube | ZombifiedPiglin | EnderDragon | Wither
+            WitherSkeleton
+                | Ghast
+                | Blaze
+                | MagmaCube
+                | ZombifiedPiglin
+                | Strider
+                | EnderDragon
+                | Wither
         )
     }
 
@@ -342,9 +355,11 @@ impl Species {
             Cow | Mooshroom => "minecraft:cow_food",
             Sheep => "minecraft:sheep_food",
             Pig => "minecraft:pig_food",
+            Strider => "minecraft:strider_food",
             Chicken => "minecraft:chicken_food",
             Rabbit => "minecraft:rabbit_food",
             Horse | Donkey | Mule => "minecraft:horse_food",
+            Llama | TraderLlama => "minecraft:llama_food",
             Wolf => "minecraft:wolf_food",
             Cat => "minecraft:cat_food",
             Fox => "minecraft:fox_food",
@@ -358,6 +373,8 @@ impl Species {
         use Species::*;
         match self {
             Horse | Donkey | Mule => Some("minecraft:horse_tempt_items"),
+            Llama | TraderLlama => Some("minecraft:llama_tempt_items"),
+            Strider => Some("minecraft:strider_tempt_items"),
             Wolf | Parrot => None,
             _ => self.food_tag(),
         }
@@ -374,6 +391,16 @@ impl Species {
         matches!(self, Species::Horse | Species::Donkey | Species::Mule)
     }
 
+    /// Llamas: chests, carpets and a strength, but nobody rides them.
+    pub fn llama(self) -> bool {
+        matches!(self, Species::Llama | Species::TraderLlama)
+    }
+
+    /// Donkeys, mules and llamas carry a chest.
+    pub fn chested(self) -> bool {
+        matches!(self, Species::Donkey | Species::Mule) || self.llama()
+    }
+
     /// Tamed by its owner and follows them.
     pub fn tameable(self) -> bool {
         matches!(
@@ -384,6 +411,8 @@ impl Species {
                 | Species::Horse
                 | Species::Donkey
                 | Species::Mule
+                | Species::Llama
+                | Species::TraderLlama
         )
     }
 
@@ -470,7 +499,6 @@ impl Species {
     pub fn ambient_interval(self) -> i32 {
         match self {
             Species::Ghast => 80,
-            Species::Horse | Species::Donkey | Species::Mule => 80,
             _ => 80,
         }
     }
@@ -481,7 +509,11 @@ impl Species {
             Species::Ghast | Species::EnderDragon => 5.0,
             Species::Wither => 2.0,
             Species::Wolf | Species::Cat | Species::Rabbit => 0.4,
-            Species::Horse | Species::Donkey | Species::Mule => 0.8,
+            Species::Horse
+            | Species::Donkey
+            | Species::Mule
+            | Species::Llama
+            | Species::TraderLlama => 0.8,
             Species::Slime | Species::MagmaCube => 0.4,
             _ => 1.0,
         }

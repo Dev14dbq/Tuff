@@ -85,6 +85,49 @@ fn tame(ctx: &ServerContext, e: &mut Entity, by: &Actor) {
     fx::status(ctx, id, 7);
 }
 
+/// Whether a lead goes on this mob: animals (a wolf only while calm).
+fn leashable(m: &mc_entity::Mob) -> bool {
+    m.species.category() == mc_entity::mob::Category::Creature
+        && !(m.species == Species::Wolf && m.anger > 0)
+        && m.dying.is_none()
+}
+
+/// Leads (minecraft.wiki, "Lead"): the holder's use takes the lead off,
+/// shears cut it, a lead in hand ties the mob to the player. Whether the
+/// use went to a lead.
+fn leads(ctx: &ServerContext, e: &mut Entity, by: &Actor, name: &str, hslot: usize) -> bool {
+    use crate::decor::leash::{self, Holder};
+    let Kind::Mob(m) = &e.kind else {
+        return false;
+    };
+    let holder = lock(&ctx.leashes).links.get(&e.id).copied();
+    let drop = by.game_mode != 1;
+    if holder == Some(Holder::Player(by.uuid)) || holder.is_some() && name == "minecraft:shears" {
+        leash::unleash(ctx, e.id, e.pos, drop);
+        let sound = if name == "minecraft:shears" {
+            "item.shears.snip"
+        } else {
+            "item.lead.untied"
+        };
+        fx::sound(ctx, sound, fx::category::NEUTRAL, e.pos, 1.0, 1.0);
+        return true;
+    }
+    if name != "minecraft:lead" || holder.is_some() || !leashable(m) {
+        return false;
+    }
+    leash::attach(ctx, e.id, Holder::Player(by.uuid));
+    consume(ctx, by, hslot);
+    fx::sound(
+        ctx,
+        "item.lead.tied",
+        fx::category::NEUTRAL,
+        e.pos,
+        1.0,
+        1.0,
+    );
+    true
+}
+
 /// A player used the held item on a mob.
 pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
     let id = e.id;
@@ -93,6 +136,10 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
     let name = held.as_ref().map_or("", |h| h.name.as_str()).to_owned();
     let hslot = held.as_ref().map_or(0, |h| h.slot);
     let item = held.as_ref().map(|h| h.stack.item);
+    if leads(ctx, e, by, &name, hslot) {
+        swing(ctx, by);
+        return;
+    }
     if name.ends_with("_spawn_egg") && super::eggs::breed_with_egg(ctx, e, by, &name, hslot) {
         swing(ctx, by);
         return;
@@ -265,6 +312,49 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
         send_now(ctx, e);
         return;
     }
+    // Llamas: wheat and hay bales heal and, with luck, tame; a tamed llama
+    // that is fed in love breeds.
+    if species.llama() && food {
+        let hay = name == "minecraft:hay_block";
+        let (heal, temper, grow) = if hay { (10.0, 6, 90) } else { (2.0, 3, 20) };
+        let mut used = false;
+        if m.health < m.max_health {
+            m.health = (m.health + heal).min(m.max_health);
+            used = true;
+        }
+        if m.is_baby() {
+            m.baby_age = (m.baby_age + grow * 20).min(0);
+            used = true;
+        } else if !m.is_tame() {
+            m.temper = (m.temper + temper).min(30);
+            used = true;
+            if (m.below(30) as i32) < m.temper {
+                tame(ctx, e, by);
+                if let Kind::Mob(m) = &mut e.kind {
+                    m.sitting = false;
+                }
+            } else {
+                fx::status(ctx, id, 6);
+            }
+        } else if m.baby_age == 0 && !m.in_love() && hay {
+            m.fall_in_love(Some(by.uuid));
+            used = true;
+        }
+        if used {
+            consume(ctx, by, hslot);
+            fx::sound(
+                ctx,
+                "entity.llama.eat",
+                fx::category::NEUTRAL,
+                pos,
+                1.0,
+                1.0,
+            );
+            send_now(ctx, e);
+            return;
+        }
+        return;
+    }
     // Horses: food heals and calms; golden food makes tamed ones breed.
     if species.horse() && food {
         let golden = matches!(
@@ -337,6 +427,27 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
         }
         return;
     }
+    // A carpet on a tamed llama.
+    if name.ends_with("_carpet") && species.llama() && m.is_tame() && m.gear[slot::BODY].is_none() {
+        if let Some(item) = item {
+            m.gear[slot::BODY] = Some(Gear {
+                item,
+                count: 1,
+                damage: 0,
+            });
+            consume(ctx, by, hslot);
+            fx::sound(
+                ctx,
+                "entity.llama.swag",
+                fx::category::NEUTRAL,
+                pos,
+                0.5,
+                1.0,
+            );
+            send_equipment(ctx, e);
+        }
+        return;
+    }
     if name.ends_with("_horse_armor")
         && species == Species::Horse
         && m.is_tame()
@@ -372,7 +483,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
     }
     // Getting on.
     let rideable = match species {
-        Species::Pig => m.saddled(),
+        Species::Pig | Species::Strider => m.saddled(),
         Species::Horse | Species::Donkey | Species::Mule => !m.is_baby(),
         _ => false,
     };

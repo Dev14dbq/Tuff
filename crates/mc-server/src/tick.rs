@@ -136,6 +136,8 @@ pub enum Action {
     /// A click on an entity: `attack` for the left one.
     /// What a rider says about their vehicle.
     Vehicle(crate::vehicles::Act),
+    /// A rider opens the inventory of their mount.
+    MountInventory,
     UseEntity {
         entity_id: i32,
         hand: i32,
@@ -779,6 +781,25 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     let (mut blasts, mut fuses) = (Vec::new(), Vec::new());
     let now = lock(&ctx.time).age;
     let mut claimed = crate::trading::claimed_sites(&entities);
+    // What villagers see: night for the bed, zombies to run from.
+    let night = {
+        let t = crate::mobs::day_time(ctx).rem_euclid(24000);
+        ctx.world.dimension == "minecraft:overworld" && (12000..23000).contains(&t)
+    };
+    let threats: Vec<[f64; 3]> = entities
+        .iter()
+        .filter(|e| {
+            !e.removed
+                && matches!(&e.kind, mc_entity::Kind::Mob(m) if m.dying.is_none() && matches!(
+                    m.species,
+                    mc_entity::mob::Species::Zombie
+                        | mc_entity::mob::Species::Husk
+                        | mc_entity::mob::Species::Drowned
+                        | mc_entity::mob::Species::ZombieVillager
+                ))
+        })
+        .map(|e| e.pos)
+        .collect();
     // Plates see entities where they are at that moment of the tick.
     level.entity_boxes = Some(entities.iter().map(|e| e.aabb()).collect());
     for (i, entity) in entities.iter_mut().enumerate() {
@@ -840,9 +861,45 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                     fuses.push(crate::explosion::fuse_data(entity.id, fuse));
                 }
             }
-            mc_entity::Kind::Merchant(_) => {
-                mc_entity::fall(entity, &Solid(level));
-                entity.vel = [0.0; 3];
+            mc_entity::Kind::Merchant(m) => {
+                // They walk about where a player is near enough to see.
+                let near = players.iter().any(|&(_, _, _, p)| {
+                    (p.x - entity.pos[0]).powi(2) + (p.z - entity.pos[2]).powi(2) < 128.0 * 128.0
+                });
+                let mut ops = Vec::new();
+                if near {
+                    let ground = crate::mobs::Ground::new(ctx);
+                    mc_entity::villager::step(
+                        entity,
+                        &ground,
+                        now as u32,
+                        !m.trading.is_empty(),
+                        &mc_entity::villager::Env {
+                            night,
+                            threats: &threats,
+                        },
+                        &mut ops,
+                    );
+                } else {
+                    mc_entity::fall(entity, &Solid(level));
+                    entity.vel = [0.0; 3];
+                }
+                for op in ops {
+                    match op {
+                        mc_entity::villager::Op::Open(c) => {
+                            crate::mobs::blocks::open_door(ctx, level, c, true)
+                        }
+                        mc_entity::villager::Op::Close(c) => {
+                            crate::mobs::blocks::open_door(ctx, level, c, false)
+                        }
+                        mc_entity::villager::Op::Sleep(c) => {
+                            crate::mobs::blocks::lie_down(ctx, level, entity, c)
+                        }
+                        mc_entity::villager::Op::Wake(c) => {
+                            crate::mobs::blocks::get_up(ctx, level, entity.id, c)
+                        }
+                    }
+                }
                 fuses.extend(crate::trading::tick(ctx, level, entity, &mut claimed, now));
             }
             // Mobs have their own tick, and so do crystals.
@@ -1029,6 +1086,11 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
         } => interact::use_item_on(ctx, actor, hand, position, face, cursor, sequence),
         Action::UseItem { hand, yaw, pitch } => interact::use_item(ctx, actor, hand, yaw, pitch),
         Action::Vehicle(act) => crate::vehicles::act(ctx, actor, act),
+        Action::MountInventory => {
+            let mut outcome = Outcome::default();
+            crate::mobs::chest::open_riding(ctx, &actor, &mut outcome);
+            outcome
+        }
         Action::UseEntity {
             entity_id,
             hand,

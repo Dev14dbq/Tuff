@@ -120,6 +120,16 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     if !m.hurt(amount, h.by.or(h.player.map(|_| -1))) {
         return false;
     }
+    // Hurt by no one (water, a fall, a wall), an enderman mostly teleports.
+    if m.species == Species::Enderman && h.by.is_none() && h.player.is_none() && m.below(10) != 0 {
+        let ground = super::Ground::new(ctx);
+        if mc_entity::mob::random_teleport(e, &ground, 32) {
+            fx::sound(ctx, "entity.enderman.teleport", 5, e.pos, 1.0, 1.0);
+        }
+    }
+    let Kind::Mob(m) = &mut e.kind else {
+        return false;
+    };
     if let Some(p) = h.player {
         m.hurt_by_player = Some((p, 100));
     }
@@ -492,6 +502,7 @@ fn ent_of(ctx: &ServerContext, m: &Mob) -> crate::loot::Ent {
                 item: n.to_owned(),
                 enchants: Vec::new(),
             }),
+        open_water: None,
     }
 }
 
@@ -591,6 +602,11 @@ pub fn die(
     }
     m.dying = Some(20);
     m.health = 0.0;
+    // Its lead falls where it died.
+    crate::decor::leash::unleash(ctx, id, e.pos, true);
+    let Kind::Mob(m) = &mut e.kind else {
+        return;
+    };
     m.target = None;
     m.nav.stop();
     let by_player = m.hurt_by_player.map(|(p, _)| p);
@@ -653,6 +669,24 @@ pub fn die(
     }
     for (item, count, damage) in gear_drops {
         spawn_stack(ctx, pos, item, count, damage);
+    }
+    // A chest on its back spills.
+    if let Kind::Mob(m) = &e.kind
+        && m.chested
+    {
+        super::chest::spill(ctx, id, pos);
+    }
+    // An enderman lets its block fall.
+    if let Kind::Mob(m) = &mut e.kind
+        && let Some(state) = m.carried.take()
+        && drops_on
+        && let Some(item) = ctx
+            .data
+            .blocks
+            .block_name(state)
+            .and_then(|n| ctx.items.id(n))
+    {
+        spawn_stack(ctx, pos, item, 1, 0);
     }
     // Big slimes split into smaller ones.
     let Kind::Mob(m) = &mut e.kind else {
@@ -736,6 +770,11 @@ pub fn breed(
     if let Kind::Mob(m) = &mut baby.kind {
         m.set_baby(true);
         m.variant = if m.below(2) == 0 { va } else { vb };
+        if kind.llama() {
+            // The mean of the parents' strengths, now and then one more.
+            let both = ma.strength + mb.strength;
+            m.strength = ((both + 1) / 2 + i32::from(m.below(10) == 0)).clamp(1, 5);
+        }
         if kind == Species::Sheep {
             let pick = m.below(2) == 0;
             m.set_color(mix_wool(ma.color, mb.color, pick));

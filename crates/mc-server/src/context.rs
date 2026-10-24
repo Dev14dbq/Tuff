@@ -487,6 +487,12 @@ pub struct ServerContext {
     /// Contents (`Items`) of entities that hold items (minecarts and boats
     /// with a chest, hopper minecarts), by entity id.
     pub entity_items: Mutex<HashMap<i32, mc_nbt::Compound>>,
+    /// Doors villagers opened that nobody has closed yet.
+    pub door_watch: Mutex<Vec<[i32; 3]>>,
+    /// Beds villagers sleep in, with the sleeper's entity id.
+    pub bed_watch: Mutex<Vec<([i32; 3], i32)>>,
+    /// Hopper minecarts resting after taking an item: ticks left, by id.
+    pub cart_rests: Mutex<HashMap<i32, i32>>,
     /// Daylight detectors in loaded chunks.
     pub daylight: Mutex<std::collections::HashSet<(i32, i32, i32)>>,
     /// Piston block events waiting for this tick (tick thread).
@@ -750,6 +756,9 @@ impl ServerContext {
             containers: Mutex::new(HashMap::new()),
             ender_chests: Mutex::new(HashMap::new()),
             entity_items: Mutex::new(HashMap::new()),
+            door_watch: Mutex::new(Vec::new()),
+            bed_watch: Mutex::new(Vec::new()),
+            cart_rests: Mutex::new(HashMap::new()),
             daylight: Mutex::new(Default::default()),
             block_events: Mutex::new(Vec::new()),
             moving: Mutex::new(Vec::new()),
@@ -1058,6 +1067,9 @@ impl ServerContext {
             containers: Mutex::new(HashMap::new()),
             ender_chests: Mutex::new(HashMap::new()),
             entity_items: Mutex::new(HashMap::new()),
+            door_watch: Mutex::new(Vec::new()),
+            bed_watch: Mutex::new(Vec::new()),
+            cart_rests: Mutex::new(HashMap::new()),
             daylight: Mutex::new(Default::default()),
             container_updates: Mutex::new(Vec::new()),
             hoppers: Mutex::new(Default::default()),

@@ -689,6 +689,9 @@ async fn play(
                 if let Some((position, kind)) = outcome.open.take() {
                     windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
                 }
+                if let Some((mount, columns)) = outcome.open_mount.take() {
+                    windows.open_mount(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, mount, columns)?;
+                }
                 if let Some((position, front)) = outcome.open_sign.take() {
                     writer.queue(&play::OpenSignEditor { position, front })?;
                 }
@@ -828,14 +831,17 @@ async fn play(
                         crate::vitals::stop_using(&ctx, uuid);
                         crate::combat::shield(&ctx, uuid, false);
                     }
-                    play::Serverbound::PlayerCommand { action: action @ (1 | 2), .. } => {
-                        crate::combat::set_sprinting(&ctx, uuid, action == 1);
-                    }
                     play::Serverbound::PlayerCommand { action: 5, .. } => {
-                        // The inventory key while riding a boat with a chest.
+                        // The inventory key while riding: a boat's chest, or a mount's.
                         if let Some((position, kind)) = crate::vehicles::ridden_inventory(&ctx, entity_id) {
                             windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
+                        } else {
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action: Action::MountInventory, reply: replies_tx.clone() });
                         }
+                    }
+                    play::Serverbound::PlayerCommand { action: action @ (1 | 2), .. } => {
+                        crate::combat::set_sprinting(&ctx, uuid, action == 1);
                     }
                     play::Serverbound::PlayerCommand { action: 6, .. } => {
                         crate::worn::start_gliding(&ctx, uuid);
@@ -1291,6 +1297,7 @@ async fn play(
                                 Fx::Status(p) => writer.queue(&p)?,
                                 Fx::Equip(p) => writer.queue(&p)?,
                                 Fx::Link(p) => writer.queue(&p)?,
+                                Fx::Cracks(p) => writer.queue(&p)?,
                                 Fx::Passengers(p) => writer.queue(&p)?,
                                 Fx::Motion(p) => writer.queue(&p)?,
                                 Fx::Damage(p) => writer.queue(&p)?,
@@ -2132,6 +2139,11 @@ fn spawn_entity(
         }
         mc_entity::Kind::Merchant(ref m) if !m.wandering => {
             writer.queue(&crate::trading::villager_data(ctx, entity.id, m))?;
+            if m.walk.asleep
+                && let Some(bed) = m.walk.bed
+            {
+                writer.queue(&crate::mobs::blocks::sleep_data(entity.id, Some(bed)))?;
+            }
         }
         _ => {}
     }

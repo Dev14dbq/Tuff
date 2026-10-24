@@ -2146,6 +2146,10 @@ pub mod play {
         pub const FLAGS: u8 = 0;
         /// Air left under water (VarInt), 300 when full.
         pub const AIR_SUPPLY: u8 = 1;
+        /// Body pose (Pose).
+        pub const POSE: u8 = 6;
+        /// Living entity: the bed it sleeps in (optional position).
+        pub const SLEEPING_POS: u8 = 14;
         /// Living entity health (Float).
         pub const HEALTH: u8 = 9;
         /// Living entity: the particles of its visible effects (Particles).
@@ -2198,6 +2202,10 @@ pub mod play {
         /// A registry id under its own serializer type (cat, cow, wolf, pig
         /// and chicken variants): (type id, value).
         Holder(i32, i32),
+        /// A body pose (0 standing, 2 sleeping).
+        Pose(i32),
+        /// A block position, or none (where someone sleeps).
+        OptPosition(Option<Position>),
     }
 
     impl MetadataValue {
@@ -2243,7 +2251,11 @@ pub mod play {
                     out.put_varint(16);
                     out.extend_from_slice(bytes);
                 }
-                MetadataValue::OptBlockPos(pos) => {
+                MetadataValue::Pose(pose) => {
+                    out.put_varint(20);
+                    out.put_varint(*pose);
+                }
+                MetadataValue::OptBlockPos(pos) | MetadataValue::OptPosition(pos) => {
                     out.put_varint(11);
                     out.put_bool(pos.is_some());
                     if let Some(p) = pos {
@@ -2409,6 +2421,23 @@ pub mod play {
         fn encode(&self, out: &mut Vec<u8>) {
             out.put_i32(self.entity_id);
             out.put_i32(self.holder);
+        }
+    }
+
+    /// Block Destruction: the cracks someone (`entity_id`) leaves in a block
+    /// they break; a stage outside 0..10 clears them.
+    #[derive(Clone, Debug)]
+    pub struct BlockDestruction {
+        pub entity_id: i32,
+        pub position: Position,
+        pub stage: i8,
+    }
+    packet!(BlockDestruction, Play, "minecraft:block_destruction");
+    impl Encode for BlockDestruction {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.entity_id);
+            out.put_position(self.position);
+            out.put_i8(self.stage);
         }
     }
 
@@ -2841,6 +2870,23 @@ pub mod play {
         }
     }
 
+    /// Mount Screen Open: the inventory of a horse, donkey or mule (saddle,
+    /// armor, then `columns` columns of three chest slots).
+    #[derive(Clone, Debug)]
+    pub struct MountScreenOpen {
+        pub window: i32,
+        pub columns: i32,
+        pub entity_id: i32,
+    }
+    packet!(MountScreenOpen, Play, "minecraft:mount_screen_open");
+    impl Encode for MountScreenOpen {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.window);
+            out.put_varint(self.columns);
+            out.put_i32(self.entity_id);
+        }
+    }
+
     /// Close Container: the server closes a window.
     #[derive(Clone, Debug)]
     pub struct ContainerCloseClientbound {
@@ -3071,6 +3117,41 @@ mod tests {
         expected.put_string("minecraft:overworld");
         expected.push(0);
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn block_destruction_layout() {
+        let packet = play::BlockDestruction {
+            entity_id: 300,
+            position: Position::new(1, 2, 3),
+            stage: 5,
+        };
+        let mut out = Vec::new();
+        packet.encode(&mut out);
+        // VarInt id, packed position (x << 38 | z << 12 | y), the stage.
+        assert_eq!(out, [0xac, 0x02, 0, 0, 0, 0x40, 0, 0, 0x30, 0x02, 5]);
+    }
+
+    #[test]
+    fn sleeping_data_layout() {
+        let packet = play::SetEntityData {
+            entity_id: 5,
+            entries: vec![
+                (play::metadata::POSE, play::MetadataValue::Pose(2)),
+                (
+                    play::metadata::SLEEPING_POS,
+                    play::MetadataValue::OptPosition(Some(Position::new(1, 2, 3))),
+                ),
+            ],
+        };
+        let mut out = Vec::new();
+        packet.encode(&mut out);
+        assert_eq!(
+            out,
+            [
+                5, 6, 20, 2, 14, 11, 1, 0, 0, 0, 0x40, 0, 0, 0x30, 0x02, 0xff
+            ]
+        );
     }
 
     #[test]
