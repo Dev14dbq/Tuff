@@ -185,12 +185,6 @@ pub fn hung_yaw(facing: u8) -> f32 {
     }
 }
 
-fn stack(item: (i32, i32)) -> ItemStack {
-    ItemStack {
-        damage: item.1,
-        ..ItemStack::new(item.0, 1)
-    }
-}
 
 /// The entity's type name and fields for clients, for the kinds in
 /// `mc_entity::extra`; `None` for the others.
@@ -280,8 +274,8 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                         1 => -90.0,
                         _ => 0.0,
                     };
-                    if let Some(item) = f.item {
-                        s.meta.push((8, MetadataValue::Item(Some(stack(item)))));
+                    if let Some(item) = &f.item {
+                        s.meta.push((8, MetadataValue::Item(Some(item.clone()))));
                     }
                     if f.rotation != 0 {
                         s.meta
@@ -320,7 +314,7 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                     }
                     for (slot, gear) in a.gear.iter().enumerate() {
                         if let Some(item) = gear {
-                            s.gear.push((slot as u8, Some(stack(*item))));
+                            s.gear.push((slot as u8, Some(item.clone())));
                         }
                     }
                 }
@@ -462,4 +456,116 @@ pub fn type_name(kind: &Kind) -> Option<String> {
         },
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod component_tests {
+    use super::*;
+    use crate::testkit::{flat, stack};
+    use mc_entity::extra::{Arrow, Frame, Hung, Projectile, Stand};
+
+    fn entity(kind: Kind) -> Entity {
+        Entity {
+            id: 5,
+            uuid: 5,
+            kind,
+            pos: [0.0; 3],
+            vel: [0.0; 3],
+            on_ground: false,
+            age: 0,
+            removed: false,
+            tags: Vec::new(),
+        }
+    }
+
+    fn shot(s: Shot) -> Kind {
+        Kind::Projectile(Projectile {
+            shot: s,
+            owner: None,
+            mob: None,
+            yaw: 0.0,
+            pitch: 0.0,
+        })
+    }
+
+    #[test]
+    fn items_keep_their_components_for_clients() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        // An enchanted sword in a frame shines.
+        let sword = stack(&ctx, "diamond_sword", &[("sharpness", 5)]);
+        assert!(shines(&sword));
+        let frame = entity(Kind::Hung(Hung {
+            decor: Decor::Frame(Frame {
+                glow: false,
+                item: Some(sword.clone()),
+                rotation: 0,
+                invisible: false,
+                fixed: false,
+            }),
+            facing: 2,
+            yaw: 0.0,
+            anchor: [0; 3],
+        }));
+        let d = describe(&ctx, &frame).unwrap();
+        assert!(d.meta.contains(&(8, MetadataValue::Item(Some(sword.clone())))));
+        // A shield with a banner's patterns on an armor stand.
+        let mut shield = stack(&ctx, "shield", &[]);
+        shield
+            .components
+            .set("minecraft:base_color", mc_nbt::Tag::String("red".into()));
+        let mut gear: [Option<ItemStack>; 6] = Default::default();
+        gear[1] = Some(shield.clone());
+        let stand = entity(Kind::Hung(Hung {
+            decor: Decor::Stand(Stand {
+                gear: Box::new(gear),
+                ..Stand::default()
+            }),
+            facing: 0,
+            yaw: 0.0,
+            anchor: [0; 3],
+        }));
+        let d = describe(&ctx, &stand).unwrap();
+        assert_eq!(d.gear, vec![(1, Some(shield))]);
+        // A tipped arrow's colour, a trident's Loyalty and glint.
+        let mut a = Arrow::new(1);
+        a.effects = vec![("minecraft:poison".into(), 0, 100)];
+        let d = describe(&ctx, &entity(shot(Shot::Arrow(a.clone())))).unwrap();
+        let color = crate::projectiles::potions::color(&a.effects);
+        assert!(d.meta.contains(&(11, MetadataValue::VarInt(color))));
+        let mut t = Arrow::new(1);
+        t.trident = true;
+        t.stack = Some(stack(&ctx, "trident", &[("loyalty", 2)]));
+        let d = describe(&ctx, &entity(shot(Shot::Arrow(t)))).unwrap();
+        assert_eq!(d.kind, "trident");
+        assert!(d.meta.contains(&(11, MetadataValue::Byte(2))));
+        assert!(d.meta.contains(&(12, MetadataValue::Boolean(true))));
+        // A thrown potion is tinted its colour.
+        let splash = ctx.items.id("minecraft:splash_potion").unwrap();
+        let d = describe(
+            &ctx,
+            &entity(shot(Shot::Potion {
+                item: splash,
+                lingering: false,
+                effects: Vec::new(),
+                color: 0x123456,
+            })),
+        )
+        .unwrap();
+        let Some((_, MetadataValue::Item(Some(s)))) = d.meta.iter().find(|m| m.0 == 8) else {
+            panic!()
+        };
+        let Some(mc_nbt::Tag::Compound(c)) = s.components.get("minecraft:potion_contents") else {
+            panic!()
+        };
+        assert_eq!(c.get("custom_color"), Some(&mc_nbt::Tag::Int(0x123456)));
+        // The rocket's own item, for its stars.
+        let rocket = crate::projectiles::crossbow::rocket_stack(&ctx, 1, 2);
+        let f = crate::projectiles::firework::rocket(&rocket, None, true);
+        let d = describe(&ctx, &entity(shot(Shot::Firework(f)))).unwrap();
+        assert!(d.meta.contains(&(8, MetadataValue::Item(Some(rocket)))));
+        assert!(d.meta.contains(&(10, MetadataValue::Boolean(true))));
+    }
 }

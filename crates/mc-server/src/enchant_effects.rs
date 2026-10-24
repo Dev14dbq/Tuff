@@ -266,14 +266,13 @@ fn moves_as(ctx: &ServerContext, p: &Value, m: Option<&Mover>) -> bool {
             return false;
         }
     }
-    if let Some(mv) = p.get("minecraft:movement") {
-        if mv.get("fall_distance").is_some_and(|r| !in_range(r, m.fall_distance))
+    if let Some(mv) = p.get("minecraft:movement")
+        && (mv.get("fall_distance").is_some_and(|r| !in_range(r, m.fall_distance))
             || mv
                 .get("horizontal_speed")
-                .is_some_and(|r| !in_range(r, m.horizontal_speed))
-        {
-            return false;
-        }
+                .is_some_and(|r| !in_range(r, m.horizontal_speed)))
+    {
+        return false;
     }
     if let Some(l) = p.get("minecraft:location")
         && l.get("can_see_sky")

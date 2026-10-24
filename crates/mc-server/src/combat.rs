@@ -598,7 +598,7 @@ pub fn after_blow(
     let power = |at: [f64; 3], resist: f64| -> Option<[f64; 3]> {
         let d = [at[0] - target_pos[0], at[1] - target_pos[1], at[2] - target_pos[2]];
         let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        if dist > 3.5 || dist < 1e-9 {
+        if !(1e-9..=3.5).contains(&dist) {
             return None;
         }
         let k = (3.5 - dist) * 0.7 * heavy * (1.0 - resist);

@@ -8,6 +8,7 @@
 
 pub mod leash;
 
+use mc_protocol::packets::play::ItemStack;
 use mc_entity::extra::{Decor, Frame, Hung, Stand};
 use mc_entity::{Entity, Kind};
 use mc_protocol::Position;
@@ -76,9 +77,20 @@ pub fn dropped(
     })
 }
 
-fn dropped_id(ctx: &ServerContext, pos: [f64; 3], item: i32, damage: i32) -> Option<Entity> {
-    let name = ctx.items.name(item)?.to_owned();
-    dropped(ctx, pos, &name, 1, damage)
+/// A stack (with its components) falling out at `pos`.
+fn dropped_stack(ctx: &ServerContext, pos: [f64; 3], stack: &ItemStack) -> Option<Entity> {
+    let r = |s: f64| hits::rnd() * s - s / 2.0;
+    Some(Entity {
+        id: ctx.next_entity_id(),
+        uuid: crate::util::random_uuid(),
+        kind: Kind::stack(stack, 10),
+        pos,
+        vel: [r(0.2), 0.2, r(0.2)],
+        on_ground: false,
+        age: 0,
+        removed: false,
+        tags: Vec::new(),
+    })
 }
 
 /// Whether a frame or painting already hangs in `cell` facing `facing`.
@@ -257,12 +269,7 @@ fn frame_data(e: &Entity, f: &Frame) -> Event {
         entries: vec![
             (
                 8,
-                MetadataValue::Item(f.item.map(|(item, damage)| {
-                    mc_protocol::packets::play::ItemStack {
-                        damage,
-                        ..mc_protocol::packets::play::ItemStack::new(item, 1)
-                    }
-                })),
+                MetadataValue::Item(f.item.clone()),
             ),
             (9, MetadataValue::VarInt(i32::from(f.rotation))),
         ],
@@ -276,13 +283,7 @@ fn gear_packet(e: &Entity, s: &Stand) -> Event {
         .iter()
         .enumerate()
         .map(|(i, g)| {
-            (
-                i as u8,
-                g.map(|(item, damage)| mc_protocol::packets::play::ItemStack {
-                    damage,
-                    ..mc_protocol::packets::play::ItemStack::new(item, 1)
-                }),
-            )
+            (i as u8, g.clone())
         })
         .collect();
     Event::Fx(fx::Fx::Equip(mc_protocol::packets::play::SetEquipment {
@@ -306,8 +307,8 @@ pub fn break_hung(ctx: &ServerContext, e: &mut Entity, fresh: &mut Vec<Entity>, 
     };
     let (self_item, sound): (Option<&str>, &str) = match &h.decor {
         Decor::Frame(f) => {
-            if let Some((item, damage)) = f.item {
-                fresh.extend(dropped_id(ctx, at, item, damage));
+            if let Some(item) = &f.item {
+                fresh.extend(dropped_stack(ctx, at, item));
             }
             (
                 Some(if f.glow {
@@ -320,8 +321,8 @@ pub fn break_hung(ctx: &ServerContext, e: &mut Entity, fresh: &mut Vec<Entity>, 
         }
         Decor::Painting { .. } => (Some("minecraft:painting"), "entity.painting.break"),
         Decor::Stand(s) => {
-            for (item, damage) in s.gear.iter().flatten() {
-                fresh.extend(dropped_id(ctx, at, *item, *damage));
+            for item in s.gear.iter().flatten() {
+                fresh.extend(dropped_stack(ctx, at, item));
             }
             (Some("minecraft:armor_stand"), "entity.armor_stand.break")
         }
@@ -425,8 +426,8 @@ pub fn hurt(ctx: &ServerContext, e: &mut Entity, hit: &Hit, fresh: &mut Vec<Enti
             if f.fixed {
                 return events;
             }
-            if let Some((item, damage)) = f.item.take() {
-                fresh.extend(dropped_id(ctx, e.pos, item, damage));
+            if let Some(item) = f.item.take() {
+                fresh.extend(dropped_stack(ctx, e.pos, &item));
                 fx::sound(
                     ctx,
                     "entity.item_frame.remove_item",
@@ -482,9 +483,9 @@ pub fn interact(
             if f.fixed {
                 return;
             }
-            if let Some((item, damage)) = f.item.take() {
+            if let Some(item) = f.item.take() {
                 if !creative {
-                    fresh.extend(dropped_id(ctx, e.pos, item, damage));
+                    fresh.extend(dropped_stack(ctx, e.pos, &item));
                 }
                 fx::sound(
                     ctx,
@@ -513,7 +514,7 @@ pub fn interact(
                     1.0,
                 );
             } else if let Some(held) = held {
-                f.item = Some((held.stack.item, held.stack.damage));
+                f.item = Some(held.stack.with_count(1));
                 if !creative {
                     held::consume(ctx, actor.uuid, held.slot, 1);
                 }
@@ -554,7 +555,7 @@ pub fn interact(
                 Some(h) => slot_for(&h.name),
                 None => click_slot(s, rel),
             };
-            let new = held.as_ref().map(|h| (h.stack.item, h.stack.damage));
+            let new = held.as_ref().map(|h| h.stack.with_count(1));
             if new.is_none() && s.gear[slot].is_none() {
                 return;
             }
@@ -565,14 +566,10 @@ pub fn interact(
                 held::consume(ctx, actor.uuid, h.slot, 1);
             }
             // The old piece goes to the player's hands, or to the floor.
-            if let Some((item, damage)) = old {
-                let stack = mc_protocol::packets::play::ItemStack {
-                    damage,
-                    ..mc_protocol::packets::play::ItemStack::new(item, 1)
-                };
-                if held::give(ctx, actor.uuid, &stack) > 0 {
-                    fresh.extend(dropped_id(ctx, e.pos, item, damage));
-                }
+            if let Some(stack) = old
+                && held::give(ctx, actor.uuid, &stack) > 0
+            {
+                fresh.extend(dropped_stack(ctx, e.pos, &stack));
             }
             fx::sound(
                 ctx,
@@ -726,7 +723,7 @@ mod tests {
         );
         let Kind::Hung(h) = &e.kind else { panic!() };
         let Decor::Frame(f) = &h.decor else { panic!() };
-        assert_eq!(f.item, Some((stone, 0)));
+        assert_eq!(f.item.as_ref().map(|s| (s.item, s.damage)), Some((stone, 0)));
         assert_eq!(
             lock(&ctx.inventories)[&7].slots[36].as_ref().unwrap().count,
             4
@@ -807,7 +804,7 @@ mod tests {
         );
         let Kind::Hung(h) = &e.kind else { panic!() };
         let Decor::Stand(s) = &h.decor else { panic!() };
-        assert_eq!(s.gear[5], Some((helmet, 0)));
+        assert_eq!(s.gear[5].as_ref().map(|s| (s.item, s.damage)), Some((helmet, 0)));
         assert!(lock(&ctx.inventories)[&7].slots[36].is_none());
         // An empty hand takes it back by where the click lands.
         interact(

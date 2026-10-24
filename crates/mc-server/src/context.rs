@@ -353,11 +353,12 @@ pub enum Event {
         kind: i32,
         duration: i32,
     },
-    /// What a player holds in the main hand changed.
+    /// What a player holds or wears changed: (equipment slot: 0 main
+    /// hand, 1 off hand, 2 feet .. 5 head; the stack).
     Equipment {
         uuid: u128,
         entity_id: i32,
-        main_hand: Option<ItemStack>,
+        slots: Vec<(u8, Option<ItemStack>)>,
     },
 }
 

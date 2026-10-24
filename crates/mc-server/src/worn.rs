@@ -22,6 +22,12 @@ use crate::context::{Event, ServerContext};
 use crate::enchant_effects::{self as ee, Mover, Situation};
 use crate::tick::lock;
 
+/// A location effect that is on: (equipment slot, enchantment, index of
+/// the effect) and the modifiers it put on.
+type Active = (&'static str, String, usize, Vec<(String, AttributeModifier)>);
+/// What a slot holds: (slot, item, enchantments).
+type SlotSig = (&'static str, i32, Vec<(String, i32)>);
+
 /// A player's enchantment state between ticks.
 #[derive(Clone, Debug, Default)]
 pub struct Worn {
@@ -29,14 +35,16 @@ pub struct Worn {
     mods: BTreeMap<String, Vec<AttributeModifier>>,
     /// Location effects that are on: (equipment slot, enchantment, index of
     /// the effect) and the modifiers they put on.
-    active: Vec<(&'static str, String, usize, Vec<(String, AttributeModifier)>)>,
+    active: Vec<Active>,
     /// What was worn last tick: (slot, item, enchantments).
-    gear: Vec<(&'static str, i32, Vec<(String, i32)>)>,
+    gear: Vec<SlotSig>,
     last_block: Option<[i32; 3]>,
     last_pos: Option<[f64; 3]>,
     age: i64,
     /// Ticks spent gliding.
     glided: i32,
+    /// The equipment others were last shown.
+    shown: Option<[Option<ItemStack>; 6]>,
 }
 
 impl Worn {
@@ -123,6 +131,38 @@ pub fn extinguish(ctx: &ServerContext, uuid: u128) {
     let lit = lock(&ctx.vitals).get(&uuid).is_some_and(|v| v.fire > 0);
     if lit {
         crate::effects::change(ctx, uuid, |v| v.fire = 0);
+    }
+}
+
+/// What others see a player hold and wear, by equipment slot: main hand,
+/// off hand, feet, legs, chest, head.
+pub fn equipment(ctx: &ServerContext, uuid: u128) -> [Option<ItemStack>; 6] {
+    let inventories = lock(&ctx.inventories);
+    let Some(h) = inventories.get(&uuid) else {
+        return Default::default();
+    };
+    let main = h.hand_slot(0);
+    [main, 45, 8, 7, 6, 5].map(|i| h.slots[i].clone())
+}
+
+/// Tells others what changed of a player's equipment (a stack that wore,
+/// broke, was put on or taken off).
+fn show_equipment(ctx: &ServerContext, uuid: u128, entity_id: i32, worn: &mut Worn) {
+    let now = equipment(ctx, uuid);
+    let slots: Vec<(u8, Option<ItemStack>)> = match &worn.shown {
+        None => Vec::new(),
+        Some(was) => (0..6)
+            .filter(|&i| was[i] != now[i])
+            .map(|i| (i as u8, now[i].clone()))
+            .collect(),
+    };
+    worn.shown = Some(now);
+    if !slots.is_empty() {
+        let _ = ctx.events.send(Event::Equipment {
+            uuid,
+            entity_id,
+            slots,
+        });
     }
 }
 
@@ -230,7 +270,7 @@ fn burn(ctx: &ServerContext, uuid: u128, mode: i32, pose: crate::context::Pose) 
 }
 
 /// The item and enchantments worn in each slot, to see what changed.
-fn signature(gear: &[(usize, &'static str, ItemStack)]) -> Vec<(&'static str, i32, Vec<(String, i32)>)> {
+fn signature(gear: &[(usize, &'static str, ItemStack)]) -> Vec<SlotSig> {
     gear.iter()
         .map(|(_, slot, s)| (*slot, s.item, crate::enchants::levels(s)))
         .collect()
@@ -253,6 +293,7 @@ fn gear_tick(
     };
     worn.age += 1;
     glide(ctx, uuid, mode, pose, flying, &mut worn);
+    show_equipment(ctx, uuid, entity_id, &mut worn);
     let pos = [pose.x, pose.y, pose.z];
     let block = pos.map(|c| c.floor() as i32);
     let below = [
@@ -795,5 +836,29 @@ mod tests {
         let worn = lock(&ctx.inventories).get(&U).unwrap().slots[6].clone().unwrap();
         // Thorns' 2 and the hit's 1.
         assert_eq!(worn.damage, 3);
+    }
+
+    #[test]
+    fn others_see_armor_and_the_off_hand_change() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        join(&ctx, U, 906, [0.5, -60.0, 0.5], 0);
+        tick(&ctx);
+        let mut events = ctx.events.subscribe();
+        let helmet = stack(&ctx, "iron_helmet", &[("protection", 1)]);
+        wear(&ctx, U, 5, helmet.clone());
+        wear(&ctx, U, 45, stack(&ctx, "shield", &[]));
+        tick(&ctx);
+        let mut seen = Vec::new();
+        while let Some(e) = events.try_changed() {
+            if let Event::Equipment { slots, .. } = e {
+                seen.extend(slots);
+            }
+        }
+        assert!(seen.contains(&(5, Some(helmet))));
+        assert!(seen.iter().any(|(i, s)| *i == 1 && s.is_some()));
+        assert_eq!(seen.len(), 2);
     }
 }

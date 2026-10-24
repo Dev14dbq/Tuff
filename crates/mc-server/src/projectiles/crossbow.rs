@@ -116,7 +116,8 @@ pub fn use_crossbow(ctx: &ServerContext, actor: Actor, hand: i32, bow: &Held) ->
 /// The charging sounds, every tick, for every crossbow being charged.
 pub fn tick_charging(ctx: &ServerContext) {
     let now = lock(&ctx.time).age;
-    let charging: Vec<(u128, (i32, bool, bool), Option<(i64, i32)>)> = {
+    type Charging = (u128, (i32, bool, bool), Option<(i64, i32)>);
+    let charging: Vec<Charging> = {
         let st = lock(&ctx.shooting);
         st.charging
             .iter()
@@ -245,7 +246,7 @@ pub fn angles(count: usize, spread: f32) -> Vec<f32> {
     let mut sign = 1.0;
     (0..count)
         .map(|i| {
-            let a = start + sign * ((i + 1) / 2) as f32 * step;
+            let a = start + sign * i.div_ceil(2) as f32 * step;
             sign = -sign;
             a
         })
