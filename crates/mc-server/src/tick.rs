@@ -932,7 +932,8 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         .filter(|e| match &e.kind {
             mc_entity::Kind::Hung(_)
             | mc_entity::Kind::Vehicle(_)
-            | mc_entity::Kind::Crystal(_) => true,
+            | mc_entity::Kind::Crystal(_)
+            | mc_entity::Kind::Merchant(_) => !e.removed,
             // The dragon is hit in its parts.
             mc_entity::Kind::Mob(m) => m.dying.is_none() && m.dragon().is_none(),
             _ => false,

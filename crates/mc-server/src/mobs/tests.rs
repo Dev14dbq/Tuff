@@ -1634,3 +1634,53 @@ fn a_burning_mob_in_a_water_cauldron_goes_out() {
         .unwrap();
     assert_eq!(ctx.shapes.property(s, "level"), Some("2"));
 }
+
+#[test]
+fn a_wandering_trader_walks_falls_and_dies_to_a_player() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    join(&ctx, [0.5, -60.0, 0.5]);
+    let e = crate::trading::new_merchant(&ctx, "minecraft:wandering_trader", [5.5, -60.0, 5.5])
+        .unwrap();
+    let id = e.id;
+    lock(&ctx.entities).push(e);
+    // It strolls about.
+    let mut farthest = 0.0f64;
+    for _ in 0..800 {
+        run_all(&ctx, 1);
+        let p = mob_of(&ctx, id).unwrap().pos;
+        farthest = farthest.max((p[0] - 5.5).hypot(p[2] - 5.5));
+    }
+    assert!(farthest > 2.0, "stood still");
+    // With the floor gone it falls as anything does, faster and faster.
+    let p = mob_of(&ctx, id).unwrap().pos;
+    let (x, z) = (p[0].floor() as i32, p[2].floor() as i32);
+    let air = ctx.data.blocks.default_state("minecraft:air").unwrap();
+    for y in -63..=-61 {
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                let at = mc_protocol::Position::new(x + dx, y, z + dz);
+                ctx.world.set_block(at, air, &ctx.data.blocks, &ctx.rules);
+            }
+        }
+    }
+    run_all(&ctx, 8);
+    assert!(mob_of(&ctx, id).unwrap().pos[1] < -62.0);
+    // A player's blows hurt it: a second one within half a second does
+    // not, and it dies at the end of its 20 health.
+    let at = mob_of(&ctx, id).unwrap().pos;
+    ctx.mobs.hit(ctx.dim, id, steve(at), blow(6.0, at));
+    run(&ctx, 1);
+    ctx.mobs.hit(ctx.dim, id, steve(at), blow(6.0, at));
+    run(&ctx, 1);
+    assert!(mob_of(&ctx, id).is_some_and(|e| !e.removed));
+    for _ in 0..3 {
+        run(&ctx, 10);
+        let at = mob_of(&ctx, id).map_or(at, |e| e.pos);
+        ctx.mobs.hit(ctx.dim, id, steve(at), blow(6.0, at));
+        run(&ctx, 1);
+    }
+    assert!(mob_of(&ctx, id).is_none_or(|e| e.removed), "still alive");
+}

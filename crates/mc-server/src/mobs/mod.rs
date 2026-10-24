@@ -114,8 +114,8 @@ pub struct MobState {
     /// Trial spawners' waves, and the configs they named (by data pack name).
     pub trials: Mutex<crate::trials::Trials>,
     pub trial_configs: Mutex<HashMap<String, crate::trials::Config>>,
-    /// Health of villagers, which zombies hurt (20 when not listed).
-    villagers: Mutex<HashMap<i32, f32>>,
+    /// Health of villagers and wandering traders (full when not listed).
+    villagers: Mutex<HashMap<i32, hurt::MerchantHealth>>,
     /// What the villagers think of each player, below zero when bad.
     standing: Mutex<HashMap<u128, i32>>,
 }
@@ -183,15 +183,19 @@ impl MobState {
 
     /// Health of the villager or wandering trader with this id.
     pub fn villager_health(&self, id: i32) -> f32 {
-        lock(&self.villagers).get(&id).copied().unwrap_or(20.0)
+        lock(&self.villagers)
+            .get(&id)
+            .copied()
+            .unwrap_or_default()
+            .health
     }
 
     /// Sets it (`None`: forgets it, the villager left the world).
     pub fn set_villager_health(&self, id: i32, health: Option<f32>) {
         let mut all = lock(&self.villagers);
         match health {
-            Some(h) if h < 20.0 => {
-                all.insert(id, h);
+            Some(h) if h < hurt::MerchantHealth::default().health => {
+                all.entry(id).or_default().health = h;
             }
             _ => {
                 all.remove(&id);
@@ -458,6 +462,12 @@ fn apply_pending(ctx: &ServerContext, entities: &mut [Entity], pending: Vec<Pend
                     continue;
                 };
                 let e = &entities[i];
+                if let Kind::Merchant(_) = &e.kind {
+                    if !e.removed && dist_sq(by.pos, e.pos) <= REACH_SQ {
+                        hurt::player_blow(ctx, entities, i, &by, &blow, now);
+                    }
+                    continue;
+                }
                 let Kind::Mob(m) = &e.kind else {
                     continue;
                 };
