@@ -69,6 +69,8 @@ species! {
     Ghast => "minecraft:ghast", "Ghast";
     Blaze => "minecraft:blaze", "Blaze";
     MagmaCube => "minecraft:magma_cube", "Magma Cube";
+    EnderDragon => "minecraft:ender_dragon", "Ender Dragon";
+    Wither => "minecraft:wither", "Wither";
 }
 
 /// Which sound of a mob.
@@ -133,6 +135,8 @@ impl Species {
             Phantom => (0.9, 0.5),
             Ghast => (4.0, 4.0),
             Blaze => (0.6, 1.8),
+            EnderDragon => (16.0, 8.0),
+            Wither => (0.9, 3.5),
         }
     }
 
@@ -176,6 +180,8 @@ impl Species {
             Enderman => 40.0,
             Witch => 26.0,
             Slime | MagmaCube => 1.0,
+            EnderDragon => 200.0,
+            Wither => 300.0,
             _ => 20.0,
         }
     }
@@ -192,6 +198,7 @@ impl Species {
             Parrot => 0.2,
             Piglin => 0.35,
             Phantom | Ghast => 0.7,
+            Wither => 0.6,
             Slime | MagmaCube => 0.3,
             _ => 0.25,
         }
@@ -206,6 +213,7 @@ impl Species {
             Ghast => 100.0,
             Blaze => 48.0,
             Fox => 32.0,
+            Wither => 40.0,
             _ => 16.0,
         }
     }
@@ -233,6 +241,7 @@ impl Species {
         use Species::*;
         match self {
             Zombie | Husk | Drowned | ZombieVillager | ZombifiedPiglin => 2.0,
+            Wither => 4.0,
             _ => 0.0,
         }
     }
@@ -251,6 +260,7 @@ impl Species {
                 | WitherSkeleton
                 | Phantom
                 | ZombifiedPiglin
+                | Wither
         )
     }
 
@@ -268,7 +278,7 @@ impl Species {
         use Species::*;
         matches!(
             self,
-            WitherSkeleton | Ghast | Blaze | MagmaCube | ZombifiedPiglin
+            WitherSkeleton | Ghast | Blaze | MagmaCube | ZombifiedPiglin | EnderDragon | Wither
         )
     }
 
@@ -276,7 +286,12 @@ impl Species {
     pub fn flies(self) -> bool {
         matches!(
             self,
-            Species::Ghast | Species::Blaze | Species::Phantom | Species::Parrot
+            Species::Ghast
+                | Species::Blaze
+                | Species::Phantom
+                | Species::Parrot
+                | Species::EnderDragon
+                | Species::Wither
         )
     }
 
@@ -291,6 +306,8 @@ impl Species {
                 | Species::Phantom
                 | Species::Cat
                 | Species::MagmaCube
+                | Species::EnderDragon
+                | Species::Wither
         )
     }
 
@@ -346,6 +363,12 @@ impl Species {
         }
     }
 
+    /// The ender dragon and the wither: they have their own tick, a boss
+    /// bar, and no effects take hold of them.
+    pub fn boss(self) -> bool {
+        matches!(self, Species::EnderDragon | Species::Wither)
+    }
+
     /// Whether it is a horse of some kind (saddle, temper, chest).
     pub fn horse(self) -> bool {
         matches!(self, Species::Horse | Species::Donkey | Species::Mule)
@@ -387,7 +410,9 @@ impl Species {
             Category::Creature => (1, 3),
             Category::Monster => match self {
                 Blaze => (10, 10),
-                Slime | MagmaCube => (0, 0),
+                Wither => (50, 50),
+                // The dragon's experience comes out as it dies.
+                Slime | MagmaCube | EnderDragon => (0, 0),
                 _ => (5, 5),
             },
         }
@@ -453,7 +478,8 @@ impl Species {
     /// How loud its sounds are.
     pub fn volume(self) -> f32 {
         match self {
-            Species::Ghast => 5.0,
+            Species::Ghast | Species::EnderDragon => 5.0,
+            Species::Wither => 2.0,
             Species::Wolf | Species::Cat | Species::Rabbit => 0.4,
             Species::Horse | Species::Donkey | Species::Mule => 0.8,
             Species::Slime | Species::MagmaCube => 0.4,

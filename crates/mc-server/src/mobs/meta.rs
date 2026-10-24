@@ -225,6 +225,7 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             v.push((16, MetadataValue::Boolean(false)));
             v.push((17, MetadataValue::Boolean(m.is_baby())));
         }
+        EnderDragon | Wither => v.extend(crate::bosses::metadata(m)),
         _ => {}
     }
     v

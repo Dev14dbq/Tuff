@@ -258,12 +258,31 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                 Shot::Firework(_) => {
                     s.meta.extend(item("minecraft:firework_rocket"));
                 }
-                Shot::Fireball { .. } => {}
+                Shot::Fireball { .. } | Shot::DragonFireball => {}
+                Shot::WitherSkull { dangerous } => {
+                    s.meta.push((8, MetadataValue::Boolean(*dangerous)));
+                }
+                Shot::Breath { radius, .. } => {
+                    s.meta.push((8, MetadataValue::Float(*radius)));
+                    if let Some(id) = ctx
+                        .data
+                        .builtin
+                        .id("minecraft:particle_type", "minecraft:dragon_breath")
+                    {
+                        let mut bytes = Vec::new();
+                        mc_protocol::Write::put_varint(&mut bytes, id);
+                        mc_protocol::Write::put_f32(&mut bytes, 1.0);
+                        s.meta.push((10, MetadataValue::Particle(bytes)));
+                    }
+                }
                 Shot::Cloud { radius, .. } => {
                     s.meta.push((8, MetadataValue::Float(*radius)));
                 }
                 Shot::Bobber { .. } => {}
             }
+        }
+        Kind::Crystal(c) => {
+            s.meta = crate::bosses::crystal::metadata(c);
         }
         Kind::Hung(h) => {
             s.yaw = h.yaw;
@@ -375,6 +394,9 @@ pub fn type_name(kind: &Kind) -> Option<String> {
             Shot::Arrow(a) if a.spectral => "spectral_arrow",
             Shot::Fireball { small: true } => "small_fireball",
             Shot::Fireball { small: false } => "fireball",
+            Shot::WitherSkull { .. } => "wither_skull",
+            Shot::DragonFireball => "dragon_fireball",
+            Shot::Breath { .. } => "area_effect_cloud",
             Shot::Arrow(_) => "arrow",
             Shot::Snowball => "snowball",
             Shot::Egg => "egg",
@@ -396,6 +418,7 @@ pub fn type_name(kind: &Kind) -> Option<String> {
             Decor::Stand(_) => "armor_stand",
         }
         .into(),
+        Kind::Crystal(_) => "end_crystal".into(),
         Kind::Vehicle(v) => match &v.craft {
             Craft::Boat { wood, chest } => match (wood.as_str(), chest) {
                 ("bamboo", false) => "bamboo_raft".into(),

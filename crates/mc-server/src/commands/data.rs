@@ -249,6 +249,7 @@ pub fn entity_nbt(ctx: &ServerContext, t: &Target) -> Compound {
             c.insert("Age", Tag::Short(e.age.min(i16::MAX as u32) as i16));
         }
         mc_entity::Kind::FallingBlock { .. } => {}
+        mc_entity::Kind::Crystal(crystal) => crate::bosses::crystal::to_nbt(crystal, &mut c),
         mc_entity::Kind::Merchant(m) => {
             if !m.wandering {
                 let mut data = Compound::new();

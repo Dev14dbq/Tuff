@@ -2189,6 +2189,10 @@ pub mod play {
         /// A direction, by its 3D value (down 0, up 1, north 2, south 3,
         /// west 4, east 5).
         Direction(i32),
+        /// One particle: its type id and options, encoded.
+        Particle(Vec<u8>),
+        /// A block position, or none (an end crystal's beam target).
+        OptBlockPos(Option<crate::Position>),
         /// A registry id under its own serializer type (cat, cow, wolf, pig
         /// and chicken variants): (type id, value).
         Holder(i32, i32),
@@ -2231,6 +2235,17 @@ pub mod play {
                     out.put_bool(uuid.is_some());
                     if let Some(u) = uuid {
                         out.put_uuid(*u);
+                    }
+                }
+                MetadataValue::Particle(bytes) => {
+                    out.put_varint(16);
+                    out.extend_from_slice(bytes);
+                }
+                MetadataValue::OptBlockPos(pos) => {
+                    out.put_varint(11);
+                    out.put_bool(pos.is_some());
+                    if let Some(p) = pos {
+                        out.put_position(*p);
                     }
                 }
                 MetadataValue::OptBlockState(state) => {

@@ -116,6 +116,26 @@ fn table(ctx: &ServerContext) -> &'static [f32] {
     })
 }
 
+/// [`table`] for a blue wither skull: what a wither may break resists no
+/// more than 0.8.
+fn weak_table(ctx: &ServerContext) -> &'static [f32] {
+    static TABLE: OnceLock<Vec<f32>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let strong = table(ctx);
+        (0..ctx.data.blocks.state_count())
+            .map(|s| {
+                let r = strong.get(s as usize).copied().unwrap_or(-1.0);
+                let name = ctx.data.blocks.block_name(s).unwrap_or("");
+                if r < 0.0 || crate::bosses::wither::immune_block(ctx, name) {
+                    r
+                } else {
+                    r.min(0.8)
+                }
+            })
+            .collect()
+    })
+}
+
 /// Blast resistance of a block (Java Edition values).
 pub fn blast_resistance(name: &str) -> f32 {
     let n = name;
@@ -433,6 +453,10 @@ pub struct Blast {
     /// A mob's (a creeper's): `mob_griefing` and
     /// `mob_explosion_drop_decay` rule it, not the TNT rules.
     pub mob: bool,
+    /// A blue wither skull's: what it may break resists no more than 0.8.
+    pub dangerous: bool,
+    /// The kind of the mob behind it (`minecraft:wither`).
+    pub by: Option<&'static str>,
 }
 
 impl Blast {
@@ -445,6 +469,8 @@ impl Blast {
             source: entity.id,
             owner,
             mob: false,
+            dangerous: false,
+            by: None,
         }
     }
 }
@@ -499,7 +525,7 @@ impl Default for Scratch {
 
 impl Scratch {
     /// Starts an explosion at `center`: nothing is cached yet.
-    fn begin(&mut self, ctx: &ServerContext, center: [f64; 3]) {
+    fn begin(&mut self, ctx: &ServerContext, center: [f64; 3], dangerous: bool) {
         self.stamp = self.stamp.wrapping_add(1);
         if self.stamp == 0 {
             self.cells.fill((0, 0));
@@ -529,7 +555,11 @@ impl Scratch {
                 }
             }
         }
-        let table = table(ctx);
+        let table = if dangerous {
+            weak_table(ctx)
+        } else {
+            table(ctx)
+        };
         for (r, &state) in self.resist.iter_mut().zip(&cube) {
             *r = table.get(state as usize).copied().unwrap_or(-1.0);
         }
@@ -649,7 +679,11 @@ fn blown_positions(
     rng: &mut Rng,
     sc: &mut Scratch,
 ) {
-    let table = table(ctx);
+    let table = if blast.dangerous {
+        weak_table(ctx)
+    } else {
+        table(ctx)
+    };
     let step = f64::from(0.3f32);
     let (min_y, max_y) = (ctx.world.min_y, ctx.world.min_y + ctx.world.height as i32);
     sc.positions.clear();
@@ -931,7 +965,7 @@ fn explode_one(
     blast: &Blast,
     gone: &mut Vec<(i32, u128)>,
 ) {
-    sc.begin(ctx, blast.center);
+    sc.begin(ctx, blast.center, blast.dangerous);
     blown_positions(ctx, level, blast, rng, sc);
     let decay = if blast.mob {
         ctx.game_rule_bool("mob_explosion_drop_decay")
@@ -993,7 +1027,7 @@ fn explode_one(
     }
     merge_and_drop(ctx, drops);
     // The blocks are gone: what entities see is read afresh.
-    sc.begin(ctx, blast.center);
+    sc.begin(ctx, blast.center, false);
     sc.index_solids(ctx);
 
     // Entities within twice the power.
@@ -1040,6 +1074,10 @@ fn explode_one(
                 continue;
             }
         }
+        if let Kind::Crystal(crystal) = &mut e.kind {
+            crate::bosses::crystal::strike(crystal, blast.owner, "minecraft:explosion");
+            continue;
+        }
         if matches!(e.kind, Kind::Mob(_)) {
             let mut h = crate::mobs::hurt::Harm::new(
                 damage(impact, reach),
@@ -1054,6 +1092,7 @@ fn explode_one(
                 .owner
                 .and_then(|o| lock(&ctx.players).get(&o).map(|p| p.entity_id));
             h.direct = Some(blast.source);
+            h.killer = blast.by.map(str::to_owned);
             crate::mobs::hurt::harm(ctx, e, &h);
         }
         for (v, d) in e.vel.iter_mut().zip(dir) {
@@ -1273,6 +1312,8 @@ mod tests {
             source: 0,
             owner: None,
             mob: false,
+            dangerous: false,
+            by: None,
         };
         let gone = explode(&ctx, &mut level, &mut entities, &blast);
         let changes = level.into_changes();
@@ -1303,6 +1344,8 @@ mod tests {
             source: 0,
             owner: None,
             mob: false,
+            dangerous: false,
+            by: None,
         };
         explode(&ctx, &mut level, &mut entities, &blast);
         drop(level);

@@ -855,6 +855,13 @@ impl World {
         }
     }
 
+    /// Entities world generation made since the last call (end crystals).
+    pub fn take_generated_entities(&self) -> Vec<mc_nbt::Compound> {
+        self.pipeline()
+            .map(crate::pipeline::Pipeline::take_entities)
+            .unwrap_or_default()
+    }
+
     /// Chunks whose light a new neighbour changed since the last call.
     pub fn take_relit(&self) -> Vec<(i32, i32)> {
         let mut list = std::mem::take(&mut *self.relit.lock().expect("relit lock"));

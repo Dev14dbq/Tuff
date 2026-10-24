@@ -7,6 +7,7 @@
 //! first, then the larger horizontal one — and its velocity is damped.
 //! Blocks collide as full cubes for now; shapes come later.
 
+pub mod boss;
 pub mod extra;
 pub mod mob;
 pub mod nav;
@@ -52,6 +53,8 @@ pub enum Kind {
     Mob(Box<Mob>),
     /// Experience: `count` merged orbs of `value` points each.
     ExperienceOrb { value: i32, count: i32 },
+    /// An end crystal.
+    Crystal(boss::Crystal),
 }
 
 impl Kind {
@@ -123,6 +126,7 @@ impl Entity {
             Kind::Merchant(_) => (0.6, 1.95),
             Kind::Mob(m) => m.species.size(),
             Kind::ExperienceOrb { .. } => (0.5, 0.5),
+            Kind::Crystal(_) => (2.0, 2.0),
             Kind::Projectile(p) => match &p.shot {
                 extra::Shot::Arrow(_) => (0.5, 0.5),
                 extra::Shot::Cloud { radius, .. } => (f64::from(*radius) * 2.0, 0.5),

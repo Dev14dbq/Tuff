@@ -666,7 +666,8 @@ pub fn use_item_on(
     }
     if let Some(name) = held_name
         && use_blocks
-        && (crate::decor::place(ctx, &mut outcome, actor, hand, name, clicked, face)
+        && (crate::bosses::crystal::place(ctx, &mut outcome, actor, hand, name, clicked)
+            || crate::decor::place(ctx, &mut outcome, actor, hand, name, clicked, face)
             || crate::vehicles::place_cart(ctx, &mut outcome, actor, hand, name, clicked)
             || crate::projectiles::use_on_block(
                 ctx,
@@ -827,6 +828,10 @@ pub fn use_item_on(
         }
     }
     outcome.events.push(Event::BlocksChanged { by: 0, changes });
+    // The last skull of a wither's T.
+    for &(p, state) in &placed.blocks {
+        crate::bosses::wither::placed(ctx, &mut outcome.events, p, state);
+    }
     // Survival and adventure use up the block.
     if actor.game_mode != CREATIVE {
         let mut inventories = ctx.inventories.lock().expect("inventories lock");

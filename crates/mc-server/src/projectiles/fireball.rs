@@ -83,6 +83,8 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             owner,
             // A ghast's: the mob rules apply.
             mob: true,
+            dangerous: false,
+            by: None,
         });
     }
 }
