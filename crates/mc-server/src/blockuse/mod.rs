@@ -46,6 +46,9 @@ pub fn comparator_signal(ctx: &ServerContext, p: Position) -> Option<u8> {
     let blocks = &ctx.data.blocks;
     let state = ctx.world.block(p, blocks)?;
     let name = blocks.block_name(state)?;
+    if name == "minecraft:decorated_pot" {
+        return Some(crate::pots::signal(ctx, p));
+    }
     if !matches!(
         name,
         "minecraft:chiseled_bookshelf" | "minecraft:lectern" | "minecraft:jukebox"
@@ -333,8 +336,10 @@ pub fn use_block(
     let Some(c) = click(ctx, actor, hand, at, face, cursor) else {
         return false;
     };
-    let used =
-        cauldron::use_on(&c, outcome) || simple::use_on(&c, outcome) || plants::use_on(&c, outcome);
+    let used = crate::pots::use_on(ctx, actor, hand, at)
+        || cauldron::use_on(&c, outcome)
+        || simple::use_on(&c, outcome)
+        || plants::use_on(&c, outcome);
     if used {
         swing(&c, outcome);
     }
@@ -357,6 +362,14 @@ pub fn use_item_on(
     };
     if c.held.is_none() {
         return false;
+    }
+    match crate::archaeology::brush(ctx, actor, hand, at, face) {
+        crate::archaeology::Press::Start => {
+            swing(&c, outcome);
+            return true;
+        }
+        crate::archaeology::Press::Keep => return true,
+        crate::archaeology::Press::No => {}
     }
     let used = tools::use_on(&c, outcome) || plants::item_on(&c, outcome);
     if used {

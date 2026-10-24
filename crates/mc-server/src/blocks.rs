@@ -59,6 +59,7 @@ pub fn breaks_instantly(data: &McData, rules: &BlockRules, state: u32) -> bool {
                 | "minecraft:repeater"
                 | "minecraft:comparator"
                 | "minecraft:flower_pot"
+                | "minecraft:decorated_pot"
                 | "minecraft:frogspawn"
                 | "minecraft:honey_block"
         )

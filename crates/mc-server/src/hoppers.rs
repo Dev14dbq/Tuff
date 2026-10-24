@@ -45,6 +45,9 @@ fn kind_at(ctx: &ServerContext, p: Position) -> Option<(Kind, &str)> {
     let blocks = &ctx.data.blocks;
     let state = ctx.world.block(p, blocks)?;
     let name = blocks.block_name(state)?;
+    if name == "minecraft:decorated_pot" {
+        return Some((crate::pots::KIND, name));
+    }
     let kind = containers::kind_of(name)?;
     Some((kind, name))
 }

@@ -1007,6 +1007,17 @@ fn explode_one(
             entities.push(tnt);
             continue;
         }
+        // The pot's loot table cannot copy its decorations; drop them here.
+        if name == "minecraft:decorated_pot" {
+            if block_drops {
+                let harvest = crate::pots::harvest(ctx, p, state, crate::pots::Breaker::Other);
+                for drop in harvest.drops {
+                    drops.push((p, drop));
+                }
+            }
+            level.set_block(p, ctx.shapes.air());
+            continue;
+        }
         if crate::containers::kind_of(name).is_some() {
             let (items, _) = crate::containers::broken(ctx, p);
             for stack in items {

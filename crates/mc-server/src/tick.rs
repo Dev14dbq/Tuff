@@ -395,6 +395,7 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
         match id.as_str() {
             "minecraft:hopper" => crate::hoppers::register(ctx, p),
             "minecraft:daylight_detector" => crate::daylight::register(ctx, p),
+            "minecraft:brushable_block" => crate::archaeology::loaded(ctx, p),
             _ => crate::furnaces::wake(ctx, p),
         }
     }
@@ -449,6 +450,7 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
             entities.push(entity);
         }
     }
+    crate::archaeology::tick(ctx);
 }
 
 /// Ids, boxes and container kinds of the minecarts.
@@ -814,7 +816,26 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             | mc_entity::Kind::Vehicle(_) => {}
             mc_entity::Kind::FallingBlock { state } => {
                 mc_entity::fall(entity, &Solid(level));
-                if entity.on_ground || entity.age > 600 {
+                let suspicious = matches!(
+                    ctx.data.blocks.block_name(state),
+                    Some("minecraft:suspicious_sand" | "minecraft:suspicious_gravel")
+                );
+                // A fall breaks suspicious sand or gravel (CancelDrop). Past
+                // 30 seconds in the air, the block item drops without its loot.
+                if suspicious && (entity.on_ground || entity.age > 600) {
+                    if !entity.on_ground
+                        && entity.age > 600
+                        && ctx.game_rule_bool("block_drops")
+                        && let Some(item) = ctx
+                            .data
+                            .blocks
+                            .block_name(state)
+                            .and_then(|n| ctx.items.id(n))
+                    {
+                        spawn_item_at(ctx, entity.pos, item, 1);
+                    }
+                    entity.removed = true;
+                } else if entity.on_ground || entity.age > 600 {
                     let (x, y, z) = entity.block_pos();
                     let at = mc_tick::BlockPos::new(x, y, z);
                     use mc_tick::Level as _;

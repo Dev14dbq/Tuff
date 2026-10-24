@@ -150,6 +150,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             e.pos = add(from, e.vel, f);
             match strike {
                 Strike::Block => {
+                    crate::pots::projectile(ctx, from, to);
                     fx::sound(
                         ctx,
                         hit_sound(a),

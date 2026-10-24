@@ -497,6 +497,8 @@ pub struct ServerContext {
     pub furnaces: Mutex<crate::furnaces::Active>,
     /// Hoppers that tick (tick thread).
     pub hoppers: Mutex<crate::hoppers::Active>,
+    /// Brushes on suspicious sand and gravel, and dust settling back.
+    pub archaeology: Mutex<crate::archaeology::State>,
     /// Recent redstone torch toggles by position (burnout).
     pub torch_toggles: Mutex<HashMap<(i32, i32, i32), Vec<i64>>>,
     /// Containers whose contents changed, for comparators (tick thread).
@@ -755,6 +757,7 @@ impl ServerContext {
             moving: Mutex::new(Vec::new()),
             furnaces: Mutex::new(HashMap::new()),
             hoppers: Mutex::new(Default::default()),
+            archaeology: Mutex::default(),
             torch_toggles: Mutex::new(HashMap::new()),
             container_updates: Mutex::new(Vec::new()),
             weather: Mutex::new(Default::default()),
@@ -1061,6 +1064,7 @@ impl ServerContext {
             daylight: Mutex::new(Default::default()),
             container_updates: Mutex::new(Vec::new()),
             hoppers: Mutex::new(Default::default()),
+            archaeology: Mutex::default(),
             torch_toggles: Mutex::new(HashMap::new()),
             furnaces: Mutex::new(HashMap::new()),
             block_events: Mutex::new(Vec::new()),

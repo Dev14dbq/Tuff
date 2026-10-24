@@ -621,6 +621,7 @@ impl World {
                     | "minecraft:blast_furnace"
                     | "minecraft:smoker"
                     | "minecraft:daylight_detector"
+                    | "minecraft:brushable_block"
             )
         });
         let mut woken = self.woken.lock().expect("woken lock");

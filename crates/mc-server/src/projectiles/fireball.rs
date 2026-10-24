@@ -64,7 +64,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 kind,
             });
         }
-        Strike::Block => {}
+        Strike::Block => crate::pots::projectile(t.ctx, from, to),
     }
     if small {
         // Light the spot it hit.

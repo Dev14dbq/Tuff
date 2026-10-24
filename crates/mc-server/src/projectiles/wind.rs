@@ -140,7 +140,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                     with: Some(e.id),
                     kind: "minecraft:wind_charge",
                 }),
-                Strike::Block => {}
+                Strike::Block => crate::pots::projectile(t.ctx, from, to),
             }
             // Burst a little short of what it hit.
             let len = e.vel.iter().map(|c| c * c).sum::<f64>().sqrt().max(1e-9);

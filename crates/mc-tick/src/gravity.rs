@@ -49,6 +49,14 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
     if !falls(ctx, state) || ctx.shapes.block_index(state) != kind {
         return;
     }
+    // Brushed suspicious sand stays put until the dust has settled again.
+    if matches!(
+        ctx.shapes.block_name(state),
+        Some("minecraft:suspicious_sand" | "minecraft:suspicious_gravel")
+    ) && ctx.shapes.property(state, "dusted") != Some("0")
+    {
+        return;
+    }
     if free(ctx, level.block(p.offset(Dir::Down))) && level.in_world(p.offset(Dir::Down)) {
         set_block(level, ctx, p, ctx.facts.air, Flags::ALL);
         level.spawn_falling_block(p, state);

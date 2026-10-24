@@ -101,6 +101,9 @@ fn fly(t: &mut Tick, e: &mut Entity, skull: Option<bool>) {
         from[2] + e.vel[2] * f,
     ];
     e.removed = true;
+    if matches!(strike, Strike::Block) {
+        crate::pots::projectile(t.ctx, from, to);
+    }
     match skull {
         Some(dangerous) => skull_hit(t, e, strike, dangerous),
         None => fireball_hit(t, e),

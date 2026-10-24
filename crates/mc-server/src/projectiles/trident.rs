@@ -453,6 +453,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             ];
             match strike {
                 Strike::Block => {
+                    crate::pots::projectile(ctx, from, to);
                     fx::sound(
                         ctx,
                         "item.trident.hit_ground",

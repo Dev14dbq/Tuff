@@ -245,6 +245,10 @@ fn store(ctx: &ServerContext, p: Position, open: &Open) {
             id: open.kind.entity.to_owned(),
             data: Compound::new(),
         });
+    if open.kind.entity == "minecraft:decorated_pot" {
+        crate::pots::write_stored(ctx, p, open.slots.first().cloned().flatten());
+        return;
+    }
     be.data.insert("Items", write_items(ctx, &open.slots));
     ctx.world.set_block_entity(be, blocks);
 }
@@ -290,6 +294,9 @@ pub fn slots(ctx: &ServerContext, p: Position, kind: Kind) -> Vec<Option<ItemSta
     if let Some(open) = ctx.containers.lock().expect("containers lock").get(&key(p)) {
         return open.slots.clone();
     }
+    if kind.entity == "minecraft:decorated_pot" {
+        return vec![crate::pots::stored(ctx, p)];
+    }
     match stored_data(ctx, p) {
         Some(data) => read_items(ctx, &data, kind.slots),
         None => vec![None; kind.slots],
@@ -301,9 +308,13 @@ pub fn slots(ctx: &ServerContext, p: Position, kind: Kind) -> Vec<Option<ItemSta
 pub fn put(ctx: &ServerContext, p: Position, kind: Kind, changes: &[(usize, Option<ItemStack>)]) {
     let mut all = ctx.containers.lock().expect("containers lock");
     let open = all.entry(key(p)).or_insert_with(|| {
-        let slots = match stored_data(ctx, p) {
-            Some(data) => read_items(ctx, &data, kind.slots),
-            None => vec![None; kind.slots],
+        let slots = if kind.entity == "minecraft:decorated_pot" {
+            vec![crate::pots::stored(ctx, p)]
+        } else {
+            match stored_data(ctx, p) {
+                Some(data) => read_items(ctx, &data, kind.slots),
+                None => vec![None; kind.slots],
+            }
         };
         Open {
             kind,
