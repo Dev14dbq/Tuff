@@ -461,13 +461,15 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         }
     }
     // Aquatic (Claude): a golden dandelion stops a baby growing, or lets it go on.
-    if name == "minecraft:golden_dandelion"
-        && (m.is_baby() || species == Species::Tadpole)
-    {
+    if name == "minecraft:golden_dandelion" && (m.is_baby() || species == Species::Tadpole) {
         let locked = !m.quirks.aqua.age_locked;
         m.quirks.aqua.age_locked = locked;
         if locked {
-            m.baby_age = if species == Species::Tadpole { 0 } else { -24000 };
+            m.baby_age = if species == Species::Tadpole {
+                0
+            } else {
+                -24000
+            };
             m.quirks.aqua.growth = 0;
             m.persistent = true;
         }
@@ -546,7 +548,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
     // Aquatic (Claude): nautilus armor on a tamed nautilus.
     if name.ends_with("_nautilus_armor")
         && matches!(species, Species::Nautilus | Species::ZombieNautilus)
-        && (m.is_tame() || species == Species::ZombieNautilus)
+        && m.is_tame()
         && !m.is_baby()
         && m.gear[slot::BODY].is_none()
     {
@@ -586,7 +588,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         // Land animals (Cursor)
         Species::Camel | Species::CamelHusk => m.saddled() && !m.is_baby(),
         Species::Nautilus => m.saddled() && m.is_tame() && !m.is_baby(),
-        Species::ZombieNautilus => m.saddled() && !m.is_baby(),
+        Species::ZombieNautilus => m.saddled() && m.is_tame() && !m.is_baby(),
         Species::Horse | Species::Donkey | Species::Mule => !m.is_baby(),
         _ => false,
     };

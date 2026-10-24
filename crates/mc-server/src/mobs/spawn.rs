@@ -473,10 +473,38 @@ impl Spots<'_> {
             }
             let pos = [f64::from(px) + 0.5, f64::from(y), f64::from(pz) + 0.5];
             let biome = self.biome(px, y, pz);
-            out.push(new_mob_in(self.ctx, entry.species, pos, biome.as_deref()));
+            let mut mob = new_mob_in(self.ctx, entry.species, pos, biome.as_deref());
+            let mount = jockey(self.ctx, &mut mob, biome.as_deref());
+            out.push(mob);
+            out.extend(mount);
             spawned += 1;
         }
     }
+}
+
+/// Half the drowned that hold a trident come up riding a zombie nautilus,
+/// outside the rivers (Aquatic, Claude). The mount is returned.
+pub(crate) fn jockey(ctx: &ServerContext, rider: &mut Entity, biome: Option<&str>) -> Option<Entity> {
+    let trident = ctx.items.id("minecraft:trident")?;
+    let Kind::Mob(m) = &mut rider.kind else {
+        return None;
+    };
+    if m.species != Species::Drowned
+        || m.is_baby()
+        || m.gear[mc_entity::mob::slot::MAINHAND]
+            .as_ref()
+            .is_none_or(|g| g.item != trident)
+        || biome.is_some_and(|b| b.ends_with("river"))
+        || m.next_f64() >= 0.5
+    {
+        return None;
+    }
+    let mut mount = new_mob_in(ctx, Species::ZombieNautilus, rider.pos, biome);
+    if let Kind::Mob(n) = &mut mount.kind {
+        n.riders.push(rider.id);
+    }
+    m.quirks.aqua.mount = Some(mount.id);
+    Some(mount)
 }
 
 /// Spawns what the rules allow this tick. Returns the new mobs.
@@ -1354,17 +1382,15 @@ mod tests {
             return;
         };
         let sea = ctx.world.sea_level;
-        let _ = ctx
-            .world
-            .block(Position::new(40, 0, 40), &ctx.data.blocks);
+        let _ = ctx.world.block(Position::new(40, 0, 40), &ctx.data.blocks);
         let state = |n: &str| ctx.data.blocks.default_state(n).unwrap();
         let put = |x: i32, y: i32, name: &str| {
             let _ = ctx.world.set_block(
-                    Position::new(x, y, 40),
-                    state(name),
-                    &ctx.data.blocks,
-                    &ctx.rules,
-                );
+                Position::new(x, y, 40),
+                state(name),
+                &ctx.data.blocks,
+                &ctx.rules,
+            );
         };
         let floor = ctx.world.min_y;
         for y in floor..sea + 2 {
@@ -1388,14 +1414,23 @@ mod tests {
         let mid = sea - 2;
         for s in [Species::Cod, Species::Squid, Species::Dolphin] {
             assert!(spots.water_fits(s, 40, mid, 40, false), "{s:?} in the sea");
-            assert!(!spots.water_fits(s, 40, sea - 1, 40, false), "{s:?} at the top");
-            assert!(!spots.water_fits(s, 41, mid, 40, false), "{s:?} on dry land");
+            assert!(
+                !spots.water_fits(s, 40, sea - 1, 40, false),
+                "{s:?} at the top"
+            );
+            assert!(
+                !spots.water_fits(s, 41, mid, 40, false),
+                "{s:?} on dry land"
+            );
         }
         // Axolotls want clay within five blocks below.
         assert!(spots.water_fits(Species::Axolotl, 40, mid, 40, false));
         put(40, floor, "minecraft:stone");
         let ground = Ground::new(&ctx);
-        let spots = Spots { ground: &ground, ..spots };
+        let spots = Spots {
+            ground: &ground,
+            ..spots
+        };
         assert!(!spots.water_fits(Species::Axolotl, 40, mid, 40, false));
     }
 

@@ -73,7 +73,10 @@ fn every_aquatic_species_is_known_by_the_registry() {
         Species::ZombieNautilus,
     ] {
         assert_ne!(crate::mobs::meta::type_id(&ctx, s), 0, "{s:?}");
-        assert!(ctx.items.id(&format!("{}_spawn_egg", s.id())).is_some(), "{s:?}");
+        assert!(
+            ctx.items.id(&format!("{}_spawn_egg", s.id())).is_some(),
+            "{s:?}"
+        );
     }
 }
 
@@ -98,14 +101,23 @@ fn the_metadata_of_the_aquatic_mobs_follows_the_wiki() {
     );
     let mut salmon = mob(Species::Salmon);
     salmon.variant = 2;
-    assert_eq!(field(&meta(&ctx, &salmon), 17), Some(&MetadataValue::VarInt(2)));
+    assert_eq!(
+        field(&meta(&ctx, &salmon), 17),
+        Some(&MetadataValue::VarInt(2))
+    );
     let mut glow = mob(Species::GlowSquid);
     glow.quirks.aqua.dark = 60;
-    assert_eq!(field(&meta(&ctx, &glow), 18), Some(&MetadataValue::VarInt(60)));
+    assert_eq!(
+        field(&meta(&ctx, &glow), 18),
+        Some(&MetadataValue::VarInt(60))
+    );
     // Squids and dolphins are ageable: the baby flag is field 16.
     let mut squid = mob(Species::Squid);
     squid.set_baby(true);
-    assert_eq!(field(&meta(&ctx, &squid), 16), Some(&MetadataValue::Boolean(true)));
+    assert_eq!(
+        field(&meta(&ctx, &squid), 16),
+        Some(&MetadataValue::Boolean(true))
+    );
     let mut dolphin = mob(Species::Dolphin);
     dolphin.quirks.aqua.got_fish = true;
     let v = meta(&ctx, &dolphin);
@@ -184,7 +196,10 @@ fn the_aquatic_mobs_are_saved_and_read_back() {
     turtle.quirks.aqua.has_egg = true;
     turtle.quirks.aqua.home = Some([4, -60, 9]);
     let (c, back) = round(&turtle);
-    assert_eq!(c.get("home_pos"), Some(&mc_nbt::Tag::IntArray(vec![4, -60, 9])));
+    assert_eq!(
+        c.get("home_pos"),
+        Some(&mc_nbt::Tag::IntArray(vec![4, -60, 9]))
+    );
     assert!(back.quirks.aqua.has_egg);
     assert_eq!(back.quirks.aqua.home, Some([4, -60, 9]));
     let mut tad = Mob::new(Species::Tadpole, 3);
@@ -200,7 +215,10 @@ fn the_aquatic_mobs_are_saved_and_read_back() {
     let mut f = Mob::new(Species::Frog, 3);
     f.variant = crate::mobs::meta::variant_id(&ctx, Species::Frog, "warm").unwrap();
     let (c, back) = round(&f);
-    assert_eq!(c.get("variant"), Some(&mc_nbt::Tag::String("minecraft:warm".into())));
+    assert_eq!(
+        c.get("variant"),
+        Some(&mc_nbt::Tag::String("minecraft:warm".into()))
+    );
     assert_eq!(back.variant, f.variant);
 }
 
@@ -215,9 +233,18 @@ fn frogs_and_zombie_nautiluses_take_the_look_of_their_biome() {
         let Kind::Mob(m) = &e.kind else { panic!() };
         crate::mobs::meta::variant_name(&ctx, species, m.variant).unwrap()
     };
-    assert_eq!(variant(Species::Frog, Some("minecraft:swamp")), "minecraft:temperate");
-    assert_eq!(variant(Species::Frog, Some("minecraft:desert")), "minecraft:warm");
-    assert_eq!(variant(Species::Frog, Some("minecraft:snowy_taiga")), "minecraft:cold");
+    assert_eq!(
+        variant(Species::Frog, Some("minecraft:swamp")),
+        "minecraft:temperate"
+    );
+    assert_eq!(
+        variant(Species::Frog, Some("minecraft:desert")),
+        "minecraft:warm"
+    );
+    assert_eq!(
+        variant(Species::Frog, Some("minecraft:snowy_taiga")),
+        "minecraft:cold"
+    );
     assert_eq!(
         variant(Species::ZombieNautilus, Some("minecraft:warm_ocean")),
         "minecraft:warm"
@@ -531,7 +558,8 @@ fn a_tame_nautilus_takes_a_saddle_and_armor_and_carries_a_rider() {
     hold(&ctx, "minecraft:shears", 1);
     ctx.mobs.use_on(ctx.dim, id, by(), 0);
     run(&ctx, 1);
-    assert!(with_mob(&ctx, id, |m| m.gear[mc_entity::mob::slot::BODY].is_none()
+    assert!(with_mob(&ctx, id, |m| m.gear[mc_entity::mob::slot::BODY]
+        .is_none()
         && m.saddled()));
     ctx.mobs.use_on(ctx.dim, id, by(), 0);
     run(&ctx, 1);
@@ -554,8 +582,9 @@ fn a_golden_dandelion_holds_a_baby_and_a_second_one_lets_it_grow() {
     hold(&ctx, "minecraft:golden_dandelion", 2);
     ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 0.5]), 0);
     run(&ctx, 50);
-    let (locked, age, kept) =
-        set_mob(&ctx, id, |m| (m.quirks.aqua.age_locked, m.baby_age, m.persistent));
+    let (locked, age, kept) = set_mob(&ctx, id, |m| {
+        (m.quirks.aqua.age_locked, m.baby_age, m.persistent)
+    });
     assert!(locked && kept);
     assert_eq!(age, -24000, "the timer starts over and does not run");
     ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 0.5]), 0);
@@ -580,6 +609,66 @@ fn an_axolotl_playing_dead_is_not_there_for_hunters() {
         m.quirks.aqua.dead_play = 0;
     }
     assert!(super::super::others(&all)[0].alive);
+}
+
+#[test]
+fn a_drowned_with_a_trident_may_ride_a_zombie_nautilus() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let trident = ctx.items.id("minecraft:trident").unwrap();
+    let dressed = |ctx: &ServerContext| {
+        let mut e = new_mob(ctx, Species::Drowned, [0.5, -60.0, 0.5]);
+        if let Kind::Mob(m) = &mut e.kind {
+            m.set_baby(false);
+            m.gear[mc_entity::mob::slot::MAINHAND] = Some(mc_entity::mob::Gear {
+                item: trident,
+                count: 1,
+                damage: 0,
+                components: Default::default(),
+            });
+        }
+        e
+    };
+    // Bare-handed ones never do, and not in rivers.
+    let mut bare = new_mob(&ctx, Species::Drowned, [0.5, -60.0, 0.5]);
+    if let Kind::Mob(m) = &mut bare.kind {
+        m.set_baby(false);
+        m.gear[mc_entity::mob::slot::MAINHAND] = None;
+    }
+    assert!((0..40).all(|_| crate::mobs::spawn::jockey(&ctx, &mut bare, None).is_none()));
+    let mut river = dressed(&ctx);
+    assert!(
+        (0..40).all(
+            |_| crate::mobs::spawn::jockey(&ctx, &mut river, Some("minecraft:river")).is_none()
+        )
+    );
+    // With a trident it happens about one time in two.
+    let mut found = None;
+    for _ in 0..60 {
+        let mut rider = dressed(&ctx);
+        if let Some(mount) = crate::mobs::spawn::jockey(&ctx, &mut rider, None) {
+            found = Some((rider, mount));
+            break;
+        }
+    }
+    let (rider, mount) = found.expect("a jockey in sixty tries");
+    let (rider_id, mount_id) = (rider.id, mount.id);
+    let mut all = vec![rider, mount];
+    all[1].pos = [10.5, -58.0, 3.5];
+    crate::mobs::aqua::carry(&ctx, &mut all);
+    assert_eq!(all[0].pos[0], 10.5);
+    assert!(all[0].pos[1] > -58.0);
+    let Kind::Mob(m) = &all[1].kind else { panic!() };
+    assert_eq!(m.species, Species::ZombieNautilus);
+    assert_eq!(m.riders, vec![rider_id]);
+    // When the mount goes, the rider falls off.
+    all[1].removed = true;
+    crate::mobs::aqua::carry(&ctx, &mut all);
+    let Kind::Mob(r) = &all[0].kind else { panic!() };
+    assert_eq!(r.quirks.aqua.mount, None);
+    let _ = mount_id;
 }
 
 #[test]
@@ -622,7 +711,12 @@ fn killing_what_axolotls_fight_rewards_the_player() {
         });
     }
     let (give, _) = (crate::effects::kind_of("mining_fatigue").unwrap(), ());
-    crate::effects::give(&ctx, STEVE, give, crate::effects::Instance::new(0, 1000, true));
+    crate::effects::give(
+        &ctx,
+        STEVE,
+        give,
+        crate::effects::Instance::new(0, 1000, true),
+    );
     let at = [0.5, -60.0, 0.5];
     ctx.mobs.hit(ctx.dim, zombie, steve(at), blow(100.0, at));
     run(&ctx, 2);
@@ -732,7 +826,11 @@ fn turtle_eggs_crack_and_hatch_into_baby_turtles_at_dusk() {
         })
         .collect();
     assert_eq!(babies.len(), 3);
-    assert!(babies.iter().all(|m| m.quirks.aqua.home == Some([0, -60, 0])));
+    assert!(
+        babies
+            .iter()
+            .all(|m| m.quirks.aqua.home == Some([0, -60, 0]))
+    );
 }
 
 #[test]
@@ -805,7 +903,11 @@ fn frogspawn_hatches_into_two_to_five_tadpoles() {
         eprintln!("skipped: no game data");
         return;
     };
-    let spawn = ctx.data.blocks.default_state("minecraft:frogspawn").unwrap();
+    let spawn = ctx
+        .data
+        .blocks
+        .default_state("minecraft:frogspawn")
+        .unwrap();
     let at = mc_tick::dir::BlockPos::new(0, -60, 0);
     let before = lock(&ctx.entities).len();
     {
@@ -941,5 +1043,3 @@ fn a_cod_in_a_pool_swims_about_in_it_for_a_minute() {
     assert!(seen.len() > 4, "it hardly moved: {seen:?}");
     assert_eq!(with_mob(&ctx, id, |m| m.health), 3.0);
 }
-
-

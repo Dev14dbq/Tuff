@@ -787,6 +787,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         let _ = ctx.events.send(Event::EntitySpawned(e.clone()));
     }
     entities.append(&mut out.fresh);
+    aqua::carry(ctx, &mut entities);
     let mut stored = lock(&ctx.entities);
     entities.append(&mut stored);
     *stored = entities;

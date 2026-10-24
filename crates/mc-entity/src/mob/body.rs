@@ -101,7 +101,12 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
     if m.species.burns_in_sun() {
         let head = [c[0], (b.pos[1] + m.size().1).floor() as i32, c[2]];
         if s.sunny && !wet && s.world.sky_light(head[0], head[1], head[2]) >= 15 {
-            if m.gear[slot::HEAD].is_some() {
+            if m.species == Species::ZombieNautilus {
+                // Its armor shades it; without, it burns.
+                if m.gear[slot::BODY].is_none() {
+                    m.burning = m.burning.max(160);
+                }
+            } else if m.gear[slot::HEAD].is_some() {
                 // A helmet takes the sun instead, and wears.
                 if m.below(2) == 0 && m.age.is_multiple_of(20) {
                     out.push(MobEvent::Wear {

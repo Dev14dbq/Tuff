@@ -688,6 +688,78 @@ pub fn trample_eggs(
     mc_tick::hatching::trample_egg(level, logic, crate::level::to_pos(at));
 }
 
+/// Mobs that ride a mob sit on it: they follow it, are announced to the
+/// clients once, and fall off when it goes.
+pub fn carry(ctx: &ServerContext, entities: &mut [Entity]) {
+    let riding: Vec<(usize, i32)> = entities
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match &e.kind {
+            Kind::Mob(m) => m.quirks.aqua.mount.map(|v| (i, v)),
+            _ => None,
+        })
+        .collect();
+    for (i, vehicle) in riding {
+        let mount = entities
+            .iter()
+            .find(|e| e.id == vehicle && !e.removed)
+            .filter(|e| matches!(&e.kind, Kind::Mob(m) if !m.is_dead()))
+            .map(|e| (e.pos, e.size().1));
+        let rider = entities[i].id;
+        let Kind::Mob(m) = &mut entities[i].kind else {
+            continue;
+        };
+        let Some((pos, height)) = mount else {
+            m.quirks.aqua.mount = None;
+            m.quirks.aqua.mount_sent = false;
+            fx::emit(
+                ctx,
+                fx::Fx::Passengers(mc_protocol::packets::play::SetPassengers {
+                    vehicle,
+                    passengers: Vec::new(),
+                }),
+            );
+            continue;
+        };
+        let announce = !m.quirks.aqua.mount_sent;
+        m.quirks.aqua.mount_sent = true;
+        entities[i].pos = [pos[0], pos[1] + height * 0.7, pos[2]];
+        entities[i].vel = [0.0; 3];
+        entities[i].on_ground = false;
+        if announce {
+            fx::emit(
+                ctx,
+                fx::Fx::Passengers(mc_protocol::packets::play::SetPassengers {
+                    vehicle,
+                    passengers: vec![rider],
+                }),
+            );
+        }
+    }
+    // A mount forgets riders that got off or died.
+    let seated: Vec<(i32, Option<i32>)> = entities
+        .iter()
+        .filter_map(|e| match &e.kind {
+            Kind::Mob(m) if !e.removed => Some((e.id, m.quirks.aqua.mount)),
+            _ => None,
+        })
+        .collect();
+    for e in entities.iter_mut() {
+        let id = e.id;
+        if let Kind::Mob(m) = &mut e.kind
+            && m.species == Species::ZombieNautilus
+            && !m.riders.is_empty()
+        {
+            m.riders.retain(|r| {
+                seated
+                    .iter()
+                    .find(|(i, _)| i == r)
+                    .is_none_or(|(_, v)| *v == Some(id))
+            });
+        }
+    }
+}
+
 /// Whoever rides a nautilus does not lose breath under water.
 pub fn breath(ctx: &ServerContext, m: &mc_entity::Mob, targets: &[Target]) {
     if !matches!(m.species, Species::Nautilus | Species::ZombieNautilus) {
@@ -697,6 +769,11 @@ pub fn breath(ctx: &ServerContext, m: &mc_entity::Mob, targets: &[Target]) {
         return;
     };
     for t in targets.iter().filter(|t| m.riders.contains(&t.id)) {
-        crate::effects::give(ctx, t.uuid, kind, crate::effects::Instance::new(0, 40, true));
+        crate::effects::give(
+            ctx,
+            t.uuid,
+            kind,
+            crate::effects::Instance::new(0, 40, true),
+        );
     }
 }

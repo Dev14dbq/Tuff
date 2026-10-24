@@ -4,7 +4,7 @@
 //! water, and the ones that live only in water flop, dry out or choke on
 //! land.
 
-use super::{cell_of, dist_sq, line_clear, Body, Mob, MobEvent, Other, Senses, Sound, Species};
+use super::{Body, Mob, MobEvent, Other, Senses, Sound, Species, cell_of, dist_sq, line_clear};
 use crate::nav::{Liquid, Terrain};
 
 /// Ticks of air a fish has out of water before it chokes (and the 20 more
@@ -141,6 +141,10 @@ pub struct Aqua {
     pub caught: Option<i32>,
     /// Tadpole: ticks lived.
     pub growth: i32,
+    /// A drowned riding a zombie nautilus: the id of its mount, and whether
+    /// the clients have been told.
+    pub mount: Option<i32>,
+    pub mount_sent: bool,
     /// A golden dandelion holds a baby (or a tadpole) at its age.
     pub age_locked: bool,
     /// Guardian: ticks charging the beam, whom it aims at (entity id, 0
@@ -182,6 +186,8 @@ impl Default for Aqua {
             caught: None,
             growth: 0,
             age_locked: false,
+            mount: None,
+            mount_sent: false,
             charge: 0,
             beam: 0,
             retract: false,

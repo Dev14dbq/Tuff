@@ -718,9 +718,10 @@ fn a_guardian_charges_its_beam_and_fires() {
     assert!(at > 80, "fired at {at}");
     assert!(out.iter().any(|ev| matches!(ev,
         MobEvent::Attack { target: 100, damage } if *damage == 6.0)));
-    assert!(out
-        .iter()
-        .any(|ev| matches!(ev, MobEvent::MagicAttack { target: 100, .. })));
+    assert!(
+        out.iter()
+            .any(|ev| matches!(ev, MobEvent::MagicAttack { target: 100, .. }))
+    );
 }
 
 /// The tick of the first beam, and its damage.

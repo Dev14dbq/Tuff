@@ -44,7 +44,7 @@ pub fn steered_by(ctx: &ServerContext, e: &Entity) -> bool {
         Species::Camel | Species::CamelHusk => m.saddled(),
         // Aquatic (Claude): a nautilus must be tamed first, its undead kin not.
         Species::Nautilus => m.saddled() && m.is_tame(),
-        Species::ZombieNautilus => m.saddled(),
+        Species::ZombieNautilus => m.saddled() && m.is_tame(),
         Species::Pig | Species::Strider => {
             let stick = stick_of(m.species);
             m.saddled()
@@ -77,7 +77,7 @@ pub fn steered(e: &Entity) -> bool {
     matches!(&e.kind, Kind::Mob(m) if !m.riders.is_empty() && m.saddled()
         && (m.species.horse() && m.is_tame()
             || m.species == Species::Nautilus && m.is_tame()
-            || m.species == Species::ZombieNautilus
+            || m.species == Species::ZombieNautilus && m.is_tame()
             || matches!(m.species, Species::Pig | Species::Strider | Species::Camel | Species::CamelHusk)))
 }
 
@@ -216,7 +216,7 @@ pub fn saddle(ctx: &ServerContext, e: &mut Entity, item: i32) -> bool {
         Species::Horse | Species::Donkey | Species::Mule => m.is_tame(),
         Species::Camel | Species::CamelHusk => true,
         Species::Nautilus => m.is_tame(),
-        Species::ZombieNautilus => true,
+        Species::ZombieNautilus => m.is_tame(),
         _ => false,
     };
     if !fits || m.saddled() || m.is_baby() {
