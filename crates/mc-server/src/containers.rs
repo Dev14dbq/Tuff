@@ -199,6 +199,8 @@ pub fn entity_gone_skipping(
     skip: usize,
 ) -> (Vec<ItemStack>, Vec<u128>) {
     let p = entity_key(id);
+    // A cart with loot still to roll drops it when it breaks.
+    unpack_loot(ctx, p, 27);
     let mut all = ctx.containers.lock().expect("containers lock");
     let data = ctx
         .entity_items
@@ -349,6 +351,10 @@ pub fn fullness(ctx: &ServerContext, slots: &[Option<ItemStack>]) -> u8 {
 
 /// The slots of the container at `p` as they are now.
 pub fn slots(ctx: &ServerContext, p: Position, kind: Kind) -> Vec<Option<ItemStack>> {
+    // Hoppers and comparators look inside a minecart too: that rolls its loot.
+    if entity_of(p).is_some() {
+        unpack_loot(ctx, p, kind.slots);
+    }
     if let Some(open) = ctx.containers.lock().expect("containers lock").get(&key(p)) {
         return open.slots.clone();
     }
@@ -411,12 +417,15 @@ fn unpack_loot(ctx: &ServerContext, p: Position, size: usize) {
     data.remove("LootTableSeed");
     let mut slots = read_items(ctx, &data, size);
     if let Some(table) = ctx.loot.table(&table).cloned() {
+        // (An entity's key is no place; its tables name no origin.)
         let cx = crate::loot::LootCtx {
-            origin: Some([
-                f64::from(p.x) + 0.5,
-                f64::from(p.y) + 0.5,
-                f64::from(p.z) + 0.5,
-            ]),
+            origin: entity_of(p).is_none().then(|| {
+                [
+                    f64::from(p.x) + 0.5,
+                    f64::from(p.y) + 0.5,
+                    f64::from(p.z) + 0.5,
+                ]
+            }),
             ..crate::loot::LootCtx::default()
         };
         let env = crate::commands::loot::Env(ctx);

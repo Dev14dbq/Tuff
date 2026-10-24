@@ -575,6 +575,63 @@ mod tests {
     }
 
     #[test]
+    fn oversized_chunks_go_to_an_mcc_file_and_come_back_when_they_shrink() {
+        let dir = std::env::temp_dir().join(format!("mc-storage-mcc-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let tag = |filler: usize| {
+            let mut root = mc_nbt::Compound::new();
+            // xorshift noise: zlib cannot squeeze it below the 1020 KiB limit.
+            let mut state = 0x2545_F491_4F6C_DD1Du64;
+            let noise: Vec<i8> = (0..filler)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    (state >> 32) as i8
+                })
+                .collect();
+            root.insert("noise", mc_nbt::Tag::ByteArray(noise));
+            let mut nbt = Vec::new();
+            mc_nbt::write_named("", &mc_nbt::Tag::Compound(root.clone()), &mut nbt).unwrap();
+            (mc_nbt::Tag::Compound(root), nbt)
+        };
+        // Chunk (-1, 33): region (-1, 1), local (31, 1).
+        let external = dir.join("c.-1.33.mcc");
+        let region_path = dir.join("r.-1.1.mca");
+        let mut storage = RegionStorage::new(&dir);
+
+        let (big, big_nbt) = tag(1_200_000);
+        storage.write_chunk(-1, 33, &big_nbt, 5).unwrap();
+        assert!(external.exists(), "the compressed data lives in the .mcc");
+        let region = RegionFile::open(&region_path).unwrap();
+        // One sector in the region file: the length field is 1 and the
+        // compression byte is zlib with the external bit.
+        let (offset, sectors) = region.location(31, 1);
+        assert_eq!(sectors, 1);
+        let start = offset * SECTOR;
+        assert_eq!(region.data[start..start + 4], 1u32.to_be_bytes());
+        assert_eq!(region.data[start + 4], ZLIB | 0x80);
+        assert_eq!(region.data.len(), 3 * SECTOR, "header + one sector only");
+        assert!(fs::metadata(&external).unwrap().len() > (MAX_SECTORS * SECTOR) as u64);
+
+        let mut fresh = RegionStorage::new(&dir);
+        assert_eq!(fresh.read_chunk(-1, 33).unwrap(), Some(big));
+
+        // Shrinking it back under the limit stores it inline and drops the file.
+        let (small, small_nbt) = tag(1000);
+        storage.write_chunk(-1, 33, &small_nbt, 6).unwrap();
+        assert!(!external.exists(), "the stale .mcc is removed");
+        let region = RegionFile::open(&region_path).unwrap();
+        let start = region.location(31, 1).0 * SECTOR;
+        assert_eq!(region.data[start + 4], ZLIB, "no external bit any more");
+        assert_eq!(region.timestamp(31, 1), 6);
+        let mut fresh = RegionStorage::new(&dir);
+        assert_eq!(fresh.read_chunk(-1, 33).unwrap(), Some(small));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn xxh32_matches_reference_values() {
         // Published test vectors of the xxHash reference implementation.
         assert_eq!(xxh32(b"", 0), 0x02CC_5D05);

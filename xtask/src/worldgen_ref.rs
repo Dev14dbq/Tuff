@@ -1,19 +1,33 @@
 //! `cargo xtask worldgen-ref [--seed <n>] [--radius <chunks>]
-//! [--dimension nether|end] [--features] [--carvers] [--structures]`: has a
+//! [--seeds 1,2,3 | --seed-count <n>] [--dimension nether|end] [--features]
+//! [--carvers] [--structures]`: has a
 //! vanilla server generate a world to compare our generator with. A data
 //! pack in the world takes every feature and carver out of every biome (and
 //! structures are off), so what is left is the terrain shape, aquifers, ore
 //! veins, surface and biomes. The chunks around 0, 0 are force-loaded, then
 //! the world is saved to `cache/vanilla-server/26.3-worldgen/<seed>/world`
-//! (`<seed>-nether`, `<seed>-end` for the other dimensions).
+//! (`<seed>-nether`, `<seed>-end` for the other dimensions). `--seeds` names
+//! several seeds, `--seed-count n` takes n seeds counting up from `--seed`;
+//! each gets its own world, one after the other.
 
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
 use crate::parity::Server;
+use crate::worldgen_seeds;
 
 const PORT: u16 = 25573;
+
+/// What `worldgen-ref` was asked to make, but for the seed.
+struct Options {
+    radius: i32,
+    features: bool,
+    structures: bool,
+    carvers: bool,
+    center: (i32, i32),
+    dimension: String,
+}
 
 pub fn run(args: &[String]) -> Result<()> {
     let (mut seed, mut radius) = (12345i64, 7i32);
@@ -22,6 +36,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut carvers = false;
     let (mut cx, mut cz) = (0i32, 0i32);
     let mut dimension = String::from("overworld");
+    let (mut list, mut count) = (None, None);
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = || {
@@ -31,6 +46,8 @@ pub fn run(args: &[String]) -> Result<()> {
         };
         match arg.as_str() {
             "--seed" => seed = value()?.parse()?,
+            "--seeds" => list = Some(value()?),
+            "--seed-count" => count = Some(value()?.parse()?),
             "--radius" => radius = value()?.parse()?,
             "--features" => features = true,
             "--structures" => structures = true,
@@ -43,6 +60,34 @@ pub fn run(args: &[String]) -> Result<()> {
             other => bail!("unknown option `{other}`"),
         }
     }
+    let options = Options {
+        radius,
+        features,
+        structures,
+        carvers,
+        center: (cx, cz),
+        dimension,
+    };
+    let seeds = worldgen_seeds::seeds(seed, list.as_deref(), count)?;
+    // The server takes minutes per seed, one after the other.
+    worldgen_seeds::each(&seeds, |seed| {
+        generate(seed, &options).map(|()| worldgen_seeds::Row::default())
+    })?;
+    Ok(())
+}
+
+/// Has a vanilla server generate the reference world of one seed.
+fn generate(seed: i64, options: &Options) -> Result<()> {
+    let Options {
+        radius,
+        features,
+        structures,
+        carvers,
+        center: (cx, cz),
+        dimension,
+    } = options;
+    let (radius, features, structures, carvers, cx, cz) =
+        (*radius, *features, *structures, *carvers, *cx, *cz);
     let root = crate::workspace_root();
     let data_root = root.join("cache/mcdata/26.3/data/minecraft/worldgen/biome");
     let (dim_id, suffix) = match dimension.as_str() {

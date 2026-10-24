@@ -1,10 +1,10 @@
 //! `/summon` for the entities of `mc_entity::extra`: their kinds from an
 //! entity type name and the NBT given.
 
-use mc_entity::Kind;
 use mc_entity::extra::{
     Arrow, Cart, Craft, Decor, Firework, Frame, Hung, Pickup, Projectile, Shot, Stand, Vehicle,
 };
+use mc_entity::{Entity, Kind};
 use mc_nbt::{Compound, Tag};
 
 use crate::context::ServerContext;
@@ -47,6 +47,78 @@ fn stack(ctx: &ServerContext, tag: Option<&Tag>) -> Option<mc_protocol::packets:
         count: 1,
         ..mc_protocol::packets::play::ItemStack::from_nbt_with(c, item)
     })
+}
+
+fn triple(nbt: &Compound, key: &str) -> Option<[f64; 3]> {
+    let Some(Tag::List(l)) = nbt.get(key) else {
+        return None;
+    };
+    let d = |i: usize| match l.get(i) {
+        Some(Tag::Double(v)) => Some(*v),
+        Some(Tag::Float(v)) => Some(f64::from(*v)),
+        _ => None,
+    };
+    Some([d(0)?, d(1)?, d(2)?])
+}
+
+/// What an entity of type `name` holds (`Items`, `LootTable`, its seed) is
+/// kept apart from the entity, by id, for containers that are entities
+/// (chest minecarts and boats...).
+pub fn stock(ctx: &ServerContext, id: i32, name: &str, nbt: &Compound) {
+    if crate::containers::entity_kind(name).is_none() {
+        return;
+    }
+    let mut data = Compound::new();
+    for key in ["Items", "LootTable", "LootTableSeed"] {
+        if let Some(tag) = nbt.get(key) {
+            data.insert(key, tag.clone());
+        }
+    }
+    if !data.is_empty() {
+        ctx.entity_items
+            .lock()
+            .expect("entity items lock")
+            .insert(id, data);
+    }
+}
+
+/// An entity world generation made (`Pos`, `id`, its own fields), ready to
+/// be added: end crystals, chest minecarts... `None` for what is not
+/// supported.
+pub fn from_saved(ctx: &ServerContext, nbt: &Compound) -> Option<Entity> {
+    let Some(Tag::String(name)) = nbt.get("id") else {
+        return None;
+    };
+    if name == "minecraft:end_crystal" {
+        return crate::bosses::crystal::from_nbt(ctx, nbt);
+    }
+    let pos = triple(nbt, "Pos")?;
+    let yaw = match nbt.get("Rotation") {
+        Some(Tag::List(l)) => match l.first() {
+            Some(Tag::Float(y)) => *y,
+            _ => 0.0,
+        },
+        _ => 0.0,
+    };
+    let (kind, place) = build(ctx, name, nbt, pos, yaw)?;
+    let entity = Entity {
+        id: crate::bosses::entity_id(ctx, &kind),
+        uuid: match nbt.get("UUID") {
+            Some(Tag::IntArray(u)) if u.len() == 4 => u
+                .iter()
+                .fold(0u128, |a, &p| (a << 32) | u128::from(p as u32)),
+            _ => crate::util::random_uuid(),
+        },
+        kind,
+        pos: place.unwrap_or(pos),
+        vel: [0.0; 3],
+        on_ground: false,
+        age: 0,
+        removed: false,
+        tags: Vec::new(),
+    };
+    stock(ctx, entity.id, name, nbt);
+    Some(entity)
 }
 
 /// What to summon for `name` (`minecraft:arrow`): its kind, and the place
@@ -247,5 +319,123 @@ pub fn build(
             }
             Some((Kind::Vehicle(v), None))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mc_protocol::Position;
+
+    fn game_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3")
+    }
+
+    /// A cart as mineshaft generation writes it.
+    fn generated_cart(at: [f64; 3]) -> Compound {
+        let mut nbt = Compound::new();
+        nbt.insert("id", Tag::String("minecraft:chest_minecart".into()));
+        nbt.insert(
+            "Pos",
+            Tag::List(at.iter().map(|v| Tag::Double(*v)).collect()),
+        );
+        nbt.insert(
+            "LootTable",
+            Tag::String("minecraft:chests/abandoned_mineshaft".into()),
+        );
+        nbt.insert("LootTableSeed", Tag::Long(42));
+        nbt
+    }
+
+    #[test]
+    fn a_generated_chest_minecart_rolls_its_loot_when_opened_or_broken() {
+        let Ok(data) = mc_data::McData::load(&game_dir()) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let ctx = ServerContext::new(crate::Config::new(game_dir()), data).unwrap();
+        let kind = crate::containers::entity_kind("minecraft:chest_minecart").unwrap();
+
+        let opened = from_saved(&ctx, &generated_cart([0.5, -59.5, 0.5])).unwrap();
+        assert!(matches!(
+            &opened.kind,
+            Kind::Vehicle(v) if v.craft == Craft::Minecart(Cart::Chest)
+        ));
+        assert_eq!(opened.pos, [0.5, -59.5, 0.5]);
+        let key = crate::containers::entity_key(opened.id);
+        let first = crate::containers::open(&ctx, 1, key, kind);
+        assert!(first.iter().any(Option::is_some), "the loot is rolled");
+        crate::containers::close(&ctx, 1, key);
+        assert_eq!(
+            crate::containers::open(&ctx, 2, key, kind),
+            first,
+            "rolled once"
+        );
+
+        let broken = from_saved(&ctx, &generated_cart([4.5, -59.5, 0.5])).unwrap();
+        let (drops, viewers) = crate::containers::entity_gone(&ctx, broken.id);
+        assert!(!drops.is_empty(), "breaking it drops the loot");
+        assert!(viewers.is_empty());
+    }
+
+    #[test]
+    fn mineshafts_leave_chest_minecarts_on_rails_and_no_chests() {
+        let Ok(data) = mc_data::McData::load(&game_dir()) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let folder = std::env::temp_dir().join(format!("mc-carts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let mut config = crate::Config::new(game_dir());
+        config.world = Some(folder.clone());
+        config.seed = Some(1);
+        let ctx = ServerContext::new(config, data).unwrap();
+        let blocks = &ctx.data.blocks;
+        let pipeline = ctx.world.pipeline().expect("a generating world");
+        pipeline.prepare();
+        let chest = blocks.default_state("minecraft:chest").unwrap();
+        let mut found = None;
+        let mut starts = pipeline.starts_within(0, 0, 40, Some("minecraft:mineshaft"));
+        starts.truncate(6);
+        'search: for (_, _, centre) in starts {
+            for cx in (centre.x >> 4) - 3..=(centre.x >> 4) + 3 {
+                for cz in (centre.z >> 4) - 3..=(centre.z >> 4) + 3 {
+                    let at = Position::new(cx * 16, 0, cz * 16);
+                    let _ = ctx.world.block(at, blocks);
+                    for nbt in ctx.world.take_generated_entities() {
+                        if nbt.get("id") == Some(&Tag::String("minecraft:chest_minecart".into())) {
+                            found = Some(nbt);
+                            break 'search;
+                        }
+                    }
+                }
+            }
+        }
+        let cart = found.expect("a mineshaft near the origin has a chest minecart");
+        assert_eq!(
+            cart.get("LootTable"),
+            Some(&Tag::String("minecraft:chests/abandoned_mineshaft".into()))
+        );
+        assert!(matches!(cart.get("LootTableSeed"), Some(Tag::Long(_))));
+        let e = from_saved(&ctx, &cart).unwrap();
+        let cell = e.pos.map(|v| v.floor() as i32);
+        let rail = ctx
+            .world
+            .block(Position::new(cell[0], cell[1], cell[2]), blocks)
+            .unwrap();
+        assert_eq!(blocks.block_name(rail), Some("minecraft:rail"), "on a rail");
+        let (cx, cz) = (cell[0] >> 4, cell[2] >> 4);
+        for x in cx * 16..cx * 16 + 16 {
+            for z in cz * 16..cz * 16 + 16 {
+                for y in cell[1] - 3..=cell[1] + 3 {
+                    assert_ne!(
+                        ctx.world.block(Position::new(x, y, z), blocks),
+                        Some(chest),
+                        "no chest blocks in a mineshaft chunk"
+                    );
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(folder);
     }
 }

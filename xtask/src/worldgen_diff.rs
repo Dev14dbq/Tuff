@@ -1,7 +1,7 @@
-//! `cargo xtask worldgen-diff [--seed <n>] [--radius <chunks>]
-//! [--dimension nether|end]`: compares our generator with the vanilla
-//! reference world (`worldgen-ref`): biomes per 4×4×4 cell, or blocks with
-//! `WORLDGEN_BLOCKS` set.
+//! `cargo xtask worldgen-diff [--seed <n> | --seeds 1,2,3 | --seed-count <n>]
+//! [--radius <chunks>] [--dimension nether|end]`: compares our generator with
+//! the vanilla reference world (`worldgen-ref`): biomes per 4×4×4 cell, and
+//! blocks too with `WORLDGEN_BLOCKS` set. Several seeds end in one table.
 
 use std::collections::HashMap;
 
@@ -12,11 +12,13 @@ use mc_worldgen::density::Builder;
 use mc_worldgen::generator::{BiomeSource, Dimension};
 
 use crate::probe::load_data;
+use crate::worldgen_seeds::{self, Row};
 
 pub fn run(args: &[String]) -> Result<()> {
     let (mut seed, mut radius) = (12345i64, 3i32);
     let mut dimension = Dimension::Overworld;
     let (mut ox, mut oz) = (0i32, 0i32);
+    let (mut list, mut count) = (None, None);
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = || {
@@ -26,6 +28,8 @@ pub fn run(args: &[String]) -> Result<()> {
         };
         match arg.as_str() {
             "--seed" => seed = value()?.parse()?,
+            "--seeds" => list = Some(value()?),
+            "--seed-count" => count = Some(value()?.parse()?),
             "--radius" => radius = value()?.parse()?,
             "--center" => {
                 ox = value()?.parse()?;
@@ -39,6 +43,14 @@ pub fn run(args: &[String]) -> Result<()> {
             other => bail!("unknown option `{other}`"),
         }
     }
+    let seeds = worldgen_seeds::seeds(seed, list.as_deref(), count)?;
+    worldgen_seeds::each(&seeds, |seed| compare(seed, radius, dimension, (ox, oz)))?;
+    Ok(())
+}
+
+/// Compares our generator with the reference world of one seed.
+fn compare(seed: i64, radius: i32, dimension: Dimension, center: (i32, i32)) -> Result<Row> {
+    let (ox, oz) = center;
     let root = crate::workspace_root();
     let data = load_data(None)?;
     let data_dir = root.join("cache/mcdata").join(&data.version.name);
@@ -95,6 +107,7 @@ pub fn run(args: &[String]) -> Result<()> {
         dimension.id().replace(':', "/")
     ));
     let mut storage = mc_storage::region::RegionStorage::new(region);
+    let mut read = 0usize;
     let air = data.blocks.default_state("minecraft:air").unwrap_or(0);
     let lookup = |n: &str| index.get(n).copied();
     let palettes = Palettes {
@@ -240,6 +253,7 @@ pub fn run(args: &[String]) -> Result<()> {
                 continue;
             };
             let before = total - same;
+            read += 1;
             if let Some(generator) = generator.as_ref().filter(|_| full) {
                 let ours = generator.generate(cx, cz);
                 if std::env::var_os("WORLDGEN_COLUMN").is_some() && (cx, cz) == (ox, oz) {
@@ -281,9 +295,8 @@ pub fn run(args: &[String]) -> Result<()> {
                         }
                     }
                 }
-                continue;
             }
-            if terrain {
+            if terrain && !full {
                 let mut ctx = mc_worldgen::density::Ctx::new(cx * 16, cz * 16, -64, 384);
                 let mut aquifer = mc_worldgen::aquifer::Aquifer::new(
                     &functions,
@@ -381,6 +394,9 @@ pub fn run(args: &[String]) -> Result<()> {
             per_chunk.push((cx, cz, total - same - before));
         }
     }
+    if read == 0 {
+        bail!("the reference world has no chunk around {ox}, {oz} (run worldgen-ref first)");
+    }
     if std::env::var_os("WORLDGEN_MAP").is_some() {
         for cz in oz - radius..=oz + radius {
             let row: String = (ox - radius..=ox + radius)
@@ -416,9 +432,7 @@ pub fn run(args: &[String]) -> Result<()> {
         for ((theirs, ours), n) in pairs.into_iter().take(25) {
             println!("  {n:8}  vanilla {theirs} | ours {ours}");
         }
-        return Ok(());
-    }
-    if terrain {
+    } else if terrain {
         println!(
             "terrain: {solid_same}/{solid_total} blocks solid alike ({:.3}%), {too_much} solid only in ours, {too_little} only in vanilla, {:.1} s",
             100.0 * solid_same as f64 / solid_total.max(1) as f64,
@@ -429,7 +443,11 @@ pub fn run(args: &[String]) -> Result<()> {
         for ((theirs, ours), n) in kinds {
             println!("  {n:8}  vanilla {theirs} | ours {ours}");
         }
-        return Ok(());
+        // Terrain mode compares what is solid, not the biomes.
+        return Ok(Row {
+            blocks: Some((solid_same, solid_total)),
+            ..Row::default()
+        });
     }
     println!(
         "biomes: {same}/{total} cells match ({:.1}%) in {:.1} s",
@@ -441,7 +459,11 @@ pub fn run(args: &[String]) -> Result<()> {
     for ((theirs, ours), n) in wrong.into_iter().take(12) {
         println!("  {n:6}  vanilla {theirs} | ours {ours}");
     }
-    Ok(())
+    Ok(Row {
+        blocks: full.then_some((blocks_same, blocks_total)),
+        biomes: Some((same, total)),
+        ..Row::default()
+    })
 }
 
 /// `offset` at a column: depth minus its height gradient.

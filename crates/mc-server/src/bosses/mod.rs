@@ -196,7 +196,12 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     let now = lock(&ctx.time).age;
     let mut entities = std::mem::take(&mut *lock(&ctx.entities));
     let mut fresh = Vec::new();
-    crystal::tick_all(ctx, level, &mut entities, &mut fresh);
+    for nbt in ctx.world.take_generated_entities() {
+        if let Some(e) = crate::summon::from_saved(ctx, &nbt) {
+            fresh.push(e);
+        }
+    }
+    crystal::tick_all(ctx, level, &mut entities);
     if ctx.world.dimension == "minecraft:the_end" {
         fight::tick(ctx, level, &mut entities, &mut fresh, now);
     }
