@@ -53,6 +53,7 @@ pub fn ink(ctx: &ServerContext, e: &Entity) {
 
 /// The player or mob with this id, hurt by `hit` (already scaled by the
 /// difficulty for players). Returns whether it took the blow.
+#[allow(clippy::too_many_arguments)]
 fn hurt_target(
     ctx: &ServerContext,
     entities: &mut [Entity],
@@ -99,6 +100,7 @@ fn hurt_target(
 }
 
 /// A pufferfish stings whatever touched it: damage, then poison.
+#[allow(clippy::too_many_arguments)]
 pub fn sting(
     ctx: &ServerContext,
     entities: &mut [Entity],

@@ -4,7 +4,7 @@
 //! water, and the ones that live only in water flop, dry out or choke on
 //! land.
 
-use super::{Body, Mob, MobEvent, Other, Senses, Sound, Species, cell_of, dist_sq, line_clear};
+use super::{cell_of, dist_sq, line_clear, Body, Mob, MobEvent, Other, Senses, Sound, Species};
 use crate::nav::{Liquid, Terrain};
 
 /// Ticks of air a fish has out of water before it chokes (and the 20 more
@@ -250,11 +250,9 @@ pub fn salmon_size(kind: i32) -> (f64, f64) {
 }
 
 /// How fast it walks on land compared to the attribute it has.
-pub(super) fn land_factor(m: &Mob) -> f64 {
-    match m.species {
-        // The attribute is already set to the walking pace.
-        _ => 1.0,
-    }
+pub(super) fn land_factor(_m: &Mob) -> f64 {
+    // The attribute is already set to the walking pace.
+    1.0
 }
 
 /// Blocks a tick it swims at a goal speed of 1, with its effects.
@@ -1489,12 +1487,11 @@ pub fn voice(species: Species, which: Sound, baby: bool) -> Option<Option<String
     if name.is_empty() {
         return Some(None);
     }
-    let suffix = if baby && species == Turtle && matches!(which, Sound::Hurt | Sound::Death) {
-        "_baby"
-    } else if baby && species == Turtle && which == Sound::Step {
-        "_baby"
-    } else {
-        ""
-    };
+    let suffix =
+        if baby && species == Turtle && matches!(which, Sound::Hurt | Sound::Death | Sound::Step) {
+            "_baby"
+        } else {
+            ""
+        };
     Some(Some(format!("entity.{base}.{name}{suffix}")))
 }

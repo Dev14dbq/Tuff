@@ -225,7 +225,7 @@ fn fish_keep_away_from_a_player() {
     let world = Pool::deep();
     let mut e = mob(Species::Cod, [0.5, 5.0, 0.5]);
     let player = Target::at(100, 100, [4.5, 5.0, 0.5]);
-    run(&mut e, &world, &[player.clone()], &[], 60);
+    run(&mut e, &world, std::slice::from_ref(&player), &[], 60);
     assert!(dist(e.pos, player.pos) > 6.0, "{:?}", e.pos);
 }
 
@@ -243,7 +243,10 @@ fn a_hurt_fish_bolts() {
 fn fish_follow_the_leader_of_the_school() {
     let world = Pool::deep();
     let mut e = mob(Species::Cod, [10.5, 5.0, 0.5]);
-    m(&mut e).brain.goals.retain(|s| matches!(s.goal, Goal::Aqua(aqua::Act::School { .. })));
+    m(&mut e)
+        .brain
+        .goals
+        .retain(|s| matches!(s.goal, Goal::Aqua(aqua::Act::School { .. })));
     // Another cod with a lower id swims over there.
     e.id = 5;
     let leader = {
@@ -251,7 +254,7 @@ fn fish_follow_the_leader_of_the_school() {
         o.baby = false;
         o
     };
-    run(&mut e, &world, &[], &[leader.clone()], 120);
+    run(&mut e, &world, &[], std::slice::from_ref(&leader), 120);
     assert!(dist(e.pos, leader.pos) < 5.0, "{:?}", e.pos);
 }
 
@@ -280,7 +283,7 @@ fn a_pufferfish_swells_near_a_player_and_eases_off() {
     let mut e = mob(Species::Pufferfish, [0.5, 5.0, 0.5]);
     m(&mut e).brain.goals.clear();
     let near = Target::at(100, 100, [1.5, 5.0, 0.5]);
-    run(&mut e, &world, &[near.clone()], &[], 5);
+    run(&mut e, &world, std::slice::from_ref(&near), &[], 5);
     assert_eq!(m(&mut e).quirks.aqua.puff, 1);
     run(&mut e, &world, &[near], &[], 60);
     assert_eq!(m(&mut e).quirks.aqua.puff, 2);
@@ -298,7 +301,7 @@ fn a_swollen_pufferfish_stings_and_poisons() {
     let mut e = mob(Species::Pufferfish, [0.5, 5.0, 0.5]);
     m(&mut e).brain.goals.clear();
     let touching = Target::at(100, 100, [0.7, 5.0, 0.5]);
-    let out = run(&mut e, &world, &[touching.clone()], &[], 70);
+    let out = run(&mut e, &world, std::slice::from_ref(&touching), &[], 70);
     let stings: Vec<_> = out
         .iter()
         .filter_map(|ev| match ev {
@@ -333,10 +336,14 @@ fn a_hurt_squid_squirts_ink_and_bolts() {
     let mut e = mob(Species::Squid, [0.5, 5.0, 0.5]);
     let attacker = Target::at(100, 100, [2.5, 5.0, 0.5]);
     m(&mut e).hurt(1.0, Some(100));
-    let out = run(&mut e, &world, &[attacker.clone()], &[], 20);
+    let out = run(&mut e, &world, std::slice::from_ref(&attacker), &[], 20);
     assert!(out.contains(&MobEvent::Ink), "{out:?}");
     // Away from the one who hit it.
-    assert!(dist(attacker.pos, e.pos) > 4.0 && e.pos[0] < 0.5, "{:?}", e.pos);
+    assert!(
+        dist(attacker.pos, e.pos) > 4.0 && e.pos[0] < 0.5,
+        "{:?}",
+        e.pos
+    );
 }
 
 #[test]
@@ -375,8 +382,13 @@ fn a_stranded_squid_chokes_but_does_not_flop() {
     e.on_ground = true;
     let out = run(&mut e, &world, &[], &[], 330);
     assert!(
-        out.iter()
-            .any(|ev| matches!(ev, MobEvent::Hurt { kind: "minecraft:drown", .. })),
+        out.iter().any(|ev| matches!(
+            ev,
+            MobEvent::Hurt {
+                kind: "minecraft:drown",
+                ..
+            }
+        )),
         "{out:?}"
     );
     assert!(e.pos[1] < 0.1);
@@ -388,7 +400,7 @@ fn a_dolphin_gives_grace_to_a_swimmer() {
     let mut e = mob(Species::Dolphin, [0.5, 5.0, 0.5]);
     let mut swimmer = Target::at(100, 100, [6.5, 5.0, 0.5]);
     swimmer.swimming = true;
-    let out = run(&mut e, &world, &[swimmer.clone()], &[], 120);
+    let out = run(&mut e, &world, std::slice::from_ref(&swimmer), &[], 120);
     assert!(
         out.iter()
             .any(|ev| matches!(ev, MobEvent::Grace { player: 100 })),
@@ -403,7 +415,7 @@ fn a_dolphin_follows_a_boat_and_gives_no_grace() {
     let mut e = mob(Species::Dolphin, [0.5, 5.0, 0.5]);
     let mut rower = Target::at(100, 100, [10.5, 11.5, 0.5]);
     rower.boating = true;
-    let out = run(&mut e, &world, &[rower.clone()], &[], 160);
+    let out = run(&mut e, &world, std::slice::from_ref(&rower), &[], 160);
     assert!(
         !out.iter().any(|ev| matches!(ev, MobEvent::Grace { .. })),
         "{out:?}"
@@ -437,14 +449,22 @@ fn a_dolphin_dries_out_in_a_few_minutes() {
     let mut e = mob(Species::Dolphin, [0.5, 0.0, 0.5]);
     e.on_ground = true;
     let out = run(&mut e, &world, &[], &[], 2300);
-    assert!(
-        !out.iter()
-            .any(|ev| matches!(ev, MobEvent::Hurt { kind: "minecraft:dry_out", .. }))
-    );
+    assert!(!out.iter().any(|ev| matches!(
+        ev,
+        MobEvent::Hurt {
+            kind: "minecraft:dry_out",
+            ..
+        }
+    )));
     let out = run(&mut e, &world, &[], &[], 200);
     assert!(
-        out.iter()
-            .any(|ev| matches!(ev, MobEvent::Hurt { kind: "minecraft:dry_out", .. })),
+        out.iter().any(|ev| matches!(
+            ev,
+            MobEvent::Hurt {
+                kind: "minecraft:dry_out",
+                ..
+            }
+        )),
         "{out:?}"
     );
     // Rain keeps it moist.
@@ -455,10 +475,13 @@ fn a_dolphin_dries_out_in_a_few_minutes() {
         ..Pool::default()
     };
     let out = run(&mut e, &rain, &[], &[], 3000);
-    assert!(
-        !out.iter()
-            .any(|ev| matches!(ev, MobEvent::Hurt { kind: "minecraft:dry_out", .. }))
-    );
+    assert!(!out.iter().any(|ev| matches!(
+        ev,
+        MobEvent::Hurt {
+            kind: "minecraft:dry_out",
+            ..
+        }
+    )));
 }
 
 #[test]
@@ -661,7 +684,11 @@ fn a_guardian_charges_its_beam_and_fires() {
     let mut aimed = false;
     let mut hit_at = None;
     for t in 0..300 {
-        tick(&mut e, &senses(&world, &[target.clone()], &[], t), &mut out);
+        tick(
+            &mut e,
+            &senses(&world, std::slice::from_ref(&target), &[], t),
+            &mut out,
+        );
         aimed |= m(&mut e).quirks.aqua.beam == 100;
         if hit_at.is_none() && out.iter().any(|ev| matches!(ev, MobEvent::Attack { .. })) {
             hit_at = Some(t);
@@ -672,8 +699,9 @@ fn a_guardian_charges_its_beam_and_fires() {
     assert!(at > 80, "fired at {at}");
     assert!(out.iter().any(|ev| matches!(ev,
         MobEvent::Attack { target: 100, damage } if *damage == 6.0)));
-    assert!(out.iter().any(|ev| matches!(ev,
-        MobEvent::MagicAttack { target: 100, .. })));
+    assert!(out
+        .iter()
+        .any(|ev| matches!(ev, MobEvent::MagicAttack { target: 100, .. })));
 }
 
 /// The tick of the first beam, and its damage.
@@ -683,7 +711,11 @@ fn first_beam(species: Species) -> (u64, f32) {
     let target = Target::at(100, 100, [5.5, 5.0, 0.5]);
     for t in 0..400 {
         let mut out = Vec::new();
-        tick(&mut e, &senses(&world, &[target.clone()], &[], t), &mut out);
+        tick(
+            &mut e,
+            &senses(&world, std::slice::from_ref(&target), &[], t),
+            &mut out,
+        );
         for ev in out {
             if let MobEvent::Attack { damage, .. } = ev {
                 return (t, damage);
@@ -725,7 +757,10 @@ fn a_beam_needs_a_clear_line() {
     }
     let world = Wall(Pool::deep());
     let mut e = mob(Species::Guardian, [0.5, 5.0, 0.5]);
-    m(&mut e).brain.goals.retain(|s| matches!(s.goal, Goal::Aqua(aqua::Act::Beam { .. })));
+    m(&mut e)
+        .brain
+        .goals
+        .retain(|s| matches!(s.goal, Goal::Aqua(aqua::Act::Beam { .. })));
     m(&mut e).brain.goals[0].goal = Goal::Aqua(aqua::Act::Beam {
         duration: 80,
         hold: 6.0,
@@ -748,7 +783,10 @@ fn a_beam_needs_a_clear_line() {
         };
         tick(&mut e, &s, &mut out);
     }
-    assert!(!out.iter().any(|ev| matches!(ev, MobEvent::Attack { .. })), "{out:?}");
+    assert!(
+        !out.iter().any(|ev| matches!(ev, MobEvent::Attack { .. })),
+        "{out:?}"
+    );
 }
 
 #[test]
@@ -777,7 +815,10 @@ fn a_stranded_guardian_flops_without_choking() {
             MobEvent::Sound { name, .. } if name == "entity.guardian.flop")),
         "{out:?}"
     );
-    assert!(!out.iter().any(|ev| matches!(ev, MobEvent::Hurt { .. })), "{out:?}");
+    assert!(
+        !out.iter().any(|ev| matches!(ev, MobEvent::Hurt { .. })),
+        "{out:?}"
+    );
 }
 
 #[test]
@@ -832,7 +873,9 @@ fn zombie_nautilus_variants_and_voices() {
         Some("entity.turtle.hurt_baby")
     );
     assert_eq!(
-        Species::ZombieNautilus.sound(Sound::Ambient, false).as_deref(),
+        Species::ZombieNautilus
+            .sound(Sound::Ambient, false)
+            .as_deref(),
         Some("entity.zombie_nautilus.ambient")
     );
 }
