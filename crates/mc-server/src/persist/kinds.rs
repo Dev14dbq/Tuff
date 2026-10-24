@@ -610,14 +610,21 @@ fn projectile(ctx: &ServerContext, e: &Entity, p: &Projectile, c: &mut Compound)
                 c.insert("DealtDamage", Tag::Byte(0));
             }
         }
-        Shot::Snowball | Shot::Egg | Shot::Pearl => {
+        Shot::Snowball | Shot::Egg | Shot::Pearl | Shot::Eye { .. } => {
             let name = match p.shot {
                 Shot::Snowball => "minecraft:snowball",
                 Shot::Egg => "minecraft:egg",
+                Shot::Eye { .. } => "minecraft:ender_eye",
                 _ => "minecraft:ender_pearl",
             };
             if let Some(stack) = named(ctx, name) {
                 c.insert("Item", Tag::Compound(stack));
+            }
+            if let Shot::Eye { target, survive } = &p.shot {
+                // Not in the game's own files: where the eye is flying to.
+                c.insert("Target", doubles(*target));
+                c.insert("Survive", byte(*survive));
+                c.insert("Life", Tag::Int(e.age as i32));
             }
         }
         Shot::Potion {
@@ -1139,6 +1146,13 @@ fn read_projectile(
         }
         Shot::Firework(f) => read_firework(c, e, f),
         Shot::Cloud { .. } => e.age = int(c, "Age").unwrap_or(0).max(0) as u32,
+        Shot::Eye { target, survive } => {
+            e.age = int(c, "Life").unwrap_or(0).max(0) as u32;
+            // Saved by the game itself there is no target: the eye hovers
+            // where it is.
+            *target = triple(c, "Target").unwrap_or(e.pos);
+            *survive = c.get("Survive").is_none_or(|_| flag(c, "Survive"));
+        }
         _ => {}
     }
 }

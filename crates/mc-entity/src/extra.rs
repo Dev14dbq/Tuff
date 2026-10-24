@@ -88,6 +88,12 @@ pub enum Shot {
     Snowball,
     Egg,
     Pearl,
+    /// A thrown eye of ender: the spot it flies to, and whether it drops
+    /// as an item (rather than shattering) when its time is up.
+    Eye {
+        target: [f64; 3],
+        survive: bool,
+    },
     /// A llama's spit.
     Spit,
     Potion {

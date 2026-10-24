@@ -406,6 +406,15 @@ fn everything(ctx: &ServerContext) -> Vec<Entity> {
         }
         all.push(e);
     }
+    let mut eye = summoned(ctx, "minecraft:eye_of_ender", "{}", [38.5, 102.0, 42.5]);
+    if let Kind::Projectile(p) = &mut eye.kind {
+        p.shot = Shot::Eye {
+            target: [50.5, 110.0, 61.25],
+            survive: false,
+        };
+    }
+    eye.age = 31;
+    all.push(eye);
     let mut rocket = summoned(
         ctx,
         "minecraft:firework_rocket",

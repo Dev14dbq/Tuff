@@ -256,6 +256,19 @@ fn found(
     distance
 }
 
+/// The nearest of the structures `wanted` (ids) from block `from`, searched
+/// as `/locate structure` does: its id and the block shown. Eyes of ender
+/// use it to find strongholds.
+pub(crate) fn nearest_structure(
+    ctx: &ServerContext,
+    wanted: &[String],
+    from: (i32, i32, i32),
+) -> Option<(String, (i32, i32, i32))> {
+    ctx.world
+        .pipeline()
+        .and_then(|p| p.locate(wanted, from, STRUCTURE_RADIUS))
+}
+
 fn locate_structure(r: &mut Run) -> Result<i32> {
     let started = std::time::Instant::now();
     let (id, tag, shown) = id_or_tag(r, "structure");
@@ -267,12 +280,7 @@ fn locate_structure(r: &mut Run) -> Result<i32> {
         ));
     }
     let from = source_block(r);
-    let hit = r
-        .ctx
-        .world
-        .pipeline()
-        .and_then(|p| p.locate(&wanted, from, STRUCTURE_RADIUS));
-    let Some((matched, at)) = hit else {
+    let Some((matched, at)) = nearest_structure(r.ctx, &wanted, from) else {
         return Err(err(
             "commands.locate.structure.not_found",
             vec![Tag::String(shown)],
