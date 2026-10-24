@@ -876,6 +876,21 @@ pub fn lectern_pulse(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
     level.schedule_block_tick(p, kind, LECTERN_PULSE, 0);
 }
 
+/// The book was taken from a lectern: it shows none and gives no signal.
+pub fn lectern_reset(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+    let state = level.block(p);
+    if ctx.shapes.block_name(state) != Some("minecraft:lectern") {
+        return;
+    }
+    let was = is(ctx, state, "powered");
+    let state = with_bool(ctx, with_bool(ctx, state, "has_book", false), "powered", false);
+    set_quietly(level, ctx, p, state);
+    if was {
+        update_neighbors_at(level, ctx, p);
+        update_neighbors_at(level, ctx, p.offset(Dir::Down));
+    }
+}
+
 /// Ticks a lectern keeps giving power after a page turn.
 const LECTERN_PULSE: i64 = 2;
 

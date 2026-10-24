@@ -293,6 +293,32 @@ mod tests {
     }
 
     #[test]
+    fn azaleas_grow_into_azalea_trees() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        for (x, name) in [(100, "minecraft:azalea"), (110, "minecraft:flowering_azalea")] {
+            let state = ctx.data.blocks.default_state(name).unwrap();
+            let at = Position::new(x, -60, 100);
+            let mut level = WorldLevel::new(&ctx);
+            level.set_block(at, state);
+            assert!(grow_tree(&mut level, mc_tick::BlockPos::new(x, -60, 100), state), "{name}");
+            drop(level);
+            let top = |dy| {
+                ctx.world
+                    .block(Position::new(x, -60 + dy, 100), &ctx.data.blocks)
+                    .and_then(|s| ctx.data.blocks.block_name(s))
+                    .map(str::to_owned)
+                    .unwrap_or_default()
+            };
+            assert_eq!(top(0), "minecraft:oak_log", "{name}: the trunk");
+            let leaves = (1..8).any(|dy| top(dy).contains("azalea_leaves"));
+            assert!(leaves, "{name}: azalea leaves on top");
+        }
+    }
+
+    #[test]
     fn random_ticks_advance_the_stage_then_grow() {
         let Some(ctx) = flat() else {
             eprintln!("skipped: no game data");

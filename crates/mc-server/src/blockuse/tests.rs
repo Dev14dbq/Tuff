@@ -515,4 +515,14 @@ fn lectern_pulses_when_a_page_turns() {
     drop(level);
     assert!(block(&ctx, lectern).contains("powered=false"));
     let _ = below;
+    // Taking the book out while it pulses ends the signal and the book.
+    let mut level = WorldLevel::new(&ctx);
+    mc_tick::redstone::lectern_pulse(&mut level, logic, at);
+    drop(level);
+    assert!(block(&ctx, lectern).contains("powered=true"));
+    let mut level = WorldLevel::new(&ctx);
+    mc_tick::redstone::lectern_reset(&mut level, logic, at);
+    drop(level);
+    let now = block(&ctx, lectern);
+    assert!(now.contains("powered=false") && now.contains("has_book=false"), "{now}");
 }
