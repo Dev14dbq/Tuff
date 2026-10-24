@@ -1568,16 +1568,16 @@ fn a_bucket_milks_a_goat_and_its_horns_round_trip() {
     let meta = crate::mobs::meta::metadata_of(&ctx, &loaded, 0);
     let flag = |index: u8| {
         meta.iter().find_map(|(i, v)| {
-            (*i == index).then_some(matches!(v, mc_protocol::packets::play::MetadataValue::Boolean(true)))
+            (*i == index).then_some(matches!(
+                v,
+                mc_protocol::packets::play::MetadataValue::Boolean(true)
+            ))
         })
     };
     assert_eq!(flag(18), Some(true));
     assert_eq!(flag(19), Some(true));
     assert_eq!(flag(20), Some(false));
-    assert_eq!(
-        crate::mobs::land::horn_group("minecraft:frozen_peaks"),
-        2
-    );
+    assert_eq!(crate::mobs::land::horn_group("minecraft:frozen_peaks"), 2);
     assert_eq!(crate::mobs::land::horn_group("minecraft:desert"), 3);
     assert_eq!(crate::mobs::land::horn_group("minecraft:swamp"), 1);
     assert_eq!(crate::mobs::land::horn_group("minecraft:plains"), 0);
@@ -1683,4 +1683,67 @@ fn a_wandering_trader_walks_falls_and_dies_to_a_player() {
         run(&ctx, 1);
     }
     assert!(mob_of(&ctx, id).is_none_or(|e| e.removed), "still alive");
+}
+
+// ---- Land animals (Cursor) ----
+
+#[test]
+fn land_animals_have_their_wiki_health_and_size() {
+    for (s, hp, size) in [
+        (Species::PolarBear, 30.0, (1.4, 1.4)),
+        (Species::Ocelot, 10.0, (0.6, 0.7)),
+        (Species::SkeletonHorse, 15.0, (1.3964844, 1.6)),
+        (Species::ZombieHorse, 15.0, (1.3964844, 1.6)),
+        (Species::Hoglin, 40.0, (1.3964844, 1.4)),
+        (Species::Zoglin, 40.0, (1.3964844, 1.4)),
+        (Species::PiglinBrute, 50.0, (0.6, 1.95)),
+    ] {
+        assert_eq!(s.max_health(), hp, "{s:?}");
+        assert_eq!(s.size(), size, "{s:?}");
+        assert_eq!(Species::from_id(s.id()), Some(s));
+    }
+    assert!(Species::Zoglin.undead() && Species::SkeletonHorse.undead());
+    assert!(Species::Hoglin.ageable() && Species::Hoglin.food_tag().is_some());
+    assert_eq!(Species::PiglinBrute.xp_reward(), (20, 20));
+}
+
+#[test]
+fn hoglins_and_brutes_zombify_outside_the_nether() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    join(&ctx, [30.5, -60.0, 30.5]);
+    let hoglin = put(&ctx, Species::Hoglin, [0.5, -60.0, 0.5]);
+    let brute = put(&ctx, Species::PiglinBrute, [4.5, -60.0, 0.5]);
+    run(&ctx, 290);
+    assert!(mob_of(&ctx, hoglin).is_some_and(|e| !e.removed));
+    run(&ctx, 20);
+    let kinds: Vec<Species> = lock(&ctx.entities)
+        .iter()
+        .filter(|e| !e.removed)
+        .filter_map(|e| match &e.kind {
+            Kind::Mob(m) => Some(m.species),
+            _ => None,
+        })
+        .collect();
+    assert!(kinds.contains(&Species::Zoglin), "{kinds:?}");
+    assert!(kinds.contains(&Species::ZombifiedPiglin), "{kinds:?}");
+    assert!(!kinds.contains(&Species::Hoglin) && !kinds.contains(&Species::PiglinBrute));
+    let _ = brute;
+}
+
+#[test]
+fn a_brute_spawns_with_a_golden_axe() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let mut e = new_mob(&ctx, Species::PiglinBrute, [0.5, -60.0, 0.5]);
+    crate::mobs::spawn::dress(&ctx, &mut e, Some("minecraft:basalt_deltas"));
+    let Kind::Mob(m) = &e.kind else { panic!() };
+    let axe = m.gear[mc_entity::mob::slot::MAINHAND]
+        .as_ref()
+        .map(|g| g.item);
+    assert_eq!(axe, ctx.items.id("minecraft:golden_axe"));
 }

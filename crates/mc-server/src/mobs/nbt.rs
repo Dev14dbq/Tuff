@@ -517,7 +517,10 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
                 Tag::Byte(i8::from(m.quirks.land.screaming)),
             );
             c.insert("HasLeftHorn", Tag::Byte(i8::from(m.quirks.land.left_horn)));
-            c.insert("HasRightHorn", Tag::Byte(i8::from(m.quirks.land.right_horn)));
+            c.insert(
+                "HasRightHorn",
+                Tag::Byte(i8::from(m.quirks.land.right_horn)),
+            );
         }
         _ => {}
     }

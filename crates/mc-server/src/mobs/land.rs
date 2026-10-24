@@ -114,7 +114,11 @@ pub fn horn(ctx: &ServerContext, e: &mut Entity) {
 }
 
 fn biome_at(ctx: &ServerContext, pos: [f64; 3]) -> String {
-    let at = mc_protocol::Position::new(pos[0].floor() as i32, pos[1].floor() as i32, pos[2].floor() as i32);
+    let at = mc_protocol::Position::new(
+        pos[0].floor() as i32,
+        pos[1].floor() as i32,
+        pos[2].floor() as i32,
+    );
     ctx.world
         .biome(at, &ctx.data.blocks)
         .and_then(|id| ctx.world.biome_name(id))
@@ -153,11 +157,7 @@ pub fn horn_group(biome: &str) -> u8 {
         "savanna_plateau",
         "windswept_savanna",
     ];
-    if FEEL.contains(&b) {
-        3
-    } else {
-        0
-    }
+    if FEEL.contains(&b) { 3 } else { 0 }
 }
 
 fn instrument(group: u8, screaming: bool) -> &'static str {

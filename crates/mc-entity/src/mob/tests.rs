@@ -438,7 +438,6 @@ fn walkers_do_not_hop_forever_at_a_wall_or_fence() {
 }
 
 #[test]
-#[test]
 fn a_goat_is_a_mountain_goat() {
     let s = Species::Goat;
     assert_eq!(s.id(), "minecraft:goat");
@@ -461,7 +460,10 @@ fn a_goat_is_a_mountain_goat() {
         g.sound_name(Sound::Ambient).as_deref(),
         Some("entity.goat.screaming.ambient")
     );
-    assert_eq!(g.sound_name(Sound::Step).as_deref(), Some("entity.goat.step"));
+    assert_eq!(
+        g.sound_name(Sound::Step).as_deref(),
+        Some("entity.goat.step")
+    );
     g.quirks.land.jumping = true;
     assert_eq!(g.size(), (0.63, 0.91));
     g.set_baby(true);
@@ -492,7 +494,11 @@ fn a_goat_rams_a_mob_it_can_see() {
     };
     let mut out = Vec::new();
     for t in 0..80 {
-        tick(&mut e, &senses(&[], std::slice::from_ref(&sheep), t, false), &mut out);
+        tick(
+            &mut e,
+            &senses(&[], std::slice::from_ref(&sheep), t, false),
+            &mut out,
+        );
     }
     assert!(
         out.iter().any(|ev| matches!(

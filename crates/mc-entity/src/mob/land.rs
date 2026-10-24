@@ -236,7 +236,9 @@ fn tick_ram(
         return;
     }
     if m.bumped {
-        if !m.is_baby() && (m.quirks.land.left_horn || m.quirks.land.right_horn) && horn_block(m, b, s)
+        if !m.is_baby()
+            && (m.quirks.land.left_horn || m.quirks.land.right_horn)
+            && horn_block(m, b, s)
         {
             out.push(MobEvent::Horn);
         }
@@ -309,7 +311,7 @@ fn ram_target(m: &Mob, b: &Body, s: &Senses) -> Option<i32> {
 }
 
 fn horn_block(m: &Mob, b: &Body, s: &Senses) -> bool {
-    let yaw = m.yaw.to_radians();
+    let yaw = f64::from(m.yaw).to_radians();
     let reach = m.size().0 * 0.5 + 0.51;
     let x = b.pos[0] - yaw.sin() * reach;
     let z = b.pos[2] + yaw.cos() * reach;
@@ -322,8 +324,12 @@ fn horn_block(m: &Mob, b: &Body, s: &Senses) -> bool {
 fn in_powder(s: &Senses, pos: [f64; 3]) -> bool {
     let c = cell_of(pos);
     s.world.feature(c[0], c[1], c[2], Feature::PowderSnow)
-        || s.world
-            .feature(c[0], (pos[1] + 0.4).floor() as i32, c[2], Feature::PowderSnow)
+        || s.world.feature(
+            c[0],
+            (pos[1] + 0.4).floor() as i32,
+            c[2],
+            Feature::PowderSnow,
+        )
 }
 
 fn powder_at(s: &Senses, x: i32, y: i32, z: i32) -> bool {

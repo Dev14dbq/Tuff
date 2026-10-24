@@ -19,9 +19,9 @@ pub mod golems;
 pub mod hurt;
 pub mod infest;
 pub mod interact;
+mod land;
 pub mod meta;
 pub mod nbt;
-mod land;
 pub mod ride;
 mod spawn;
 mod spawner;
@@ -911,9 +911,7 @@ fn handle(
             target,
             damage,
             knockback,
-        } => land::ram(
-            ctx, entities, i, target, damage, knockback, targets,
-        ),
+        } => land::ram(ctx, entities, i, target, damage, knockback, targets),
         MobEvent::Horn => land::horn(ctx, &mut entities[i]),
     }
 }

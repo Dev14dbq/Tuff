@@ -357,6 +357,14 @@ pub fn mob_attacks(
     // The weapon's modifiers, strength and weakness change the blow.
     let damage = crate::mob_effects::attribute(ctx, m, "attack_damage", f64::from(damage))
         .clamp(0.0, 2048.0) as f32;
+    // Land animals (Cursor): a grown hoglin's or zoglin's blow rolls
+    // between half and one and a half times its damage, and throws.
+    let throws = matches!(species, Species::Hoglin | Species::Zoglin) && !m.is_baby();
+    let damage = if throws && damage > 0.0 {
+        damage / 2.0 + crate::hits::rnd() as f32 * damage
+    } else {
+        damage
+    };
     let disables = weapon.and_then(|w| w.weapon).map_or(0.0, |w| w.1);
     let burning = m.burning > 0;
     if let Some(t) = targets.iter().find(|t| t.id == target) {
@@ -372,6 +380,12 @@ pub fn mob_attacks(
             disables_shield: disables,
         };
         if crate::combat::hurt_player(ctx, t.uuid, &hit).is_some() {
+            if throws {
+                let (dx, dz) = (t.pos[0] - pos[0], t.pos[2] - pos[2]);
+                let len = dx.hypot(dz).max(1e-4);
+                let push = [dx / len * 0.5, 0.5, dz / len * 0.5];
+                crate::combat::push_player(ctx, t.uuid, t.id, push);
+            }
             poison(ctx, t.uuid, species, difficulty);
             if burning && crate::hits::rnd() < f64::from(difficulty) * 0.3 {
                 // Burning zombies set what they hit alight.
@@ -395,8 +409,9 @@ pub fn mob_attacks(
             if self::harm(ctx, &mut entities[j], &harm) {
                 bite(ctx, &mut entities[j], species, difficulty);
             }
-            // An iron golem throws what it hits up into the air.
-            if species == Species::IronGolem
+            // An iron golem throws what it hits up into the air, and so
+            // do grown hoglins and zoglins.
+            if (species == Species::IronGolem || throws)
                 && let Kind::Mob(t) = &entities[j].kind
             {
                 let lift = 0.4 * (1.0 - armor_resistance(ctx, t)).max(0.0);

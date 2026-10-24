@@ -351,6 +351,27 @@ fn conversions(m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<MobEvent>) {
                 out.push(MobEvent::Convert(Species::ZombifiedPiglin));
             }
         }
+        // Land animals (Cursor): out of the Nether, hoglins and brutes
+        // zombify after 15 seconds as piglins do.
+        Species::Hoglin | Species::PiglinBrute if !s.nether && !m.no_ai => {
+            m.soaked += 1;
+            if m.soaked > 300 {
+                let (sound, to) = if m.species == Species::Hoglin {
+                    ("entity.hoglin.converted_to_zombified", Species::Zoglin)
+                } else {
+                    (
+                        "entity.piglin_brute.converted_to_zombified",
+                        Species::ZombifiedPiglin,
+                    )
+                };
+                out.push(MobEvent::Sound {
+                    name: sound.into(),
+                    volume: 1.0,
+                    pitch: 1.0,
+                });
+                out.push(MobEvent::Convert(to));
+            }
+        }
         _ => {}
     }
 }
