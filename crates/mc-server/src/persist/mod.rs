@@ -342,6 +342,7 @@ fn raw_chunk(c: &Compound) -> Option<(i32, i32)> {
 
 /// Writes the entities of every loaded chunk (world folders only).
 pub fn save(ctx: &ServerContext) {
+    crate::poi::save(ctx);
     load_stored(ctx);
     let entities = lock(&ctx.entities);
     let alive: HashSet<u128> = entities.iter().map(|e| e.uuid).collect();
@@ -356,6 +357,7 @@ pub fn save(ctx: &ServerContext) {
 /// Chunks were unloaded: their entities are written and leave the world,
 /// passengers with their vehicles.
 pub fn unloaded(ctx: &ServerContext, chunks: &[(i32, i32)]) {
+    crate::poi::unloaded(ctx, chunks);
     if !ctx.world.is_saved() {
         return;
     }

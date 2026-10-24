@@ -61,6 +61,7 @@ mod packs;
 mod persist;
 mod pipeline;
 mod players;
+mod poi;
 mod portals;
 mod pots;
 mod precipitation;

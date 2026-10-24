@@ -69,11 +69,22 @@ pub struct World {
     entity_chunks: Mutex<HashMap<(i32, i32), Vec<Tag>>>,
     /// Loaded chunks whose light a new neighbour changed.
     relit: Mutex<Vec<(i32, i32)>>,
+    /// What the points of interest (see [`crate::poi`]) have to catch up
+    /// with: chunks that came into memory, blocks that may have become or
+    /// stopped being one.
+    poi_log: Mutex<PoiLog>,
     /// New chunks are lit with their neighbours outside the chunks lock;
     /// overlapping 3×3 areas take turns.
     lighting: crate::util::Claims,
     /// `/save-off`.
     no_autosave: std::sync::atomic::AtomicBool,
+}
+
+/// Changes the points of interest have not seen yet.
+#[derive(Debug, Default)]
+pub struct PoiLog {
+    pub loaded: Vec<(i32, i32)>,
+    pub changed: Vec<Position>,
 }
 
 /// A scheduled tick as chunk files keep it (`block_ticks`, `fluid_ticks`):
@@ -333,6 +344,7 @@ impl World {
             loaded_entities: Mutex::new(Vec::new()),
             entity_chunks: Mutex::new(HashMap::new()),
             relit: Mutex::new(Vec::new()),
+            poi_log: Mutex::default(),
             lighting: crate::util::Claims::default(),
             no_autosave: std::sync::atomic::AtomicBool::new(false),
             dimension: dim.name,
@@ -499,6 +511,7 @@ impl World {
             loaded_entities: Mutex::new(Vec::new()),
             entity_chunks: Mutex::new(HashMap::new()),
             relit: Mutex::new(Vec::new()),
+            poi_log: Mutex::default(),
             lighting: crate::util::Claims::default(),
             no_autosave: std::sync::atomic::AtomicBool::new(false),
             dimension: dim.name,
@@ -520,6 +533,13 @@ impl World {
             return f(slot);
         }
         let (chunk, generated) = self.load(x, z, blocks);
+        if chunk.is_some() {
+            self.poi_log
+                .lock()
+                .expect("poi log lock")
+                .loaded
+                .push((x, z));
+        }
         let new_slot = |chunk| Slot {
             chunk,
             frame: None,
@@ -774,6 +794,40 @@ impl World {
     /// (chunks not named store none).
     pub fn set_ticks_to_save(&self, ticks: HashMap<(i32, i32), PendingTicks>) {
         *self.ticks_to_save.lock().expect("ticks to save lock") = ticks;
+    }
+
+    /// The data version of the files this world writes.
+    pub fn data_version(&self) -> i32 {
+        self.data_version
+    }
+
+    /// Chunks read and blocks changed since the last call, for the points
+    /// of interest.
+    pub fn take_poi_log(&self) -> PoiLog {
+        std::mem::take(&mut *self.poi_log.lock().expect("poi log lock"))
+    }
+
+    /// Where the points of interest are stored (`None` for a world with no
+    /// folder).
+    pub fn poi_dir(&self) -> Option<PathBuf> {
+        match &self.source {
+            Source::Anvil(anvil) => {
+                let entities = anvil.entities.lock().expect("entity storage");
+                Some(
+                    entities
+                        .dir()
+                        .parent()
+                        .map_or_else(|| entities.dir().join("poi"), |d| d.join("poi")),
+                )
+            }
+            Source::Flat(_) => None,
+        }
+    }
+
+    /// Runs `f` on the chunk if it is in memory (nothing is loaded).
+    pub fn peek_chunk<R>(&self, x: i32, z: i32, f: impl FnOnce(&Chunk) -> R) -> Option<R> {
+        let chunks = self.chunks.lock().expect("chunks lock");
+        chunks.get(&(x, z))?.chunk.as_deref().map(f)
     }
 
     /// Ticking block entities of chunks read from disk since the last call.
@@ -1370,6 +1424,10 @@ impl World {
                 chunk
                     .block_entities
                     .retain(|be| (be.x, be.y, be.z) != (p.x, p.y, p.z));
+            }
+            let poi_block = |s| blocks.block_name(s).is_some_and(crate::poi::is_poi_block);
+            if poi_block(old) || poi_block(state) {
+                self.poi_log.lock().expect("poi log lock").changed.push(p);
             }
             slot.frame = None;
             slot.changes += 1;

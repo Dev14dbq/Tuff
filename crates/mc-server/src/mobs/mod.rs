@@ -25,6 +25,7 @@ pub mod ride;
 mod spawn;
 mod spawner;
 mod terrain;
+pub mod village;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -724,6 +725,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     let spawned = spawn::tick(ctx, &ground, &mut entities, &targets, now, day, difficulty);
     out.fresh.extend(spawned);
     golems::villagers(ctx, &ground, &mut entities, now, &mut out.fresh);
+    village::claims(ctx, &mut entities, now);
     let made = spawner::tick(ctx, &ground, &entities, &targets, difficulty);
     out.fresh.extend(made);
     let made = crate::trials::tick(ctx, &ground, &entities, &targets, difficulty, now);
@@ -744,6 +746,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             out.removed.push(e.id);
         }
     }
+    village::release_removed(ctx, &mut entities);
     entities.retain(|e| !e.removed);
     for e in &out.fresh {
         let _ = ctx.events.send(Event::EntitySpawned(e.clone()));

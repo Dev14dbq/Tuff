@@ -101,6 +101,13 @@ pub struct Merchant {
     pub offers: Vec<Offer>,
     /// The workstation the villager works at.
     pub job_site: Option<(i32, i32, i32)>,
+    /// The bed it sleeps in and the bell it meets at, each holding a ticket
+    /// of its point of interest.
+    pub home: Option<(i32, i32, i32)>,
+    pub meeting: Option<(i32, i32, i32)>,
+    /// Whether the tickets it holds were checked against the points of
+    /// interest since it came into the world.
+    pub verified: bool,
     /// Game time of the last restock and how many there were today.
     pub last_restock: i64,
     pub restocks_today: i32,
@@ -123,6 +130,9 @@ impl Merchant {
             xp: 0,
             offers: Vec::new(),
             job_site: None,
+            home: None,
+            meeting: None,
+            verified: false,
             last_restock: 0,
             restocks_today: 0,
             restock_day: 0,

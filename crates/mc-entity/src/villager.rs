@@ -118,6 +118,7 @@ pub fn step(
     let Kind::Merchant(m) = &mut entity.kind else {
         return;
     };
+    let home = m.home.map(|(x, y, z)| [x, y, z]);
     let walk = &mut m.walk;
     let wandering = m.wandering;
     walk.nav.tick(pos, now);
@@ -186,7 +187,7 @@ pub fn step(
     } else if standing {
         walk.nav.stop();
     } else if env.night && !wandering {
-        night_walk(walk, world, pos, from, now, seed, ops);
+        night_walk(walk, home, world, pos, from, now, seed, ops);
     } else if walk.nav.is_done() && walk.next(seed) % STROLL == 0 {
         let p = params();
         for _ in 0..10 {
@@ -276,9 +277,12 @@ pub fn step(
     entity.age += 1;
 }
 
-/// At night: looks for a free bed, walks to it, lies down.
+/// At night: goes to the bed it has claimed (see the village's points of
+/// interest) and lies down in it. A villager with no bed stays up.
+#[allow(clippy::too_many_arguments)]
 fn night_walk(
     walk: &mut Walk,
+    home: Option<Cell>,
     world: &dyn Terrain,
     pos: [f64; 3],
     from: Cell,
@@ -290,37 +294,22 @@ fn night_walk(
         if walk.rest > 0 {
             walk.rest -= 1;
         } else if (u64::from(now) + seed).is_multiple_of(40) {
-            walk.rest = 0;
-            let mut best: Option<(i32, Cell)> = None;
-            for dx in -16..=16 {
-                for dz in -16..=16 {
-                    for dy in -4..=4 {
-                        let c = [from[0] + dx, from[1] + dy, from[2] + dz];
-                        if world.free_bed(c[0], c[1], c[2]) {
-                            let d = dx * dx + dz * dz + dy * dy;
-                            if best.is_none_or(|(b, _)| d < b) {
-                                best = Some((d, c));
-                            }
-                        }
-                    }
+            let Some(c) = home.filter(|c| world.free_bed(c[0], c[1], c[2])) else {
+                walk.rest = 100;
+                return;
+            };
+            walk.bed = Some(c);
+            let p = params();
+            let side = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                .into_iter()
+                .flat_map(|(dx, dz)| [0, -1, 1].map(|dy| [c[0] + dx, c[1] + dy, c[2] + dz]))
+                .find(|s| standable(world, *s, &p));
+            match side {
+                Some(s) => {
+                    walk.nav.stop();
+                    walk.nav.go_to(world, from, s, &p);
                 }
-            }
-            if let Some((_, c)) = best {
-                walk.bed = Some(c);
-                let p = params();
-                let side = [(1, 0), (-1, 0), (0, 1), (0, -1)]
-                    .into_iter()
-                    .flat_map(|(dx, dz)| [0, -1, 1].map(|dy| [c[0] + dx, c[1] + dy, c[2] + dz]))
-                    .find(|s| standable(world, *s, &p));
-                match side {
-                    Some(s) => {
-                        walk.nav.stop();
-                        walk.nav.go_to(world, from, s, &p);
-                    }
-                    None => walk.bed = None,
-                }
-            } else {
-                walk.rest = 600;
+                None => walk.bed = None,
             }
         }
         return;

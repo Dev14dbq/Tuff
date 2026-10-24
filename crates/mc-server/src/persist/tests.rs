@@ -150,6 +150,8 @@ fn everything(ctx: &ServerContext) -> Vec<Entity> {
         m.offers[0].uses = 3;
         m.offers[0].demand = 2;
         m.job_site = Some((37, 99, 34));
+        m.home = Some((38, 99, 34));
+        m.meeting = Some((40, 99, 30));
         m.last_restock = 12000;
         m.restocks_today = 1;
     }
@@ -525,6 +527,13 @@ fn every_kind_of_entity_comes_back_after_a_restart() {
         .find(|e| matches!(&e.kind, Kind::Merchant(m) if !m.wandering))
         .unwrap();
     assert_eq!(ctx.mobs.villager_health(villager.id), 13.5);
+    let Kind::Merchant(m) = &villager.kind else {
+        panic!()
+    };
+    assert_eq!(
+        (m.job_site, m.home, m.meeting),
+        (Some((37, 99, 34)), Some((38, 99, 34)), Some((40, 99, 30)))
+    );
     let pig = entities
         .iter()
         .find(|e| matches!(&e.kind, Kind::Mob(m) if m.species == Species::Pig))

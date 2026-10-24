@@ -448,7 +448,12 @@ fn merchant(ctx: &ServerContext, e: &Entity, m: &Merchant, c: &mut Compound) {
         &[("max_health", 20.0), ("movement_speed", 0.5)],
     );
     let mut memories = Compound::new();
-    if let Some((x, y, z)) = m.job_site {
+    for (name, site) in [
+        ("minecraft:job_site", m.job_site),
+        ("minecraft:home", m.home),
+        ("minecraft:meeting_point", m.meeting),
+    ] {
+        let Some((x, y, z)) = site else { continue };
         let mut at = Compound::new();
         at.insert("pos", Tag::IntArray(vec![x, y, z]));
         at.insert(
@@ -457,7 +462,7 @@ fn merchant(ctx: &ServerContext, e: &Entity, m: &Merchant, c: &mut Compound) {
         );
         let mut memory = Compound::new();
         memory.insert("value", Tag::Compound(at));
-        memories.insert("minecraft:job_site", Tag::Compound(memory));
+        memories.insert(name, Tag::Compound(memory));
     }
     let mut brain = Compound::new();
     brain.insert("memories", Tag::Compound(memories));
@@ -1007,11 +1012,19 @@ fn read_merchant(ctx: &ServerContext, c: &Compound, m: &mut Merchant) {
     m.restocks_today = int(c, "RestocksToday").unwrap_or(0);
     if let Some(Tag::Compound(brain)) = c.get("Brain")
         && let Some(Tag::Compound(mem)) = brain.get("memories")
-        && let Some(Tag::Compound(site)) = mem.get("minecraft:job_site")
-        && let Some(Tag::Compound(value)) = site.get("value")
-        && let Some(p) = int3(value, "pos")
     {
-        m.job_site = Some((p[0], p[1], p[2]));
+        let site = |name: &str| {
+            let Some(Tag::Compound(site)) = mem.get(name) else {
+                return None;
+            };
+            let Some(Tag::Compound(value)) = site.get("value") else {
+                return None;
+            };
+            int3(value, "pos").map(|p| (p[0], p[1], p[2]))
+        };
+        m.job_site = site("minecraft:job_site");
+        m.home = site("minecraft:home");
+        m.meeting = site("minecraft:meeting_point");
     }
     let Some(Tag::Compound(offers)) = c.get("Offers") else {
         return;
