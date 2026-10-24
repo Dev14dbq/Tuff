@@ -90,9 +90,10 @@ fn a_pillager_loads_its_crossbow_and_shoots_the_player() {
     let mut shot = false;
     for _ in 0..120 {
         run(&ctx, 1);
-        shot |= count(&ctx, |e| {
-            matches!(&e.kind, Kind::Projectile(p) if matches!(p.shot, Shot::Arrow(_)))
-        }) > 0;
+        shot |= count(
+            &ctx,
+            |e| matches!(&e.kind, Kind::Projectile(p) if matches!(p.shot, Shot::Arrow(_))),
+        ) > 0;
         if shot {
             break;
         }
@@ -114,12 +115,14 @@ fn an_evoker_calls_up_vexes_and_fangs() {
     let (mut vexes, mut fangs) = (0, 0);
     for _ in 0..300 {
         run(&ctx, 1);
-        vexes = vexes.max(count(&ctx, |e| {
-            matches!(&e.kind, Kind::Mob(m) if m.species == Species::Vex)
-        }));
-        fangs = fangs.max(count(&ctx, |e| {
-            matches!(&e.kind, Kind::Projectile(p) if matches!(p.shot, Shot::Fangs { .. }))
-        }));
+        vexes = vexes.max(count(
+            &ctx,
+            |e| matches!(&e.kind, Kind::Mob(m) if m.species == Species::Vex),
+        ));
+        fangs = fangs.max(count(
+            &ctx,
+            |e| matches!(&e.kind, Kind::Projectile(p) if matches!(p.shot, Shot::Fangs { .. })),
+        ));
         if vexes > 0 && fangs > 0 {
             break;
         }
@@ -199,7 +202,9 @@ fn a_ravager_tramples_leaves_and_crops_but_not_stone() {
     let mut level = WorldLevel::new(&ctx);
     super::super::illager::crush(&ctx, &mut level, &e);
     let changes = level.into_changes();
-    let _ = ctx.events.send(crate::context::Event::BlocksChanged { by: 0, changes });
+    let _ = ctx
+        .events
+        .send(crate::context::Event::BlocksChanged { by: 0, changes });
     assert_eq!(block(&ctx, [1, -60, 0]), "minecraft:air");
     assert_eq!(block(&ctx, [0, -60, 1]), "minecraft:air");
     assert_eq!(block(&ctx, [-1, -60, 0]), "minecraft:stone");

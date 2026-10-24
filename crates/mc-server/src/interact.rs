@@ -400,14 +400,33 @@ pub fn dig(
     let Some(state) = world.block(position, blocks) else {
         return outcome;
     };
-    // Spectators do not dig; creative breaks at once; survival breaks when
-    // the client says it finished, or at once for blocks that break
-    // instantly (dig times are not checked yet).
+    // Spectators do not dig; creative breaks at once; survival breaks at once
+    // for blocks that break instantly, else when the client says it finished
+    // and the time it takes has passed.
+    if status == dig::CANCEL {
+        crate::digging::stop(ctx, actor.uuid);
+        return outcome;
+    }
     let breaks = match (status, actor.game_mode) {
         (_, SPECTATOR) => false,
         (dig::START, CREATIVE) => breaks_in_creative(ctx, actor.uuid),
-        (dig::START, _) => blocks::breaks_instantly(&ctx.data, &ctx.rules, state),
-        (dig::FINISH, mode) => mode != CREATIVE,
+        (dig::START, _) => {
+            crate::digging::start(ctx, &actor, position);
+            blocks::breaks_instantly(&ctx.data, &ctx.rules, state)
+                || crate::digging::factors(ctx, actor.uuid, &actor.pose, state)
+                    .is_some_and(|f| crate::digging::ticks_to_break(&f) == Some(0))
+        }
+        (dig::FINISH, CREATIVE) => false,
+        (dig::FINISH, _) => {
+            let ok = in_reach(&actor.pose, position)
+                && crate::digging::may_finish(ctx, &actor, position, state);
+            crate::digging::stop(ctx, actor.uuid);
+            if !ok {
+                // The client broke it already: show what is there.
+                outcome.updates.push((position, state));
+            }
+            ok
+        }
         _ => return Outcome::default(),
     };
     if !breaks || !in_reach(&actor.pose, position) {
@@ -606,7 +625,11 @@ pub fn use_item_on(
             .and_then(crate::menus::Menu::of_block)
     {
         outcome.open_menu = Some((clicked, menu));
-        crate::stats::opened(ctx, actor.uuid, block_at(clicked).and_then(|s| blocks.block_name(s)));
+        crate::stats::opened(
+            ctx,
+            actor.uuid,
+            block_at(clicked).and_then(|s| blocks.block_name(s)),
+        );
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,
             entity_id: actor.entity_id,
@@ -621,7 +644,11 @@ pub fn use_item_on(
             .and_then(crate::containers::kind_of)
     {
         outcome.open = Some((clicked, kind));
-        crate::stats::opened(ctx, actor.uuid, block_at(clicked).and_then(|s| blocks.block_name(s)));
+        crate::stats::opened(
+            ctx,
+            actor.uuid,
+            block_at(clicked).and_then(|s| blocks.block_name(s)),
+        );
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,
             entity_id: actor.entity_id,
@@ -692,7 +719,13 @@ pub fn use_item_on(
         let changes = level.into_changes();
         outcome.updates.extend(changes.iter().copied());
         outcome.events.push(Event::BlocksChanged { by: 0, changes });
-        crate::stats::item(ctx, actor.uuid, crate::stats::USED, ctx.items.id("minecraft:ender_eye").unwrap_or(0), 1);
+        crate::stats::item(
+            ctx,
+            actor.uuid,
+            crate::stats::USED,
+            ctx.items.id("minecraft:ender_eye").unwrap_or(0),
+            1,
+        );
         if actor.game_mode != CREATIVE {
             replace_held(ctx, &mut outcome, actor, hand, None);
         }
@@ -1162,7 +1195,10 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
         if let Some(h) = thrown
             && !matches!(
                 h.name.as_str(),
-                "minecraft:bow" | "minecraft:crossbow" | "minecraft:trident" | "minecraft:fishing_rod"
+                "minecraft:bow"
+                    | "minecraft:crossbow"
+                    | "minecraft:trident"
+                    | "minecraft:fishing_rod"
             )
             && !done.events.is_empty()
         {
@@ -1562,6 +1598,7 @@ mod tests {
             .unwrap();
         let at = Position::new(1, -60, 0);
         WorldLevel::new(&ctx).set_block(at, tnt);
+        dig(&ctx, actor, dig::START, at, 1, 1);
         dig(&ctx, actor, dig::FINISH, at, 1, 1);
         assert!(
             ctx.data

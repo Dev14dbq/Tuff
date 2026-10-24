@@ -854,11 +854,14 @@ pub(super) fn brain(species: Species) -> Brain {
         Pillager => (
             vec![
                 float(),
-                cast(3, Cast::Crossbow {
-                    stage: 0,
-                    timer: 0,
-                    seen: 0,
-                }),
+                cast(
+                    3,
+                    Cast::Crossbow {
+                        stage: 0,
+                        timer: 0,
+                        seen: 0,
+                    },
+                ),
                 stroll(8, 0.6),
                 look(9, 15.0),
                 random_look(10),

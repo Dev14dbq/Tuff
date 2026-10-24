@@ -949,12 +949,26 @@ async fn survival_breaking_drops_items_that_get_picked_up() {
         .await;
     miner.recv_until("minecraft:block_update").await;
 
-    let mut dig = Vec::new();
-    dig.put_varint(2); // finished digging
-    dig.put_position(mc_protocol::Position::new(1, -60, 0));
-    dig.put_i8(1);
-    dig.put_varint(1);
-    miner.send("minecraft:player_action", dig).await;
+    // Stone takes a while by hand: start, and finish when the time is up
+    // (a diamond pickaxe, ordered with /give, makes it 4 ticks).
+    miner
+        .send(
+            "minecraft:chat_command",
+            command("give Miner diamond_pickaxe"),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let action = |status: i32, sequence: i32| {
+        let mut dig = Vec::new();
+        dig.put_varint(status);
+        dig.put_position(mc_protocol::Position::new(1, -60, 0));
+        dig.put_i8(1);
+        dig.put_varint(sequence);
+        dig
+    };
+    miner.send("minecraft:player_action", action(0, 1)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    miner.send("minecraft:player_action", action(2, 2)).await;
 
     let (_, spawned) = miner.recv_until("minecraft:add_entity").await;
 
@@ -1016,8 +1030,8 @@ async fn survival_breaking_drops_items_that_get_picked_up() {
     }
     assert_eq!(
         slot_seen,
-        Some((36, 1, cobblestone)),
-        "one cobblestone in the first hotbar slot"
+        Some((37, 1, cobblestone)),
+        "one cobblestone in the slot after the pickaxe"
     );
     let _ = stop.send(());
 }
@@ -1664,14 +1678,21 @@ async fn changes_to_a_vanilla_world_are_saved_on_shutdown() {
     let (mut bot, (x, y, z)) = join_offline(addr, ctx.ids.clone(), "Digger").await;
     let below =
         mc_protocol::Position::new(x.floor() as i32, y.floor() as i32 - 1, z.floor() as i32);
-    let mut dig = Vec::new();
-    dig.put_varint(2); // finished digging (the world's game mode is survival)
-    dig.put_position(below);
-    dig.put_i8(1);
-    dig.put_varint(1);
-    bot.send("minecraft:player_action", dig).await;
+    let action = |status: i32, sequence: i32| {
+        let mut dig = Vec::new();
+        dig.put_varint(status);
+        dig.put_position(below);
+        dig.put_i8(1);
+        dig.put_varint(sequence);
+        dig
+    };
+    // The world's game mode is survival: dig, and finish when the time is up.
+    bot.send("minecraft:player_action", action(0, 1)).await;
+    bot.recv_until("minecraft:block_changed_ack").await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    bot.send("minecraft:player_action", action(2, 2)).await;
     let (_, ack) = bot.recv_until("minecraft:block_changed_ack").await;
-    assert_eq!(Reader::new(&ack).varint().unwrap(), 1);
+    assert_eq!(Reader::new(&ack).varint().unwrap(), 2);
     drop(bot);
     let _ = stop.send(());
     running.await.unwrap().unwrap();
@@ -3791,6 +3812,123 @@ async fn clicking_a_recipe_in_the_book_fills_the_grid_or_shows_a_ghost() {
         Some(item("minecraft:stick"))
     );
     assert_eq!(hands.slots[36].as_ref().map(|s| s.count), Some(1));
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn survival_dig_times_are_checked_by_the_server() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    config.ops = vec!["Miner".into()];
+    let server = Server::bind(config).await.unwrap();
+    server
+        .context()
+        .game_rules
+        .lock()
+        .unwrap()
+        .set("respawn_radius", mc_server::rules::Value::Int(0));
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let stone = ctx.data.blocks.default_state("minecraft:stone").unwrap() as i32;
+    let air = ctx.data.blocks.default_state("minecraft:air").unwrap() as i32;
+    let (mut miner, _) = join_offline(addr, ctx.ids.clone(), "Miner").await;
+    let command = |text: &str| {
+        let mut body = Vec::new();
+        body.put_string(text);
+        body
+    };
+    let block_update = |body: &[u8]| {
+        let mut r = Reader::new(body);
+        let p = r.position().unwrap();
+        ((p.x, p.y, p.z), r.varint().unwrap())
+    };
+    let action = |status: i32, at: (i32, i32, i32), sequence: i32| {
+        let mut dig = Vec::new();
+        dig.put_varint(status);
+        dig.put_position(mc_protocol::Position::new(at.0, at.1, at.2));
+        dig.put_i8(1);
+        dig.put_varint(sequence);
+        dig
+    };
+    miner
+        .send("minecraft:chat_command", command("gamemode survival"))
+        .await;
+    miner.recv_until("minecraft:game_event").await;
+    miner
+        .send(
+            "minecraft:chat_command",
+            command("give Miner diamond_pickaxe"),
+        )
+        .await;
+    for text in ["setblock 1 -60 0 stone", "setblock 2 -60 0 short_grass"] {
+        miner.send("minecraft:chat_command", command(text)).await;
+        miner.recv_until("minecraft:block_update").await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // A finish right after the start: refused. The block stays, the client
+    // is told so, and nothing drops.
+    miner
+        .send("minecraft:player_action", action(0, (1, -60, 0), 1))
+        .await;
+    miner
+        .send("minecraft:player_action", action(2, (1, -60, 0), 2))
+        .await;
+    let mut seen = Vec::new();
+    let mut updates = Vec::new();
+    let ack = loop {
+        let (name, body) = miner.recv().await;
+        match name.as_str() {
+            "minecraft:block_update" => updates.push(block_update(&body)),
+            "minecraft:block_changed_ack" => {
+                let n = Reader::new(&body).varint().unwrap();
+                if n == 2 {
+                    break n;
+                }
+            }
+            "minecraft:keep_alive" => miner.send("minecraft:keep_alive", body).await,
+            _ => {}
+        }
+        seen.push(name);
+    };
+    assert_eq!(ack, 2);
+    assert!(updates.contains(&((1, -60, 0), stone)), "{updates:?}");
+    assert!(!updates.iter().any(|&(_, s)| s == air), "{updates:?}");
+    assert!(
+        !seen.iter().any(|n| n == "minecraft:add_entity"),
+        "{seen:?}"
+    );
+
+    // Once the time is up it goes (a diamond pickaxe: 4 ticks; wait longer).
+    miner
+        .send("minecraft:player_action", action(0, (1, -60, 0), 3))
+        .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    miner
+        .send("minecraft:player_action", action(2, (1, -60, 0), 4))
+        .await;
+    miner.recv_until("minecraft:add_entity").await;
+
+    // A block that breaks at once does, on the start.
+    miner
+        .send("minecraft:player_action", action(0, (2, -60, 0), 5))
+        .await;
+    loop {
+        let (name, body) = miner.recv().await;
+        if name == "minecraft:block_update" && block_update(&body) == ((2, -60, 0), air) {
+            break;
+        }
+    }
     let _ = stop.send(());
 }
 

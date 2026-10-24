@@ -45,7 +45,8 @@ pub fn new(
 
 /// Raiders do not bite each other.
 fn spared(kind: Option<&str>) -> bool {
-    kind.and_then(Species::from_id).is_some_and(|s| s.raider() || s == Species::Vex)
+    kind.and_then(Species::from_id)
+        .is_some_and(|s| s.raider() || s == Species::Vex)
 }
 
 pub fn tick(t: &mut Tick, e: &mut Entity) {

@@ -471,6 +471,8 @@ pub struct Shared {
     pub rare: Mutex<crate::commands::rare::State>,
     /// Statistics of the players online.
     pub stats: Mutex<crate::stats::All>,
+    /// Blocks survival players are digging, by player.
+    pub digs: Mutex<std::collections::HashMap<u128, crate::digging::Dig>>,
     /// Bows being drawn and bobbers cast.
     pub shooting: Mutex<crate::projectiles::State>,
     /// Leads: who holds each leashed entity.
@@ -1098,6 +1100,7 @@ impl ServerContext {
             storage: Mutex::new(storage),
             rare: Mutex::default(),
             stats: Mutex::default(),
+            digs: Mutex::default(),
             shooting: Mutex::default(),
             leashes: Mutex::default(),
             stopwatches: Mutex::default(),
