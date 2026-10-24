@@ -123,6 +123,14 @@ pub fn sting(
     if hurt.is_none() {
         return;
     }
+    fx::sound(
+        ctx,
+        "entity.puffer_fish.sting",
+        fx::category::NEUTRAL,
+        entities[i].pos,
+        1.0,
+        1.0,
+    );
     let Some(kind) = crate::effects::kind_of("poison") else {
         return;
     };
@@ -218,9 +226,7 @@ pub fn eat(ctx: &ServerContext, entities: &mut [Entity], i: usize, target: i32) 
         },
         _ => return,
     };
-    // It goes without a death animation.
-    prey.health = 0.0;
-    prey.dying = None;
+    // It goes without a death animation or loot of its own.
     entities[j].removed = true;
     if let Some(item) = ctx.items.id(drop) {
         crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 0.3, pos[2]], item, 1);

@@ -2,6 +2,8 @@ use super::*;
 use crate::combat::Blow;
 
 mod critters;
+// Aquatic (Claude)
+mod aquatic;
 // Land animals (Cursor)
 mod land;
 mod villages;

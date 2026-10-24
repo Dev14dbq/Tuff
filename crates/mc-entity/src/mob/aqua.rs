@@ -1359,11 +1359,21 @@ fn puff(m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<MobEvent>) {
     }
     // Touching it hurts and poisons.
     let state = m.quirks.aqua.puff;
-    if state > 0 && m.age.is_multiple_of(10) {
+    if state > 0 && m.attack_cooldown <= 0 {
+        let mut stung = false;
         let touch = |w: f64| 0.3 + width / 2.0 + w / 2.0;
+        let height = m.size().1;
+        // Boxes that touch: close sideways, overlapping in height.
+        let near = |at: [f64; 3], w: f64, h: f64| {
+            let (dx, dz) = (b.pos[0] - at[0], b.pos[2] - at[2]);
+            dx * dx + dz * dz <= touch(w).powi(2)
+                && b.pos[1] < at[1] + h + 0.3
+                && b.pos[1] + height > at[1] - 0.3
+        };
         for p in s.players.iter().filter(|p| p.targetable) {
-            if dist_sq(b.pos, p.pos) <= touch(0.6).powi(2) && (b.pos[1] - p.pos[1]).abs() < 1.8 {
+            if near(p.pos, 0.6, 1.8) {
                 sting(p.id, state, out);
+                stung = true;
             }
         }
         for o in s.mobs.iter().filter(|o| scary(o) && o.id != b.id) {
@@ -1372,10 +1382,13 @@ fn puff(m: &mut Mob, b: &Body, s: &Senses, out: &mut Vec<MobEvent>) {
             {
                 continue;
             }
-            if dist_sq(b.pos, o.pos) <= touch(o.width).powi(2) && (b.pos[1] - o.pos[1]).abs() < 1.8
-            {
+            if near(o.pos, o.width, o.height) {
                 sting(o.id, state, out);
+                stung = true;
             }
+        }
+        if stung {
+            m.attack_cooldown = 20;
         }
     }
 }
@@ -1386,7 +1399,6 @@ fn sting(target: i32, state: u8, out: &mut Vec<MobEvent>) {
         damage: 1.0 + f32::from(state),
         poison: 60 * i32::from(state),
     });
-    push_puff(out, "sting");
 }
 
 fn push_puff(out: &mut Vec<MobEvent>, what: &str) {
