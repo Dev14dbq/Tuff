@@ -61,7 +61,7 @@ pub fn find(ctx: &ServerContext, uuid: u128, want: impl Fn(&str) -> bool) -> Opt
     None
 }
 
-fn changed(ctx: &ServerContext, uuid: u128, slots: &[usize]) {
+pub fn changed(ctx: &ServerContext, uuid: u128, slots: &[usize]) {
     let inventories = lock(&ctx.inventories);
     let Some(hands) = inventories.get(&uuid) else {
         return;

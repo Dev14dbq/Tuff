@@ -35,6 +35,8 @@ pub struct Worn {
     last_block: Option<[i32; 3]>,
     last_pos: Option<[f64; 3]>,
     age: i64,
+    /// Ticks spent gliding.
+    glided: i32,
 }
 
 impl Worn {
@@ -124,6 +126,56 @@ pub fn extinguish(ctx: &ServerContext, uuid: u128) {
     }
 }
 
+/// The chest slot holds a glider (an elytra) that is not about to break.
+fn has_glider(ctx: &ServerContext, uuid: u128) -> bool {
+    lock(&ctx.inventories)
+        .get(&uuid)
+        .and_then(|h| h.slots[6].clone())
+        .is_some_and(|s| {
+            let glides = s.components.get("minecraft:glider").is_some()
+                || ctx.items.default_component(s.item, "glider").is_some()
+                    && !s.components.is_removed("minecraft:glider");
+            let max = ctx.items.max_damage(s.item);
+            glides && (max == 0 || s.damage < max - 1)
+        })
+}
+
+/// The player asks to glide (Player Command 6): in the air, out of water,
+/// not levitating, with a glider on.
+pub fn start_gliding(ctx: &ServerContext, uuid: u128) {
+    let Some(pose) = lock(&ctx.players).get(&uuid).and_then(|p| p.pose) else {
+        return;
+    };
+    let levitating = lock(&ctx.vitals)
+        .get(&uuid)
+        .is_none_or(|v| v.gliding || v.effects.has("levitation"));
+    if pose.on_ground || levitating || crate::hits::in_water(ctx, [pose.x, pose.y, pose.z]) {
+        return;
+    }
+    if has_glider(ctx, uuid) {
+        crate::effects::change(ctx, uuid, |v| v.gliding = true);
+    }
+}
+
+/// One tick of gliding: it ends on the ground, in water or without a
+/// glider; the elytra wears by 1 a second.
+fn glide(ctx: &ServerContext, uuid: u128, mode: i32, pose: crate::context::Pose, flying: bool, worn: &mut Worn) {
+    let gliding = lock(&ctx.vitals).get(&uuid).is_some_and(|v| v.gliding);
+    if !gliding {
+        worn.glided = 0;
+        return;
+    }
+    if pose.on_ground || flying || crate::hits::in_water(ctx, [pose.x, pose.y, pose.z]) || !has_glider(ctx, uuid) {
+        worn.glided = 0;
+        crate::effects::change(ctx, uuid, |v| v.gliding = false);
+        return;
+    }
+    worn.glided += 1;
+    if worn.glided % 20 == 0 && mode != 1 {
+        crate::held::wear(ctx, uuid, 6, 1);
+    }
+}
+
 /// One tick of every player: burning, gear and its effects.
 pub fn tick(ctx: &ServerContext) {
     let players: Vec<(u128, i32, i32, crate::context::Pose, bool)> = lock(&ctx.players)
@@ -200,6 +252,7 @@ fn gear_tick(
         return;
     };
     worn.age += 1;
+    glide(ctx, uuid, mode, pose, flying, &mut worn);
     let pos = [pose.x, pose.y, pose.z];
     let block = pos.map(|c| c.floor() as i32);
     let below = [

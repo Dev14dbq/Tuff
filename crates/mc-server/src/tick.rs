@@ -219,6 +219,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             crate::vitals::tick(&ctx);
             crate::worn::tick(&ctx);
             crate::projectiles::trident::tick_spins(&ctx);
+            crate::projectiles::crossbow::tick_charging(&ctx);
             crate::vitals::tick_using(&ctx);
             crate::portals::tick(&ctx);
             crate::useblocks::tick(&ctx);

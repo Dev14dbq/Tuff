@@ -831,6 +831,9 @@ async fn play(
                     play::Serverbound::PlayerCommand { action: action @ (1 | 2), .. } => {
                         crate::combat::set_sprinting(&ctx, uuid, action == 1);
                     }
+                    play::Serverbound::PlayerCommand { action: 6, .. } => {
+                        crate::worn::start_gliding(&ctx, uuid);
+                    }
                     play::Serverbound::PlayerAction { status: status @ (3 | 4), .. } => {
                         // Q: drop one (4) or the whole stack (3) from the main hand.
                         let mut thrown = None;

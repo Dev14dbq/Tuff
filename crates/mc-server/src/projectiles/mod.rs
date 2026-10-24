@@ -9,6 +9,7 @@
 //! [`shoot`].
 
 pub mod arrow;
+pub mod crossbow;
 pub mod fireball;
 pub mod firework;
 pub mod fishing;
@@ -38,6 +39,9 @@ pub struct State {
     pub bobbers: HashMap<u128, i32>,
     /// Riptide spins, by player.
     pub spins: HashMap<u128, trident::Spin>,
+    /// Crossbows being charged: the player's entity id and whether the
+    /// start and middle sounds played.
+    pub charging: HashMap<u128, (i32, bool, bool)>,
     /// Items a player may not use again before this world age.
     pub cooldowns: HashMap<(u128, &'static str), i64>,
 }
@@ -315,13 +319,12 @@ pub fn use_item(
         }
         "minecraft:fishing_rod" => return Some(fishing::use_rod(ctx, actor, hand, yaw, pitch)),
         "minecraft:firework_rocket" => {
-            firework::launch(
-                ctx,
-                actor,
-                &held,
-                [actor.pose.x, actor.pose.y + 1.5, actor.pose.z],
-                false,
-            );
+            // In the air a rocket does something only for a gliding player.
+            let gliding = lock(&ctx.vitals).get(&actor.uuid).is_some_and(|v| v.gliding);
+            if !gliding {
+                return Some(outcome);
+            }
+            firework::boost(ctx, actor, &held);
             if consumes {
                 crate::held::consume(ctx, actor.uuid, held.slot, 1);
             }
@@ -330,6 +333,10 @@ pub fn use_item(
                 entity_id: actor.entity_id,
                 times: 1,
             });
+            return Some(outcome);
+        }
+        "minecraft:crossbow" => {
+            crossbow::use_crossbow(ctx, actor, hand, &held);
             return Some(outcome);
         }
         _ => return None,
@@ -409,6 +416,7 @@ pub fn release(ctx: &ServerContext, actor: Actor) {
     let ticks = (now - start).max(0) as i32;
     match crate::held::held(ctx, actor.uuid, hand).map(|h| h.name) {
         Some(n) if n == "minecraft:trident" => trident::release(ctx, actor, hand, ticks),
+        Some(n) if n == "minecraft:crossbow" => crossbow::release(ctx, actor, hand, ticks),
         _ => arrow::fire_bow(ctx, actor, hand, ticks),
     }
 }
