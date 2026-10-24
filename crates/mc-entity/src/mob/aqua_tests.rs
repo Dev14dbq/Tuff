@@ -259,6 +259,25 @@ fn fish_follow_the_leader_of_the_school() {
 }
 
 #[test]
+fn a_school_does_not_outgrow_its_size() {
+    let world = Pool::deep();
+    let mut e = mob(Species::Cod, [10.5, 5.0, 0.5]);
+    m(&mut e)
+        .brain
+        .goals
+        .retain(|s| matches!(s.goal, Goal::Aqua(aqua::Act::School { .. })));
+    // The ninth cod of a row leaves the first eight alone.
+    e.id = 8;
+    let leader = {
+        let mut o = other(7, Species::Cod, [0.5, 5.0, 0.5]);
+        o.baby = false;
+        o
+    };
+    run(&mut e, &world, &[], std::slice::from_ref(&leader), 120);
+    assert!(dist(e.pos, leader.pos) > 9.0, "{:?}", e.pos);
+}
+
+#[test]
 fn a_stranded_fish_flops_and_then_chokes() {
     let world = Pool::default();
     let mut e = mob(Species::Cod, [0.5, 0.0, 0.5]);

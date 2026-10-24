@@ -61,6 +61,15 @@ impl Species {
         matches!(self, Species::Cod | Species::Salmon | Species::TropicalFish)
     }
 
+    /// The most fish in one school.
+    pub fn school_size(self) -> i32 {
+        match self {
+            Species::Salmon => 5,
+            Species::TropicalFish => 9,
+            _ => 8,
+        }
+    }
+
     /// Blocks a tick it swims at a goal speed of 1.
     pub fn swim_pace(self) -> f64 {
         use Species::*;
@@ -565,8 +574,10 @@ pub(super) fn in_water(b: &Body, s: &Senses) -> bool {
 /// The school's leader: the nearest of the kind with a lower id.
 fn school_leader<'a>(m: &Mob, b: &Body, s: &'a Senses) -> Option<&'a Other> {
     let me = b.id;
+    // A school holds a run of ids, so it never grows past its size.
+    let size = m.species.school_size();
     s.nearest_mob(b.pos, 12.0, |o| {
-        o.id < me && o.species == Some(m.species) && !o.baby
+        o.id < me && o.id / size == me / size && o.species == Some(m.species) && !o.baby
     })
 }
 
