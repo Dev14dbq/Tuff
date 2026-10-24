@@ -5,6 +5,7 @@ pub mod cauldron;
 pub mod command_block;
 pub mod composter;
 pub mod dir;
+pub mod dripstone;
 pub mod facts;
 pub mod fast;
 pub mod fire;

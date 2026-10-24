@@ -467,6 +467,23 @@ pub fn bone_meal(
             level.set_block(at(base, 0, 1, 0), air);
             dripleaf(level, base, &facing, 2 + (roll % 4) as i32)
         }
+        "pitcher_crop" => {
+            // Either half takes the meal for the crop: one stage, if it
+            // is light enough and the upper half has room.
+            let base = if prop("half").as_deref() == Some("upper") {
+                at(p, 0, -1, 0)
+            } else {
+                p
+            };
+            let lower = level.block(to_pos(base));
+            if name_at(level, base) != "pitcher_crop"
+                || ctx.shapes.property(lower, "age") == Some("4")
+            {
+                return Some(false);
+            }
+            mc_tick::random::pitcher_grow(level, ctx, to_pos(base), lower, 1);
+            true
+        }
         "bamboo_sapling" => {
             if !is_air(level, up) {
                 return Some(false);

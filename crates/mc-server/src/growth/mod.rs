@@ -333,4 +333,148 @@ mod tests {
         let now = mc_tick::Level::block(&level, mc_tick::BlockPos::new(0, -60, 0));
         assert_eq!(ctx.data.blocks.block_name(now), Some("minecraft:birch_log"));
     }
+
+    fn put(level: &mut WorldLevel, p: [i32; 3], name: &str, props: &[(&str, &str)]) {
+        let state = level.context().data.blocks.state_id(name, props).unwrap();
+        level.set_block(Position::new(p[0], p[1], p[2]), state);
+    }
+
+    fn look(level: &WorldLevel, p: [i32; 3]) -> String {
+        let s = mc_tick::Level::block(level, mc_tick::BlockPos::new(p[0], p[1], p[2]));
+        level
+            .context()
+            .data
+            .blocks
+            .describe(s)
+            .unwrap()
+            .trim_end_matches("[]")
+            .to_owned()
+    }
+
+    fn random_tick(level: &mut WorldLevel, p: [i32; 3], rng: &mut mc_tick::rng::Rng) {
+        let logic = level.logic();
+        let at = mc_tick::BlockPos::new(p[0], p[1], p[2]);
+        let state = mc_tick::Level::block(level, at);
+        mc_tick::random::tick(level, logic, at, state, rng);
+    }
+
+    #[test]
+    fn a_pitcher_crop_grows_to_two_blocks_by_random_ticks_and_bone_meal() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut level = WorldLevel::new(&ctx);
+        put(
+            &mut level,
+            [0, -61, 0],
+            "minecraft:farmland",
+            &[("moisture", "7")],
+        );
+        fn crop<'a>(age: &'a str, half: &'a str) -> [(&'a str, &'a str); 2] {
+            [("age", age), ("half", half)]
+        }
+        put(
+            &mut level,
+            [0, -60, 0],
+            "minecraft:pitcher_crop",
+            &crop("0", "lower"),
+        );
+        let mut rng = mc_tick::rng::Rng::new(9);
+        let mut seen = vec![look(&level, [0, -60, 0])];
+        for _ in 0..4000 {
+            random_tick(&mut level, [0, -60, 0], &mut rng);
+            let now = look(&level, [0, -60, 0]);
+            if seen.last() != Some(&now) {
+                seen.push(now);
+            }
+        }
+        // Each stage in turn; from the fourth the upper half is there.
+        assert_eq!(seen.len(), 5, "{seen:?}");
+        assert!(seen[4].contains("age=4") && seen[4].contains("half=lower"));
+        assert!(look(&level, [0, -59, 0]).contains("age=4"));
+        assert!(look(&level, [0, -59, 0]).contains("half=upper"));
+        // The upper half does not tick, and the full crop stays.
+        random_tick(&mut level, [0, -59, 0], &mut rng);
+        assert!(look(&level, [0, -59, 0]).contains("half=upper"));
+
+        // Bone meal: one stage; blocked above, the third stage waits.
+        put(
+            &mut level,
+            [4, -61, 0],
+            "minecraft:farmland",
+            &[("moisture", "7")],
+        );
+        put(
+            &mut level,
+            [4, -60, 0],
+            "minecraft:pitcher_crop",
+            &crop("1", "lower"),
+        );
+        put(&mut level, [4, -58, 0], "minecraft:stone", &[]);
+        assert!(bone_meal(&mut level, Position::new(4, -60, 0)));
+        assert!(look(&level, [4, -60, 0]).contains("age=2"));
+        put(&mut level, [4, -59, 0], "minecraft:stone", &[]);
+        assert!(bone_meal(&mut level, Position::new(4, -60, 0)));
+        assert!(look(&level, [4, -60, 0]).contains("age=2"));
+        put(&mut level, [4, -59, 0], "minecraft:air", &[]);
+        assert!(bone_meal(&mut level, Position::new(4, -60, 0)));
+        assert!(look(&level, [4, -60, 0]).contains("age=3"));
+        assert!(look(&level, [4, -59, 0]).contains("half=upper"));
+        // From the upper half too, up to the end.
+        assert!(bone_meal(&mut level, Position::new(4, -59, 0)));
+        assert!(look(&level, [4, -60, 0]).contains("age=4"));
+        assert!(!bone_meal(&mut level, Position::new(4, -60, 0)));
+    }
+
+    #[test]
+    fn pointed_dripstone_grows_down_and_up_under_a_water_source() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut level = WorldLevel::new(&ctx);
+        let tip = [("vertical_direction", "down"), ("thickness", "tip")];
+        put(
+            &mut level,
+            [10, -47, 0],
+            "minecraft:water",
+            &[("level", "0")],
+        );
+        put(&mut level, [10, -48, 0], "minecraft:dripstone_block", &[]);
+        put(
+            &mut level,
+            [10, -49, 0],
+            "minecraft:pointed_dripstone",
+            &tip,
+        );
+        // The floor is five blocks under the tip.
+        put(&mut level, [10, -55, 0], "minecraft:stone", &[]);
+        let mut rng = mc_tick::rng::Rng::new(4);
+        for _ in 0..40_000 {
+            random_tick(&mut level, [10, -49, 0], &mut rng);
+        }
+        // Down from the top: pieces of one stalactite, then they meet the
+        // stalagmite growing from the floor and merge.
+        let column: Vec<String> = (-54..=-49)
+            .rev()
+            .map(|y| look(&level, [10, y, 0]))
+            .collect();
+        assert!(
+            column[0].contains("vertical_direction=down") && !column[0].contains("thickness=tip"),
+            "{column:?}"
+        );
+        assert!(column.iter().any(|s| s.contains("thickness=tip_merge")));
+        let merged: Vec<_> = column.iter().filter(|s| s.contains("tip_merge")).collect();
+        assert_eq!(merged.len(), 2, "{column:?}");
+        assert!(look(&level, [10, -54, 0]).contains("vertical_direction=up"));
+        // Without a water source it does not grow.
+        let mut dry = WorldLevel::new(&ctx);
+        put(&mut dry, [20, -48, 0], "minecraft:dripstone_block", &[]);
+        put(&mut dry, [20, -49, 0], "minecraft:pointed_dripstone", &tip);
+        for _ in 0..40_000 {
+            random_tick(&mut dry, [20, -49, 0], &mut rng);
+        }
+        assert!(look(&dry, [20, -50, 0]).ends_with("air"));
+    }
 }
