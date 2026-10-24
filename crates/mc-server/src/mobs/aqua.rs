@@ -199,6 +199,13 @@ pub fn curse(ctx: &ServerContext, e: &Entity, targets: &[Target]) {
             crate::effects::Instance::new(2, 6000, true),
         );
         fx::sound(ctx, "entity.elder_guardian.curse", 5, t.pos, 1.0, 1.0);
+        let _ = ctx.events.send(crate::context::Event::Direct {
+            uuid: t.uuid,
+            packet: crate::context::Direct::GameEvent(mc_protocol::packets::play::GameEvent {
+                event: mc_protocol::packets::play::game_event::ELDER_GUARDIAN_APPEARANCE,
+                value: 1.0,
+            }),
+        });
     }
 }
 

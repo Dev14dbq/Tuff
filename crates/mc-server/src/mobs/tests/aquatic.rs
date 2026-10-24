@@ -373,10 +373,23 @@ fn an_elder_guardian_lays_mining_fatigue_on_players_near() {
     join(&ctx, [0.5, -60.0, 0.5]);
     let id = put(&ctx, Species::ElderGuardian, [20.5, -60.0, 0.5]);
     set_mob(&ctx, id, |m| m.quirks.aqua.curse_in = 3);
+    let mut events = ctx.events.subscribe();
     run(&ctx, 6);
     let (amp, ticks) = effect_of(&ctx, "mining_fatigue").expect("cursed");
     assert_eq!(amp, 2);
     assert!(ticks > 5900, "{ticks}");
+    // And its ghost fills the screen.
+    let mut ghost = false;
+    while let Some(e) = events.try_changed() {
+        if let crate::context::Event::Direct {
+            packet: crate::context::Direct::GameEvent(g),
+            ..
+        } = e
+        {
+            ghost |= g.event == mc_protocol::packets::play::game_event::ELDER_GUARDIAN_APPEARANCE;
+        }
+    }
+    assert!(ghost);
 }
 
 #[test]

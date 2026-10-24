@@ -2332,6 +2332,8 @@ pub mod play {
         pub const RAIN_LEVEL: u8 = 7;
         /// Value: thunder level 0–1.
         pub const THUNDER_LEVEL: u8 = 8;
+        /// The elder guardian's ghost fills the screen (Aquatic, Claude).
+        pub const ELDER_GUARDIAN_APPEARANCE: u8 = 10;
         /// Value: 1 skips the death screen (`immediate_respawn`).
         pub const IMMEDIATE_RESPAWN: u8 = 11;
         /// Value: 1 limits crafting to known recipes (`limited_crafting`).
