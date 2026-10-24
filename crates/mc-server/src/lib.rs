@@ -9,6 +9,8 @@ mod archaeology;
 mod auth;
 mod beacons;
 mod blocks;
+mod digging;
+mod hardness;
 mod blockuse;
 mod books;
 mod border;
