@@ -21,6 +21,7 @@ mod watch;
 mod worldgen_compare;
 mod worldgen_diff;
 mod worldgen_ref;
+mod worldgen_seeds;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -68,6 +69,13 @@ Tasks:
   observe-commands [--lines <file>]
       Record the command tree vanilla sends an operator and its replies to
       the lines of xtask/commands.txt (observed/commands.json).
+  worldgen-ref [--seed <n> | --seeds 1,2,3 | --seed-count <n>] [--radius <chunks>] [--dimension nether|end]
+      Have a vanilla server generate reference worlds (cache/vanilla-server/26.3-worldgen/<seed>).
+  worldgen-diff [--seed <n> | --seeds 1,2,3 | --seed-count <n>] [--radius <chunks>] [--dimension nether|end]
+      Compare our generator with those worlds (biomes; blocks with WORLDGEN_BLOCKS=1).
+  worldgen-compare <vanilla world> <our world> [--seeds 1,2,3 | --seed-count <n>] [--radius <chunks>]
+      Compare two world folders; with several seeds the paths hold `{seed}`.
+      Several seeds end in one table: seed, blocks equal %, biomes equal %.
   chunk-info <region dir> <chunk x> <chunk z> [--depth <n>] [--all]
       Print the NBT structure of one stored chunk.
   chunk-speed [--addr <host:port>] [--view-distance <n>] [--runs <n>] [--version <id>]

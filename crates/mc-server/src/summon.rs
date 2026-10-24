@@ -1,10 +1,10 @@
 //! `/summon` for the entities of `mc_entity::extra`: their kinds from an
 //! entity type name and the NBT given.
 
-use mc_entity::{Entity, Kind};
 use mc_entity::extra::{
     Arrow, Cart, Craft, Decor, Firework, Frame, Hung, Pickup, Projectile, Shot, Stand, Vehicle,
 };
+use mc_entity::{Entity, Kind};
 use mc_nbt::{Compound, Tag};
 
 use crate::context::ServerContext;

@@ -1,16 +1,20 @@
 //! `cargo xtask worldgen-compare <vanilla world> <our world> [--radius n]
-//! [--center x z] [--dimension nether|end]`:
-//! compares two worlds chunk by chunk around 0, 0: how many blocks are the
-//! same, which blocks differ most, and how often each block occurs in
-//! each (features: trees, plants, ores).
+//! [--center x z] [--dimension nether|end] [--seeds 1,2,3 | --seed-count n
+//! [--seed first]]`:
+//! compares two worlds chunk by chunk around 0, 0: how many blocks and biome
+//! cells are the same, which blocks differ most, and how often each block
+//! occurs in each (features: trees, plants, ores). With several seeds the
+//! world paths hold `{seed}` (`cache/vanilla-server/26.3-worldgen/{seed}/world`)
+//! and a table of all seeds ends the output.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use mc_storage::chunk::{Decoded, Palettes, decode_chunk};
 
 use crate::probe::load_data;
+use crate::worldgen_seeds::{self, Row};
 
 fn region(world: &Path) -> std::path::PathBuf {
     let d = world.join("dimensions/minecraft/overworld/region");
@@ -32,6 +36,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut radius = 4;
     let (mut ox, mut oz) = (0i32, 0i32);
     let mut dimension = String::from("overworld");
+    let (mut seed, mut list, mut count) = (12345i64, None, None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -41,15 +46,53 @@ pub fn run(args: &[String]) -> Result<()> {
                 ox = it.next().map_or(Ok(0), |v| v.parse())?;
                 oz = it.next().map_or(Ok(0), |v| v.parse())?;
             }
-            _ => paths.push(std::path::PathBuf::from(a)),
+            "--seed" => seed = it.next().context("--seed needs a value")?.parse()?,
+            "--seeds" => list = Some(it.next().context("--seeds needs a list")?.clone()),
+            "--seed-count" => count = Some(it.next().context("--seed-count needs n")?.parse()?),
+            _ => paths.push(a.clone()),
         }
     }
     let [theirs, ours] = &paths[..] else {
-        bail!("usage: worldgen-compare <vanilla world> <our world> [--radius n]");
+        bail!(
+            "usage: worldgen-compare <vanilla world> <our world> [--radius n] [--center x z] \
+             [--dimension nether|end] [--seeds 1,2,3 | --seed-count n [--seed first]] \
+             (with several seeds `{{seed}}` in a path stands for the seed)"
+        );
     };
+    let seeds = worldgen_seeds::seeds(seed, list.as_deref(), count)?;
+    if seeds.len() > 1 && !(theirs.contains("{seed}") && ours.contains("{seed}")) {
+        bail!("with several seeds both world paths need `{{seed}}` in them");
+    }
+    worldgen_seeds::each(&seeds, |seed| {
+        let at = |path: &str| std::path::PathBuf::from(path.replace("{seed}", &seed.to_string()));
+        compare(&at(theirs), &at(ours), radius, (ox, oz), &dimension)
+    })?;
+    Ok(())
+}
+
+/// Compares two worlds chunk by chunk: prints the differences and returns
+/// how many blocks and biome cells are the same.
+fn compare(
+    theirs: &Path,
+    ours: &Path,
+    radius: i32,
+    (ox, oz): (i32, i32),
+    dimension: &str,
+) -> Result<Row> {
     let data = load_data(None)?;
     let air = data.blocks.default_state("minecraft:air").unwrap_or(0);
-    let lookup = |_: &str| Some(0u32);
+    // Biome ids are the sorted names, in both worlds alike.
+    let mut biome_names: Vec<String> = std::fs::read_dir(
+        crate::workspace_root()
+            .join("cache/mcdata")
+            .join(&data.version.name)
+            .join("data/minecraft/worldgen/biome"),
+    )?
+    .filter_map(|e| e.ok()?.file_name().to_str().map(str::to_owned))
+    .map(|n| format!("minecraft:{}", n.trim_end_matches(".json")))
+    .collect();
+    biome_names.sort();
+    let lookup = |n: &str| biome_names.iter().position(|b| b == n).map(|i| i as u32);
     let palettes = Palettes {
         blocks: &data.blocks,
         biome: &lookup,
@@ -57,8 +100,8 @@ pub fn run(args: &[String]) -> Result<()> {
         fallback_biome: 0,
         unresolved: std::cell::Cell::new(0),
     };
-    let (region_a, min_y, height) = dimension_region(theirs, &dimension)?;
-    let (region_b, ..) = dimension_region(ours, &dimension)?;
+    let (region_a, min_y, height) = dimension_region(theirs, dimension)?;
+    let (region_b, ..) = dimension_region(ours, dimension)?;
     let mut a = mc_storage::region::RegionStorage::new(region_a);
     let mut b = mc_storage::region::RegionStorage::new(region_b);
     let name = |s: u32| {
@@ -69,6 +112,7 @@ pub fn run(args: &[String]) -> Result<()> {
             .to_owned()
     };
     let (mut same, mut total) = (0usize, 0usize);
+    let (mut biomes_same, mut biomes_total) = (0usize, 0usize);
     let mut counts: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     let mut pairs: HashMap<(String, String), usize> = HashMap::new();
     let mut chunks = 0;
@@ -88,6 +132,12 @@ pub fn run(args: &[String]) -> Result<()> {
                 continue;
             };
             chunks += 1;
+            for (sa, sb) in ca.sections.iter().zip(&cb.sections) {
+                for i in 0..64 {
+                    biomes_total += 1;
+                    biomes_same += usize::from(sa.biomes.get(i) == sb.biomes.get(i));
+                }
+            }
             for y in min_y..min_y + height {
                 for lz in 0..16 {
                     for lx in 0..16 {
@@ -122,8 +172,9 @@ pub fn run(args: &[String]) -> Result<()> {
         }
     }
     println!(
-        "{chunks} chunks: {same}/{total} blocks the same ({:.3}%)",
-        same as f64 * 100.0 / total.max(1) as f64
+        "{chunks} chunks: {same}/{total} blocks the same ({:.3}%), {biomes_same}/{biomes_total} biome cells ({:.3}%)",
+        same as f64 * 100.0 / total.max(1) as f64,
+        biomes_same as f64 * 100.0 / biomes_total.max(1) as f64
     );
     if pair.is_some() {
         println!("by y: {pair_y:?}");
@@ -153,7 +204,14 @@ pub fn run(args: &[String]) -> Result<()> {
         };
         println!("{n:>30} {va:>9} {vb:>9}{mark}");
     }
-    Ok(())
+    if chunks == 0 {
+        bail!("no chunk is in both worlds around {ox}, {oz}");
+    }
+    Ok(Row {
+        blocks: Some((same, total)),
+        biomes: Some((biomes_same, biomes_total)),
+        ..Row::default()
+    })
 }
 
 /// `cargo xtask worldgen-logs <vanilla> <ours> <cx> <cz>`: tree logs in one
