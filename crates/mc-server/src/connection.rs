@@ -487,7 +487,7 @@ async fn play(
     let mut ctx = writer.ctx.of_player(uuid);
     // Subscribe before reading the player list, so nobody slips through.
     let mut events = ctx.events.subscribe();
-    crate::commands::load_progress(&ctx, uuid, &me.extra.recipes, &me.extra.book.highlight);
+    crate::commands::load_progress(&ctx, uuid, &me.extra.recipes, &me.extra.book);
     crate::stats::load(&ctx, uuid);
     let mut pose = session
         .saved
@@ -525,6 +525,8 @@ async fn play(
     writer.queue(&abilities(me.game_mode, flying))?;
     send_permissions(writer, &ctx, uuid, &me.profile.name, entity_id)?;
     writer.queue(&ctx.recipes.update_packet())?;
+    writer.queue(&crate::commands::settings_packet(&ctx, uuid))?;
+    writer.queue(&crate::commands::initial_book(&ctx, uuid))?;
     let mut awaiting_teleport = Some(1);
     let mut next_teleport = 1;
     writer.queue(&play::PlayerPosition {
@@ -808,6 +810,15 @@ async fn play(
                         }
                         play::Serverbound::ContainerButtonClick { window, button } => {
                             windows.button(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, button)?;
+                        }
+                        play::Serverbound::PlaceRecipe { window, recipe, all } => {
+                            windows.place_recipe(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, recipe, all)?;
+                        }
+                        play::Serverbound::RecipeBookChangeSettings { book, open, filter } => {
+                            crate::commands::book_settings(&ctx, uuid, book, open, filter);
+                        }
+                        play::Serverbound::RecipeBookSeenRecipe { recipe } => {
+                            crate::commands::recipe_seen(&ctx, uuid, recipe);
                         }
                         play::Serverbound::ContainerSlotStateChanged { slot, window, enabled } => {
                             windows.slot_state(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, slot, enabled)?;

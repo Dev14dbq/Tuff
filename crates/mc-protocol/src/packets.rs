@@ -906,13 +906,11 @@ pub mod play {
                     recipe: r.varint()?,
                     all: r.bool()?,
                 },
-                "minecraft:recipe_book_change_settings" => {
-                    Serverbound::RecipeBookChangeSettings {
-                        book: r.varint()?,
-                        open: r.bool()?,
-                        filter: r.bool()?,
-                    }
-                }
+                "minecraft:recipe_book_change_settings" => Serverbound::RecipeBookChangeSettings {
+                    book: r.varint()?,
+                    open: r.bool()?,
+                    filter: r.bool()?,
+                },
                 "minecraft:recipe_book_seen_recipe" => Serverbound::RecipeBookSeenRecipe {
                     recipe: r.varint()?,
                 },
@@ -4039,16 +4037,18 @@ mod recipe_book_tests {
                 filter: false
             }
         );
-        let seen =
-            Serverbound::decode("minecraft:recipe_book_seen_recipe", &mut Reader::new(&[7]))
-                .unwrap();
+        let seen = Serverbound::decode("minecraft:recipe_book_seen_recipe", &mut Reader::new(&[7]))
+            .unwrap();
         assert_eq!(seen, Serverbound::RecipeBookSeenRecipe { recipe: 7 });
     }
 
     #[test]
     fn a_recipe_is_written_with_its_display_group_category_and_flags() {
         let display = RecipeDisplay::Shapeless {
-            ingredients: vec![SlotDisplay::Tag("minecraft:planks".into()), SlotDisplay::Item(5)],
+            ingredients: vec![
+                SlotDisplay::Tag("minecraft:planks".into()),
+                SlotDisplay::Item(5),
+            ],
             result: SlotDisplay::ItemStack(ItemStack::new(9, 4)),
             station: SlotDisplay::Item(1),
         };
@@ -4077,10 +4077,18 @@ mod recipe_book_tests {
 
     #[test]
     fn removals_settings_and_ghosts_are_written() {
-        assert_eq!(bytes(&RecipeBookRemove { recipes: vec![1, 200] }), [2, 1, 0xc8, 0x01]);
+        assert_eq!(
+            bytes(&RecipeBookRemove {
+                recipes: vec![1, 200]
+            }),
+            [2, 1, 0xc8, 0x01]
+        );
         let mut books = [(false, false); 4];
         books[1] = (true, true);
-        assert_eq!(bytes(&RecipeBookSettings { books }), [0, 0, 1, 1, 0, 0, 0, 0]);
+        assert_eq!(
+            bytes(&RecipeBookSettings { books }),
+            [0, 0, 1, 1, 0, 0, 0, 0]
+        );
         let ghost = PlaceGhostRecipe {
             window: 2,
             display: RecipeDisplay::Stonecutter {

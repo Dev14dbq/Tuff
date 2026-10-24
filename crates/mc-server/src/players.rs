@@ -131,7 +131,12 @@ impl BookState {
         }
         book.insert(
             "toBeDisplayed",
-            Tag::List(self.highlight.iter().map(|r| Tag::String(r.clone())).collect()),
+            Tag::List(
+                self.highlight
+                    .iter()
+                    .map(|r| Tag::String(r.clone()))
+                    .collect(),
+            ),
         );
     }
 }

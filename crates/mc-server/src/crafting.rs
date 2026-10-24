@@ -294,7 +294,7 @@ impl Recipes {
                 name: name.to_string(),
             });
         }
-        let book = book_recipes(data, &pack, &items, &item_tags);
+        let book = book_recipes(data, &pack, items, &item_tags);
         let book_ids = book
             .iter()
             .enumerate()
@@ -554,7 +554,11 @@ fn book_recipes(
     let accepted = |v: &Value| -> Option<Vec<i32>> {
         let mut set: Vec<i32> = match v {
             Value::String(s) => one(s),
-            Value::Array(list) => list.iter().filter_map(Value::as_str).flat_map(one).collect(),
+            Value::Array(list) => list
+                .iter()
+                .filter_map(Value::as_str)
+                .flat_map(one)
+                .collect(),
             _ => return None,
         };
         set.sort_unstable();
@@ -576,7 +580,10 @@ fn book_recipes(
     };
     let category = |name: &str| {
         data.builtin
-            .id("minecraft:recipe_book_category", &format!("minecraft:{name}"))
+            .id(
+                "minecraft:recipe_book_category",
+                &format!("minecraft:{name}"),
+            )
             .unwrap_or(0)
     };
     let station = |name: &str| item(name).map_or(SlotDisplay::Empty, SlotDisplay::Item);
@@ -593,7 +600,8 @@ fn book_recipes(
         let Some(result) = json["result"]["id"].as_str().and_then(item) else {
             continue;
         };
-        let result_stack = ItemStack::new(result, json["result"]["count"].as_i64().unwrap_or(1) as i32);
+        let result_stack =
+            ItemStack::new(result, json["result"]["count"].as_i64().unwrap_or(1) as i32);
         let result = SlotDisplay::ItemStack(result_stack);
         let wanted = json["category"].as_str().unwrap_or("");
         let (display, category, book, width, height, shaped, slots) = match kind {
@@ -678,7 +686,9 @@ fn book_recipes(
                     slots,
                 )
             }
-            "minecraft:smelting" | "minecraft:blasting" | "minecraft:smoking"
+            "minecraft:smelting"
+            | "minecraft:blasting"
+            | "minecraft:smoking"
             | "minecraft:campfire_cooking" => {
                 let Some(set) = accepted(&json["ingredient"]) else {
                     continue;

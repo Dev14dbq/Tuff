@@ -111,7 +111,11 @@ impl Counts {
         for (kind, m) in v["stats"].as_object().into_iter().flatten() {
             for (id, value) in m.as_object().into_iter().flatten() {
                 if let Some(n) = value.as_i64() {
-                    out.set(kind, id, n.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32);
+                    out.set(
+                        kind,
+                        id,
+                        n.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+                    );
                 }
             }
         }
@@ -484,10 +488,13 @@ fn travelled(
         let stat = match vehicle.as_str() {
             "minecraft:pig" => Some("pig_one_cm"),
             "minecraft:strider" => Some("strider_one_cm"),
-            "minecraft:horse" | "minecraft:donkey" | "minecraft:mule" | "minecraft:skeleton_horse"
-            | "minecraft:zombie_horse" | "minecraft:camel" | "minecraft:llama" => {
-                Some("horse_one_cm")
-            }
+            "minecraft:horse"
+            | "minecraft:donkey"
+            | "minecraft:mule"
+            | "minecraft:skeleton_horse"
+            | "minecraft:zombie_horse"
+            | "minecraft:camel"
+            | "minecraft:llama" => Some("horse_one_cm"),
             "minecraft:happy_ghast" => Some("happy_ghast_one_cm"),
             v if v.ends_with("_boat") || v.ends_with("_raft") || v.ends_with("_chest_boat") => {
                 Some("boat_one_cm")
@@ -508,6 +515,7 @@ fn travelled(
     let eyes = name_at(after.y + 1.62);
     let in_water = feet.as_deref() == Some("minecraft:water");
     let under_water = eyes.as_deref() == Some("minecraft:water");
+    crate::commands::in_water(ctx, uuid, in_water);
     let climbing = feet.as_deref().is_some_and(|n| {
         matches!(n, "minecraft:ladder" | "minecraft:scaffolding")
             || n.ends_with("vine")
@@ -550,7 +558,10 @@ fn vehicle_of(ctx: &ServerContext, entity_id: i32) -> Option<String> {
             Kind::Mob(m) => &m.riders,
             _ => return None,
         };
-        riders.contains(&entity_id).then(|| entity_type(e)).flatten()
+        riders
+            .contains(&entity_id)
+            .then(|| entity_type(e))
+            .flatten()
     })
 }
 
@@ -644,12 +655,26 @@ mod tests {
     #[test]
     fn damage_and_death_are_counted_in_tenths() {
         let Some(ctx) = setup() else { return };
-        crate::vitals::hurt_by(&ctx, ME, 3.0, "minecraft:generic", "death.attack.generic", None);
+        crate::vitals::hurt_by(
+            &ctx,
+            ME,
+            3.0,
+            "minecraft:generic",
+            "death.attack.generic",
+            None,
+        );
         assert_eq!(count(&ctx, "damage_taken"), 30);
         assert_eq!(count(&ctx, "deaths"), 0);
         tick(&ctx);
         assert_eq!(count(&ctx, "time_since_death"), 1);
-        crate::vitals::hurt_by(&ctx, ME, 40.0, "minecraft:out_of_world", "death.attack.outOfWorld", Some("Zombie"));
+        crate::vitals::hurt_by(
+            &ctx,
+            ME,
+            40.0,
+            "minecraft:out_of_world",
+            "death.attack.outOfWorld",
+            Some("Zombie"),
+        );
         assert_eq!(count(&ctx, "deaths"), 1);
         assert_eq!(count(&ctx, "time_since_death"), 0);
         assert_eq!(get(&ctx, ME, KILLED_BY, "minecraft:zombie"), 1);
@@ -660,17 +685,39 @@ mod tests {
         let Some(ctx) = setup() else { return };
         custom(&ctx, ME, "jump", 3);
         add(&ctx, ME, MINED, "minecraft:stone", 2);
-        item(&ctx, ME, CRAFTED, ctx.items.id("minecraft:stick").unwrap(), 4);
+        item(
+            &ctx,
+            ME,
+            CRAFTED,
+            ctx.items.id("minecraft:stick").unwrap(),
+            4,
+        );
         add(&ctx, ME, KILLED, "minecraft:zombie", 1);
         let stats = packet(&ctx, ME).stats;
         let b = &ctx.data.builtin;
         let id = |r: &str, n: &str| b.id(r, n).unwrap();
         assert_eq!(stats.len(), 4);
         for want in [
-            (id("minecraft:stat_type", CUSTOM), id("minecraft:custom_stat", "minecraft:jump"), 3),
-            (id("minecraft:stat_type", MINED), id("minecraft:block", "minecraft:stone"), 2),
-            (id("minecraft:stat_type", CRAFTED), id("minecraft:item", "minecraft:stick"), 4),
-            (id("minecraft:stat_type", KILLED), id("minecraft:entity_type", "minecraft:zombie"), 1),
+            (
+                id("minecraft:stat_type", CUSTOM),
+                id("minecraft:custom_stat", "minecraft:jump"),
+                3,
+            ),
+            (
+                id("minecraft:stat_type", MINED),
+                id("minecraft:block", "minecraft:stone"),
+                2,
+            ),
+            (
+                id("minecraft:stat_type", CRAFTED),
+                id("minecraft:item", "minecraft:stick"),
+                4,
+            ),
+            (
+                id("minecraft:stat_type", KILLED),
+                id("minecraft:entity_type", "minecraft:zombie"),
+                1,
+            ),
         ] {
             assert!(stats.contains(&want), "{want:?} in {stats:?}");
         }

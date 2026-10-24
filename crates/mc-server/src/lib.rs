@@ -67,6 +67,7 @@ mod precipitation;
 mod projectiles;
 pub mod properties;
 mod random_ticks;
+mod recipe_book;
 mod respawn;
 pub mod rules;
 mod scoreboard;
@@ -441,6 +442,7 @@ pub(crate) fn saved_of(ctx: &ServerContext, uuid: u128) -> Option<players::Saved
         vitals,
         extra: players::Extra {
             recipes: commands::known_recipes(ctx, uuid),
+            book: commands::book_state(ctx, uuid),
             root_vehicle: ctx
                 .in_dimension(&player.dimension)
                 .and_then(|d| persist::root_vehicle(&d, player.entity_id)),
