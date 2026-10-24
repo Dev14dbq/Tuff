@@ -516,6 +516,34 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         }
         return;
     }
+    // Aquatic (Claude): nautilus armor on a tamed nautilus.
+    if name.ends_with("_nautilus_armor")
+        && matches!(species, Species::Nautilus | Species::ZombieNautilus)
+        && (m.is_tame() || species == Species::ZombieNautilus)
+        && !m.is_baby()
+        && m.gear[slot::BODY].is_none()
+    {
+        if let Some(item) = item {
+            m.gear[slot::BODY] = Some(Gear {
+                item,
+                count: 1,
+                damage: 0,
+                components: Default::default(),
+            });
+            m.persistent = true;
+            consume(ctx, by, hslot);
+            fx::sound(
+                ctx,
+                "item.armor.equip_nautilus",
+                fx::category::NEUTRAL,
+                pos,
+                0.5,
+                1.0,
+            );
+            send_equipment(ctx, e);
+        }
+        return;
+    }
     // An owner's empty-handed (or non-food) use: sit or stand.
     if owner && matches!(species, Species::Wolf | Species::Cat | Species::Parrot) && !by.sneaking {
         m.sitting = !m.sitting;
@@ -530,6 +558,8 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         Species::Pig | Species::Strider => m.saddled(),
         // Land animals (Cursor)
         Species::Camel | Species::CamelHusk => m.saddled() && !m.is_baby(),
+        Species::Nautilus => m.saddled() && m.is_tame() && !m.is_baby(),
+        Species::ZombieNautilus => m.saddled() && !m.is_baby(),
         Species::Horse | Species::Donkey | Species::Mule => !m.is_baby(),
         _ => false,
     };
@@ -565,6 +595,34 @@ pub fn shear(ctx: &ServerContext, e: &mut Entity) -> bool {
             crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 1.7, pos[2]], item, 1);
         }
         send_now(ctx, e);
+        return true;
+    }
+    // Aquatic (Claude): shears take a nautilus's armor off first, then the saddle.
+    if matches!(species, Species::Nautilus | Species::ZombieNautilus) {
+        let worn = if m.gear[slot::BODY].is_some() {
+            slot::BODY
+        } else if m.gear[slot::SADDLE].is_some() {
+            slot::SADDLE
+        } else {
+            return false;
+        };
+        let gear = m.gear[worn].take();
+        let rider_off = worn == slot::SADDLE && !m.riders.is_empty();
+        fx::sound(
+            ctx,
+            "item.armor.unequip_nautilus",
+            fx::category::PLAYERS,
+            pos,
+            1.0,
+            1.0,
+        );
+        if let Some(g) = gear {
+            crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 0.5, pos[2]], g.item, 1);
+        }
+        if rider_off {
+            super::ride::eject(ctx, e);
+        }
+        send_equipment(ctx, e);
         return true;
     }
     if m.can_shear() {

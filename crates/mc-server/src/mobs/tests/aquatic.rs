@@ -486,6 +486,46 @@ fn a_nautilus_is_tamed_with_pufferfish_and_healed_with_fish() {
 }
 
 #[test]
+fn a_tame_nautilus_takes_a_saddle_and_armor_and_carries_a_rider() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    join(&ctx, [0.5, -60.0, 0.5]);
+    let id = put(&ctx, Species::Nautilus, [2.5, -60.0, 0.5]);
+    set_mob(&ctx, id, |m| m.no_ai = true);
+    let by = || steve([0.5, -60.0, 0.5]);
+    // Wild, it takes no saddle.
+    hold(&ctx, "minecraft:saddle", 1);
+    ctx.mobs.use_on(ctx.dim, id, by(), 0);
+    run(&ctx, 1);
+    assert!(!with_mob(&ctx, id, |m| m.saddled()));
+    set_mob(&ctx, id, |m| m.owner = Some(STEVE));
+    ctx.mobs.use_on(ctx.dim, id, by(), 0);
+    run(&ctx, 1);
+    assert!(with_mob(&ctx, id, |m| m.saddled()));
+    hold(&ctx, "minecraft:iron_nautilus_armor", 1);
+    ctx.mobs.use_on(ctx.dim, id, by(), 0);
+    run(&ctx, 1);
+    assert!(with_mob(&ctx, id, |m| m.gear[mc_entity::mob::slot::BODY].is_some()));
+    // Empty-handed it is mounted, and its rider keeps their breath.
+    hold(&ctx, "minecraft:stick", 1);
+    ctx.mobs.use_on(ctx.dim, id, by(), 0);
+    run(&ctx, 25);
+    assert!(with_mob(&ctx, id, |m| m.riders == vec![7000]));
+    assert!(effect_of(&ctx, "breath_of_the_nautilus").is_some());
+    // Shears take the armor first, then the saddle (and the rider with it).
+    hold(&ctx, "minecraft:shears", 1);
+    ctx.mobs.use_on(ctx.dim, id, by(), 0);
+    run(&ctx, 1);
+    assert!(with_mob(&ctx, id, |m| m.gear[mc_entity::mob::slot::BODY].is_none()
+        && m.saddled()));
+    ctx.mobs.use_on(ctx.dim, id, by(), 0);
+    run(&ctx, 1);
+    assert!(with_mob(&ctx, id, |m| !m.saddled() && m.riders.is_empty()));
+}
+
+#[test]
 fn an_axolotl_is_bred_with_a_bucket_of_tropical_fish_and_the_bucket_comes_back() {
     let Some(ctx) = flat() else {
         eprintln!("skipped: no game data");

@@ -680,3 +680,16 @@ pub fn trample_eggs(
     let logic = level.logic();
     mc_tick::hatching::trample_egg(level, logic, crate::level::to_pos(at));
 }
+
+/// Whoever rides a nautilus does not lose breath under water.
+pub fn breath(ctx: &ServerContext, m: &mc_entity::Mob, targets: &[Target]) {
+    if !matches!(m.species, Species::Nautilus | Species::ZombieNautilus) {
+        return;
+    }
+    let Some(kind) = crate::effects::kind_of("breath_of_the_nautilus") else {
+        return;
+    };
+    for t in targets.iter().filter(|t| m.riders.contains(&t.id)) {
+        crate::effects::give(ctx, t.uuid, kind, crate::effects::Instance::new(0, 40, true));
+    }
+}

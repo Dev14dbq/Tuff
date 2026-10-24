@@ -773,7 +773,9 @@ pub fn tick(ctx: &ServerContext) {
             && (crate::util::random_u64() >> 11) as f64 / (1u64 << 53) as f64
                 >= 1.0 / (f64::from(oxygen) + 1.0);
         if let Some(v) = lock(&ctx.vitals).get_mut(&uuid) {
-            let dry = v.effects.has("water_breathing") || v.effects.has("conduit_power");
+            let dry = v.effects.has("water_breathing")
+                || v.effects.has("conduit_power")
+                || v.effects.has("breath_of_the_nautilus");
             let (air, drown) = if underwater && holds_breath {
                 (v.air, false)
             } else {

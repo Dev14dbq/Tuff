@@ -619,6 +619,9 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         if e.on_ground {
             aqua::trample_eggs(ctx, level, m, e.pos, None);
         }
+        if !m.riders.is_empty() && now % 10 == 0 {
+            aqua::breath(ctx, m, &targets);
+        }
         let before = (
             e.pos,
             e.on_ground,
