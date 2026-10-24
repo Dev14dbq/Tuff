@@ -66,11 +66,9 @@ pub fn hurt(ctx: &ServerContext, e: &mut Entity, h: &Harm) {
                 duplicate(ctx, from, color);
             }
         }
-        Species::Bee => {
-            if h.by.is_some() || h.player.is_some() {
-                m.anger = 400 + m.below(380) as i32;
-                m.dirty = true;
-            }
+        Species::Bee if h.by.is_some() || h.player.is_some() => {
+            m.anger = 400 + m.below(380) as i32;
+            m.dirty = true;
         }
         _ => {}
     }

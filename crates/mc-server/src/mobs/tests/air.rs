@@ -287,7 +287,7 @@ fn a_dancing_allay_splits_with_an_amethyst_shard() {
     run(&ctx, 2);
     assert_eq!(count_of(&ctx, Species::Allay), 2);
     // Both wait five minutes before they can split again.
-    assert_eq!(with_mob(&ctx, id, |m| m.quirks.air.dup_cd) > 5000, true);
+    assert!(with_mob(&ctx, id, |m| m.quirks.air.dup_cd) > 5000);
 }
 
 #[test]
