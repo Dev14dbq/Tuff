@@ -366,13 +366,22 @@ fn apply_pending(ctx: &ServerContext, entities: &mut [Entity], pending: Vec<Pend
                 hurt::player_blow(ctx, entities, i, &by, &blow, now);
             }
             Pending::Use { target, by, hand } => {
+                // Those on leads (and what holds them), for leads to move.
+                let leashed: Vec<Entity> = {
+                    let links = lock(&ctx.leashes);
+                    entities
+                        .iter()
+                        .filter(|e| links.links.contains_key(&e.id))
+                        .cloned()
+                        .collect()
+                };
                 let Some(e) = entities.iter_mut().find(|e| e.id == target) else {
                     continue;
                 };
                 if dist_sq(by.pos, e.pos) > REACH_SQ {
                     continue;
                 }
-                interact::used(ctx, e, &by, hand);
+                interact::used(ctx, e, &by, hand, &leashed);
             }
         }
     }

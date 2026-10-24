@@ -310,6 +310,15 @@ pub fn use_entity(
     let mut fresh = Vec::new();
     {
         let mut entities = crate::tick::lock(&ctx.entities);
+        // Those on leads, for how far they are from a new holder.
+        let leashed: Vec<Entity> = {
+            let links = crate::tick::lock(&ctx.leashes);
+            entities
+                .iter()
+                .filter(|e| links.links.contains_key(&e.id))
+                .cloned()
+                .collect()
+        };
         let Some(e) = entities
             .iter_mut()
             .find(|e| e.id == entity_id && !e.removed)
@@ -327,10 +336,26 @@ pub fn use_entity(
         }
         match &e.kind {
             Kind::Hung(_) => {
-                crate::decor::interact(ctx, actor, e, hand, attack, at, &mut outcome, &mut fresh);
+                crate::decor::interact(
+                    ctx,
+                    actor,
+                    e,
+                    (hand, attack, at),
+                    &leashed,
+                    &mut outcome,
+                    &mut fresh,
+                );
             }
             Kind::Vehicle(_) => {
-                crate::vehicles::interact(ctx, actor, e, hand, attack, &mut outcome, &mut fresh);
+                crate::vehicles::interact(
+                    ctx,
+                    actor,
+                    e,
+                    (hand, attack),
+                    &leashed,
+                    &mut outcome,
+                    &mut fresh,
+                );
             }
             Kind::Mob(_) => crate::mobs::clicked(ctx, &actor, entity_id, hand, attack),
             _ => {}

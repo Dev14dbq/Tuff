@@ -327,7 +327,7 @@ pub fn break_hung(ctx: &ServerContext, e: &mut Entity, fresh: &mut Vec<Entity>, 
         fresh.extend(dropped(ctx, at, name, 1, 0));
     }
     if matches!(h.decor, Decor::LeashKnot) {
-        leash::knot_gone(ctx, e.id);
+        leash::knot_gone(ctx, e.id, drop_self.then_some(at), fresh);
     }
     fx::sound(ctx, sound, fx::category::BLOCKS, at, 1.0, 1.0);
     e.removed = true;
@@ -461,9 +461,8 @@ pub fn interact(
     ctx: &ServerContext,
     actor: Actor,
     e: &mut Entity,
-    hand: i32,
-    attack: bool,
-    at: Option<[f64; 3]>,
+    (hand, attack, at): (i32, bool, Option<[f64; 3]>),
+    leashed: &[Entity],
     outcome: &mut Outcome,
     fresh: &mut Vec<Entity>,
 ) {
@@ -585,7 +584,7 @@ pub fn interact(
         }
         Decor::LeashKnot if !attack => {
             // Using a knot frees what is tied to it.
-            leash::untie_knot(ctx, outcome, actor, e.id);
+            leash::untie_knot(ctx, outcome, actor, e, leashed, fresh);
         }
         _ => {}
     }
@@ -716,9 +715,8 @@ mod tests {
             &ctx,
             actor(0),
             &mut e,
-            0,
-            false,
-            None,
+            (0, false, None),
+            &[],
             &mut outcome,
             &mut fresh,
         );
@@ -734,9 +732,8 @@ mod tests {
             &ctx,
             actor(0),
             &mut e,
-            0,
-            false,
-            None,
+            (0, false, None),
+            &[],
             &mut outcome,
             &mut fresh,
         );
@@ -748,9 +745,8 @@ mod tests {
             &ctx,
             actor(0),
             &mut e,
-            0,
-            true,
-            None,
+            (0, true, None),
+            &[],
             &mut outcome,
             &mut fresh,
         );
@@ -759,9 +755,8 @@ mod tests {
             &ctx,
             actor(0),
             &mut e,
-            0,
-            true,
-            None,
+            (0, true, None),
+            &[],
             &mut outcome,
             &mut fresh,
         );
@@ -797,9 +792,8 @@ mod tests {
             &ctx,
             actor(0),
             &mut e,
-            0,
-            false,
-            Some([5.5, -58.5, 5.5]),
+            (0, false, Some([5.5, -58.5, 5.5])),
+            &[],
             &mut outcome,
             &mut fresh,
         );
@@ -812,9 +806,8 @@ mod tests {
             &ctx,
             actor(0),
             &mut e,
-            0,
-            false,
-            Some([5.5, -58.2, 5.5]),
+            (0, false, Some([5.5, -58.2, 5.5])),
+            &[],
             &mut outcome,
             &mut fresh,
         );
@@ -826,9 +819,8 @@ mod tests {
             &ctx,
             actor(0),
             &mut e,
-            0,
-            true,
-            None,
+            (0, true, None),
+            &[],
             &mut outcome,
             &mut fresh,
         );
@@ -837,9 +829,8 @@ mod tests {
             &ctx,
             actor(0),
             &mut e,
-            0,
-            true,
-            None,
+            (0, true, None),
+            &[],
             &mut outcome,
             &mut fresh,
         );

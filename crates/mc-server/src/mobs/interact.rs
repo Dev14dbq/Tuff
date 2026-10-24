@@ -86,7 +86,7 @@ fn tame(ctx: &ServerContext, e: &mut Entity, by: &Actor) {
 }
 
 /// A player used the held item on a mob.
-pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
+pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: &[Entity]) {
     let id = e.id;
     let pos = e.pos;
     let held = crate::held::held(ctx, by.uuid, hand);
@@ -97,9 +97,19 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32) {
         swing(ctx, by);
         return;
     }
-    // Leads come first: letting go, or tying a free mob.
-    let lead = (name == "minecraft:lead").then_some(hslot);
-    if crate::decor::leash::use_on_mob(ctx, e, (by.uuid, by.game_mode), lead) {
+    // Leads come first: snipping, tying to it, letting go, tying it.
+    let leash_held = held.as_ref().map(|_| (name.as_str(), hslot));
+    let mut leads = Vec::new();
+    let leashing = crate::decor::leash::use_on(
+        ctx,
+        e,
+        (by.uuid, by.game_mode, by.sneaking),
+        leash_held,
+        others,
+        &mut leads,
+    );
+    crate::decor::spawn_all(ctx, leads);
+    if leashing {
         swing(ctx, by);
         return;
     }

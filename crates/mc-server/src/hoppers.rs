@@ -334,6 +334,11 @@ fn behavior(
                     leftover: None,
                     wear: 1,
                 }
+            } else if crate::decor::leash::snip_at(ctx, front) {
+                Behavior::Done {
+                    leftover: None,
+                    wear: 1,
+                }
             } else {
                 Behavior::Default
             }
