@@ -944,7 +944,13 @@ pub(super) fn brain(species: Species) -> Brain {
             vec![nearest(1, 32.0, false)],
         ),
         CopperGolem => (
-            vec![float(), stroll(5, 1.0), look(7, 6.0), random_look(8)],
+            vec![
+                float(),
+                slot(2, MOVE, Goal::Air(air::Act::Errand)),
+                stroll(5, 1.0),
+                look(7, 6.0),
+                random_look(8),
+            ],
             vec![],
         ),
         SulfurCube => (

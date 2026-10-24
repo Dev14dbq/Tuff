@@ -474,3 +474,128 @@ fn breaking_a_heart_kills_its_creaking() {
     run(&ctx, 30);
     assert_eq!(count_of(&ctx, Species::Creaking), 0);
 }
+
+fn chest_slots(
+    ctx: &ServerContext,
+    at: [i32; 3],
+) -> Vec<Option<mc_protocol::packets::play::ItemStack>> {
+    let p = mc_protocol::Position::new(at[0], at[1], at[2]);
+    let name = ctx
+        .world
+        .block(p, &ctx.data.blocks)
+        .and_then(|s| ctx.data.blocks.block_name(s))
+        .unwrap()
+        .to_owned();
+    crate::containers::slots(ctx, p, crate::containers::kind_of(&name).unwrap())
+}
+
+fn place_chest(ctx: &ServerContext, at: [i32; 3], name: &str) {
+    set(ctx, at, name);
+    let p = mc_protocol::Position::new(at[0], at[1], at[2]);
+    let state = ctx.world.block(p, &ctx.data.blocks).unwrap();
+    crate::containers::placed(ctx, p, state);
+}
+
+#[test]
+fn a_carved_pumpkin_on_copper_makes_a_golem_and_a_copper_chest() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [20.5, -60.0, 10.5]);
+    set(&ctx, [20, -60, 0], "minecraft:exposed_copper");
+    set(&ctx, [20, -59, 0], "minecraft:carved_pumpkin");
+    let p = mc_protocol::Position::new(20, -59, 0);
+    let state = ctx.world.block(p, &ctx.data.blocks).unwrap();
+    crate::mobs::golems::placed(&ctx, p, state);
+    assert_eq!(block(&ctx, [20, -60, 0]), "minecraft:exposed_copper_chest");
+    assert_eq!(block(&ctx, [20, -59, 0]), "minecraft:air");
+    let golem = lock(&ctx.entities)
+        .iter()
+        .find(|e| matches!(&e.kind, Kind::Mob(m) if m.species == Species::CopperGolem))
+        .map(|e| e.id)
+        .expect("no golem");
+    assert_eq!(with_mob(&ctx, golem, |m| m.quirks.air.weather), 1);
+}
+
+#[test]
+fn a_copper_golem_carries_items_from_the_copper_chest_to_a_chest_that_holds_them() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [3.5, -60.0, 12.5]);
+    place_chest(&ctx, [0, -60, 0], "minecraft:copper_chest");
+    place_chest(&ctx, [8, -60, 0], "minecraft:chest");
+    place_chest(&ctx, [8, -60, 4], "minecraft:chest");
+    let cobble = ctx.items.id("minecraft:cobblestone").unwrap();
+    let dirt = ctx.items.id("minecraft:dirt").unwrap();
+    let copper = mc_protocol::Position::new(0, -60, 0);
+    crate::containers::put(
+        &ctx,
+        copper,
+        crate::containers::kind_of("minecraft:copper_chest").unwrap(),
+        &[(
+            0,
+            Some(mc_protocol::packets::play::ItemStack::new(cobble, 40)),
+        )],
+    );
+    // One chest holds dirt (no good), the other is empty.
+    crate::containers::put(
+        &ctx,
+        mc_protocol::Position::new(8, -60, 4),
+        crate::containers::kind_of("minecraft:chest").unwrap(),
+        &[(0, Some(mc_protocol::packets::play::ItemStack::new(dirt, 5)))],
+    );
+    let id = put(&ctx, Species::CopperGolem, [2.5, -60.0, 0.5]);
+    for _ in 0..1500 {
+        run(&ctx, 1);
+    }
+    let in_copper: i32 = chest_slots(&ctx, [0, -60, 0])
+        .iter()
+        .flatten()
+        .map(|s| s.count)
+        .sum();
+    let in_far: i32 = chest_slots(&ctx, [8, -60, 0])
+        .iter()
+        .flatten()
+        .filter(|s| s.item == cobble)
+        .map(|s| s.count)
+        .sum();
+    let in_dirt: i32 = chest_slots(&ctx, [8, -60, 4])
+        .iter()
+        .flatten()
+        .filter(|s| s.item == cobble)
+        .map(|s| s.count)
+        .sum();
+    assert_eq!(in_dirt, 0, "put cobblestone in the dirt chest");
+    assert!(in_far >= 16, "moved only {in_far}");
+    assert_eq!(
+        in_copper + in_far + with_mob(&ctx, id, |m| m.quirks.air.carried.map_or(0, |c| c.1)),
+        40
+    );
+}
+
+#[test]
+fn a_copper_golem_weathers_and_wax_stops_it() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [3.5, -60.0, 12.5]);
+    let id = put(&ctx, Species::CopperGolem, [0.5, -60.0, 0.5]);
+    set_mob(&ctx, id, |m| m.no_ai = true);
+    run(&ctx, 2);
+    let now = lock(&ctx.time).age;
+    set_mob(&ctx, id, |m| m.quirks.air.next_weather = now + 3);
+    run(&ctx, 10);
+    assert_eq!(with_mob(&ctx, id, |m| m.quirks.air.weather), 1);
+    // Honeycomb waxes it.
+    let _ = steve_at(&ctx, 0.5, false);
+    hold(&ctx, "minecraft:honeycomb", 2);
+    ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 3.5]), 0);
+    run(&ctx, 2);
+    assert_eq!(with_mob(&ctx, id, |m| m.quirks.air.next_weather), -2);
+    run(&ctx, 5);
+    assert_eq!(with_mob(&ctx, id, |m| m.quirks.air.weather), 1);
+}

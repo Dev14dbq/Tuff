@@ -161,6 +161,9 @@ pub fn used(
     let Kind::Mob(m) = &mut e.kind else {
         return false;
     };
+    if m.species == Species::CopperGolem && m.dying.is_none() {
+        return copper_used(ctx, e, by, name, hslot);
+    }
     if m.species != Species::Allay || m.dying.is_some() {
         return false;
     }
@@ -395,4 +398,64 @@ fn weather(m: &mut mc_entity::Mob, now: i64) {
         air.next_weather = now + step;
         m.dirty = true;
     }
+}
+
+/// Honeycomb waxes a copper golem, an axe takes the wax off or scrapes one
+/// stage of weathering, and an empty hand makes it put down what it carries.
+fn copper_used(
+    ctx: &ServerContext,
+    e: &mut Entity,
+    by: &super::Actor,
+    name: &str,
+    hslot: usize,
+) -> bool {
+    let pos = e.pos;
+    let Kind::Mob(m) = &mut e.kind else {
+        return false;
+    };
+    let air = &mut m.quirks.air;
+    let waxed = air.next_weather == -2;
+    if name == "minecraft:honeycomb" && !waxed {
+        air.next_weather = -2;
+        m.dirty = true;
+        if by.game_mode != 1 {
+            crate::held::consume(ctx, by.uuid, hslot, 1);
+        }
+        fx::level_event(ctx, 3003, pos, 0);
+        fx::sound(
+            ctx,
+            "item.honeycomb.wax_on",
+            fx::category::PLAYERS,
+            pos,
+            1.0,
+            1.0,
+        );
+        return true;
+    }
+    if name.ends_with("_axe") && (waxed || air.weather > 0) {
+        if waxed {
+            air.next_weather = -1;
+            fx::level_event(ctx, 3004, pos, 0);
+        } else {
+            air.weather -= 1;
+            air.next_weather = -1;
+            fx::level_event(ctx, 3005, pos, 0);
+        }
+        m.dirty = true;
+        if by.game_mode != 1 {
+            crate::held::wear(ctx, by.uuid, hslot, 1);
+        }
+        fx::sound(ctx, "item.axe.scrape", fx::category::PLAYERS, pos, 1.0, 1.0);
+        return true;
+    }
+    if name.is_empty()
+        && let Some((item, count)) = air.carried.take()
+    {
+        air.wait = 0;
+        air.at_chest = None;
+        m.dirty = true;
+        crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 0.6, pos[2]], item, count);
+        return true;
+    }
+    false
 }

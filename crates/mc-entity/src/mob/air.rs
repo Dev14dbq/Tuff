@@ -77,6 +77,13 @@ pub struct Air {
     pub carried: Option<(i32, i32)>,
     pub errand: Option<[f64; 3]>,
     pub note: Option<([i32; 3], i64)>,
+    /// Copper golem: chests it found nothing in (at most nine), the failed
+    /// looks since it last put something down, ticks it waits (looking at a
+    /// chest, or wandering after ten failures) and the chest it is at.
+    pub memory: Vec<[i32; 3]>,
+    pub checks: i32,
+    pub wait: i32,
+    pub at_chest: Option<[i32; 3]>,
 }
 
 impl Default for Air {
@@ -111,6 +118,10 @@ impl Default for Air {
             carried: None,
             errand: None,
             note: None,
+            memory: Vec::new(),
+            checks: 0,
+            wait: 0,
+            at_chest: None,
         }
     }
 }
