@@ -72,6 +72,22 @@ pub struct Spawner {
     seed: Option<Option<i64>>,
     /// When phantoms next look.
     phantoms_at: i64,
+    siege: Siege,
+}
+
+/// Tonight's zombie siege (minecraft.wiki, "Zombie siege").
+#[derive(Debug, Default)]
+struct Siege {
+    /// Decided at midnight: a siege may still start tonight.
+    tonight: bool,
+    /// Where the zombies come from, once a player in a village was found.
+    at: Option<[i32; 3]>,
+    /// Zombies still to try for.
+    left: i32,
+    /// Ticks to the next one.
+    wait: i32,
+    /// The day whose midnight was decided on (time may stand still).
+    decided: Option<i64>,
 }
 
 fn count(v: &Value) -> (u32, u32) {
@@ -249,6 +265,26 @@ impl Spots<'_> {
         chunk && y < 40 && below(10) == 0
     }
 
+    /// How much the sky is darkened, by the night and the weather.
+    fn dark(&self) -> u8 {
+        if self.thundering {
+            self.darken.max(10)
+        } else if self.raining {
+            self.darken.max(3)
+        } else {
+            self.darken
+        }
+    }
+
+    /// A cell in a village where a siege zombie may stand, at the surface
+    /// of this column.
+    fn siege_fits(&self, x: i32, z: i32) -> Option<[i32; 3]> {
+        let y = self.surface(x, z)? + 1;
+        (crate::raids::is_village(self.ctx, [x, y, z])
+            && self.fits(Species::Zombie, x, y, z, false))
+        .then_some([x, y, z])
+    }
+
     fn biome(&self, x: i32, y: i32, z: i32) -> Option<String> {
         let id = self
             .ctx
@@ -386,14 +422,7 @@ impl Spots<'_> {
                 if self.ctx.world.block_light(p) > 0 {
                     return false;
                 }
-                let darken = if self.thundering {
-                    self.darken.max(10)
-                } else if self.raining {
-                    self.darken.max(3)
-                } else {
-                    self.darken
-                };
-                let sky = self.ctx.world.sky_light(p).saturating_sub(darken);
+                let sky = self.ctx.world.sky_light(p).saturating_sub(self.dark());
                 u32::from(sky) <= below(8)
             }
         }
@@ -677,6 +706,14 @@ fn spawn_round(
         &mut spawner.phantoms_at,
         &spots,
         now,
+        difficulty,
+        &mut out,
+    );
+    siege(
+        ctx,
+        &mut spawner.siege,
+        &spots,
+        day_time,
         difficulty,
         &mut out,
     );
@@ -1153,6 +1190,105 @@ fn phantoms(
             out.push(new_mob_in(ctx, Species::Phantom, at, None));
         }
     }
+}
+
+/// Zombie sieges: at midnight, one night in ten, a player in a village is
+/// looked for; from a point 32 blocks away from them twenty zombies are
+/// tried for, one every 3 ticks, in the village around it. Daylight or
+/// peace calls it off.
+fn siege(
+    ctx: &ServerContext,
+    s: &mut Siege,
+    spots: &Spots,
+    day_time: i64,
+    difficulty: i32,
+    out: &mut Vec<Entity>,
+) {
+    if ctx.world.dimension != "minecraft:overworld" || difficulty == 0 || spots.dark() <= 3 {
+        *s = Siege::default();
+        return;
+    }
+    let day = day_time.div_euclid(24000);
+    if day_time.rem_euclid(24000) == 18000 && s.decided != Some(day) {
+        *s = Siege {
+            tonight: below(10) == 0,
+            decided: Some(day),
+            ..Siege::default()
+        };
+    }
+    if !s.tonight {
+        return;
+    }
+    if s.at.is_none() {
+        let start = spots
+            .targets
+            .iter()
+            .filter(|t| t.present)
+            .find_map(|t| siege_start(ctx, spots, t.pos));
+        let Some(at) = start else {
+            return;
+        };
+        s.at = Some(at);
+        s.left = 20;
+        s.wait = 0;
+    }
+    if s.wait > 0 {
+        s.wait -= 1;
+        return;
+    }
+    s.wait = 2;
+    s.left -= 1;
+    if s.left <= 0 {
+        s.tonight = false;
+    }
+    let Some(at) = s.at else {
+        return;
+    };
+    let cell = (0..10)
+        .find_map(|_| spots.siege_fits(at[0] + below(16) as i32 - 8, at[2] + below(16) as i32 - 8));
+    if let Some(c) = cell {
+        let pos = [
+            f64::from(c[0]) + 0.5,
+            f64::from(c[1]),
+            f64::from(c[2]) + 0.5,
+        ];
+        let biome = spots.biome(c[0], c[1], c[2]);
+        out.push(new_mob_in(ctx, Species::Zombie, pos, biome.as_deref()));
+    }
+}
+
+/// Where a siege on the village of a player at `pos` starts: one of ten
+/// points on a circle of 32 blocks around them.
+fn siege_start(ctx: &ServerContext, spots: &Spots, pos: [f64; 3]) -> Option<[i32; 3]> {
+    let p = [
+        pos[0].floor() as i32,
+        pos[1].floor() as i32,
+        pos[2].floor() as i32,
+    ];
+    if !crate::raids::is_village(ctx, p)
+        || spots
+            .biome(p[0], p[1], p[2])
+            .is_some_and(|b| in_biome_tag(ctx, &b, "minecraft:without_zombie_sieges"))
+    {
+        return None;
+    }
+    (0..10).find_map(|_| {
+        let angle = rand() * std::f64::consts::TAU;
+        spots.siege_fits(
+            p[0] + (angle.cos() * 32.0).floor() as i32,
+            p[2] + (angle.sin() * 32.0).floor() as i32,
+        )
+    })
+}
+
+/// Makes tonight one with a siege (tests).
+#[cfg(test)]
+pub(crate) fn siege_tonight(ctx: &ServerContext) {
+    let mut all = lock(&ctx.mobs.spawner);
+    all.entry(ctx.dim).or_default().siege = Siege {
+        tonight: true,
+        ..Siege::default()
+    };
 }
 
 fn is_monster(e: &Entity) -> bool {

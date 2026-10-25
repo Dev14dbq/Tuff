@@ -9,6 +9,7 @@ mod aquatic;
 mod illagers;
 mod land;
 mod raids;
+mod sieges;
 mod villages;
 mod warden;
 
