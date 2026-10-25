@@ -503,7 +503,11 @@ impl Spots<'_> {
 
 /// Half the drowned that hold a trident come up riding a zombie nautilus,
 /// outside the rivers (Aquatic, Claude). The mount is returned.
-pub(crate) fn jockey(ctx: &ServerContext, rider: &mut Entity, biome: Option<&str>) -> Option<Entity> {
+pub(crate) fn jockey(
+    ctx: &ServerContext,
+    rider: &mut Entity,
+    biome: Option<&str>,
+) -> Option<Entity> {
     let trident = ctx.items.id("minecraft:trident")?;
     let Kind::Mob(m) = &mut rider.kind else {
         return None;
@@ -1187,8 +1191,7 @@ pub fn despawn(
         {
             continue;
         }
-        if difficulty == 0 && category == Category::Monster && m.species != Species::SulfurCube
-        {
+        if difficulty == 0 && category == Category::Monster && m.species != Species::SulfurCube {
             e.removed = true;
             gone.push(id);
             continue;

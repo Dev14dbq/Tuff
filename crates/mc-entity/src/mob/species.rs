@@ -567,7 +567,14 @@ impl Species {
         use Species::*;
         matches!(
             self,
-            Zombie | Drowned | ZombieVillager | Skeleton | Stray | Phantom | Bogged | ZombieNautilus
+            Zombie
+                | Drowned
+                | ZombieVillager
+                | Skeleton
+                | Stray
+                | Phantom
+                | Bogged
+                | ZombieNautilus
         )
     }
 

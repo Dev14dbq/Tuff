@@ -549,6 +549,8 @@ pub struct ServerContext {
     pub bosses: Mutex<crate::bosses::State>,
     /// The points of interest (beds, workstations, bells) of this dimension.
     pub poi: Mutex<crate::poi::Poi>,
+    /// Raids, omens and the patrol clock.
+    pub raids: Mutex<crate::raids::Raids>,
 }
 
 impl Deref for ServerContext {
@@ -823,6 +825,7 @@ impl ServerContext {
             events: self.shared.hub.for_dim(index),
             bosses: Mutex::default(),
             poi,
+            raids: Mutex::new(crate::raids::Raids::default()),
         }))
     }
 
@@ -1146,6 +1149,7 @@ impl ServerContext {
             forced: Mutex::new(forced),
             bosses: Mutex::default(),
             poi,
+            raids: Mutex::new(crate::raids::Raids::default()),
         });
         *shared.dims[0].lock().expect("dimensions lock") = Some(Arc::clone(&overworld));
         Ok(overworld)

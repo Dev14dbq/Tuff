@@ -1,8 +1,8 @@
 //! The goals of each kind of mob, by priority (minecraft.wiki, the "Behavior"
 //! section of each mob's page).
 
-use super::aqua::Act as Aq;
 use super::air;
+use super::aqua::Act as Aq;
 use super::goals::{Avoidee, Goal, Ranged, Slot};
 use super::illager::{Act as Cast, Spell};
 use super::land::Act;
@@ -558,6 +558,7 @@ pub(super) fn brain(species: Species) -> Brain {
             vec![
                 float(),
                 ranged(2, Ranged::Potion, 60, 10.0),
+                cast(2, Cast::March { done: false }),
                 stroll(2, 1.0),
                 look(3, 8.0),
                 random_look(3),
@@ -971,6 +972,7 @@ pub(super) fn brain(species: Species) -> Brain {
                         seen: 0,
                     },
                 ),
+                cast(7, Cast::March { done: false }),
                 stroll(8, 0.6),
                 look(9, 15.0),
                 random_look(10),
@@ -981,6 +983,7 @@ pub(super) fn brain(species: Species) -> Brain {
             vec![
                 float(),
                 melee(4, 1.0, false),
+                cast(7, Cast::March { done: false }),
                 stroll(8, 0.6),
                 look(9, 3.0),
                 random_look(10),
@@ -994,6 +997,7 @@ pub(super) fn brain(species: Species) -> Brain {
                 spell(4, Spell::Vexes),
                 spell(5, Spell::Fangs),
                 spell(6, Spell::Wololo),
+                cast(7, Cast::March { done: false }),
                 stroll(8, 0.6),
                 look(9, 3.0),
                 random_look(10),
@@ -1006,6 +1010,7 @@ pub(super) fn brain(species: Species) -> Brain {
                 spell(4, Spell::Mirror),
                 spell(5, Spell::Blindness),
                 ranged(6, Ranged::Bow, 20, 15.0),
+                cast(7, Cast::March { done: false }),
                 stroll(8, 0.6),
                 look(9, 3.0),
                 random_look(10),
@@ -1026,6 +1031,7 @@ pub(super) fn brain(species: Species) -> Brain {
             vec![
                 float(),
                 melee(4, 1.0, true),
+                cast(5, Cast::March { done: false }),
                 stroll(5, 0.4),
                 look(6, 6.0),
                 random_look(10),

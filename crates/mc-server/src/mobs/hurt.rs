@@ -847,6 +847,12 @@ pub fn die(
     for (item, count, damage, components) in gear_drops {
         spawn_stack(ctx, pos, item, count, damage, components);
     }
+    if drops_on
+        && by_player.is_some()
+        && let Kind::Mob(m) = &e.kind
+    {
+        crate::raids::captain_died(ctx, m, pos);
+    }
     // A chest on its back spills.
     if let Kind::Mob(m) = &e.kind
         && m.chested
@@ -886,7 +892,7 @@ pub fn die(
     }
 }
 
-fn spawn_stack(
+pub(crate) fn spawn_stack(
     ctx: &ServerContext,
     pos: [f64; 3],
     item: i32,

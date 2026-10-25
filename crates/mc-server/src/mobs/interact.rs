@@ -138,7 +138,7 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
             send_now(ctx, e);
             return;
         }
-}
+    }
 
     if super::air::used(ctx, e, by, &name, hslot, held.as_ref().map(|h| &h.stack)) {
         swing(ctx, by);

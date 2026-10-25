@@ -10,8 +10,8 @@
 //! - [`meta`]: metadata and equipment for clients;
 //! - [`nbt`]: mobs as `/summon` and `/data` see them.
 
-pub mod aqua;
 pub mod air;
+pub mod aqua;
 pub mod bees;
 pub(crate) mod blocks;
 pub mod chest;
@@ -30,7 +30,7 @@ mod land;
 pub mod meta;
 pub mod nbt;
 pub mod ride;
-mod spawn;
+pub(crate) mod spawn;
 mod spawner;
 mod terrain;
 pub mod village;

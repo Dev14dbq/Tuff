@@ -3922,11 +3922,11 @@ async fn survival_dig_times_are_checked_by_the_server() {
     // what older clients sent for "drop the stack").
     let pickaxe = ctx.items.id("minecraft:diamond_pickaxe").unwrap();
     assert!(
-        ctx.inventories
-            .lock()
-            .unwrap()
-            .values()
-            .any(|h| h.slots.iter().flatten().any(|s| s.item == pickaxe)),
+        ctx.inventories.lock().unwrap().values().any(|h| h
+            .slots
+            .iter()
+            .flatten()
+            .any(|s| s.item == pickaxe)),
         "the pickaxe stayed in the hand"
     );
 
@@ -3973,11 +3973,20 @@ async fn a_thrown_block_is_gone_from_the_hand_for_the_server_too() {
         body.put_string(text);
         body
     };
-    miner.send("minecraft:chat_command", command("gamemode survival")).await;
+    miner
+        .send("minecraft:chat_command", command("gamemode survival"))
+        .await;
     miner.recv_until("minecraft:game_event").await;
-    miner.send("minecraft:chat_command", command("setblock 1 -60 0 stone")).await;
+    miner
+        .send("minecraft:chat_command", command("setblock 1 -60 0 stone"))
+        .await;
     miner.recv_until("minecraft:block_update").await;
-    miner.send("minecraft:chat_command", command("give Miner minecraft:cobblestone 1")).await;
+    miner
+        .send(
+            "minecraft:chat_command",
+            command("give Miner minecraft:cobblestone 1"),
+        )
+        .await;
     miner.recv_until("minecraft:container_set_slot").await;
 
     // Q: drop one.
@@ -3989,7 +3998,11 @@ async fn a_thrown_block_is_gone_from_the_hand_for_the_server_too() {
     miner.send("minecraft:player_action", drop).await;
     miner.recv_until("minecraft:add_entity").await;
     assert!(
-        ctx.inventories.lock().unwrap().values().all(|h| h.slots.iter().all(Option::is_none)),
+        ctx.inventories
+            .lock()
+            .unwrap()
+            .values()
+            .all(|h| h.slots.iter().all(Option::is_none)),
         "the thrown block left the server's hands too"
     );
 

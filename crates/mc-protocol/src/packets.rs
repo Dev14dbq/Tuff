@@ -4112,7 +4112,10 @@ mod recipe_book_tests {
         assert_eq!(&out[6..6 + 17], b"\x10minecraft:planks");
         // An item stack display is item, count, then no component changes.
         let stack = [5, 9, 4, 0, 0];
-        assert!(out.windows(5).any(|w| w == stack), "item first, then the count");
+        assert!(
+            out.windows(5).any(|w| w == stack),
+            "item first, then the count"
+        );
         // At the end: group 0 is written as 1, category 3, ingredients
         // present: one set of two ids, flags 3, not replacing.
         assert_eq!(&out[out.len() - 9..], [1, 3, 1, 1, 3, 5, 6, 3, 0]);
@@ -4156,7 +4159,14 @@ mod player_action_tests {
         assert_eq!(dig::from_wire(3), dig::FINISH);
         assert_eq!(dig::from_wire(5), dig::DROP_ONE);
         assert_eq!(dig::from_wire(7), dig::SWAP_HANDS);
-        for s in [dig::START, dig::CANCEL, dig::FINISH, dig::DROP_ALL, dig::RELEASE, dig::STAB] {
+        for s in [
+            dig::START,
+            dig::CANCEL,
+            dig::FINISH,
+            dig::DROP_ALL,
+            dig::RELEASE,
+            dig::STAB,
+        ] {
             assert_eq!(dig::from_wire(dig::to_wire(s)), s);
         }
     }

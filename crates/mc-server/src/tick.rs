@@ -579,6 +579,7 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
     tick_entities(ctx, &mut level);
     crate::trading::tick_spawner(ctx, lock(&ctx.time).age);
     crate::mobs::tick(ctx, &mut level);
+    crate::raids::tick(ctx);
     crate::bosses::tick(ctx, &mut level);
     press_plates(ctx, &mut level);
     mc_tick::pistons::tick(&mut level, logic);
