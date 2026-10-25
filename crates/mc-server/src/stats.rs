@@ -423,8 +423,10 @@ pub fn fell(ctx: &ServerContext, uuid: u128, distance: f64) {
     if distance >= 2.0 {
         custom(ctx, uuid, "fall_one_cm", cm(distance));
     }
+    // The players lock is let go before the vibration, which takes it again.
+    let pose = lock(&ctx.players).get(&uuid).and_then(|p| p.pose);
     if distance > 0.0
-        && let Some(pose) = lock(&ctx.players).get(&uuid).and_then(|p| p.pose)
+        && let Some(pose) = pose
     {
         let below = ground(ctx, pose);
         crate::vibrations::emit(
