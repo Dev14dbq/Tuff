@@ -77,6 +77,9 @@ fn tick_chunks(ctx: &ServerContext, chunks: &[(i32, i32)]) -> usize {
             continue;
         }
         mc_tick::random::tick(&mut level, logic, at, state, &mut rng);
+        if shapes.random_behaviour(state) == mc_tick::random::Behaviour::NetherPortal {
+            portal_piglin(ctx, at, rng.unit());
+        }
     }
     let changes = level.into_changes();
     if !changes.is_empty() {
@@ -85,9 +88,81 @@ fn tick_chunks(ctx: &ServerContext, chunks: &[(i32, i32)]) -> usize {
     count
 }
 
+/// A nether portal block ticked where the dimension lets portals spawn
+/// piglins (the Overworld): a zombified piglin, one time in 2000 per level
+/// of difficulty, in the portal's bottom block (minecraft.wiki, "Zombified
+/// Piglin"). `roll` is in [0, 1).
+fn portal_piglin(ctx: &ServerContext, at: mc_tick::BlockPos, roll: f64) {
+    let difficulty = ctx.difficulty();
+    if difficulty == 0
+        || roll >= f64::from(difficulty) / 2000.0
+        || !ctx.game_rule_bool("minecraft:spawn_mobs")
+        || !crate::environment::flag(
+            ctx,
+            Some([at.x, at.y, at.z]),
+            crate::environment::NETHER_PORTAL_SPAWNS_PIGLIN,
+            false,
+        )
+    {
+        return;
+    }
+    let blocks = &ctx.data.blocks;
+    let is_portal = |y: i32| {
+        ctx.world
+            .block(mc_protocol::Position::new(at.x, y, at.z), blocks)
+            .and_then(|s| blocks.block_name(s))
+            == Some("minecraft:nether_portal")
+    };
+    let mut y = at.y;
+    while y > ctx.world.min_y && is_portal(y - 1) {
+        y -= 1;
+    }
+    // It stands on the frame.
+    if !crate::hits::stops(ctx, [at.x, y - 1, at.z]) {
+        return;
+    }
+    let pos = [f64::from(at.x) + 0.5, f64::from(y), f64::from(at.z) + 0.5];
+    let e = crate::mobs::new_mob(ctx, mc_entity::Species::ZombifiedPiglin, pos);
+    let _ = ctx.events.send(Event::EntitySpawned(e.clone()));
+    lock(&ctx.entities).push(e);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_overworld_portal_now_and_then_lets_a_zombified_piglin_out() {
+        let Some(ctx) = crate::projectiles::tests::flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        ctx.difficulty
+            .store(2, std::sync::atomic::Ordering::Relaxed);
+        let blocks = &ctx.data.blocks;
+        let set = |y: i32, name: &str| {
+            ctx.world.set_block(
+                mc_protocol::Position::new(0, y, 0),
+                blocks.default_state(name).unwrap(),
+                blocks,
+                &ctx.rules,
+            );
+        };
+        set(-60, "minecraft:obsidian");
+        for y in -59..=-57 {
+            set(y, "minecraft:nether_portal");
+        }
+        let top = mc_tick::BlockPos::new(0, -57, 0);
+        // Normal difficulty: one tick in a thousand.
+        portal_piglin(&ctx, top, 0.0011);
+        assert!(lock(&ctx.entities).is_empty());
+        portal_piglin(&ctx, top, 0.0009);
+        let all = lock(&ctx.entities);
+        assert_eq!(all.len(), 1);
+        assert!(matches!(&all[0].kind,
+            mc_entity::Kind::Mob(m) if m.species == mc_entity::Species::ZombifiedPiglin));
+        assert_eq!(all[0].pos, [0.5, -59.0, 0.5]);
+    }
 
     fn world(name: &str) -> Option<(std::sync::Arc<ServerContext>, std::path::PathBuf)> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");

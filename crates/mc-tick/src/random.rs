@@ -57,6 +57,8 @@ pub enum Behaviour {
     Lava,
     /// A turtle egg cracks and hatches.
     TurtleEgg,
+    /// A nether portal may let a zombified piglin out (the server does it).
+    NetherPortal,
 }
 
 impl Behaviour {
@@ -78,6 +80,7 @@ impl Behaviour {
             "brown_mushroom" | "red_mushroom" => Self::Mushroom,
             _ if copper_age(name).is_some_and(|a| a < 3) => Self::Weathering,
             "nether_wart" => Self::NetherWart,
+            "nether_portal" => Self::NetherPortal,
             "sweet_berry_bush" => Self::SweetBerries,
             "cocoa" => Self::Cocoa,
             "kelp" | "weeping_vines" | "twisting_vines" | "cave_vines" => Self::GrowingTip,
@@ -115,7 +118,7 @@ fn name<'a>(ctx: Ctx<'a>, state: u32) -> &'a str {
 /// A random tick of the block `state` at `p`.
 pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, rng: &mut Rng) {
     match ctx.shapes.random_behaviour(state) {
-        Behaviour::None => {}
+        Behaviour::None | Behaviour::NetherPortal => {}
         Behaviour::Crop { max } => crop(level, ctx, p, state, u32::from(max), rng),
         Behaviour::Stem => stem(level, ctx, p, state, rng),
         Behaviour::Pitcher => pitcher(level, ctx, p, state, rng),

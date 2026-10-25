@@ -288,7 +288,9 @@ fn omens(ctx: &ServerContext, players: &[Player]) {
             continue;
         };
         let at = block_of(p.pos);
-        if !is_village(ctx, at) {
+        if !is_village(ctx, at)
+            || !crate::environment::flag(ctx, Some(at), crate::environment::CAN_START_RAID, true)
+        {
             continue;
         }
         let (Some(bad), Some(raid)) = (effects::kind_of("bad_omen"), effects::kind_of("raid_omen"))

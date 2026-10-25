@@ -547,7 +547,7 @@ impl Level for WorldLevel<'_> {
     }
 
     fn ultrawarm(&self) -> bool {
-        self.ctx.world.dimension.contains("nether")
+        crate::environment::flag(self.ctx, None, crate::environment::WATER_EVAPORATES, false)
     }
 
     fn sponge_dried(&mut self, p: BlockPos) {

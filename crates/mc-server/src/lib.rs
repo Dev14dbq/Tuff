@@ -39,6 +39,7 @@ mod dropped;
 mod effects;
 mod enchant_effects;
 mod enchants;
+mod environment;
 mod explosion;
 mod fastmap;
 mod forced;

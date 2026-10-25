@@ -588,6 +588,8 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     let sunny = overworld && sky_darken(day) == 0 && !raining;
     // Bright outside: rain dims the sky a little, a thunderstorm too much.
     let bright = overworld && sky_darken(day) < 4 && !lock(&ctx.weather).thundering;
+    // Piglins and hoglins turn where the dimension says (not the Nether).
+    let zombify = crate::environment::flag(ctx, None, crate::environment::PIGLINS_ZOMBIFY, true);
     let griefing = ctx.game_rule_bool("minecraft:mob_griefing");
     let difficulty = ctx.difficulty();
     let mut out = Outcome::default();
@@ -680,7 +682,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             difficulty,
             sunny,
             raining,
-            nether: ctx.world.dimension == "minecraft:the_nether",
+            nether: !zombify,
             day: bright,
             griefing,
         };

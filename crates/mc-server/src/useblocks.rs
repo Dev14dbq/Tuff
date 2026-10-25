@@ -388,9 +388,10 @@ fn jukebox(
 }
 
 fn bed(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, p: Position, state: u32) -> bool {
-    if ctx.world.dimension != "minecraft:overworld" {
-        // Beds only work in the Overworld: both halves go and the bed
-        // explodes (minecraft.wiki, "Bed").
+    let rule = crate::environment::bed_rule(ctx, [p.x, p.y, p.z]);
+    if rule.explodes {
+        // Where its rule says so (the Nether, the End) both halves go and
+        // the bed explodes (minecraft.wiki, "Bed").
         let blocks = &ctx.data.blocks;
         let head = blocks.property(state, "part") == Some("head");
         let facing = blocks
@@ -420,11 +421,13 @@ fn bed(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, p: Position, st
         pitch: 0.0,
         forced: false,
     };
-    if let Some(pl) = ctx
-        .players
-        .lock()
-        .expect("players lock")
-        .get_mut(&actor.uuid)
+    let set_spawn = rule.can_set_spawn != "never";
+    if set_spawn
+        && let Some(pl) = ctx
+            .players
+            .lock()
+            .expect("players lock")
+            .get_mut(&actor.uuid)
     {
         pl.extra.respawn = Some(respawn);
     }
@@ -438,15 +441,24 @@ fn bed(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, p: Position, st
             .rem_euclid(24000);
         (12542..=23459).contains(&t)
     };
-    if night {
-        message(outcome, actor, "block.minecraft.set_spawn");
+    let can_sleep = match rule.can_sleep.as_str() {
+        "always" => true,
+        "never" => false,
+        _ => night,
+    };
+    if can_sleep {
+        if set_spawn {
+            message(outcome, actor, "block.minecraft.set_spawn");
+        }
         ctx.sleepers
             .lock()
             .expect("sleepers lock")
             .insert(actor.uuid, ctx.time.lock().expect("time lock").age);
     } else {
         message(outcome, actor, "block.minecraft.bed.no_sleep");
-        message(outcome, actor, "block.minecraft.set_spawn");
+        if set_spawn {
+            message(outcome, actor, "block.minecraft.set_spawn");
+        }
     }
     true
 }
@@ -486,9 +498,14 @@ fn anchor(
     if charges == 0 {
         return false;
     }
-    if !ctx.world.dimension.contains("nether") {
-        // A charged anchor outside the Nether blows up; water beside it
-        // spares the blocks around.
+    if !crate::environment::flag(
+        ctx,
+        Some([p.x, p.y, p.z]),
+        crate::environment::RESPAWN_ANCHOR_WORKS,
+        false,
+    ) {
+        // A charged anchor where it does not work (outside the Nether)
+        // blows up; water beside it spares the blocks around.
         let blocks = &ctx.data.blocks;
         let wet = |q: Position| {
             ctx.world.block(q, blocks).is_some_and(|s| {
