@@ -265,6 +265,11 @@ pub fn burst(ctx: &ServerContext, entities: &mut [Entity], g: &Gust) {
                 vi.impulse_y = Some(pose.y);
                 vi.fall_distance = 0.0;
             }
+            crate::criteria::launched(
+                uuid,
+                [pose.x, pose.y, pose.z],
+                Some("minecraft:wind_charge"),
+            );
         }
     }
     if g.triggers {

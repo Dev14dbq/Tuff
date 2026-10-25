@@ -165,10 +165,16 @@ pub fn craft(level: &mut crate::level::WorldLevel, p: Position) {
     };
     let at = [f64::from(p.x), f64::from(p.y), f64::from(p.z)];
     let mut slots = containers::slots(ctx, p, kind());
-    let Some(made) = ctx.recipes.craft(&slots[..9], 3) else {
+    let Some((made, recipe)) = ctx.recipes.craft_named(&slots[..9], 3) else {
         crate::fx::level_event(ctx, 1050, at, 0);
         return;
     };
+    // Players about the crafter saw it made.
+    let used: Vec<ItemStack> = slots[..9].iter().flatten().cloned().collect();
+    let centre = [at[0] + 0.5, at[1] + 0.5, at[2] + 0.5];
+    for uuid in crate::criteria::players_near(ctx, centre, 17.0) {
+        crate::criteria::crafted(ctx, uuid, "minecraft:crafter_recipe_crafted", recipe, &used);
+    }
     lock(&ctx.crafters).insert((p.x, p.y, p.z), CRAFTING_TICKS);
     if blocks.property(state, "crafting") != Some("true") {
         level.set_block(p, ctx.shapes.with(state, "crafting", "true"));

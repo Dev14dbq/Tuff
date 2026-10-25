@@ -95,6 +95,7 @@ pub fn consume(ctx: &ServerContext, uuid: u128, slot: usize, n: i32) {
 /// Wears the item in a slot by `amount`; it breaks at its limit.
 pub fn wear(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32) {
     let mut broke = None;
+    let worn;
     {
         let mut inventories = lock(&ctx.inventories);
         let Some(hands) = inventories.get_mut(&uuid) else {
@@ -112,12 +113,14 @@ pub fn wear(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32) {
             return;
         }
         stack.damage += amount;
+        worn = stack.clone();
         if stack.damage >= max {
             broke = Some(stack.item);
             hands.slots[slot] = None;
         }
     }
     changed(ctx, uuid, &[slot]);
+    crate::criteria::with_item(ctx, uuid, "minecraft:item_durability_changed", &worn);
     if let Some(item) = broke {
         crate::stats::item(ctx, uuid, crate::stats::BROKEN, item, 1);
         let entity_id = lock(&ctx.players).get(&uuid).map(|p| p.entity_id);
@@ -143,6 +146,7 @@ pub fn wear_into(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32, into
     let Some(rod) = ctx.items.id(into) else {
         return wear(ctx, uuid, slot, amount);
     };
+    let worn;
     {
         let mut inventories = lock(&ctx.inventories);
         let Some(stack) = inventories
@@ -156,6 +160,9 @@ pub fn wear_into(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32, into
             return;
         }
         let amount = crate::enchant_effects::wear(ctx, stack, amount);
+        let mut was = stack.clone();
+        was.damage += amount;
+        worn = was;
         if stack.damage + amount >= max {
             let mut fresh = ItemStack::new(rod, 1);
             fresh.components = stack.components.clone();
@@ -166,6 +173,7 @@ pub fn wear_into(ctx: &ServerContext, uuid: u128, slot: usize, amount: i32, into
         }
     }
     changed(ctx, uuid, &[slot]);
+    crate::criteria::with_item(ctx, uuid, "minecraft:item_durability_changed", &worn);
 }
 
 /// Puts a stack in the inventory; what does not fit is returned.

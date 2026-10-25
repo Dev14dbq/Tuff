@@ -96,6 +96,8 @@ fn tame(ctx: &ServerContext, e: &mut Entity, by: &Actor) {
     }
     m.dirty = true;
     fx::status(ctx, id, 7);
+    let tamed = crate::criteria::entity(ctx, e);
+    crate::criteria::with_entity(ctx, by.uuid, "minecraft:tame_animal", &tamed);
 }
 
 /// A player used the held item on a mob.
@@ -862,12 +864,19 @@ pub fn pick_up(
             count,
             damage,
             ref components,
+            thrower,
             ..
         } = entities[j].kind
         else {
             continue;
         };
         let components = components.clone();
+        let taken = mc_protocol::packets::play::ItemStack {
+            count: 1,
+            item,
+            damage,
+            components: components.clone(),
+        };
         let item_id = entities[j].id;
         let Kind::Mob(m) = &mut entities[i].kind else {
             continue;
@@ -926,6 +935,16 @@ pub fn pick_up(
         let pos = entities[i].pos;
         let collector = entities[i].id;
         send_equipment(ctx, &entities[i]);
+        if let Some(by) = thrower {
+            let picker = crate::criteria::entity(ctx, &entities[i]);
+            crate::criteria::entity_and_item(
+                ctx,
+                by,
+                "minecraft:thrown_item_picked_up_by_entity",
+                &picker,
+                Some(&taken),
+            );
+        }
         if count > 1 {
             if let Kind::Item { count: c, .. } = &mut entities[j].kind {
                 *c -= 1;

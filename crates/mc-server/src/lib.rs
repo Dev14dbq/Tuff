@@ -28,6 +28,7 @@ mod containers;
 mod context;
 mod crafter;
 mod crafting;
+mod criteria;
 mod currents;
 mod damage;
 mod daylight;

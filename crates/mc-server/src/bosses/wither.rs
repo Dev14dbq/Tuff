@@ -565,5 +565,6 @@ pub fn placed(ctx: &ServerContext, events: &mut Vec<Event>, p: Position, state: 
         by: 0,
         changes: level.into_changes(),
     });
+    crate::criteria::summoned(ctx, &e);
     crate::tick::spawn_entity(ctx, e);
 }

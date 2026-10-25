@@ -697,6 +697,68 @@ pub fn use_item_on(
     cursor: [f32; 3],
     sequence: i32,
 ) -> Outcome {
+    let held: Option<ItemStack> = ctx
+        .inventories
+        .lock()
+        .expect("inventories lock")
+        .get(&actor.uuid)
+        .and_then(|h| h.held(hand).cloned());
+    let (world, blocks) = (&ctx.world, &ctx.data.blocks);
+    let placed_at = usize::try_from(face)
+        .ok()
+        .filter(|f| *f < 6)
+        .map(|f| offset(clicked, f));
+    let before = [Some(clicked), placed_at].map(|p| p.and_then(|p| world.block(p, blocks)));
+    let outcome = use_item_on_block(ctx, actor, hand, clicked, face, cursor, sequence);
+    let done = outcome
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::Swing { .. }));
+    if done {
+        // Something placed (seeds place crops, so any held stack counts):
+        // where a block now stands that did not before.
+        if held.is_some() {
+            for (p, was) in [placed_at, Some(clicked)]
+                .into_iter()
+                .zip([before[1], before[0]])
+            {
+                if let Some(p) = p
+                    && let Some(now) = world.block(p, blocks)
+                    && Some(now) != was
+                    && blocks.block_name(now) != Some("minecraft:air")
+                {
+                    crate::criteria::on_block(
+                        ctx,
+                        actor.uuid,
+                        "minecraft:placed_block",
+                        p,
+                        held.as_ref(),
+                    );
+                    break;
+                }
+            }
+        }
+        crate::criteria::on_block(
+            ctx,
+            actor.uuid,
+            "minecraft:item_used_on_block",
+            clicked,
+            held.as_ref(),
+        );
+    }
+    outcome
+}
+
+#[allow(clippy::too_many_arguments)]
+fn use_item_on_block(
+    ctx: &ServerContext,
+    actor: Actor,
+    hand: i32,
+    clicked: Position,
+    face: i32,
+    cursor: [f32; 3],
+    sequence: i32,
+) -> Outcome {
     let mut outcome = Outcome {
         ack: Some(sequence),
         ..Outcome::default()
@@ -1304,6 +1366,12 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
         return outcome;
     }
     let thrown = crate::held::held(ctx, actor.uuid, hand);
+    if thrown
+        .as_ref()
+        .is_some_and(|h| h.name == "minecraft:spyglass")
+    {
+        crate::criteria::spyglass(actor.uuid, Some(hand));
+    }
     if let Some(done) = crate::projectiles::use_item(ctx, actor, hand, yaw, pitch) {
         // Thrown things are used (bows, rods and tridents count when they let go).
         if let Some(h) = thrown

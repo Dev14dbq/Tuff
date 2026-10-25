@@ -111,6 +111,13 @@ pub fn mount(ctx: &ServerContext, e: &mut Entity, rider: i32) -> bool {
         return false;
     }
     m.riders.push(rider);
+    if let Some(uuid) = lock(&ctx.players)
+        .values()
+        .find(|p| p.entity_id == rider)
+        .map(|p| p.profile.uuid)
+    {
+        crate::criteria::started_riding(uuid);
+    }
     m.nav.stop();
     m.sitting = false;
     passengers(ctx, id, &m.riders);

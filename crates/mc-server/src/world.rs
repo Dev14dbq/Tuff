@@ -6,7 +6,7 @@
 //! frame, the next request encodes it again. Each chunk counts the players who have it; chunks nobody has and
 //! that have no unsaved changes are dropped by [`World::unload_unused`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -57,6 +57,9 @@ pub struct World {
     /// Block entities that tick (hoppers, furnaces) in chunks read from disk
     /// since the last call to [`World::take_woken`].
     woken: Mutex<Vec<(Position, String)>>,
+    /// Chunks made new (generated, or from a flat world's template) that
+    /// have not had their first animals yet.
+    fresh: Mutex<HashSet<(i32, i32)>>,
     /// Scheduled ticks stored in chunks read from disk, not yet queued.
     saved_ticks: Mutex<Vec<SavedTick>>,
     /// Scheduled ticks to store with each chunk at the next save.
@@ -342,6 +345,7 @@ impl World {
             light,
             live_ticks: Mutex::new(Vec::new()),
             woken: Mutex::new(Vec::new()),
+            fresh: Mutex::new(HashSet::new()),
             saved_ticks: Mutex::new(Vec::new()),
             ticks_to_save: Mutex::new(HashMap::new()),
             loaded_entities: Mutex::new(Vec::new()),
@@ -510,6 +514,7 @@ impl World {
             light,
             live_ticks: Mutex::new(Vec::new()),
             woken: Mutex::new(Vec::new()),
+            fresh: Mutex::new(HashSet::new()),
             saved_ticks: Mutex::new(Vec::new()),
             ticks_to_save: Mutex::new(HashMap::new()),
             loaded_entities: Mutex::new(Vec::new()),
@@ -538,6 +543,9 @@ impl World {
             return f(slot);
         }
         let (chunk, generated) = self.load(x, z, blocks);
+        if chunk.is_some() && (generated || matches!(self.source, Source::Flat(_))) {
+            self.fresh.lock().expect("fresh lock").insert((x, z));
+        }
         if chunk.is_some() {
             self.poi_log
                 .lock()
@@ -844,6 +852,12 @@ impl World {
     pub fn peek_chunk<R>(&self, x: i32, z: i32, f: impl FnOnce(&Chunk) -> R) -> Option<R> {
         let chunks = self.chunks.lock().expect("chunks lock");
         chunks.get(&(x, z))?.chunk.as_deref().map(f)
+    }
+
+    /// Whether the chunk is new and still owed its first animals; asking
+    /// settles it.
+    pub fn take_fresh(&self, x: i32, z: i32) -> bool {
+        self.fresh.lock().expect("fresh lock").remove(&(x, z))
     }
 
     /// Ticking block entities of chunks read from disk since the last call.

@@ -202,7 +202,7 @@ pub fn entity_gone_skipping(
 ) -> (Vec<ItemStack>, Vec<u128>) {
     let p = entity_key(id);
     // A cart with loot still to roll drops it when it breaks.
-    unpack_loot(ctx, p, 27);
+    let _ = unpack_loot(ctx, p, 27);
     let mut all = ctx.containers.lock().expect("containers lock");
     let data = ctx
         .entity_items
@@ -359,7 +359,7 @@ pub fn fullness(ctx: &ServerContext, slots: &[Option<ItemStack>]) -> u8 {
 pub fn slots(ctx: &ServerContext, p: Position, kind: Kind) -> Vec<Option<ItemStack>> {
     // Hoppers and comparators look inside a minecart too: that rolls its loot.
     if entity_of(p).is_some() {
-        unpack_loot(ctx, p, kind.slots);
+        let _ = unpack_loot(ctx, p, kind.slots);
     }
     if let Some(open) = ctx.containers.lock().expect("containers lock").get(&key(p)) {
         return open.slots.clone();
@@ -419,13 +419,11 @@ pub fn put(ctx: &ServerContext, p: Position, kind: Kind, changes: &[(usize, Opti
 /// A generated chest (or minecart, barrel...) still holds only the name of
 /// its loot table: roll it into the slots, the first time anyone looks
 /// (minecraft.wiki, "Loot table" → "Containers"). Stacks are split to fill
-/// empty slots and spread over them at random.
-fn unpack_loot(ctx: &ServerContext, p: Position, size: usize) {
-    let Some(mut data) = stored_data(ctx, p) else {
-        return;
-    };
+/// empty slots and spread over them at random. Returns the table rolled.
+fn unpack_loot(ctx: &ServerContext, p: Position, size: usize) -> Option<String> {
+    let mut data = stored_data(ctx, p)?;
     let Some(Tag::String(table)) = data.remove("LootTable") else {
-        return;
+        return None;
     };
     data.remove("LootTableSeed");
     let mut slots = read_items(ctx, &data, size);
@@ -450,6 +448,7 @@ fn unpack_loot(ctx: &ServerContext, p: Position, size: usize) {
             .collect();
         fill(&mut slots, rolled, &mut || crate::util::random_u64());
     }
+    let rolled = Some(crate::enchant_effects::full(&table));
     data.insert("Items", write_items(ctx, &slots));
     match entity_of(p) {
         Some(id) => {
@@ -466,6 +465,7 @@ fn unpack_loot(ctx: &ServerContext, p: Position, size: usize) {
             }
         }
     }
+    rolled
 }
 
 /// Puts rolled loot in the empty slots of `slots`: stacks are halved at
@@ -613,7 +613,9 @@ fn chest_partner(ctx: &ServerContext, p: Position, state: u32) -> Option<Positio
 
 /// A player opens the container at `p`: its kind and current slots.
 pub fn open(ctx: &ServerContext, uuid: u128, p: Position, kind: Kind) -> Vec<Option<ItemStack>> {
-    unpack_loot(ctx, p, kind.slots);
+    if let Some(table) = unpack_loot(ctx, p, kind.slots) {
+        crate::criteria::container_loot(ctx, uuid, &table);
+    }
     let mut all = ctx.containers.lock().expect("containers lock");
     let open = all.entry(key(p)).or_insert_with(|| {
         let data = stored_data(ctx, p).unwrap_or_default();
@@ -739,7 +741,7 @@ pub fn close(ctx: &ServerContext, uuid: u128, p: Position) {
 
 /// The block at `p` was broken: its items, and who had it open.
 pub fn broken(ctx: &ServerContext, p: Position) -> (Vec<ItemStack>, Vec<u128>) {
-    unpack_loot(ctx, p, 54);
+    let _ = unpack_loot(ctx, p, 54);
     let mut all = ctx.containers.lock().expect("containers lock");
     let (slots, viewers) = match all.remove(&key(p)) {
         Some(open) => (open.slots, open.viewers),

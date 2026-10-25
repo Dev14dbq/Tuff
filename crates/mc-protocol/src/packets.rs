@@ -706,6 +706,10 @@ pub mod play {
         RecipeBookSeenRecipe {
             recipe: i32,
         },
+        /// The advancements screen opened on a tab (`Some`) or closed.
+        SeenAdvancements {
+            tab: Option<String>,
+        },
         /// A crafter slot clicked on or off.
         ContainerSlotStateChanged {
             slot: i32,
@@ -944,6 +948,12 @@ pub mod play {
                 },
                 "minecraft:recipe_book_seen_recipe" => Serverbound::RecipeBookSeenRecipe {
                     recipe: r.varint()?,
+                },
+                "minecraft:seen_advancements" => Serverbound::SeenAdvancements {
+                    tab: match r.varint()? {
+                        0 => Some(r.identifier()?),
+                        _ => None,
+                    },
                 },
                 "minecraft:container_slot_state_changed" => {
                     Serverbound::ContainerSlotStateChanged {
@@ -2051,6 +2061,123 @@ pub mod play {
             out.put_len(self.recipes.len());
             for &r in &self.recipes {
                 out.put_varint(r);
+            }
+        }
+    }
+
+    /// How an advancement looks in its tab.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct AdvancementDisplay {
+        pub title: Tag,
+        pub description: Tag,
+        pub icon: ItemStack,
+        /// 0 task, 1 challenge, 2 goal.
+        pub frame: i32,
+        /// A root's tab background.
+        pub background: Option<String>,
+        pub show_toast: bool,
+        pub hidden: bool,
+        pub x: f32,
+        pub y: f32,
+    }
+
+    /// One advancement as the client knows it.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Advancement {
+        pub parent: Option<String>,
+        pub display: Option<AdvancementDisplay>,
+        /// Groups of criteria: one of each group must be done.
+        pub requirements: Vec<Vec<String>>,
+        pub telemetry: bool,
+    }
+
+    /// Each criterion of an advancement, with when it was done (epoch
+    /// milliseconds), `None` if not yet.
+    pub type CriteriaProgress = Vec<(String, Option<i64>)>;
+
+    /// Update Advancements: advancements to show or drop, and the criteria
+    /// done of some (each criterion with when, in epoch milliseconds, or
+    /// `None` if not done).
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct UpdateAdvancements {
+        pub reset: bool,
+        pub added: Vec<(String, Advancement)>,
+        pub removed: Vec<String>,
+        pub progress: Vec<(String, CriteriaProgress)>,
+        /// Whether to toast what was just completed.
+        pub show: bool,
+    }
+    packet!(UpdateAdvancements, Play, "minecraft:update_advancements");
+    impl Encode for UpdateAdvancements {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_bool(self.reset);
+            out.put_len(self.added.len());
+            for (id, a) in &self.added {
+                out.put_string(id);
+                out.put_bool(a.parent.is_some());
+                if let Some(p) = &a.parent {
+                    out.put_string(p);
+                }
+                out.put_bool(a.display.is_some());
+                if let Some(d) = &a.display {
+                    crate::codec::put_nbt(out, &d.title);
+                    crate::codec::put_nbt(out, &d.description);
+                    ItemStack::encode(Some(&d.icon), out);
+                    out.put_varint(d.frame);
+                    let flags = i32::from(d.background.is_some())
+                        | i32::from(d.show_toast) << 1
+                        | i32::from(d.hidden) << 2;
+                    out.put_i32(flags);
+                    if let Some(b) = &d.background {
+                        out.put_string(b);
+                    }
+                    out.put_f32(d.x);
+                    out.put_f32(d.y);
+                }
+                out.put_len(a.requirements.len());
+                for group in &a.requirements {
+                    out.put_len(group.len());
+                    for c in group {
+                        out.put_string(c);
+                    }
+                }
+                out.put_bool(a.telemetry);
+            }
+            out.put_len(self.removed.len());
+            for id in &self.removed {
+                out.put_string(id);
+            }
+            out.put_len(self.progress.len());
+            for (id, criteria) in &self.progress {
+                out.put_string(id);
+                out.put_len(criteria.len());
+                for (name, when) in criteria {
+                    out.put_string(name);
+                    out.put_bool(when.is_some());
+                    if let Some(t) = when {
+                        out.put_i64(*t);
+                    }
+                }
+            }
+            out.put_bool(self.show);
+        }
+    }
+
+    /// Select Advancements Tab: the tab the screen opens on.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct SelectAdvancementsTab {
+        pub tab: Option<String>,
+    }
+    packet!(
+        SelectAdvancementsTab,
+        Play,
+        "minecraft:select_advancements_tab"
+    );
+    impl Encode for SelectAdvancementsTab {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_bool(self.tab.is_some());
+            if let Some(t) = &self.tab {
+                out.put_string(t);
             }
         }
     }
@@ -4094,6 +4221,44 @@ mod recipe_book_tests {
                 open: true,
                 filter: false
             }
+        );
+        let opened = Serverbound::decode(
+            "minecraft:seen_advancements",
+            &mut Reader::new(&[0, 3, b'a', b':', b'b']),
+        )
+        .unwrap();
+        assert_eq!(
+            opened,
+            Serverbound::SeenAdvancements {
+                tab: Some("a:b".into())
+            }
+        );
+        let closed =
+            Serverbound::decode("minecraft:seen_advancements", &mut Reader::new(&[1])).unwrap();
+        assert_eq!(closed, Serverbound::SeenAdvancements { tab: None });
+        let mut out = Vec::new();
+        super::play::UpdateAdvancements {
+            reset: true,
+            added: vec![(
+                "a:b".into(),
+                super::play::Advancement {
+                    parent: None,
+                    display: None,
+                    requirements: vec![vec!["c".into()]],
+                    telemetry: false,
+                },
+            )],
+            removed: vec![],
+            progress: vec![("a:b".into(), vec![("c".into(), Some(1))])],
+            show: true,
+        }
+        .encode(&mut out);
+        assert_eq!(
+            out,
+            [
+                1, 1, 3, b'a', b':', b'b', 0, 0, 1, 1, 1, b'c', 0, 0, 1, 3, b'a', b':', b'b', 1, 1,
+                b'c', 1, 0, 0, 0, 0, 0, 0, 0, 1, 1
+            ]
         );
         let seen = Serverbound::decode("minecraft:recipe_book_seen_recipe", &mut Reader::new(&[7]))
             .unwrap();

@@ -246,6 +246,7 @@ pub fn start_using(
 /// The player let go of use (or changed what they hold).
 pub fn stop_using(ctx: &ServerContext, uuid: u128) {
     crate::archaeology::stop(ctx, uuid);
+    crate::criteria::spyglass(uuid, None);
     if let Some(using) = lock(&ctx.using).remove(&uuid) {
         let _ = ctx.events.send(Event::UsingItem {
             uuid,
@@ -557,6 +558,16 @@ pub fn try_hurt_by_entity(
     {
         crate::stats::custom(ctx, uuid, stat, n);
     }
+    let hit = crate::criteria::Hit {
+        kind: crate::enchant_effects::full(damage_type),
+        taken: tally[0] as f32 / 10.0,
+        dealt: amount,
+        ..Default::default()
+    };
+    crate::criteria::hurt_by(ctx, uuid, &hit);
+    if died {
+        crate::criteria::killed_by(ctx, uuid, &hit);
+    }
     let _ = ctx.events.send(Event::Health {
         uuid,
         health: packet,
@@ -583,6 +594,15 @@ pub fn try_hurt_by_entity(
 
 /// A player moved: track falling and hurt them when they land.
 pub fn moved(ctx: &ServerContext, uuid: u128, before: Pose, after: Pose, in_water: bool) {
+    crate::criteria::moved(
+        ctx,
+        uuid,
+        [before.x, before.y, before.z],
+        before.on_ground,
+        [after.x, after.y, after.z],
+        after.on_ground,
+        in_water,
+    );
     let landed_from = {
         let mut all = lock(&ctx.vitals);
         let Some(v) = all.get_mut(&uuid) else {

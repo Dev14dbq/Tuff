@@ -86,6 +86,52 @@ fn fire(t: &mut Tick, pos: [f64; 3], extra: usize) {
     }
 }
 
+/// A bolt is over: `lightning_strike` for the players about, with what it
+/// struck and the fires burning where it fell.
+fn struck_near(t: &Tick, e: &Entity) {
+    let Kind::Projectile(p) = &e.kind else {
+        return;
+    };
+    let Shot::Lightning { struck, .. } = &p.shot else {
+        return;
+    };
+    let ctx = t.ctx;
+    let at = e.pos.map(|c| c.floor() as i32);
+    let fires = (-1..=1)
+        .flat_map(|dx| {
+            (-1..=1)
+                .flat_map(move |dy| (-1..=1).map(move |dz| [at[0] + dx, at[1] + dy, at[2] + dz]))
+        })
+        .filter(|c| {
+            hits::block_at(ctx, *c).and_then(|s| ctx.data.blocks.block_name(s))
+                == Some("minecraft:fire")
+        })
+        .count() as i32;
+    let bolt = crate::criteria::Subject {
+        kind: "minecraft:lightning_bolt".into(),
+        id: e.id,
+        pos: e.pos,
+        dimension: ctx.world.dimension.clone(),
+        fires_lit: Some(fires),
+        ..Default::default()
+    };
+    let bystanders: Vec<crate::criteria::Subject> = t
+        .targets
+        .iter()
+        .filter(|g| struck.contains(&g.id))
+        .filter_map(|g| {
+            Some(crate::criteria::Subject {
+                kind: g.kind?.to_owned(),
+                id: g.id,
+                ..Default::default()
+            })
+        })
+        .collect();
+    for uuid in crate::criteria::players_near(ctx, e.pos, 64.0) {
+        crate::criteria::lightning(ctx, uuid, &bolt, &bystanders);
+    }
+}
+
 pub fn tick(t: &mut Tick, e: &mut Entity) {
     let Kind::Projectile(p) = &mut e.kind else {
         return;
@@ -130,6 +176,9 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
     if *life < 0 {
         if *flashes == 0 {
             e.removed = true;
+            if !visual {
+                struck_near(t, e);
+            }
             return;
         }
         if *life < -((crate::util::random_u64() % 10) as i32) {

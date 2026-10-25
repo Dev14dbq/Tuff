@@ -66,6 +66,7 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
                     crate::stats::custom(&ctx, uuid, "leave_game", 1);
                     crate::save_player(&ctx, uuid);
                     crate::stats::forget(&ctx, uuid);
+                    crate::criteria::forget(uuid);
                 })
                 .await?;
             }
@@ -527,6 +528,7 @@ async fn play(
     writer.queue(&ctx.recipes.update_packet())?;
     writer.queue(&crate::commands::settings_packet(&ctx, uuid))?;
     writer.queue(&crate::commands::initial_book(&ctx, uuid))?;
+    writer.queue(&crate::commands::initial_advancements(&ctx, uuid))?;
     let mut awaiting_teleport = Some(1);
     let mut next_teleport = 1;
     writer.queue(&play::PlayerPosition {
@@ -825,6 +827,11 @@ async fn play(
                         }
                         play::Serverbound::RecipeBookSeenRecipe { recipe } => {
                             crate::commands::recipe_seen(&ctx, uuid, recipe);
+                        }
+                        play::Serverbound::SeenAdvancements { tab } => {
+                            if let Some(p) = crate::commands::seen_tab(tab) {
+                                writer.queue(&p)?;
+                            }
                         }
                         play::Serverbound::ContainerSlotStateChanged { slot, window, enabled } => {
                             windows.slot_state(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, slot, enabled)?;
@@ -1624,6 +1631,7 @@ async fn play(
                                 Direct::Map(p) => writer.queue(&p)?,
                                 Direct::RecipeAdd(p) => writer.queue(&p)?,
                                 Direct::RecipeRemove(p) => writer.queue(&p)?,
+                                Direct::Advancements(p) => writer.queue(&p)?,
                             }
                         }
                         Ok(Event::Scoreboard(p)) => send_scoreboard(writer, &p)?,
@@ -1675,6 +1683,7 @@ async fn play(
                             };
                             // Others here stop seeing us; the new place starts afresh.
                             let _ = ctx.events.send(Event::PlayerGone { uuid, entity_id });
+                            let left = (ctx.world.dimension.clone(), [pose.x, pose.y, pose.z]);
                             ctx = next;
                             events = ctx.events.subscribe();
                             visible.clear();
@@ -1684,6 +1693,9 @@ async fn play(
                                 p.dimension = ctx.world.dimension.clone();
                                 p.pose = Some(pose);
                             });
+                            if !after_death {
+                                crate::criteria::changed_dimension(&ctx, uuid, &left.0, &ctx.world.dimension, left.1);
+                            }
                             crate::vitals::stop_using(&ctx, uuid);
                             writer.queue(&play::Respawn {
                                 dimension_type: ctx.world.dimension_type_id,

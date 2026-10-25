@@ -28,6 +28,7 @@ const BAD_OMEN_TICKS: i32 = 120_000;
 /// taken from it).
 pub fn eaten(ctx: &ServerContext, uuid: u128, stack: &ItemStack) {
     crate::stats::item(ctx, uuid, crate::stats::USED, stack.item, 1);
+    crate::criteria::with_item(ctx, uuid, "minecraft:consume_item", stack);
     let pos = lock(&ctx.players)
         .get(&uuid)
         .and_then(|p| p.pose)

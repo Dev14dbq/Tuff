@@ -288,6 +288,7 @@ pub fn shoot(ctx: &ServerContext, actor: Actor, hand: i32) {
     if list.is_empty() {
         return;
     }
+    crate::criteria::with_item(ctx, actor.uuid, "minecraft:shot_crossbow", &bow.stack);
     let spread = ee::modify(
         ctx,
         "minecraft:projectile_spread",

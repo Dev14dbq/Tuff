@@ -226,6 +226,14 @@ pub fn give(ctx: &ServerContext, uuid: u128, kind: &'static Kind, new: Instance)
     });
     let after = seen(ctx, v);
     send_changes(ctx, uuid, entity_id, &before, &after, v, Some(kind));
+    let have: Vec<String> = v
+        .effects
+        .active
+        .keys()
+        .map(|k| format!("minecraft:{k}"))
+        .collect();
+    drop(all);
+    crate::criteria::effects_changed(ctx, uuid, &have, None);
     true
 }
 

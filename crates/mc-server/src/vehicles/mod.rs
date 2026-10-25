@@ -503,6 +503,7 @@ pub fn interact(
     }
     if v.riders.len() < capacity(&v.craft) && !v.riders.contains(&actor.entity_id) {
         v.riders.push(actor.entity_id);
+        crate::criteria::started_riding(actor.uuid);
         passengers(ctx, id, &v.riders.clone());
         outcome.events.push(Event::Swing {
             uuid: actor.uuid,

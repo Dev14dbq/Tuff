@@ -686,7 +686,35 @@ impl Windows {
                     if local.is_empty() {
                         continue;
                     }
+                    // Potions taken out of a brewing stand.
+                    let stand = ctx
+                        .world
+                        .block(p, &ctx.data.blocks)
+                        .and_then(|s| ctx.data.blocks.block_name(s))
+                        .filter(|n| *n == "minecraft:brewing_stand")
+                        .and_then(containers::kind_of);
+                    let brewed: Vec<String> = if let Some(kind) = stand {
+                        let old = containers::slots(ctx, p, kind);
+                        local
+                            .iter()
+                            .filter(|(slot, new)| *slot < 3 && new.is_none())
+                            .filter_map(|(slot, _)| old.get(*slot).cloned().flatten())
+                            .filter_map(|s| match s.components.get("minecraft:potion_contents") {
+                                Some(mc_nbt::Tag::Compound(c)) => match c.get("potion") {
+                                    Some(mc_nbt::Tag::String(p)) => Some(p.clone()),
+                                    _ => None,
+                                },
+                                Some(mc_nbt::Tag::String(p)) => Some(p.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                     let (viewers, slots) = containers::change(ctx, uuid, p, &local, &hand_stacks);
+                    for potion in brewed {
+                        crate::criteria::brewed(ctx, uuid, &crate::enchant_effects::full(&potion));
+                    }
                     if !viewers.is_empty() {
                         let _ = ctx.events.send(Event::ContainerSlots {
                             position: p,

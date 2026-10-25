@@ -263,14 +263,15 @@ fn damage_to(ctx: &ServerContext, stack: Option<&ItemStack>, kind: &str) -> f32 
 
 /// Channeling: in a thunderstorm, the trident calls lightning on what it
 /// hit (`post_attack`) or on the lightning rod it struck (`hit_block`).
-fn channel(t: &mut Tick, stack: Option<&ItemStack>, at: [f64; 3], on_rod: bool) {
+/// Calls lightning down if the trident channels it; whether it did.
+fn channel(t: &mut Tick, stack: Option<&ItemStack>, at: [f64; 3], on_rod: bool) -> bool {
     let Some(stack) = stack else {
-        return;
+        return false;
     };
     let ctx = t.ctx;
     let thundering = lock(&ctx.weather).thundering;
     if !thundering {
-        return;
+        return false;
     }
     let block = at.map(|c| c.floor() as i32);
     let sky = crate::worn::sees_sky(ctx, block);
@@ -317,6 +318,7 @@ fn channel(t: &mut Tick, stack: Option<&ItemStack>, at: [f64; 3], on_rod: bool) 
         );
         fx::sound(ctx, "item.trident.thunder", 10, at, 5.0, 1.0);
     }
+    calls
 }
 
 /// The `hit_block` requirements of Channeling, with its `location_check`
@@ -487,7 +489,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                                 .any(|m| m == n)
                         });
                     if rod {
-                        channel(
+                        let _ = channel(
                             t,
                             stack.as_ref(),
                             [
@@ -512,7 +514,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                         owner,
                         e.id,
                     );
-                    channel(t, stack.as_ref(), victim.pose_vec(), false);
+                    let _ = channel(t, stack.as_ref(), victim.pose_vec(), false);
                 }
                 Strike::Target(i) => {
                     let target = t.targets[i];
@@ -524,9 +526,9 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                         with: Some(e.id),
                         kind: "minecraft:trident",
                     });
-                    if target.kind.is_some() {
+                    if let Some(kind) = target.kind {
                         let c = target.aabb;
-                        channel(
+                        let called = channel(
                             t,
                             stack.as_ref(),
                             [
@@ -536,6 +538,14 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                             ],
                             false,
                         );
+                        if called && let Some(o) = owner {
+                            let victim = crate::criteria::Subject {
+                                kind: kind.to_owned(),
+                                id: target.id,
+                                ..Default::default()
+                            };
+                            crate::criteria::channeled(ctx, o, &[victim]);
+                        }
                     }
                 }
             }

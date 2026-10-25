@@ -537,6 +537,7 @@ impl Machine {
             have.push((e.id.clone(), *l));
         }
         crate::enchants::set_levels(&mut made, key, &have);
+        crate::criteria::enchanted_item(ctx, uuid, &made, cost);
         self.slots[0] = Some(made);
         crate::stats::custom(ctx, uuid, "enchant_item", 1);
         if !creative {
@@ -982,6 +983,16 @@ impl Machine {
         match self.menu {
             Menu::Stonecutter => take_one(&mut self.slots[0], 1),
             Menu::Smithing => {
+                let inputs: Vec<ItemStack> = self.slots[..3].iter().flatten().cloned().collect();
+                if let [template, base, addition] = &inputs[..]
+                    && let Some(r) = ctx.recipes.smithing.iter().find(|r| {
+                        r.template.contains(&template.item)
+                            && r.base.contains(&base.item)
+                            && r.addition.contains(&addition.item)
+                    })
+                {
+                    crate::criteria::crafted(ctx, uuid, "minecraft:recipe_crafted", &r.id, &inputs);
+                }
                 for i in 0..3 {
                     take_one(&mut self.slots[i], 1);
                 }
