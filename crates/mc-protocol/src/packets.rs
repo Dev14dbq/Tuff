@@ -771,6 +771,7 @@ pub mod play {
             z: f64,
             yaw: f32,
             pitch: f32,
+            on_ground: bool,
         },
         /// Keys held: 0x10 jump, 0x20 sneak, 0x40 sprint.
         PlayerInput {
@@ -1005,6 +1006,7 @@ pub mod play {
                         z: r.f64()?,
                         yaw: r.f32()?,
                         pitch: r.f32()?,
+                        on_ground: r.remaining() > 0 && r.bool()?,
                     };
                     r.rest();
                     packet

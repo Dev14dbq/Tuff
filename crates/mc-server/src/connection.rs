@@ -891,6 +891,11 @@ async fn play(
                                 let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action: Action::MountInventory, reply: replies_tx.clone() });
                             }
                         }
+                        play::Serverbound::PlayerCommand { action: 3, data, .. } => {
+                            // The jump key let go while riding (a horse's jump, a nautilus's dash).
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action: Action::MountJump { power: data }, reply: replies_tx.clone() });
+                        }
                         play::Serverbound::PlayerCommand { action: action @ (1 | 2), .. } => {
                             crate::combat::set_sprinting(&ctx, uuid, action == 1);
                             crate::stats::set_sprinting(&ctx, uuid, action == 1);
@@ -1028,13 +1033,13 @@ async fn play(
                             let action = Action::Vehicle(crate::vehicles::Act::Paddle { left, right });
                             let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
-                        play::Serverbound::MoveVehicle { x, y, z, yaw, pitch } if riding.is_some() && awaiting_teleport.is_none() => {
+                        play::Serverbound::MoveVehicle { x, y, z, yaw, pitch, on_ground } if riding.is_some() && awaiting_teleport.is_none() => {
                             if [x, y, z].iter().all(|c| c.is_finite()) {
                                 pose = Pose { x, y, z, yaw, pitch, on_ground: false };
                                 update_player(&ctx, uuid, |p| p.pose = Some(pose));
                                 view.move_to(writer, chunk_of(x), chunk_of(z)).await?;
                                 let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                                let action = Action::Vehicle(crate::vehicles::Act::Move { pos: [x, y, z], yaw });
+                                let action = Action::Vehicle(crate::vehicles::Act::Move { pos: [x, y, z], yaw, on_ground });
                                 let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                             }
                         }

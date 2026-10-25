@@ -1,0 +1,16 @@
+# A nautilus dash, as the server answers a rider's jump
+gamemode survival @s
+effect give @s minecraft:water_breathing infinite 0 true
+fill ~-10 ~-1 ~-10 ~10 ~10 ~10 minecraft:water
+tp @s ~ ~3 ~
+summon minecraft:nautilus ~ ~ ~ {Tame:1b,Owner:[I;1057792200,-1625932921,-1828997594,-1180583015],equipment:{saddle:{id:"minecraft:saddle",count:1}},PersistenceRequired:1b}
+ride @s mount @e[type=minecraft:nautilus,limit=1,sort=nearest]
+@wait 1500
+@command 3 100
+@wait 300
+@command 4 0
+@wait 3000
+@command 3 50
+@wait 300
+@command 4 0
+@wait 3000

@@ -35,6 +35,8 @@ pub struct Land {
     pub leap_vz: f64,
     /// Shrunk hitbox and the long-jump pose.
     pub jumping: bool,
+    /// Horse: ticks left of rearing up (a rider's jump).
+    pub rearing: i32,
     /// Horn style 0–3, or 255 until the first horn picks one.
     pub horn_group: u8,
     /// The ram connected or missed: shed the charge speed.
@@ -64,6 +66,7 @@ impl Default for Land {
             leap_vx: 0.0,
             leap_vz: 0.0,
             jumping: false,
+            rearing: 0,
             horn_group: 255,
             brake: false,
             rolled: false,

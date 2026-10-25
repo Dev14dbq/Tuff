@@ -53,7 +53,7 @@ pub fn tick(
     } else {
         v[1] -= mc_entity::GRAVITY;
     }
-    let pushed = push_out_of_blocks(level, entity);
+    let pushed = push_out_of_blocks(ctx, entity);
     let horizontal = entity.vel[0] * entity.vel[0] + entity.vel[2] * entity.vel[2];
     // Resting items only check the ground every fourth tick.
     if !entity.on_ground
@@ -67,8 +67,8 @@ pub fn tick(
             }
             entity.on_ground = false;
         } else {
-            let solid = crate::tick::Solid(level);
-            let (moved, on_ground) = mc_entity::move_entity(entity.aabb(), entity.vel, &solid);
+            let ground = crate::mobs::Ground::new(ctx);
+            let (moved, on_ground) = mc_entity::move_entity(entity.aabb(), entity.vel, &ground);
             for ((pos, vel), moved) in entity.pos.iter_mut().zip(&mut entity.vel).zip(moved) {
                 *pos += moved;
                 if (moved - *vel).abs() > 1.0e-9 {
@@ -198,16 +198,22 @@ fn fluid(ctx: &ServerContext, state: u32) -> Option<(bool, f64)> {
 }
 
 /// An item stuck inside a block drifts out towards the nearest open side.
-fn push_out_of_blocks(level: &WorldLevel, entity: &mut Entity) -> bool {
+/// Only what has collision holds it (as clients see it): not a flower,
+/// and a slab only in its lower half.
+fn push_out_of_blocks(ctx: &ServerContext, entity: &mut Entity) -> bool {
     use mc_entity::Collide as _;
-    let solid = crate::tick::Solid(level);
+    let solid = crate::mobs::Ground::new(ctx);
     let centre = [
         entity.pos[0],
         (entity.aabb().min[1] + entity.aabb().max[1]) / 2.0,
         entity.pos[2],
     ];
     let at = centre.map(|c| c.floor() as i32);
-    if !solid.solid(at[0], at[1], at[2]) {
+    let up = centre[1] - f64::from(at[1]);
+    if !solid
+        .span(at[0], at[1], at[2])
+        .is_some_and(|(lo, hi)| (lo..hi).contains(&up))
+    {
         return false;
     }
     let inside = centre.map(f64::fract);
@@ -743,6 +749,28 @@ mod tests {
         let rows = run(&ctx, &mut e, 1);
         assert!(e.vel[1] > 0.05, "{:?}", e.vel);
         assert_eq!(rows.len(), 1, "a push clients cannot foresee");
+    }
+
+    #[test]
+    fn items_fall_into_flowers_and_onto_slabs_as_clients_see_it() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        // A flower has no collision: the item lies on the grass in its cell
+        // and stays put, never pushed back up.
+        set(&ctx, Position::new(8, -60, 8), "minecraft:dandelion");
+        let mut e = item(&ctx, "minecraft:stone", 1, [8.5, -59.2, 8.5]);
+        run(&ctx, &mut e, 40);
+        assert!((e.pos[1] + 60.0).abs() < 1e-6, "{:?}", e.pos);
+        let rows = run(&ctx, &mut e, 40);
+        assert!((e.pos[1] + 60.0).abs() < 1e-6, "{:?}", e.pos);
+        assert!(rows.iter().all(|r| r.pos == e.pos), "it moved: {rows:?}");
+        // A bottom slab holds it half a block up.
+        set(&ctx, Position::new(11, -60, 8), "minecraft:stone_slab");
+        let mut e = item(&ctx, "minecraft:stone", 1, [11.5, -59.0, 8.5]);
+        run(&ctx, &mut e, 40);
+        assert!((e.pos[1] + 59.5).abs() < 1e-6, "{:?}", e.pos);
     }
 
     #[test]

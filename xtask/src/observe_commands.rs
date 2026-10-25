@@ -7,6 +7,9 @@
 //!   default `xtask/commands.txt`): `> text` asks for suggestions, any other
 //!   line runs the command; the replies are recorded as text components;
 //! - `@use` uses the item in the main hand;
+//! - `@command <action> <data>` sends a player command (3/4 start and stop a
+//!   mount's jump);
+//! - `@wait <ms>` only records what comes for that long;
 //! - with `--packets a,b`, the bodies of those packets too (hex; a boss
 //!   bar's random UUID left out);
 //! - with `--datapack <dir>`, that data pack is put in the world first.
@@ -205,7 +208,20 @@ fn observe(
     let mut replies = Vec::new();
     for (n, line) in lines.iter().enumerate() {
         let mut entry = json!({ "line": line });
-        if line.trim() == "@use" {
+        let mut window = Duration::from_millis(400);
+        if let Some(ms) = line.trim().strip_prefix("@wait ") {
+            window = Duration::from_millis(ms.trim().parse().context("@wait <ms>")?);
+        } else if let Some(args) = line.trim().strip_prefix("@command ") {
+            let mut args = args.split_whitespace().map(str::parse::<i32>);
+            let (Some(Ok(action)), Some(Ok(data))) = (args.next(), args.next()) else {
+                bail!("@command <action> <data>: `{line}`");
+            };
+            let mut body = Vec::new();
+            body.put_varint(client.entity_id);
+            body.put_varint(action);
+            body.put_varint(data);
+            client.send("minecraft:player_command", body)?;
+        } else if line.trim() == "@use" {
             // Uses the item in the main hand.
             let mut body = Vec::new();
             body.put_varint(0);
@@ -224,7 +240,7 @@ fn observe(
             client.send("minecraft:chat_command", body)?;
         }
         let mut got = Vec::new();
-        let until = Instant::now() + Duration::from_millis(400);
+        let until = Instant::now() + window;
         while Instant::now() < until {
             let Some((name, body)) = next(&mut client)? else {
                 continue;

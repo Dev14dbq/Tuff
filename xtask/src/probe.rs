@@ -348,6 +348,9 @@ pub(crate) fn join_player_with(
     client.state = State::Play;
     loop {
         let (packet, body) = client.recv()?;
+        if packet == "minecraft:login" {
+            client.entity_id = Reader::new(&body).i32()?;
+        }
         if packet == "minecraft:player_position" {
             client.send(
                 "minecraft:accept_teleportation",
@@ -746,6 +749,8 @@ pub(crate) struct Client {
     pub(crate) compression: Option<usize>,
     pub(crate) ids: PacketIds,
     pub(crate) state: State,
+    /// Our player's entity id, from the login packet.
+    pub(crate) entity_id: i32,
 }
 
 impl Client {
@@ -760,6 +765,7 @@ impl Client {
             compression: None,
             ids,
             state: State::Handshake,
+            entity_id: 0,
         })
     }
 

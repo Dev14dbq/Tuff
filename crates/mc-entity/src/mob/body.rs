@@ -678,10 +678,12 @@ pub(super) fn physics(
         if fell > 0.0 {
             out.push(MobEvent::Landed { distance: fell });
         }
-        let safe = m.species.safe_fall() + f64::from(m.effect_level("jump_boost"));
-        if gathered > safe && m.species.takes_fall_damage() {
+        let damage = m
+            .species
+            .fall_damage(gathered, f64::from(m.effect_level("jump_boost")));
+        if damage > 0.0 && m.species.takes_fall_damage() {
             out.push(MobEvent::Hurt {
-                amount: (gathered - safe).ceil() as f32,
+                amount: damage,
                 kind: "minecraft:fall",
             });
         }

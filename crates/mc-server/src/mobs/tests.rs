@@ -28,6 +28,15 @@ fn flat() -> Option<std::sync::Arc<ServerContext>> {
     ServerContext::new(crate::Config::new(dir), data).ok()
 }
 
+/// Runs the lead tick the way the entity tick does: with the entities taken out.
+fn leash_tick(ctx: &ServerContext) {
+    let mut es = std::mem::take(&mut *lock(&ctx.entities));
+    crate::decor::leash::tick(ctx, &mut es);
+    let mut shared = lock(&ctx.entities);
+    es.append(&mut shared);
+    *shared = es;
+}
+
 const STEVE: u128 = 0xfeed;
 
 /// Puts a survival player at `pos` and loads the chunks around.
@@ -715,7 +724,7 @@ fn a_lead_ties_leads_and_snaps() {
     // Far off at once, the lead snaps and falls.
     move_steve(&ctx, [40.5, -60.0, 0.5]);
     run(&ctx, 1);
-    crate::decor::leash::tick(&ctx);
+    leash_tick(&ctx);
     assert!(!lock(&ctx.leashes).links.contains_key(&cow));
     assert_eq!(items_of(&ctx, "minecraft:lead"), 1);
 }
@@ -756,6 +765,119 @@ fn tame_donkey(ctx: &ServerContext) -> i32 {
         m.tame = true;
     }
     id
+}
+
+#[test]
+fn a_ridden_horse_and_its_rider_take_a_long_fall() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let uuid = join(&ctx, [0.5, -48.0, 0.5]);
+    let id = put(&ctx, Species::Horse, [0.5, -48.0, 0.5]);
+    let saddle = ctx.items.id("minecraft:saddle").unwrap();
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.gear[mc_entity::mob::slot::SADDLE] = Some(mc_entity::mob::Gear {
+            item: saddle,
+            count: 1,
+            damage: 0,
+            components: Default::default(),
+        });
+        m.tame = true;
+        m.health = 20.0;
+        m.riders.push(7000);
+    }
+    let actor = actor_at([0.5, -48.0, 0.5]);
+    let fall_to = |y: f64, on_ground: bool| {
+        let act = crate::vehicles::Act::Move {
+            pos: [0.5, y, 0.5],
+            yaw: 0.0,
+            on_ground,
+        };
+        crate::vehicles::act(&ctx, actor, act);
+    };
+    // Six blocks: both are fine.
+    for y in [-49.0, -51.0, -53.0] {
+        fall_to(y, false);
+    }
+    fall_to(-54.0, true);
+    assert_eq!(with_mob(&ctx, id, |m| m.health), 20.0);
+    assert_eq!(lock(&ctx.vitals)[&uuid].health, 20.0);
+    // Twelve: the horse takes half a point a block past seven, rounded
+    // down; the rider a point a block past three.
+    for y in [-56.0, -59.0, -62.0, -65.0] {
+        fall_to(y, false);
+    }
+    fall_to(-66.0, true);
+    assert_eq!(with_mob(&ctx, id, |m| m.health), 18.0);
+    assert_eq!(lock(&ctx.vitals)[&uuid].health, 11.0);
+}
+
+#[test]
+fn a_ridden_nautilus_dashes_every_two_seconds() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let id = put(&ctx, Species::Nautilus, [0.5, -60.0, 0.5]);
+    let saddle = ctx.items.id("minecraft:saddle").unwrap();
+    if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+        && let Kind::Mob(m) = &mut e.kind
+    {
+        m.gear[mc_entity::mob::slot::SADDLE] = Some(mc_entity::mob::Gear {
+            item: saddle,
+            count: 1,
+            damage: 0,
+            components: Default::default(),
+        });
+        m.tame = true;
+        m.riders.push(7000);
+    }
+    let actor = actor_at([0.5, -60.0, 0.5]);
+    let dash =
+        |ctx: &ServerContext| with_mob(ctx, id, |m| (m.quirks.aqua.dashing, m.quirks.aqua.dash_cd));
+    crate::mobs::ride::jump(&ctx, &actor, 100);
+    assert_eq!(dash(&ctx), (2, 40));
+    // Not again before it is ready.
+    run(&ctx, 1);
+    crate::mobs::ride::jump(&ctx, &actor, 100);
+    assert_eq!(dash(&ctx), (1, 39));
+    run(&ctx, 39);
+    assert_eq!(dash(&ctx), (0, 0));
+    crate::mobs::ride::jump(&ctx, &actor, 100);
+    assert_eq!(dash(&ctx), (2, 40));
+}
+
+#[test]
+fn the_inventory_key_opens_a_ridden_horse() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    for species in [Species::Horse, Species::Nautilus] {
+        let id = put(&ctx, species, [2.5, -60.0, 0.5]);
+        let actor = actor_at([0.5, -60.0, 0.5]);
+        let ride = |tame: bool| {
+            if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id)
+                && let Kind::Mob(m) = &mut e.kind
+            {
+                m.tame = tame;
+                m.owner = tame.then_some(STEVE);
+                m.riders = vec![actor.entity_id];
+            }
+            let mut out = crate::interact::Outcome::default();
+            crate::mobs::chest::open_riding(&ctx, &actor, &mut out);
+            out.open_mount
+        };
+        // Breaking in a wild one: no window.
+        assert_eq!(ride(false), None, "{species:?}");
+        assert_eq!(ride(true), Some((id, 0)), "{species:?}");
+        lock(&ctx.entities).retain(|e| e.id != id);
+    }
 }
 
 #[test]
@@ -1142,7 +1264,7 @@ fn a_wandering_trader_brings_two_leashed_llamas_that_leave_with_it() {
     }
     // The trader goes; so do its llamas, and no lead is left behind.
     lock(&ctx.entities).retain(|e| e.id != tid);
-    crate::decor::leash::tick(&ctx);
+    leash_tick(&ctx);
     assert!(
         mobs_of(&ctx, Species::TraderLlama)
             .iter()
@@ -1446,6 +1568,29 @@ fn a_falling_mob_tramples_farmland() {
 }
 
 #[test]
+fn a_lead_holds_through_the_server_tick() {
+    use crate::decor::leash::Holder;
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    let cow = put(&ctx, Species::Cow, [2.5, -60.0, 0.5]);
+    hold(&ctx, "minecraft:lead", 1);
+    ctx.mobs.use_on(ctx.dim, cow, steve([0.5, -60.0, 0.5]), 0);
+    run(&ctx, 1);
+    // The entity tick has the entities out of the shared list: the link
+    // must not read that as the cow gone.
+    for _ in 0..5 {
+        crate::tick::run_scheduled_ticks(&ctx);
+    }
+    assert_eq!(
+        lock(&ctx.leashes).links.get(&cow),
+        Some(&Holder::Player(STEVE))
+    );
+}
+
+#[test]
 fn a_lead_ties_an_animal_pulls_it_and_lets_go() {
     use crate::decor::leash::Holder;
     let Some(ctx) = flat() else {
@@ -1474,7 +1619,7 @@ fn a_lead_ties_an_animal_pulls_it_and_lets_go() {
     let _ = steve_at(&ctx, 11.0, false);
     let before = mob_of(&ctx, cow).unwrap().pos[0];
     for _ in 0..20 {
-        crate::decor::leash::tick(&ctx);
+        leash_tick(&ctx);
         run(&ctx, 1);
         let e = mob_of(&ctx, cow).unwrap();
         assert!(e.vel[0] >= 0.0, "pulled, not pushed: {:?}", e.vel);
@@ -1508,10 +1653,10 @@ fn leads_snap_at_twelve_blocks_and_move_between_mobs() {
     // Eleven blocks hold; past twelve it snaps (centres of the boxes).
     lock(&ctx.leashes).links.insert(cow, Holder::Player(STEVE));
     let _ = steve_at(&ctx, 13.5, false);
-    crate::decor::leash::tick(&ctx);
+    leash_tick(&ctx);
     assert_eq!(leashes(&ctx).len(), 1);
     let _ = steve_at(&ctx, 15.0, false);
-    crate::decor::leash::tick(&ctx);
+    leash_tick(&ctx);
     assert!(leashes(&ctx).is_empty(), "snapped");
     assert_eq!(items_of(&ctx, "minecraft:lead"), 1);
     // Sneaking at the pig ties the cow to it.

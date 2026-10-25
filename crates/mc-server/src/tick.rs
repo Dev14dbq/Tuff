@@ -208,6 +208,8 @@ pub enum Action {
     Vehicle(crate::vehicles::Act),
     /// A rider opens the inventory of their mount.
     MountInventory,
+    /// A rider lets go of the jump key with `power` charged (0..=100).
+    MountJump { power: i32 },
     UseEntity {
         entity_id: i32,
         hand: i32,
@@ -957,7 +959,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
         })
         .collect();
     targets.extend(crate::bosses::part_targets(&entities));
-    crate::decor::leash::tick(ctx);
+    crate::decor::leash::tick(ctx, &mut entities);
     level.minecarts = minecart_boxes(&entities);
     let mut out = crate::hits::Out::default();
     let (mut moved, mut removed) = (Vec::new(), Vec::new());
@@ -1059,7 +1061,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                 if !simulated_at(ctx, &players, entity.pos) {
                     continue;
                 }
-                mc_entity::fall(entity, &Solid(level));
+                mc_entity::fall(entity, &crate::mobs::Ground::new(ctx));
                 if entity.on_ground {
                     entity.vel[0] *= 0.7;
                     entity.vel[1] *= -0.5;
@@ -1095,7 +1097,7 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                         &mut ops,
                     );
                 } else {
-                    mc_entity::fall(entity, &Solid(level));
+                    mc_entity::fall(entity, &crate::mobs::Ground::new(ctx));
                     entity.vel = [0.0; 3];
                 }
                 for op in ops {
@@ -1119,7 +1121,11 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             // Mobs have their own tick, and so do crystals.
             mc_entity::Kind::Mob(_) | mc_entity::Kind::Crystal(_) => {}
             mc_entity::Kind::ExperienceOrb { .. } => {
-                mc_entity::fall_with(entity, &Solid(level), mc_entity::ORB_GRAVITY);
+                mc_entity::fall_with(
+                    entity,
+                    &crate::mobs::Ground::new(ctx),
+                    mc_entity::ORB_GRAVITY,
+                );
                 if entity.on_ground {
                     entity.vel[0] *= 0.6;
                     entity.vel[2] *= 0.6;
@@ -1310,6 +1316,10 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             let mut outcome = Outcome::default();
             crate::mobs::chest::open_riding(ctx, &actor, &mut outcome);
             outcome
+        }
+        Action::MountJump { power } => {
+            crate::mobs::ride::jump(ctx, &actor, power);
+            Outcome::default()
         }
         Action::UseEntity {
             entity_id,

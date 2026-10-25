@@ -8,6 +8,7 @@ use super::run::err;
 use super::target::Target;
 use super::{Result, Run};
 use crate::effects::{self, Instance, Kind};
+use crate::tick::lock;
 
 pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
     Some(match path {
@@ -466,6 +467,34 @@ fn ride_mount(r: &mut Run) -> Result<i32> {
             Vec::new(),
         ));
     }
-    // Riding needs passengers on the wire, which the server has not yet.
-    Err(err("commands.ride.mount.failure.generic", Vec::new()))
+    let riders = r.targets("target", false)?;
+    let Some(t) = riders.first() else {
+        return Err(err("argument.entity.notfound.entity", Vec::new()));
+    };
+    let rider = match t {
+        Target::Player { uuid, .. } => lock(&r.ctx.players).get(uuid).map(|p| p.entity_id),
+        Target::Entity { id, .. } => Some(*id),
+    };
+    let (Some(rider), Target::Entity { id: vehicle, .. }) = (rider, v) else {
+        return Err(err("commands.ride.mount.failure.generic", Vec::new()));
+    };
+    // Mobs only: boats and carts take riders their own way.
+    let mounted = {
+        let mut entities = lock(&r.ctx.entities);
+        entities
+            .iter_mut()
+            .find(|e| e.id == *vehicle && !e.removed && matches!(e.kind, mc_entity::Kind::Mob(_)))
+            .is_some_and(|e| crate::mobs::ride::mount(r.ctx, e, rider))
+    };
+    if !mounted {
+        return Err(err("commands.ride.mount.failure.generic", Vec::new()));
+    }
+    r.success(
+        translate(
+            "commands.ride.mount.success",
+            vec![t.display(), v.display()],
+        ),
+        true,
+    );
+    Ok(1)
 }

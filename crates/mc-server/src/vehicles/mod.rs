@@ -19,7 +19,11 @@ use crate::tick::lock;
 #[derive(Clone, Copy, Debug)]
 pub enum Act {
     /// Where it is now (boats are steered by the client).
-    Move { pos: [f64; 3], yaw: f32 },
+    Move {
+        pos: [f64; 3],
+        yaw: f32,
+        on_ground: bool,
+    },
     /// The player asks to get off.
     Dismount,
     /// The driver turns a boat's paddles.
@@ -586,7 +590,7 @@ pub fn act(ctx: &ServerContext, actor: Actor, act: Act) -> Outcome {
         return Outcome::default();
     };
     match act {
-        Act::Move { pos: to, yaw } => {
+        Act::Move { pos: to, yaw, .. } => {
             // Only boats are driven by their rider, and not far at once.
             let near = (0..3).all(|i| (to[i] - pos[i]).abs() < 10.0);
             if matches!(v.craft, Craft::Boat { .. }) && near && to.iter().all(|c| c.is_finite()) {

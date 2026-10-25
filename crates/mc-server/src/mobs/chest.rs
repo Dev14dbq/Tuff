@@ -22,6 +22,21 @@ const COLUMNS: i32 = 5;
 const SADDLE: usize = 0;
 const ARMOR: usize = 1;
 
+/// Has a window of saddle and armor: horses of every kind (undead too), llamas and
+/// ("Nautilus") nautiluses.
+fn has_window(m: &mc_entity::mob::Mob) -> bool {
+    use mc_entity::mob::Species;
+    m.species.horse()
+        || m.species.llama()
+        || matches!(
+            m.species,
+            Species::SkeletonHorse
+                | Species::ZombieHorse
+                | Species::Nautilus
+                | Species::ZombieNautilus
+        )
+}
+
 fn gear_stack(g: &Option<Gear>) -> Option<ItemStack> {
     g.as_ref().map(|g| ItemStack {
         damage: g.damage,
@@ -77,8 +92,7 @@ pub fn use_on(
     let Kind::Mob(m) = &mut e.kind else {
         return false;
     };
-    if !(m.species.horse() || m.species.llama()) || m.dying.is_some() || m.is_baby() && !m.is_tame()
-    {
+    if !has_window(m) || m.dying.is_some() || m.is_baby() && !m.is_tame() {
         return false;
     }
     let held = crate::held::held(ctx, actor.uuid, hand);
@@ -120,7 +134,7 @@ pub fn use_on(
 pub fn open_riding(ctx: &ServerContext, actor: &Actor, outcome: &mut Outcome) {
     let entities = lock(&ctx.entities);
     if let Some(e) = entities.iter().find(|e| {
-        matches!(&e.kind, Kind::Mob(m) if m.species.chested() && m.riders.contains(&actor.entity_id))
+        matches!(&e.kind, Kind::Mob(m) if has_window(m) && m.is_tame() && m.riders.contains(&actor.entity_id))
     }) {
         open(ctx, e, outcome);
     }
@@ -133,7 +147,7 @@ pub fn mirror(ctx: &ServerContext, entities: &mut [Entity]) {
         let Kind::Mob(m) = &mut e.kind else {
             continue;
         };
-        if !(m.species.horse() || m.species.llama()) {
+        if !has_window(m) {
             continue;
         }
         if m.chested {

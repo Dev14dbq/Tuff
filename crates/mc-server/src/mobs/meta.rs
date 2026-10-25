@@ -213,6 +213,9 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             if m.is_tame() {
                 f |= 2;
             }
+            if m.quirks.land.rearing > 0 {
+                f |= 0x20;
+            }
             v.push((a, MetadataValue::Byte(f)));
             if m.species == Horse {
                 v.push((a + 1, MetadataValue::VarInt(m.variant)));

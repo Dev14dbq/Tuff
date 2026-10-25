@@ -687,7 +687,9 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             griefing,
         };
         events.clear();
-        if m.species.boss() {
+        let boss = m.species.boss();
+        ride::rear_tick(e);
+        if boss {
             crate::bosses::tick_mob(ctx, level, &mut entities, i, &targets, now, &mut out.blasts);
         } else if ride::steered(e) {
             ride::tick(ctx, e, &senses, &mut events);

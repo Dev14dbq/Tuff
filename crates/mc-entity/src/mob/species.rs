@@ -654,14 +654,35 @@ impl Species {
     pub fn safe_fall(self) -> f64 {
         match self {
             Species::Rabbit | Species::Fox => 5.0,
-            Species::Horse | Species::Donkey | Species::Mule => 4.0,
+            // "Horse": seven blocks.
+            Species::Horse | Species::Donkey | Species::Mule => 7.0,
             // Land animals (Cursor): 10 HP less fall damage than the usual 3.
             Species::Goat => 13.0,
             // Aquatic (Claude): frogs take 5 less.
             Species::Frog => 8.0,
-            Species::SkeletonHorse | Species::ZombieHorse => 4.0,
+            Species::SkeletonHorse | Species::ZombieHorse => 7.0,
             _ => 3.0,
         }
+    }
+
+    /// The damage of a fall of `fell` blocks, `spare` more of them safe
+    /// (jump boost): a point a block past the safe distance, rounded up;
+    /// horses ("Horse") half a point, rounded down.
+    pub fn fall_damage(self, fell: f64, spare: f64) -> f32 {
+        let over = fell - self.safe_fall() - spare;
+        let damage = if matches!(
+            self,
+            Species::Horse
+                | Species::Donkey
+                | Species::Mule
+                | Species::SkeletonHorse
+                | Species::ZombieHorse
+        ) {
+            (over * 0.5).floor()
+        } else {
+            over.ceil()
+        };
+        damage.max(0.0) as f32
     }
 
     /// Can have babies (`AgeableMob`).

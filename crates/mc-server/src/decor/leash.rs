@@ -431,8 +431,9 @@ pub fn unleash(ctx: &ServerContext, entity: i32, at: [f64; 3], drop: bool) -> bo
 }
 
 /// Once a tick: leads beyond [`FREE`] pull, leads beyond [`SNAP`] snap
-/// (and the lead drops).
-pub fn tick(ctx: &ServerContext) {
+/// (and the lead drops). `entities` are the world's, taken out for the
+/// entity tick (the shared list is empty meanwhile).
+pub fn tick(ctx: &ServerContext, entities: &mut [Entity]) {
     let links: Vec<(i32, Holder)> = lock(&ctx.leashes)
         .links
         .iter()
@@ -446,7 +447,6 @@ pub fn tick(ctx: &ServerContext) {
     let mut gone = Vec::new();
     let mut departed = Vec::new();
     {
-        let mut entities = lock(&ctx.entities);
         for (id, holder) in links {
             let Some(i) = entities.iter().position(|e| e.id == id && !e.removed) else {
                 // The leashed one is gone (or is a player).
@@ -496,7 +496,7 @@ pub fn tick(ctx: &ServerContext) {
     drop(leashes);
     for id in departed {
         detach(ctx, id);
-        if let Some(e) = lock(&ctx.entities).iter_mut().find(|e| e.id == id) {
+        if let Some(e) = entities.iter_mut().find(|e| e.id == id) {
             e.removed = true;
         }
         let _ = ctx.events.send(Event::EntitiesRemoved(vec![id]));

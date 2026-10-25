@@ -89,8 +89,125 @@ pub fn steered(e: &Entity) -> bool {
 pub fn tick(ctx: &ServerContext, e: &mut Entity, s: &Senses, out: &mut Vec<MobEvent>) {
     if steered_by(ctx, e) {
         mc_entity::mob::tick_ridden(e, s, out);
+        dash_tick(ctx, e, out);
     } else {
         mc_entity::mob::tick(e, s, out);
+    }
+}
+
+/// A horse that reared up at a jump comes down, ridden or not.
+pub fn rear_tick(e: &mut Entity) {
+    if let Kind::Mob(m) = &mut e.kind
+        && m.quirks.land.rearing > 0
+    {
+        m.quirks.land.rearing -= 1;
+        if m.quirks.land.rearing == 0 {
+            m.dirty = true;
+        }
+    }
+}
+
+/// Ticks from a nautilus's dash to the next ("Nautilus": every two seconds).
+const DASH_EVERY: i32 = 40;
+/// Ticks the dash shows in its data.
+const DASH_SHOWN: i32 = 2;
+/// Ticks a horse rears up at its rider's jump (as a vanilla server shows it).
+const REARING: i32 = 20;
+
+fn nautilus(species: Species) -> Option<&'static str> {
+    match species {
+        Species::Nautilus => Some("nautilus"),
+        Species::ZombieNautilus => Some("zombie_nautilus"),
+        _ => None,
+    }
+}
+
+/// `entity.<kind>.<what>`, the `_land` one out of water.
+fn dash_sound(kind: &str, what: &str, wet: bool) -> String {
+    let land = if wet { "" } else { "_land" };
+    format!("entity.{kind}.{what}{land}")
+}
+
+/// The rider let go of the jump key; their client moves the mount. A horse
+/// rears up with its jump sound; a nautilus dashes: the server sounds it,
+/// shows it in the data and counts down to the next.
+pub fn jump(ctx: &ServerContext, actor: &crate::interact::Actor, power: i32) {
+    let mut entities = lock(&ctx.entities);
+    let Some(e) = entities.iter_mut().find(|e| {
+        matches!(&e.kind, Kind::Mob(m) if m.riders.first() == Some(&actor.entity_id)) && !e.removed
+    }) else {
+        return;
+    };
+    if power <= 0 || !steered_by(ctx, e) {
+        return;
+    }
+    let pos = e.pos;
+    let wet = crate::hits::in_water(ctx, pos);
+    let Kind::Mob(m) = &mut e.kind else {
+        return;
+    };
+    if m.species.horse() {
+        m.quirks.land.rearing = REARING;
+        m.dirty = true;
+        drop(entities);
+        fx::sound(
+            ctx,
+            "entity.horse.jump",
+            fx::category::NEUTRAL,
+            pos,
+            0.4,
+            1.0,
+        );
+        return;
+    }
+    let Some(kind) = nautilus(m.species) else {
+        return;
+    };
+    if m.quirks.aqua.dash_cd > 0 {
+        return;
+    }
+    m.quirks.aqua.dash_cd = DASH_EVERY;
+    m.quirks.aqua.dashing = DASH_SHOWN;
+    m.dirty = true;
+    let pitch = m.voice_pitch();
+    let category = crate::mobs::category(m.species);
+    drop(entities);
+    fx::sound(
+        ctx,
+        &dash_sound(kind, "dash", wet),
+        category,
+        pos,
+        1.0,
+        pitch,
+    );
+}
+
+/// A ridden nautilus's dash wears off, and it is ready for the next.
+fn dash_tick(ctx: &ServerContext, e: &mut Entity, out: &mut Vec<MobEvent>) {
+    let wet = crate::hits::in_water(ctx, e.pos);
+    let Kind::Mob(m) = &mut e.kind else {
+        return;
+    };
+    let Some(kind) = nautilus(m.species) else {
+        return;
+    };
+    let a = &mut m.quirks.aqua;
+    if a.dashing > 0 {
+        a.dashing -= 1;
+        if a.dashing == 0 {
+            m.dirty = true;
+        }
+    }
+    if m.quirks.aqua.dash_cd > 0 {
+        m.quirks.aqua.dash_cd -= 1;
+        if m.quirks.aqua.dash_cd == 0 {
+            let pitch = m.voice_pitch();
+            out.push(MobEvent::Sound {
+                name: dash_sound(kind, "dash_ready", wet),
+                volume: 1.0,
+                pitch,
+            });
+        }
     }
 }
 
@@ -164,7 +281,11 @@ pub fn act(ctx: &ServerContext, actor: &crate::interact::Actor, act: crate::vehi
         return;
     };
     match act {
-        crate::vehicles::Act::Move { pos, yaw } => {
+        crate::vehicles::Act::Move {
+            pos,
+            yaw,
+            on_ground,
+        } => {
             let near = (0..3).all(|i| (pos[i] - e.pos[i]).abs() < 10.0);
             if !near || !pos.iter().all(|c| c.is_finite()) {
                 return;
@@ -173,10 +294,14 @@ pub fn act(ctx: &ServerContext, actor: &crate::interact::Actor, act: crate::vehi
             if !steered {
                 return;
             }
+            let down = e.pos[1] - pos[1];
             e.pos = pos;
+            let wet = crate::hits::in_water(ctx, pos);
+            let mut landed = None;
             if let Kind::Mob(m) = &mut e.kind {
                 m.yaw = yaw;
                 m.head_yaw = yaw;
+                landed = fall(m, down, on_ground, wet);
             }
             let moved = crate::mobs::MobMove {
                 id: e.id,
@@ -184,9 +309,14 @@ pub fn act(ctx: &ServerContext, actor: &crate::interact::Actor, act: crate::vehi
                 yaw,
                 pitch: 0.0,
                 head_yaw: yaw,
-                on_ground: true,
+                on_ground,
             };
             let _ = ctx.events.send(Event::MobsMoved(vec![moved]));
+            if let Some(fell) = landed {
+                let riders = land(ctx, e, fell);
+                drop(entities);
+                riders_land(ctx, &riders, pos, fell);
+            }
         }
         crate::vehicles::Act::Dismount => {
             let id = e.id;
@@ -212,6 +342,76 @@ pub fn act(ctx: &ServerContext, actor: &crate::interact::Actor, act: crate::vehi
         }
         // Mounts have no paddles.
         crate::vehicles::Act::Paddle { .. } => {}
+    }
+}
+
+/// A steered mob's fall, from where its rider's client moved it: the
+/// distance of a fall that just ended.
+fn fall(m: &mut mc_entity::mob::Mob, drop: f64, on_ground: bool, wet: bool) -> Option<f64> {
+    if wet {
+        m.fall_distance = 0.0;
+        None
+    } else if on_ground {
+        // The move that lands is part of the fall.
+        let fell = m.fall_distance + drop.max(0.0);
+        m.fall_distance = 0.0;
+        (fell > 0.0).then_some(fell)
+    } else {
+        m.fall_distance += drop.max(0.0);
+        None
+    }
+}
+
+/// A steered mob lands `fell` blocks down: it is hurt as it would be
+/// without a rider. The riders, when the fall was past its safe distance.
+fn land(ctx: &ServerContext, e: &mut Entity, fell: f64) -> Vec<i32> {
+    let Kind::Mob(m) = &e.kind else {
+        return Vec::new();
+    };
+    let riders = if fell > m.species.safe_fall() {
+        m.riders.clone()
+    } else {
+        Vec::new()
+    };
+    let damage = m
+        .species
+        .fall_damage(fell, f64::from(m.effect_level("jump_boost")));
+    if damage > 0.0 && m.species.takes_fall_damage() {
+        let harm = crate::mobs::hurt::Harm::new(damage, "minecraft:fall");
+        crate::mobs::hurt::harm(ctx, e, &harm);
+    }
+    riders
+}
+
+/// Riders of a mount that fell past its safe distance ("Horse") take the
+/// fall as usual.
+fn riders_land(ctx: &ServerContext, riders: &[i32], pos: [f64; 3], fell: f64) {
+    if riders.is_empty() {
+        return;
+    }
+    let below = mc_protocol::Position::new(
+        pos[0].floor() as i32,
+        (pos[1] - 0.2).floor() as i32,
+        pos[2].floor() as i32,
+    );
+    let block = ctx
+        .world
+        .block(below, &ctx.data.blocks)
+        .and_then(|s| ctx.data.blocks.block_name(s));
+    let key = crate::damage::fall_key(block, false);
+    let players: Vec<u128> = lock(&ctx.players)
+        .values()
+        .filter(|p| riders.contains(&p.entity_id))
+        .map(|p| p.profile.uuid)
+        .collect();
+    for uuid in players {
+        let safe = lock(&ctx.vitals).get(&uuid).map_or(3.0, |v| {
+            v.effects.value(crate::effects::Attr::SafeFallDistance)
+        });
+        let damage = (fell - safe).ceil();
+        if damage > 0.0 {
+            crate::vitals::hurt_by(ctx, uuid, damage as f32, "minecraft:fall", key, None);
+        }
     }
 }
 
