@@ -2091,6 +2091,10 @@ pub mod play {
         pub telemetry: bool,
     }
 
+    /// Each criterion of an advancement, with when it was done (epoch
+    /// milliseconds), `None` if not yet.
+    pub type CriteriaProgress = Vec<(String, Option<i64>)>;
+
     /// Update Advancements: advancements to show or drop, and the criteria
     /// done of some (each criterion with when, in epoch milliseconds, or
     /// `None` if not done).
@@ -2099,7 +2103,7 @@ pub mod play {
         pub reset: bool,
         pub added: Vec<(String, Advancement)>,
         pub removed: Vec<String>,
-        pub progress: Vec<(String, Vec<(String, Option<i64>)>)>,
+        pub progress: Vec<(String, CriteriaProgress)>,
         /// Whether to toast what was just completed.
         pub show: bool,
     }

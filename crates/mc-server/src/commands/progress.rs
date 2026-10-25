@@ -7,7 +7,7 @@ use std::sync::Arc;
 use mc_command::args::full_id;
 use mc_nbt::{Compound, Tag};
 use mc_protocol::packets::play::{
-    Advancement, AdvancementDisplay, ItemStack, RecipeBookAdd, RecipeBookRemove,
+    Advancement, AdvancementDisplay, CriteriaProgress, ItemStack, RecipeBookAdd, RecipeBookRemove,
     RecipeBookSettings, UpdateAdvancements,
 };
 use mc_protocol::text::{list, translate};
@@ -145,7 +145,7 @@ impl Sink<'_> {
             let old = state.progress.shown.get(&uuid).cloned().unwrap_or_default();
             let added: Vec<String> = now.difference(&old).cloned().collect();
             let removed: Vec<String> = old.difference(&now).cloned().collect();
-            let mut progress: Vec<(String, Vec<(String, Option<i64>)>)> = added
+            let mut progress: Vec<(String, CriteriaProgress)> = added
                 .iter()
                 .map(|i| (i.clone(), b.progress(i, done.and_then(|d| d.get(i)), when)))
                 .collect();
