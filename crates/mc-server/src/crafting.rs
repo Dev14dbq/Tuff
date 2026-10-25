@@ -65,6 +65,8 @@ pub struct Cut {
 /// A smithing table recipe: an upgrade (`result` set) or a trim (not).
 #[derive(Debug)]
 pub struct Smithing {
+    /// The recipe's id (`minecraft:coast_armor_trim_smithing_template_smithing_trim`).
+    pub id: String,
     pub template: HashSet<i32>,
     pub base: HashSet<i32>,
     pub addition: HashSet<i32>,
@@ -167,6 +169,7 @@ impl Recipes {
                     ingredient(&json["addition"]),
                 ) {
                     smithing.push(Smithing {
+                        id: name.clone(),
                         template,
                         base,
                         addition,
@@ -199,6 +202,7 @@ impl Recipes {
                     ingredient(&json["addition"]),
                 ) {
                     smithing.push(Smithing {
+                        id: name.clone(),
                         template,
                         base,
                         addition,

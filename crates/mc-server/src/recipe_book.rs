@@ -161,6 +161,8 @@ pub fn craft(
 pub fn used(ctx: &ServerContext, uuid: u128, grid: &[Option<ItemStack>], size: usize) {
     if let Some((_, name)) = ctx.recipes.craft_named(grid, size) {
         crate::commands::unlock(ctx, uuid, name);
+        let used: Vec<ItemStack> = grid.iter().flatten().cloned().collect();
+        crate::criteria::crafted(ctx, uuid, "minecraft:recipe_crafted", name, &used);
     }
 }
 

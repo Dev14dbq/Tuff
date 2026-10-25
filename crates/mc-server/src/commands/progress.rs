@@ -72,6 +72,8 @@ pub struct Book {
     water: Vec<(String, String)>,
     /// (advancement, criterion) waiting for each recipe.
     waiting: HashMap<String, Vec<(String, String)>>,
+    /// (advancement, criterion, conditions) of each trigger.
+    by_trigger: HashMap<String, Vec<(String, String, serde_json::Value)>>,
 }
 
 /// A criterion that completes once the inventory holds every item a
@@ -263,6 +265,13 @@ fn book(ctx: &ServerContext) -> Arc<Book> {
             })
             .collect();
         for (k, c) in v["criteria"].as_object().into_iter().flatten() {
+            if let Some(t) = c["trigger"].as_str() {
+                b.by_trigger.entry(full_id(t)).or_default().push((
+                    id.clone(),
+                    k.clone(),
+                    c["conditions"].clone(),
+                ));
+            }
             match c["trigger"].as_str() {
                 Some("minecraft:inventory_changed") => {
                     let wants: Vec<HashSet<i32>> = c["conditions"]["items"]
@@ -832,6 +841,62 @@ fn trigger(ctx: &ServerContext, uuid: u128, award: impl FnOnce(&mut Sink, &Book,
     for e in events {
         let _ = ctx.events.send(e);
     }
+}
+
+/// A trigger fired for a player: every criterion of it not done yet whose
+/// conditions `test` passes, and whose `player` conditions the player
+/// meets, is done. `test` is given the conditions and the player.
+pub fn criterion(
+    ctx: &ServerContext,
+    uuid: u128,
+    kind: &str,
+    test: impl Fn(&serde_json::Value, &crate::criteria::Subject) -> bool,
+) {
+    criterion_as(ctx, uuid, kind, |_| {}, test);
+}
+
+/// [`criterion`] with the player as conditions see them changed first (what
+/// they look at, say).
+pub fn criterion_as(
+    ctx: &ServerContext,
+    uuid: u128,
+    kind: &str,
+    change: impl FnOnce(&mut crate::criteria::Subject),
+    test: impl Fn(&serde_json::Value, &crate::criteria::Subject) -> bool,
+) {
+    let b = book(ctx);
+    let Some(list) = b.by_trigger.get(kind) else {
+        return;
+    };
+    let undone: Vec<&(String, String, serde_json::Value)> = {
+        let state = lock(&ctx.rare);
+        let done = state.progress.done.get(&uuid);
+        list.iter()
+            .filter(|(a, c, _)| !done.and_then(|d| d.get(a)).is_some_and(|d| d.contains(c)))
+            .collect()
+    };
+    if undone.is_empty() {
+        return;
+    }
+    let Some(mut me) = crate::criteria::player(ctx, uuid) else {
+        return;
+    };
+    change(&mut me);
+    let hits: Vec<(String, String)> = undone
+        .into_iter()
+        .filter(|(_, _, c)| {
+            crate::criteria::holds(ctx, &c["player"], Some(&me), me.pos) && test(c, &me)
+        })
+        .map(|(a, c, _)| (a.clone(), c.clone()))
+        .collect();
+    if hits.is_empty() {
+        return;
+    }
+    trigger(ctx, uuid, |r, b, p| {
+        for (a, c) in hits {
+            grant(r, b, p, &a, Some(&c));
+        }
+    });
 }
 
 /// The player's inventory holds `items` (every kind in it) now that it

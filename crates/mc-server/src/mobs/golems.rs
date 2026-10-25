@@ -176,6 +176,7 @@ fn raise(ctx: &ServerContext, build: &Build) -> Event {
             m.quirks.air.weather = stage;
         }
     }
+    crate::criteria::summoned(ctx, &e);
     crate::tick::spawn_entity(ctx, e);
     Event::BlocksChanged {
         by: 0,

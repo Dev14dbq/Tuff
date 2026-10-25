@@ -237,6 +237,14 @@ fn catch(ctx: &ServerContext, actor: Actor, at: [f64; 3], luck: i32, open_water:
     let drops = ctx.loot.roll(&env, &table, &cx);
     if !drops.is_empty() {
         crate::stats::custom(ctx, actor.uuid, "fish_caught", 1);
+        let caught: Vec<_> = drops.iter().map(crate::loot::Drop::stack).collect();
+        let rod = [0, 1]
+            .into_iter()
+            .filter_map(|hand| crate::held::held(ctx, actor.uuid, hand))
+            .find(|h| h.name == "minecraft:fishing_rod");
+        if let Some(rod) = rod {
+            crate::criteria::fished(ctx, actor.uuid, &rod.stack, None, &caught);
+        }
     }
     for drop in drops {
         let d = [

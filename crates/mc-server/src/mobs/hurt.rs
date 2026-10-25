@@ -34,6 +34,8 @@ pub struct Harm<'a> {
     pub player: Option<u128>,
     /// The projectile that did it.
     pub direct: Option<i32>,
+    /// Its entity type (`minecraft:fireball`).
+    pub direct_kind: Option<String>,
     /// Pushes away from here.
     pub from: Option<[f64; 3]>,
     /// Knockback levels beyond the basic push.
@@ -54,6 +56,7 @@ impl<'a> Harm<'a> {
             by: None,
             player: None,
             direct: None,
+            direct_kind: None,
             from: None,
             knockback: 0.0,
             fire: 0,
@@ -163,6 +166,8 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     if let Some(p) = h.player {
         crate::stats::custom(ctx, p, "damage_dealt", (amount * 10.0).round() as i32);
     }
+    let blamed = h.player.or(m.hurt_by_player.map(|(p, _)| p));
+    let dead_now = m.is_dead();
     // Hurt by no one (water, a fall, a wall), an enderman mostly teleports.
     if m.species == Species::Enderman && h.by.is_none() && h.player.is_none() && m.below(10) != 0 {
         let ground = super::Ground::new(ctx);
@@ -226,6 +231,27 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
             )],
         }),
     );
+    if let Some(p) = blamed {
+        let victim = crate::criteria::entity(ctx, e);
+        let hit = crate::criteria::Hit {
+            kind: crate::enchant_effects::full(h.kind),
+            direct: h.direct_kind.as_ref().map(|k| crate::criteria::Subject {
+                kind: k.clone(),
+                id: h.direct.unwrap_or(-1),
+                pos: h.from.unwrap_or(e.pos),
+                ..Default::default()
+            }),
+            dealt: h.amount,
+            taken: amount,
+            ..Default::default()
+        };
+        if h.player.is_some() {
+            crate::criteria::hurt_entity(ctx, p, &victim, &hit);
+        }
+        if dead_now {
+            crate::criteria::killed(ctx, p, &victim, &hit);
+        }
+    }
     if dead {
         let killer = h
             .killer
@@ -334,6 +360,7 @@ fn hit_with_blow(
         by: Some(by.entity_id),
         player: Some(by.uuid),
         direct: None,
+        direct_kind: None,
         from: Some(by.pos),
         knockback,
         fire: blow.fire,
@@ -647,7 +674,7 @@ fn villager_hit(
 }
 
 /// The loot context entity for a mob.
-fn ent_of(ctx: &ServerContext, m: &Mob) -> crate::loot::Ent {
+pub(crate) fn ent_of(ctx: &ServerContext, m: &Mob) -> crate::loot::Ent {
     let mut components = Vec::new();
     if m.species == Species::Sheep {
         components.push((
@@ -994,6 +1021,11 @@ pub fn breed(
             crate::stats::custom(ctx, p, "animals_bred", 1);
             let xp = 1 + (crate::util::random_u64() % 7) as i32;
             crate::xp::spawn(ctx, pos, xp);
+            let (a, b) = (
+                crate::criteria::entity(ctx, &entities[i]),
+                crate::criteria::entity(ctx, &entities[j]),
+            );
+            crate::criteria::bred(ctx, p, &a, &b, None);
         }
         return None;
     }
@@ -1056,6 +1088,11 @@ pub fn breed(
         crate::stats::custom(ctx, p, "animals_bred", 1);
         let xp = 1 + (crate::util::random_u64() % 7) as i32;
         crate::xp::spawn(ctx, pos, xp);
+        let (a, b) = (
+            crate::criteria::entity(ctx, &entities[i]),
+            crate::criteria::entity(ctx, &entities[j]),
+        );
+        crate::criteria::bred(ctx, p, &a, &b, Some(&crate::criteria::entity(ctx, &baby)));
     }
     // Land animals (Cursor): sniffers lay an egg, which hatches later.
     if kind == Species::Sniffer {
@@ -1151,6 +1188,13 @@ pub fn cure(ctx: &ServerContext, e: &mut Entity) {
         mv.gossip.happen(p, mc_entity::gossip::Kind::MinorPositive);
     }
     e.removed = true;
+    if let Some(p) = curer {
+        let (zombie, villager) = (
+            crate::criteria::entity(ctx, e),
+            crate::criteria::entity(ctx, &v),
+        );
+        crate::criteria::cured(ctx, p, &zombie, &villager);
+    }
     fx::status(ctx, v.id, 16);
     fx::sound(ctx, "entity.zombie_villager.converted", 5, e.pos, 1.0, 1.0);
     let id = v.id;

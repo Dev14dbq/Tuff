@@ -233,6 +233,14 @@ pub fn tick(ctx: &ServerContext, count: i64) {
         if levels == 0 {
             continue;
         }
+        let centre = [
+            f64::from(p.x) + 0.5,
+            f64::from(p.y) + 0.5,
+            f64::from(p.z) + 0.5,
+        ];
+        for uuid in crate::criteria::players_near(ctx, centre, 10.0) {
+            crate::criteria::beacon(ctx, uuid, levels);
+        }
         let Some(primary) = effect_name(&be.data, "primary_effect") else {
             continue;
         };

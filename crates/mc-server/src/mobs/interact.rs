@@ -96,6 +96,8 @@ fn tame(ctx: &ServerContext, e: &mut Entity, by: &Actor) {
     }
     m.dirty = true;
     fx::status(ctx, id, 7);
+    let tamed = crate::criteria::entity(ctx, e);
+    crate::criteria::with_entity(ctx, by.uuid, "minecraft:tame_animal", &tamed);
 }
 
 /// A player used the held item on a mob.

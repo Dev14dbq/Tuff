@@ -873,6 +873,11 @@ fn respawn_tick(
         fight.dragon_killed = false;
         let d = new_dragon(ctx);
         fight.dragon = Some(d.uuid);
+        // Everyone at the fight summoned it.
+        let s = crate::criteria::entity(ctx, &d);
+        for uuid in crate::criteria::players_near(ctx, CENTRE, 192.0) {
+            crate::criteria::with_entity(ctx, uuid, "minecraft:summoned_entity", &s);
+        }
         fresh.push(d);
     } else {
         fight.respawn = Some(next);

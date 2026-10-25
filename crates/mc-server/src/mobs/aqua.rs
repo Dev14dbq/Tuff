@@ -528,6 +528,7 @@ pub fn used(
         e.removed = true;
         consume(ctx, by, slot);
         give(ctx, by, &stack);
+        crate::criteria::with_item(ctx, by.uuid, "minecraft:filled_bucket", &stack);
         fx::sound(
             ctx,
             "item.bucket.fill_fish",

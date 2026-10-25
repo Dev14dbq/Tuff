@@ -451,6 +451,16 @@ pub fn hurt_player(ctx: &ServerContext, uuid: u128, hit: &Hit) -> Option<bool> {
             "damage_blocked_by_shield",
             (hit.amount * 10.0).round() as i32,
         );
+        crate::criteria::hurt_by(
+            ctx,
+            uuid,
+            &crate::criteria::Hit {
+                kind: crate::enchant_effects::full(hit.kind),
+                dealt: hit.amount,
+                blocked: true,
+                ..Default::default()
+            },
+        );
         if hit.amount >= 3.0 {
             crate::held::wear(ctx, uuid, slot, 1 + hit.amount.floor() as i32);
         }

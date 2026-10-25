@@ -335,6 +335,10 @@ pub fn apply(
         .with
         .and_then(|w| entities.iter().find(|e| e.id == w))
         .map(|p| [p.pos[0] - p.vel[0], p.pos[1], p.pos[2] - p.vel[2]]);
+    let direct_kind = hit
+        .with
+        .and_then(|w| entities.iter().find(|e| e.id == w))
+        .and_then(crate::stats::entity_type);
     let part = crate::bosses::part_owner(entities, hit.target);
     let target = part.map_or(hit.target, |(id, _)| id);
     let Some(e) = entities.iter_mut().find(|e| e.id == target && !e.removed) else {
@@ -357,6 +361,7 @@ pub fn apply(
             h.killer = Some("minecraft:player".into());
         }
         h.direct = hit.with;
+        h.direct_kind = direct_kind;
         h.from = from;
         crate::mobs::hurt::harm(ctx, e, &h);
         return;

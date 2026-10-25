@@ -626,7 +626,19 @@ pub fn complete(
     times: i32,
 ) -> Option<Snapshot> {
     let gained = with_merchant(ctx, entity_id, |m| {
+        let seller = crate::criteria::Subject {
+            kind: if m.wandering {
+                "minecraft:wandering_trader"
+            } else {
+                "minecraft:villager"
+            }
+            .into(),
+            id: entity_id,
+            baby: m.is_baby(),
+            ..Default::default()
+        };
         let offer = m.offers.get_mut(index)?;
+        let bought = offer.result.clone();
         let times = times.clamp(1, (offer.max_uses - offer.uses).max(1));
         offer.uses += times;
         let (xp, reward) = (offer.xp * times, offer.reward_xp);
@@ -639,9 +651,11 @@ pub fn complete(
                 m.level_up_in = Some(LEVEL_UP_DELAY);
             }
         }
-        Some((times, reward))
+        Some((times, reward, seller, bought))
     })??;
     crate::stats::custom(ctx, uuid, "traded_with_villager", gained.0);
+    let bought = ItemStack::new(gained.3.item, gained.3.count);
+    crate::criteria::traded(ctx, uuid, &gained.2, &bought);
     if gained.1 {
         let points: i32 = (0..gained.0).map(|_| 3 + below(4) as i32).sum();
         give_xp(ctx, uuid, points);

@@ -1682,6 +1682,7 @@ async fn play(
                             };
                             // Others here stop seeing us; the new place starts afresh.
                             let _ = ctx.events.send(Event::PlayerGone { uuid, entity_id });
+                            let left = (ctx.world.dimension.clone(), [pose.x, pose.y, pose.z]);
                             ctx = next;
                             events = ctx.events.subscribe();
                             visible.clear();
@@ -1691,6 +1692,9 @@ async fn play(
                                 p.dimension = ctx.world.dimension.clone();
                                 p.pose = Some(pose);
                             });
+                            if !after_death {
+                                crate::criteria::changed_dimension(&ctx, uuid, &left.0, &ctx.world.dimension, left.1);
+                            }
                             crate::vitals::stop_using(&ctx, uuid);
                             writer.queue(&play::Respawn {
                                 dimension_type: ctx.world.dimension_type_id,

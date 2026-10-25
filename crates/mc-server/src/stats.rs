@@ -312,6 +312,13 @@ pub fn set_sprinting(ctx: &ServerContext, uuid: u128, on: bool) {
 }
 
 /// Whether the player is sprinting (dolphins watch for swimmers).
+pub fn is_sneaking(ctx: &ServerContext, uuid: u128) -> bool {
+    lock(&ctx.stats)
+        .watch
+        .get(&uuid)
+        .is_some_and(|w| w.sneaking)
+}
+
 pub fn is_sprinting(ctx: &ServerContext, uuid: u128) -> bool {
     lock(&ctx.stats)
         .watch
@@ -450,6 +457,11 @@ pub fn tick(ctx: &ServerContext) {
         if asleep && !was_asleep {
             custom(ctx, uuid, "sleep_in_bed", 1);
             reset(ctx, uuid, CUSTOM, "time_since_rest");
+            crate::criteria::plain(ctx, uuid, "minecraft:slept_in_bed");
+        }
+        // Where the player is, once a second.
+        if alive && get(ctx, uuid, CUSTOM, "minecraft:play_time") % 20 == 0 {
+            crate::criteria::plain(ctx, uuid, "minecraft:location");
         }
         if let Some(w) = lock(&ctx.stats).watch.get_mut(&uuid) {
             w.asleep = asleep;

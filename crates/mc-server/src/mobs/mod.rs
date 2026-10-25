@@ -542,7 +542,18 @@ fn apply_pending(ctx: &ServerContext, entities: &mut [Entity], pending: Vec<Pend
                 if dist_sq(by.pos, e.pos) > REACH_SQ {
                     continue;
                 }
+                let held = crate::held::held(ctx, by.uuid, hand).map(|h| h.stack);
                 interact::used(ctx, e, &by, hand, &leashed);
+                if held.is_some() {
+                    let after = crate::criteria::entity(ctx, e);
+                    crate::criteria::entity_and_item(
+                        ctx,
+                        by.uuid,
+                        "minecraft:player_interacted_with_entity",
+                        &after,
+                        held.as_ref(),
+                    );
+                }
             }
         }
     }
