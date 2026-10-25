@@ -114,6 +114,37 @@ pub fn flags_of(m: &Mob) -> i8 {
     i8::from(burning) | crate::effects::flags(&m.effects)
 }
 
+/// A mannequin's fields. It is not a mob to clients but an avatar, the
+/// player's model: from 15 on come its main hand, skin layers, profile,
+/// immovability and the line under its name (as a vanilla server sends
+/// them).
+fn avatar_fields(m: &Mob) -> Vec<(u8, MetadataValue)> {
+    let default = mc_entity::mob::Avatar::default();
+    let a = m.quirks.avatar.as_deref().unwrap_or(&default);
+    let mut v = Vec::new();
+    if a.pose != 0 {
+        v.push((6, MetadataValue::Pose(a.pose)));
+    }
+    if a.left_handed {
+        v.push((15, MetadataValue::Holder(42, 0)));
+    }
+    v.push((16, MetadataValue::Byte(a.layers as i8)));
+    if let Some(bytes) = a
+        .profile
+        .as_ref()
+        .and_then(|p| mc_protocol::components::encode_value("minecraft:profile", p))
+    {
+        v.push((17, MetadataValue::Raw(41, bytes)));
+    }
+    if a.immovable {
+        v.push((18, MetadataValue::Boolean(true)));
+    }
+    if let Some(d) = &a.description {
+        v.push((19, MetadataValue::OptComponent(d.clone())));
+    }
+    v
+}
+
 /// All the metadata fields of a mob, as sent when it appears.
 pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataValue)> {
     use Species::*;
@@ -122,6 +153,18 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
         (metadata::HEALTH, MetadataValue::Float(m.health.max(0.0))),
     ];
     v.extend(crate::mob_effects::effect_fields(ctx, m, false));
+    if m.species == Mannequin {
+        if let Some(name) = &m.custom_name {
+            let mut c = mc_nbt::Compound::new();
+            c.insert("text", mc_nbt::Tag::String(name.clone()));
+            v.push((
+                field::CUSTOM_NAME,
+                MetadataValue::OptComponent(Some(mc_nbt::Tag::Compound(c))),
+            ));
+        }
+        v.extend(avatar_fields(m));
+        return v;
+    }
     v.extend([(
         field::MOB_FLAGS,
         MetadataValue::Byte(
@@ -469,4 +512,69 @@ pub fn slot_of(ctx: &ServerContext, item: i32) -> Option<usize> {
         "offhand" => slot::OFFHAND,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use mc_entity::Kind;
+    use mc_nbt::{Compound, Tag};
+    use mc_protocol::Encode as _;
+    use mc_protocol::packets::play::SetEntityData;
+
+    use super::*;
+
+    #[test]
+    fn a_mannequin_is_sent_as_a_vanilla_server_sends_it() {
+        let Some(ctx) = crate::projectiles::tests::flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        // summon minecraft:mannequin ~ ~ ~ {profile:{name:"Softfoxxy"},
+        //   hidden_layers:["cape","hat"],main_hand:"left",pose:"crouching",
+        //   immovable:1b,description:"Hi"}
+        let mut nbt = Compound::new();
+        let mut profile = Compound::new();
+        profile.insert("name", Tag::String("Softfoxxy".into()));
+        nbt.insert("profile", Tag::Compound(profile));
+        nbt.insert(
+            "hidden_layers",
+            Tag::List(vec![Tag::String("cape".into()), Tag::String("hat".into())]),
+        );
+        nbt.insert("main_hand", Tag::String("left".into()));
+        nbt.insert("pose", Tag::String("crouching".into()));
+        nbt.insert("immovable", Tag::Byte(1));
+        nbt.insert("description", Tag::String("Hi".into()));
+        let mut e = crate::mobs::new_mob(&ctx, Species::Mannequin, [0.0; 3]);
+        let Kind::Mob(m) = &mut e.kind else { panic!() };
+        crate::mobs::nbt::apply(&ctx, m, &nbt);
+        let entries: Vec<_> = metadata_of(&ctx, m, 0)
+            .into_iter()
+            .filter(|(i, _)| *i == 6 || *i >= 15)
+            .collect();
+        let mut ours = Vec::new();
+        SetEntityData {
+            entity_id: 1,
+            entries,
+        }
+        .encode(&mut ours);
+        // As the vanilla server sent its fields 6 and 15 to 19.
+        let mut vanilla = vec![
+            1, 6, 0x14, 5, 0x0f, 0x2a, 0, 0x10, 0, 0x3e, 0x11, 0x29, 0, 1, 9,
+        ];
+        vanilla.extend(b"Softfoxxy");
+        vanilla.extend([
+            0, 0, 0, 0, 0, 0, 0x12, 8, 1, 0x13, 6, 1, 8, 0, 2, b'H', b'i', 0xff,
+        ]);
+        assert_eq!(ours, vanilla);
+        // Saved and read back, it is the same.
+        let mut saved = Compound::new();
+        crate::mobs::nbt::write(&ctx, m, &mut saved);
+        let mut back = crate::mobs::new_mob(&ctx, Species::Mannequin, [0.0; 3]);
+        let Kind::Mob(b) = &mut back.kind else {
+            panic!()
+        };
+        crate::mobs::nbt::apply(&ctx, b, &saved);
+        assert_eq!(b.quirks.avatar, m.quirks.avatar);
+        assert!(b.persistent);
+    }
 }

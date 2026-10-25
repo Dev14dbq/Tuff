@@ -132,6 +132,7 @@ species! {
     Bogged => "minecraft:bogged", "Bogged";
     Parched => "minecraft:parched", "Parched";
     Giant => "minecraft:giant", "Giant";
+    Mannequin => "minecraft:mannequin", "Mannequin";
     Shulker => "minecraft:shulker", "Shulker";
     Creaking => "minecraft:creaking", "Creaking";
     Warden => "minecraft:warden", "Warden";
@@ -196,7 +197,7 @@ impl Species {
             // Land animals (Cursor)
             Goat | PolarBear | Ocelot | SkeletonHorse | ZombieHorse | Armadillo | Panda | Camel
             | Sniffer => Category::Creature,
-            IronGolem | SnowGolem => Category::Misc,
+            IronGolem | SnowGolem | Mannequin => Category::Misc,
             // Aquatic (Claude)
             Turtle | Frog | Tadpole => Category::Creature,
             Squid | Dolphin | Nautilus => Category::WaterCreature,
@@ -282,6 +283,7 @@ impl Species {
             HappyGhast => (4.0, 4.0),
             Bogged | Parched => (0.6, 1.99),
             Giant => (3.6, 12.0),
+            Mannequin => (0.6, 1.8),
             Shulker => (1.0, 1.0),
             Creaking => (0.9, 2.7),
             Warden => (0.9, 2.9),
@@ -868,12 +870,21 @@ impl Species {
         let base = match self {
             Mooshroom => "cow",
             CaveSpider => "spider",
+            Mannequin => "generic",
             _ => self.path(),
         };
         let ok = match which {
             Sound::Ambient => !matches!(
                 self,
-                Creeper | Slime | MagmaCube | IronGolem | Bee | CopperGolem | SulfurCube | Warden
+                Creeper
+                    | Slime
+                    | MagmaCube
+                    | IronGolem
+                    | Bee
+                    | CopperGolem
+                    | SulfurCube
+                    | Warden
+                    | Mannequin
             ),
             Sound::Step => matches!(
                 self,

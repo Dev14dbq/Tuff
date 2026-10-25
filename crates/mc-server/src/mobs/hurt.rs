@@ -272,6 +272,10 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
 }
 
 pub(crate) fn armor_resistance(ctx: &ServerContext, m: &Mob) -> f64 {
+    // An immovable mannequin is not pushed by blows.
+    if m.quirks.avatar.as_ref().is_some_and(|a| a.immovable) {
+        return 1.0;
+    }
     let base = m.species.knockback_resistance();
     crate::mob_effects::attribute(ctx, m, "knockback_resistance", base).clamp(-2.0, 1.0)
 }
@@ -880,6 +884,10 @@ pub fn die(
             gear_drops.push((g.item, g.count, damage, g.components));
             m.gear[s] = None;
         }
+    }
+    // A mannequin lets nothing fall.
+    if m.species == Species::Mannequin {
+        gear_drops.clear();
     }
     let path = m.species.path();
     let table = format!("minecraft:entities/{path}");

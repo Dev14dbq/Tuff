@@ -918,6 +918,7 @@ pub(super) fn brain(species: Species) -> Brain {
                 prey(3, IRON_GOLEMS, false, false),
             ],
         ),
+        Mannequin => (Vec::new(), Vec::new()),
         Giant => (
             vec![
                 float(),

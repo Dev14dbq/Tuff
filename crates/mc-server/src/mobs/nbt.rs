@@ -118,6 +118,9 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
         m.custom_name = Some(name);
         m.persistent = true;
     }
+    if s == Species::Mannequin {
+        load_avatar(nbt, m);
+    }
     if let Some(v) = int(nbt, "Fire") {
         m.burning = v.max(0);
     }
@@ -447,6 +450,9 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
     c.insert("PersistenceRequired", Tag::Byte(i8::from(m.persistent)));
     c.insert("LeftHanded", Tag::Byte(i8::from(m.left_handed)));
     c.insert("CanPickUpLoot", Tag::Byte(i8::from(m.can_pick_up)));
+    if let Some(a) = &m.quirks.avatar {
+        save_avatar(a, c);
+    }
     if let Some(name) = &m.custom_name {
         c.insert("CustomName", Tag::String(name.clone()));
     }
@@ -724,6 +730,90 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
 }
 
 /// Aquatic (Claude): what the water kinds read from their data.
+const POSES: [(&str, i32); 5] = [
+    ("standing", 0),
+    ("fall_flying", 1),
+    ("sleeping", 2),
+    ("swimming", 3),
+    ("crouching", 5),
+];
+
+/// A mannequin's look (minecraft.wiki, "Mannequin"). It never goes away.
+fn load_avatar(nbt: &Compound, m: &mut Mob) {
+    m.persistent = true;
+    let a = m.quirks.avatar.get_or_insert_with(Default::default);
+    if let Some(p) = nbt.get("profile") {
+        a.profile = Some(match p {
+            Tag::String(name) => {
+                let mut c = Compound::new();
+                c.insert("name", Tag::String(name.clone()));
+                Tag::Compound(c)
+            }
+            other => other.clone(),
+        });
+    }
+    if let Some(Tag::List(hidden)) = nbt.get("hidden_layers") {
+        a.layers = 0x7f;
+        for h in hidden {
+            if let Tag::String(h) = h
+                && let Some(bit) = mc_entity::mob::LAYERS.iter().position(|l| l == h)
+            {
+                a.layers &= !(1 << bit);
+            }
+        }
+    }
+    if let Some(hand) = string(nbt, "main_hand") {
+        a.left_handed = hand == "left";
+    }
+    if let Some(pose) = string(nbt, "pose") {
+        a.pose = POSES.iter().find(|(n, _)| *n == pose).map_or(0, |p| p.1);
+    }
+    if let Some(v) = flag(nbt, "immovable") {
+        a.immovable = v;
+    }
+    if let Some(d) = nbt.get("description") {
+        a.description = Some(Some(d.clone()));
+    }
+    if flag(nbt, "hide_description") == Some(true) {
+        a.description = Some(None);
+    }
+}
+
+fn save_avatar(a: &mc_entity::mob::Avatar, c: &mut Compound) {
+    c.insert(
+        "profile",
+        a.profile
+            .clone()
+            .unwrap_or_else(|| Tag::Compound(Compound::new())),
+    );
+    let hidden: Vec<Tag> = mc_entity::mob::LAYERS
+        .iter()
+        .enumerate()
+        .filter(|(bit, _)| a.layers & (1 << bit) == 0)
+        .map(|(_, l)| Tag::String((*l).into()))
+        .collect();
+    c.insert("hidden_layers", Tag::List(hidden));
+    c.insert(
+        "main_hand",
+        Tag::String(if a.left_handed { "left" } else { "right" }.into()),
+    );
+    let pose = POSES
+        .iter()
+        .find(|p| p.1 == a.pose)
+        .map_or("standing", |p| p.0);
+    c.insert("pose", Tag::String(pose.into()));
+    c.insert("immovable", Tag::Byte(i8::from(a.immovable)));
+    match &a.description {
+        Some(Some(d)) => {
+            c.insert("description", d.clone());
+        }
+        Some(None) => {
+            c.insert("hide_description", Tag::Byte(1));
+        }
+        None => {}
+    }
+}
+
 fn load_aquatic(nbt: &Compound, m: &mut Mob) {
     use Species::*;
     let s = m.species;

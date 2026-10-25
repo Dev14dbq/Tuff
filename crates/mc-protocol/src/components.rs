@@ -739,6 +739,13 @@ static MAP_DECOR: [Field; 4] = [
 ];
 static MAP_DECORATIONS: Net = Net::Map(&Net::Str, &Net::Fields(&MAP_DECOR));
 
+/// A component's value as it goes over the wire, if we know its encoding.
+pub fn encode_value(name: &str, value: &Tag) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    write(codec(name)?, value, &mut out)?;
+    Some(out)
+}
+
 /// The encoding of component `name`, if we know it.
 pub fn codec(name: &str) -> Option<&'static Net> {
     static ENCHANTMENTS: Net = Net::Map(&Net::Holder("minecraft:enchantment"), &Net::VarInt);

@@ -504,7 +504,49 @@ pub struct Quirks {
     /// Illagers, vexes and ravagers.
     pub illager: illager::Illager,
     pub warden: warden::Warden,
+    /// A mannequin's look.
+    pub avatar: Option<Box<Avatar>>,
 }
+
+/// How a mannequin looks (26.x): the player it shows and how it stands.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Avatar {
+    /// `profile` as saved: a name, or a compound (name, id, properties).
+    pub profile: Option<mc_nbt::Tag>,
+    /// The skin layers shown (cape 1, jacket 2, sleeves 4 and 8, trouser
+    /// legs 16 and 32, hat 64).
+    pub layers: u8,
+    pub left_handed: bool,
+    /// 0 standing, 1 fall flying, 2 sleeping, 3 swimming, 5 crouching.
+    pub pose: i32,
+    pub immovable: bool,
+    /// `description`: `None` for the default ("NPC"), `Some(None)` hidden.
+    pub description: Option<Option<mc_nbt::Tag>>,
+}
+
+impl Default for Avatar {
+    fn default() -> Self {
+        Self {
+            profile: None,
+            layers: 0x7f,
+            left_handed: false,
+            pose: 0,
+            immovable: false,
+            description: None,
+        }
+    }
+}
+
+/// The names of the skin layers, by bit.
+pub const LAYERS: [&str; 7] = [
+    "cape",
+    "jacket",
+    "left_sleeve",
+    "right_sleeve",
+    "left_pants_leg",
+    "right_pants_leg",
+    "hat",
+];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mob {

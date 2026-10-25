@@ -2915,6 +2915,9 @@ pub mod play {
         Pose(i32),
         /// A block position, or none (where someone sleeps).
         OptPosition(Option<Position>),
+        /// A value of serializer type `.0`, already encoded (a mannequin's
+        /// profile).
+        Raw(i32, Vec<u8>),
     }
 
     impl MetadataValue {
@@ -2982,6 +2985,10 @@ pub mod play {
                 MetadataValue::Holder(kind, value) => {
                     out.put_varint(*kind);
                     out.put_varint(*value);
+                }
+                MetadataValue::Raw(kind, bytes) => {
+                    out.put_varint(*kind);
+                    out.extend_from_slice(bytes);
                 }
                 MetadataValue::Direction(v) => {
                     out.put_varint(12);
