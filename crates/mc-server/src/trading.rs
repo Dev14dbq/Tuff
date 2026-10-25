@@ -638,7 +638,7 @@ pub fn complete(
             ..Default::default()
         };
         let offer = m.offers.get_mut(index)?;
-        let bought = offer.result.clone();
+        let bought = offer.result;
         let times = times.clamp(1, (offer.max_uses - offer.uses).max(1));
         offer.uses += times;
         let (xp, reward) = (offer.xp * times, offer.reward_xp);

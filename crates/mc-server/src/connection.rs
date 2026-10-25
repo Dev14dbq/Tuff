@@ -66,6 +66,7 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
                     crate::stats::custom(&ctx, uuid, "leave_game", 1);
                     crate::save_player(&ctx, uuid);
                     crate::stats::forget(&ctx, uuid);
+                    crate::criteria::forget(uuid);
                 })
                 .await?;
             }

@@ -854,17 +854,6 @@ pub fn target_hit(ctx: &ServerContext, uuid: u128, projectile: &Subject, signal:
     });
 }
 
-/// `enter_block`, `slide_down_block`: the player is in (on) a block.
-pub fn in_block(ctx: &ServerContext, uuid: u128, trigger: &str, block: &str, state: u32) {
-    criterion(ctx, uuid, trigger, |c, _| {
-        c["block"]
-            .as_str()
-            .is_none_or(|b| crate::enchant_effects::full(b) == block)
-            && (c["blocks"].is_null() || is(ctx, "minecraft:block", &c["blocks"], block))
-            && state_is(ctx, state, &c["state"])
-    });
-}
-
 /// `enchanted_item`: the player enchanted a stack for `levels` levels.
 pub fn enchanted_item(ctx: &ServerContext, uuid: u128, stack: &ItemStack, levels: i32) {
     criterion(ctx, uuid, "minecraft:enchanted_item", |c, _| {
@@ -878,19 +867,6 @@ pub fn brewed(ctx: &ServerContext, uuid: u128, potion: &str) {
         c["potion"]
             .as_str()
             .is_none_or(|p| crate::enchant_effects::full(p) == potion)
-    });
-}
-
-/// `bee_nest_destroyed`: the player broke a nest or hive with bees inside.
-pub fn bee_nest(ctx: &ServerContext, uuid: u128, block: &str, tool: Option<&ItemStack>, bees: i32) {
-    criterion(ctx, uuid, "minecraft:bee_nest_destroyed", |c, _| {
-        (c["block"].is_null()
-            || c["block"]
-                .as_str()
-                .is_some_and(|b| crate::enchant_effects::full(b) == block))
-            && (c["blocks"].is_null() || is(ctx, "minecraft:block", &c["blocks"], block))
-            && item(ctx, &c["item"], tool)
-            && range(&c["num_bees_inside"], f64::from(bees))
     });
 }
 
@@ -942,13 +918,6 @@ pub fn killed_by_arrow(
                 .into_iter()
                 .flatten()
                 .all(|p| victims.iter().any(|v| holds(ctx, p, Some(v), me.pos)))
-    });
-}
-
-/// `spear_mobs`: one spear thrust hit this many mobs.
-pub fn spear_mobs(ctx: &ServerContext, uuid: u128, count: i32) {
-    criterion(ctx, uuid, "minecraft:spear_mobs", |c, _| {
-        range(&c["count"], f64::from(count))
     });
 }
 
@@ -1217,7 +1186,7 @@ pub fn tick(ctx: &ServerContext) {
             );
         }
         // Riding through lava, looked at now and then.
-        if n % 10 == 0 {
+        if n.is_multiple_of(10) {
             let in_lava = player(ctx, uuid)
                 .and_then(|me| me.vehicle)
                 .is_some_and(|v| {
