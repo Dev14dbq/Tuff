@@ -594,6 +594,15 @@ pub fn try_hurt_by_entity(
 
 /// A player moved: track falling and hurt them when they land.
 pub fn moved(ctx: &ServerContext, uuid: u128, before: Pose, after: Pose, in_water: bool) {
+    crate::criteria::moved(
+        ctx,
+        uuid,
+        [before.x, before.y, before.z],
+        before.on_ground,
+        [after.x, after.y, after.z],
+        after.on_ground,
+        in_water,
+    );
     let landed_from = {
         let mut all = lock(&ctx.vitals);
         let Some(v) = all.get_mut(&uuid) else {

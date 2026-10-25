@@ -262,10 +262,16 @@ pub fn tick(ctx: &ServerContext, entities: &mut [Entity], targets: &[super::Targ
                 && dist_sq(o.pos, pos) < 1.3 * 1.3
         });
         let Some((j, _)) = found else { continue };
-        let Kind::Item { item, count, .. } = &mut entities[j].kind else {
+        let Kind::Item {
+            item,
+            count,
+            thrower,
+            ..
+        } = &mut entities[j].kind
+        else {
             continue;
         };
-        let item = *item;
+        let (item, thrower) = (*item, *thrower);
         *count -= 1;
         let gone = *count <= 0;
         let id = entities[j].id;
@@ -288,5 +294,16 @@ pub fn tick(ctx: &ServerContext, entities: &mut [Entity], targets: &[super::Targ
             m.dirty = true;
         }
         super::interact::send_equipment(ctx, &entities[i]);
+        if let Some(by) = thrower {
+            let picker = crate::criteria::entity(ctx, &entities[i]);
+            let taken = mc_protocol::packets::play::ItemStack::new(item, 1);
+            crate::criteria::entity_and_item(
+                ctx,
+                by,
+                "minecraft:thrown_item_picked_up_by_entity",
+                &picker,
+                Some(&taken),
+            );
+        }
     }
 }

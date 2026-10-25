@@ -587,6 +587,7 @@ fn raids(ctx: &ServerContext, players: &[Player]) {
             effects::give(ctx, uuid, k, Instance::new(level - 1, HERO_TICKS, true));
         }
         crate::stats::custom(ctx, uuid, "raid_win", 1);
+        crate::criteria::plain(ctx, uuid, "minecraft:hero_of_the_village");
     }
     join(ctx);
 }

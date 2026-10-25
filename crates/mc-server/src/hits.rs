@@ -339,6 +339,17 @@ pub fn apply(
         .with
         .and_then(|w| entities.iter().find(|e| e.id == w))
         .and_then(crate::stats::entity_type);
+    // An arrow (not a trident): whether a crossbow shot it.
+    let arrow_from_crossbow = hit
+        .with
+        .and_then(|w| entities.iter().find(|e| e.id == w))
+        .and_then(|e| match &e.kind {
+            Kind::Projectile(p) => match &p.shot {
+                mc_entity::extra::Shot::Arrow(a) if !a.trident => Some(a.crossbow),
+                _ => None,
+            },
+            _ => None,
+        });
     let part = crate::bosses::part_owner(entities, hit.target);
     let target = part.map_or(hit.target, |(id, _)| id);
     let Some(e) = entities.iter_mut().find(|e| e.id == target && !e.removed) else {
@@ -363,7 +374,16 @@ pub fn apply(
         h.direct = hit.with;
         h.direct_kind = direct_kind;
         h.from = from;
+        let alive = matches!(&e.kind, Kind::Mob(m) if m.dying.is_none());
         crate::mobs::hurt::harm(ctx, e, &h);
+        let killed = alive && matches!(&e.kind, Kind::Mob(m) if m.dying.is_some());
+        if killed
+            && let (Some(owner), Some(arrow), Some(crossbow)) =
+                (hit.by, hit.with, arrow_from_crossbow)
+        {
+            let victim = crate::criteria::entity(ctx, e);
+            crate::criteria::arrow_killed(ctx, owner, arrow, crossbow, victim);
+        }
         return;
     }
     let mut fresh = Vec::new();

@@ -155,6 +155,22 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                         && let Some(o) = owner
                     {
                         crate::stats::custom(ctx, o, "target_hit", 1);
+                        if let Strike::Block { cell, face } = strike {
+                            let signal = hits::target_strength(cell, face, e.pos);
+                            let arrow = crate::criteria::Subject {
+                                kind: match (a.trident, a.spectral) {
+                                    (true, _) => "minecraft:trident",
+                                    (_, true) => "minecraft:spectral_arrow",
+                                    _ => "minecraft:arrow",
+                                }
+                                .into(),
+                                id: e.id,
+                                pos: e.pos,
+                                dimension: ctx.world.dimension.clone(),
+                                ..Default::default()
+                            };
+                            crate::criteria::target_hit(ctx, o, &arrow, i32::from(signal));
+                        }
                     }
                     crate::pots::projectile(ctx, from, to);
                     fx::sound(

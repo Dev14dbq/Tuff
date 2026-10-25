@@ -513,6 +513,7 @@ pub fn block_holds(ctx: &ServerContext, c: &Value, at: Position, tool: Option<&I
                     ];
                     location(ctx, &c["predicate"], pos, &ctx.world.dimension)
                 }
+                "match_block" => block_is(ctx, c, at),
                 "block_state_property" => block_at(ctx, at).is_some_and(|(name, state)| {
                     c["block"]
                         .as_str()
@@ -1070,9 +1071,185 @@ fn in_sight(
     best.map(|(_, e)| entity(ctx, e))
 }
 
-/// Each tick: `using_item` for those looking through a spyglass, with what
-/// they look at.
-pub fn tick_spyglasses(ctx: &ServerContext) {
+/// What the movement triggers keep of each player: where a fall began,
+/// where an explosion or wind burst launched them and by what, where they
+/// began to levitate (and for how long) or to ride through lava.
+#[derive(Default)]
+struct Motion {
+    fall_start: Option<[f64; 3]>,
+    launched: Option<([f64; 3], Option<String>)>,
+    levitating: Option<([f64; 3], i32)>,
+    lava: Option<[f64; 3]>,
+    mounted: bool,
+}
+
+static MOTION: std::sync::Mutex<Option<std::collections::HashMap<u128, Motion>>> =
+    std::sync::Mutex::new(None);
+
+fn motion<R>(uuid: u128, f: impl FnOnce(&mut Motion) -> R) -> R {
+    let mut all = lock(&MOTION);
+    f(all
+        .get_or_insert_with(Default::default)
+        .entry(uuid)
+        .or_default())
+}
+
+/// The player moved: a fall begins or ends (`fall_from_height`, and
+/// `fall_after_explosion` after a launch).
+pub fn moved(
+    ctx: &ServerContext,
+    uuid: u128,
+    before: [f64; 3],
+    was_on_ground: bool,
+    after: [f64; 3],
+    on_ground: bool,
+    in_water: bool,
+) {
+    let landed = motion(uuid, |m| {
+        if in_water {
+            m.fall_start = None;
+            m.launched = None;
+            return None;
+        }
+        if was_on_ground && !on_ground && m.fall_start.is_none() {
+            m.fall_start = Some(before);
+        }
+        if on_ground && !was_on_ground {
+            return Some((m.fall_start.take(), m.launched.take()));
+        }
+        if on_ground {
+            m.fall_start = None;
+        }
+        None
+    });
+    let Some((start, launch)) = landed else {
+        return;
+    };
+    let dimension = ctx.world.dimension.clone();
+    let _ = after;
+    if let Some(start) = start {
+        travelled(
+            ctx,
+            uuid,
+            "minecraft:fall_from_height",
+            (start, &dimension),
+            None,
+            0,
+        );
+    }
+    if let Some((at, cause)) = launch {
+        let cause = cause.map(|kind| Subject {
+            kind,
+            ..Subject::default()
+        });
+        travelled(
+            ctx,
+            uuid,
+            "minecraft:fall_after_explosion",
+            (at, &dimension),
+            cause.as_ref(),
+            0,
+        );
+    }
+}
+
+/// An explosion or wind burst launched the player from `at`.
+pub fn launched(uuid: u128, at: [f64; 3], cause: Option<&str>) {
+    motion(uuid, |m| m.launched = Some((at, cause.map(str::to_owned))));
+}
+
+/// The player got on something (`started_riding` is tested next tick, when
+/// what they ride can be looked at).
+pub fn started_riding(uuid: u128) {
+    motion(uuid, |m| m.mounted = true);
+}
+
+/// The player left the game: what was kept of them goes.
+pub fn forget(uuid: u128) {
+    if let Some(all) = lock(&MOTION).as_mut() {
+        all.remove(&uuid);
+    }
+    spyglass(uuid, None);
+}
+
+static TICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Each tick: the triggers that watch players over time (`using_item`
+/// through a spyglass, `levitation`, `ride_entity_in_lava`,
+/// `started_riding`).
+pub fn tick(ctx: &ServerContext) {
+    let n = TICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let online: Vec<u128> = lock(&ctx.players).keys().copied().collect();
+    for uuid in online {
+        let here = ctx.of_player(uuid);
+        let ctx = &*here;
+        let Some(pos) = lock(&ctx.players)
+            .get(&uuid)
+            .and_then(|p| p.pose)
+            .map(|p| [p.x, p.y, p.z])
+        else {
+            continue;
+        };
+        if motion(uuid, |m| std::mem::take(&mut m.mounted)) {
+            plain(ctx, uuid, "minecraft:started_riding");
+        }
+        let levitating = lock(&ctx.vitals)
+            .get(&uuid)
+            .is_some_and(|v| v.effects.has("levitation"));
+        let since = motion(uuid, |m| {
+            if !levitating {
+                m.levitating = None;
+                return None;
+            }
+            let l = m.levitating.get_or_insert((pos, 0));
+            l.1 += 1;
+            Some(*l)
+        });
+        if let Some((start, ticks)) = since {
+            let dimension = ctx.world.dimension.clone();
+            travelled(
+                ctx,
+                uuid,
+                "minecraft:levitation",
+                (start, &dimension),
+                None,
+                ticks,
+            );
+        }
+        // Riding through lava, looked at now and then.
+        if n % 10 == 0 {
+            let in_lava = player(ctx, uuid)
+                .and_then(|me| me.vehicle)
+                .is_some_and(|v| {
+                    block_at(ctx, block_pos(v.pos))
+                        .is_some_and(|(name, _)| name == "minecraft:lava")
+                });
+            let start = motion(uuid, |m| {
+                if !in_lava {
+                    m.lava = None;
+                    return None;
+                }
+                Some(*m.lava.get_or_insert(pos))
+            });
+            if let Some(start) = start {
+                let dimension = ctx.world.dimension.clone();
+                travelled(
+                    ctx,
+                    uuid,
+                    "minecraft:ride_entity_in_lava",
+                    (start, &dimension),
+                    None,
+                    0,
+                );
+            }
+        }
+    }
+    tick_spyglasses(ctx);
+}
+
+/// `using_item` for those looking through a spyglass, with what they look
+/// at.
+fn tick_spyglasses(ctx: &ServerContext) {
     let users: Vec<(u128, i32)> = lock(&SPYGLASS)
         .as_ref()
         .map(|m| m.iter().map(|(u, h)| (*u, *h)).collect())
@@ -1094,5 +1271,233 @@ pub fn tick_spyglasses(ctx: &ServerContext) {
         };
         let seen = in_sight(ctx, &me, pose.yaw, pose.pitch, 100.0);
         using(ctx, uuid, &held.stack, seen.as_ref());
+    }
+}
+
+/// What each arrow killed so far, for `killed_by_arrow`.
+static ARROW_KILLS: std::sync::Mutex<Option<std::collections::HashMap<i32, Vec<Subject>>>> =
+    std::sync::Mutex::new(None);
+
+/// An arrow the player shot (from a crossbow or a bow) killed `victim`:
+/// `killed_by_arrow` with everything it killed so far.
+pub fn arrow_killed(ctx: &ServerContext, uuid: u128, arrow: i32, crossbow: bool, victim: Subject) {
+    let victims = {
+        let mut all = lock(&ARROW_KILLS);
+        let all = all.get_or_insert_with(Default::default);
+        // Arrows come and go: keep only a few hundred about.
+        if all.len() > 256 {
+            all.clear();
+        }
+        let list = all.entry(arrow).or_default();
+        list.push(victim);
+        list.clone()
+    };
+    let weapon = ctx
+        .items
+        .id(if crossbow {
+            "minecraft:crossbow"
+        } else {
+            "minecraft:bow"
+        })
+        .map(|i| ItemStack::new(i, 1));
+    killed_by_arrow(ctx, uuid, &victims, weapon.as_ref());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::progress::has_done;
+    use crate::testkit;
+    use mc_entity::mob::Species;
+
+    const ME: u128 = 0xadd5;
+
+    fn setup() -> Option<std::sync::Arc<ServerContext>> {
+        let ctx = testkit::flat()?;
+        testkit::join(&ctx, ME, 77, [0.5, -60.0, 0.5], 0);
+        crate::commands::load_progress(&ctx, ME, &[], &crate::players::BookState::default());
+        Some(ctx)
+    }
+
+    fn stack(ctx: &ServerContext, name: &str) -> ItemStack {
+        ItemStack::new(ctx.items.id(name).unwrap(), 1)
+    }
+
+    #[test]
+    fn killing_a_mob_counts_by_its_kind() {
+        let Some(ctx) = setup() else { return };
+        let mut zombie = crate::mobs::new_mob(&ctx, Species::Zombie, [3.5, -60.0, 0.5]);
+        let mut h = crate::mobs::hurt::Harm::new(100.0, "minecraft:player_attack");
+        h.player = Some(ME);
+        crate::mobs::hurt::harm(&ctx, &mut zombie, &h);
+        assert!(has_done(
+            &ctx,
+            ME,
+            "minecraft:adventure/kill_a_mob",
+            Some("minecraft:zombie")
+        ));
+        assert!(!has_done(
+            &ctx,
+            ME,
+            "minecraft:adventure/kill_a_mob",
+            Some("minecraft:skeleton")
+        ));
+    }
+
+    #[test]
+    fn a_skeleton_shot_from_afar_is_a_sniper_duel_and_from_near_is_not() {
+        let Some(ctx) = setup() else { return };
+        let arrow = |pos: [f64; 3]| Hit {
+            kind: "minecraft:arrow".into(),
+            direct: Some(Subject {
+                kind: "minecraft:arrow".into(),
+                pos,
+                ..Subject::default()
+            }),
+            ..Hit::default()
+        };
+        let skeleton = |x: f64| Subject {
+            kind: "minecraft:skeleton".into(),
+            pos: [x, -60.0, 0.5],
+            dimension: "minecraft:overworld".into(),
+            ..Subject::default()
+        };
+        killed(&ctx, ME, &skeleton(20.0), &arrow([20.0, -59.0, 0.5]));
+        assert!(!has_done(&ctx, ME, "minecraft:adventure/sniper_duel", None));
+        // Melee from afar is no shot.
+        let melee = Hit {
+            kind: "minecraft:player_attack".into(),
+            ..Hit::default()
+        };
+        killed(&ctx, ME, &skeleton(60.0), &melee);
+        assert!(!has_done(&ctx, ME, "minecraft:adventure/sniper_duel", None));
+        killed(&ctx, ME, &skeleton(60.0), &arrow([60.0, -59.0, 0.5]));
+        assert!(has_done(&ctx, ME, "minecraft:adventure/sniper_duel", None));
+    }
+
+    #[test]
+    fn eating_counts_toward_a_balanced_diet() {
+        let Some(ctx) = setup() else { return };
+        crate::consume::eaten(&ctx, ME, &stack(&ctx, "minecraft:apple"));
+        assert!(has_done(
+            &ctx,
+            ME,
+            "minecraft:husbandry/balanced_diet",
+            Some("apple")
+        ));
+        assert!(!has_done(
+            &ctx,
+            ME,
+            "minecraft:husbandry/balanced_diet",
+            Some("beef")
+        ));
+    }
+
+    #[test]
+    fn a_planted_crop_is_a_seed_planted() {
+        let Some(ctx) = setup() else { return };
+        testkit::set(&ctx, [2, -60, 2], "minecraft:wheat");
+        on_block(
+            &ctx,
+            ME,
+            "minecraft:placed_block",
+            Position::new(2, -60, 2),
+            Some(&stack(&ctx, "minecraft:wheat_seeds")),
+        );
+        assert!(has_done(
+            &ctx,
+            ME,
+            "minecraft:husbandry/plant_seed",
+            Some("wheat")
+        ));
+        assert!(!has_done(
+            &ctx,
+            ME,
+            "minecraft:husbandry/plant_seed",
+            Some("beetroots")
+        ));
+    }
+
+    #[test]
+    fn where_the_player_stands_is_checked_by_biome() {
+        let Some(ctx) = setup() else { return };
+        let biome = crate::mobs::aqua::biome_at(&ctx, [0.5, -60.0, 0.5]).unwrap();
+        plain(&ctx, ME, "minecraft:location");
+        assert!(has_done(
+            &ctx,
+            ME,
+            "minecraft:adventure/adventuring_time",
+            Some(&biome)
+        ));
+    }
+
+    #[test]
+    fn a_long_way_through_the_nether_is_fast_travel() {
+        let Some(ctx) = setup() else { return };
+        changed_dimension(
+            &ctx,
+            ME,
+            "minecraft:overworld",
+            "minecraft:the_nether",
+            [0.5, -60.0, 0.5],
+        );
+        assert!(has_done(&ctx, ME, "minecraft:story/enter_the_nether", None));
+        testkit::place(&ctx, ME, [8000.5, -60.0, 0.5], true);
+        changed_dimension(
+            &ctx,
+            ME,
+            "minecraft:the_nether",
+            "minecraft:overworld",
+            [1000.0, 70.0, 0.0],
+        );
+        assert!(has_done(&ctx, ME, "minecraft:nether/fast_travel", None));
+    }
+
+    #[test]
+    fn items_match_by_tag_count_and_enchantment() {
+        let Some(ctx) = setup() else { return };
+        let pick = testkit::stack(&ctx, "diamond_pickaxe", &[("efficiency", 3)]);
+        let p = serde_json::json!({
+            "items": "#minecraft:pickaxes",
+            "predicates": {"minecraft:enchantments": [{"enchantments": "minecraft:efficiency", "levels": {"min": 2}}]}
+        });
+        assert!(item(&ctx, &p, Some(&pick)));
+        let p =
+            serde_json::json!({"predicates": {"minecraft:enchantments": [{"levels": {"min": 4}}]}});
+        assert!(!item(&ctx, &p, Some(&pick)));
+        assert!(!item(
+            &ctx,
+            &serde_json::json!({"count": {"min": 2}}),
+            Some(&pick)
+        ));
+        assert!(!item(
+            &ctx,
+            &serde_json::json!({"items": "minecraft:apple"}),
+            None
+        ));
+    }
+
+    #[test]
+    fn a_ghast_killed_by_its_own_fireball_is_a_return_to_sender() {
+        let Some(ctx) = setup() else { return };
+        let ghast = Subject {
+            kind: "minecraft:ghast".into(),
+            ..Subject::default()
+        };
+        let hit = Hit {
+            kind: "minecraft:fireball".into(),
+            direct: Some(Subject {
+                kind: "minecraft:fireball".into(),
+                ..Subject::default()
+            }),
+            ..Hit::default()
+        };
+        killed(&ctx, ME, &ghast, &hit);
+        assert!(has_done(
+            &ctx,
+            ME,
+            "minecraft:nether/return_to_sender",
+            None
+        ));
     }
 }

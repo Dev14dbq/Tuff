@@ -345,7 +345,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             crate::effects::tick(&ctx, count as i64);
             crate::vitals::tick(&ctx);
             crate::stats::tick(&ctx);
-            crate::criteria::tick_spyglasses(&ctx);
+            crate::criteria::tick(&ctx);
             crate::commands::watch(&ctx);
             crate::worn::tick(&ctx);
             crate::projectiles::trident::tick_spins(&ctx);
@@ -948,6 +948,8 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
             aabb: e.aabb(),
             kind: match &e.kind {
                 mc_entity::Kind::Mob(m) => Some(m.species.id()),
+                mc_entity::Kind::Merchant(m) if m.wandering => Some("minecraft:wandering_trader"),
+                mc_entity::Kind::Merchant(_) => Some("minecraft:villager"),
                 _ => None,
             },
         })
