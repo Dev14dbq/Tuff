@@ -355,6 +355,20 @@ fn everything(ctx: &ServerContext) -> Vec<Entity> {
         .links
         .insert(chicken.id, crate::decor::leash::Holder::Player(0x99));
     all.extend([knot, pig, chicken]);
+    let cushion = entity(
+        ctx,
+        Kind::Hung(Hung {
+            decor: Decor::Cushion {
+                color: 14,
+                sitter: None,
+            },
+            facing: 0,
+            yaw: 0.0,
+            anchor: [36, 100, 40],
+        }),
+        [36.5, 100.0, 40.5],
+    );
+    all.push(cushion);
 
     // Projectiles.
     let mut arrow = summoned(
@@ -561,6 +575,13 @@ fn every_kind_of_entity_comes_back_after_a_restart() {
         lock(&ctx.leashes).links.get(&pig.id),
         Some(&crate::decor::leash::Holder::Knot(knot.id))
     );
+    let cushion = find("cushion");
+    let Kind::Hung(h) = &cushion.kind else {
+        panic!()
+    };
+    assert_eq!(h.anchor, [36, 100, 40]);
+    assert!(matches!(h.decor, Decor::Cushion { color: 14, .. }));
+    assert_eq!([cushion.pos[0], cushion.pos[2]], [36.5, 40.5]);
     let boat = find("oak_boat");
     let Kind::Vehicle(v) = &boat.kind else {
         panic!()

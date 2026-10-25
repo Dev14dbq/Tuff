@@ -186,6 +186,8 @@ pub struct Spawn {
 
 /// Serializer type of a painting variant holder.
 const PAINTING_VARIANT: i32 = 34;
+/// Serializer type of a dye color (a cushion's), as a vanilla server sends it.
+const DYE_COLOR: i32 = 43;
 
 /// Yaw a hanging entity looks out with, from its facing (north 2, south 3,
 /// west 4, east 5).
@@ -349,6 +351,10 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                 Decor::LeashKnot => {
                     s.data = i32::from(h.facing);
                 }
+                Decor::Cushion { color, .. } => {
+                    s.meta
+                        .push((8, MetadataValue::Holder(DYE_COLOR, i32::from(*color))));
+                }
                 Decor::Stand(a) => {
                     if a.invisible {
                         s.meta
@@ -503,6 +509,7 @@ pub fn type_name(kind: &Kind) -> Option<String> {
             Decor::Frame(_) => "item_frame",
             Decor::Painting { .. } => "painting",
             Decor::LeashKnot => "leash_knot",
+            Decor::Cushion { .. } => "cushion",
             Decor::Stand(_) => "armor_stand",
         }
         .into(),

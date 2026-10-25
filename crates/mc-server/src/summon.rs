@@ -233,6 +233,19 @@ pub fn build(
                 None,
             ))
         }
+        "cushion" => {
+            let cell = match nbt.get("block_pos") {
+                Some(Tag::IntArray(p)) if p.len() == 3 => [p[0], p[1], p[2]],
+                _ => at.map(|v| v.floor() as i32),
+            };
+            let color = match nbt.get("color") {
+                Some(Tag::String(c)) => crate::decor::cushion::color_of(c),
+                _ => 0,
+            };
+            let y = crate::decor::cushion::rest(ctx, cell).unwrap_or(at[1]);
+            let e = crate::decor::cushion::new(ctx, cell, y, color);
+            Some((e.kind, Some(e.pos)))
+        }
         "item_frame" | "glow_item_frame" | "painting" | "leash_knot" => {
             // Paintings keep their facing as a horizontal one (`facing`:
             // south, west, north, east).

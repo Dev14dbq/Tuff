@@ -253,6 +253,12 @@ pub enum Decor {
     Stand(Box<Stand>),
     /// The knot a lead is tied to on a fence.
     LeashKnot,
+    /// A cushion (26.3): `anchor` is the cell it lies in; `color` a dye
+    /// (0 white .. 15 black); `sitter` the entity sitting on it.
+    Cushion {
+        color: u8,
+        sitter: Option<i32>,
+    },
 }
 
 /// A hanging entity: the block it hangs on is `anchor`, `facing` is the side

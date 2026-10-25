@@ -6,6 +6,7 @@
 //! does. Armor stands stand where they are put and fall when the ground goes.
 //! Follows minecraft.wiki ("Item Frame", "Armor Stand", "Painting", "Lead").
 
+pub mod cushion;
 pub mod leash;
 pub mod painting;
 
@@ -204,6 +205,9 @@ pub fn place(
         "minecraft:lead" if is_fence(ctx, clicked) => {
             return leash::tie_to_fence(ctx, outcome, actor, hand, clicked);
         }
+        _ if let Some(color) = cushion::color_of_item(name) => {
+            return cushion::place(ctx, outcome, actor, hand, color, clicked, face);
+        }
         _ => return false,
     };
     // Hangs on a solid block in free space.
@@ -285,31 +289,49 @@ pub fn break_hung(ctx: &ServerContext, e: &mut Entity, fresh: &mut Vec<Entity>, 
     } else {
         &mut kept
     };
-    let (self_item, sound): (Option<&str>, &str) = match &h.decor {
+    let (self_item, sound): (Option<String>, &str) = match &h.decor {
         Decor::Frame(f) => {
             if let Some(item) = &f.item {
                 fresh.extend(dropped_stack(ctx, at, item));
             }
             (
-                Some(if f.glow {
-                    "minecraft:glow_item_frame"
-                } else {
-                    "minecraft:item_frame"
-                }),
+                Some(
+                    if f.glow {
+                        "minecraft:glow_item_frame"
+                    } else {
+                        "minecraft:item_frame"
+                    }
+                    .into(),
+                ),
                 "entity.item_frame.break",
             )
         }
-        Decor::Painting { .. } => (Some("minecraft:painting"), "entity.painting.break"),
+        Decor::Painting { .. } => (Some("minecraft:painting".into()), "entity.painting.break"),
         Decor::Stand(s) => {
             for item in s.gear.iter().flatten() {
                 fresh.extend(dropped_stack(ctx, at, item));
             }
-            (Some("minecraft:armor_stand"), "entity.armor_stand.break")
+            (
+                Some("minecraft:armor_stand".into()),
+                "entity.armor_stand.break",
+            )
         }
         Decor::LeashKnot => (None, "item.lead.untied"),
+        Decor::Cushion { color, sitter } => {
+            if sitter.is_some() {
+                fx::emit(
+                    ctx,
+                    fx::Fx::Passengers(mc_protocol::packets::play::SetPassengers {
+                        vehicle: e.id,
+                        passengers: Vec::new(),
+                    }),
+                );
+            }
+            (Some(cushion::item_of(*color)), "entity.cushion.break")
+        }
     };
     if drop_self && let Some(name) = self_item {
-        fresh.extend(dropped(ctx, at, name, 1, 0));
+        fresh.extend(dropped(ctx, at, &name, 1, 0));
     }
     if matches!(h.decor, Decor::LeashKnot) {
         leash::knot_gone(ctx, e.id, drop_self.then_some(at), fresh);
@@ -359,6 +381,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 t.out.spawn.extend(fresh);
             }
         }
+        Decor::Cushion { .. } => cushion::tick(t, e),
         Decor::Stand(s) => {
             if s.marker {
                 return;
@@ -435,7 +458,7 @@ pub fn hurt(ctx: &ServerContext, e: &mut Entity, hit: &Hit, fresh: &mut Vec<Enti
                 break_hung(ctx, e, fresh, true);
             }
         }
-        Decor::Painting { .. } => break_hung(ctx, e, fresh, true),
+        Decor::Painting { .. } | Decor::Cushion { .. } => break_hung(ctx, e, fresh, true),
         Decor::Stand(s) => {
             if s.marker || hit.amount <= 0.0 {
                 return events;
@@ -525,6 +548,15 @@ pub fn interact(
             outcome.events.push(frame_data(e, &f));
         }
         Decor::Painting { .. } if attack => break_hung(ctx, e, fresh, !creative),
+        // Adventure players leave cushions be.
+        Decor::Cushion { .. } if attack && actor.game_mode != 2 => {
+            break_hung(ctx, e, fresh, !creative);
+        }
+        Decor::Cushion { .. } if !attack => {
+            if !cushion::sit(ctx, actor, e) {
+                return;
+            }
+        }
         Decor::Stand(s) if attack => {
             if s.marker {
                 return;

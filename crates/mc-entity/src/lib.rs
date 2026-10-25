@@ -159,6 +159,7 @@ impl Entity {
                 extra::Decor::Stand(s) if s.small => (0.25, 0.9875),
                 extra::Decor::Stand(_) => (0.5, 1.975),
                 extra::Decor::LeashKnot => (0.375, 0.5),
+                extra::Decor::Cushion { .. } => (0.999, 0.249),
                 // Thin boxes are cut to the wall in `Entity::aabb`.
                 _ => (0.75, 0.75),
             },

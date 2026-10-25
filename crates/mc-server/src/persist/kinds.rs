@@ -284,7 +284,7 @@ pub fn write(ctx: &ServerContext, e: &Entity, all: &[Entity]) -> Option<Compound
         Kind::Projectile(p) => (p.yaw, p.pitch),
         Kind::Hung(h) => match h.decor {
             Decor::Stand(_) => (h.yaw, 0.0),
-            Decor::LeashKnot => (0.0, 0.0),
+            Decor::LeashKnot | Decor::Cushion { .. } => (0.0, 0.0),
             _ => hung_rotation(h.facing),
         },
         Kind::Vehicle(v) => (v.yaw, 0.0),
@@ -777,6 +777,13 @@ fn hung(ctx: &ServerContext, e: &Entity, h: &Hung, c: &mut Compound) {
         }
         Decor::LeashKnot => {
             c.insert("block_pos", Tag::IntArray(h.anchor.to_vec()));
+        }
+        Decor::Cushion { color, .. } => {
+            c.insert("block_pos", Tag::IntArray(h.anchor.to_vec()));
+            c.insert(
+                "color",
+                Tag::String(crate::decor::cushion::color_name(*color).into()),
+            );
         }
         Decor::Stand(s) => {
             living(c, s.health, &[("max_health", 20.0)]);
@@ -1295,7 +1302,7 @@ fn read_hung(ctx: &ServerContext, c: &Compound, h: &mut Hung, yaw: f32) {
             h.facing = side_of_painting(int(c, "facing").or_else(|| int(c, "Facing")).unwrap_or(0));
             *size = painting_size(ctx, variant);
         }
-        Decor::LeashKnot => {
+        Decor::LeashKnot | Decor::Cushion { .. } => {
             if let Some(at) = cell {
                 h.anchor = at;
             }
