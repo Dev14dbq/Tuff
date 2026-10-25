@@ -6,7 +6,10 @@ use std::sync::Arc;
 
 use mc_command::args::full_id;
 use mc_nbt::{Compound, Tag};
-use mc_protocol::packets::play::{RecipeBookAdd, RecipeBookRemove, RecipeBookSettings};
+use mc_protocol::packets::play::{
+    Advancement, AdvancementDisplay, ItemStack, RecipeBookAdd, RecipeBookRemove,
+    RecipeBookSettings, UpdateAdvancements,
+};
 use mc_protocol::text::{list, translate};
 
 use super::run::err;
@@ -43,6 +46,14 @@ struct Adv {
     description: Option<Tag>,
     frame: String,
     announce: bool,
+    /// How it shows in its tab, if it does.
+    icon: Option<ItemStack>,
+    background: Option<String>,
+    show_toast: bool,
+    hidden: bool,
+    telemetry: bool,
+    /// Where it sits in its tab (column, row).
+    at: (f32, f32),
     recipes: Vec<String>,
     xp: i32,
 }
@@ -121,6 +132,69 @@ impl Sink<'_> {
     }
 }
 
+impl Sink<'_> {
+    /// Tells a player's screen of what changed in the advancement `id`: its
+    /// progress, and what now shows or no longer does. Changes one after
+    /// the other share a packet.
+    fn advancement_changed(&mut self, b: &Book, uuid: u128, id: &str) {
+        let (added, removed, progress) = {
+            let mut state = lock(&self.ctx.rare);
+            let done = state.progress.done.get(&uuid);
+            let now = b.visible(done);
+            let when = now_millis();
+            let old = state.progress.shown.get(&uuid).cloned().unwrap_or_default();
+            let added: Vec<String> = now.difference(&old).cloned().collect();
+            let removed: Vec<String> = old.difference(&now).cloned().collect();
+            let mut progress: Vec<(String, Vec<(String, Option<i64>)>)> = added
+                .iter()
+                .map(|i| (i.clone(), b.progress(i, done.and_then(|d| d.get(i)), when)))
+                .collect();
+            if now.contains(id) && !added.iter().any(|i| i == id) {
+                progress.push((
+                    id.to_owned(),
+                    b.progress(id, done.and_then(|d| d.get(id)), when),
+                ));
+            }
+            state.progress.shown.insert(uuid, now);
+            (added, removed, progress)
+        };
+        if added.is_empty() && removed.is_empty() && progress.is_empty() {
+            return;
+        }
+        let added: Vec<(String, Advancement)> = added
+            .into_iter()
+            .map(|i| {
+                let a = b.for_client(&i);
+                (i, a)
+            })
+            .collect();
+        if let Some(Event::Direct {
+            uuid: last,
+            packet: Direct::Advancements(u),
+        }) = self.events.last_mut()
+            && *last == uuid
+        {
+            u.added.extend(added);
+            u.removed.extend(removed);
+            for (i, p) in progress {
+                u.progress.retain(|(j, _)| *j != i);
+                u.progress.push((i, p));
+            }
+            return;
+        }
+        self.events.push(Event::Direct {
+            uuid,
+            packet: Direct::Advancements(UpdateAdvancements {
+                reset: false,
+                added,
+                removed,
+                progress,
+                show: true,
+            }),
+        });
+    }
+}
+
 fn sink<'a>(r: &'a mut Run<'_>) -> Sink<'a> {
     Sink {
         ctx: r.ctx,
@@ -144,6 +218,8 @@ pub struct Progress {
     settings: HashMap<u128, ([bool; 4], [bool; 4])>,
     /// Players whose self-completing criteria were awarded since joining.
     ticked: HashSet<u128>,
+    /// The advancements each player's screen shows.
+    shown: HashMap<u128, BTreeSet<String>>,
 }
 
 fn book(ctx: &ServerContext) -> Arc<Book> {
@@ -241,6 +317,22 @@ fn book(ctx: &ServerContext) -> Arc<Book> {
             description: component("description"),
             frame: display["frame"].as_str().unwrap_or("task").to_owned(),
             announce: display["announce_to_chat"].as_bool().unwrap_or(true),
+            icon: display["icon"]["id"].as_str().and_then(|item| {
+                let comps = match mc_data::json_to_nbt(&display["icon"]["components"]) {
+                    Some(Tag::Compound(c)) => Some(c),
+                    _ => None,
+                };
+                Some(crate::items::stack_with(
+                    ctx.items.id(&full_id(item))?,
+                    display["icon"]["count"].as_i64().unwrap_or(1) as i32,
+                    comps.as_ref(),
+                ))
+            }),
+            background: display["background"].as_str().map(full_id),
+            show_toast: display["show_toast"].as_bool().unwrap_or(true),
+            hidden: display["hidden"].as_bool().unwrap_or(false),
+            telemetry: v["sends_telemetry_event"].as_bool().unwrap_or(false),
+            at: (0.0, 0.0),
             recipes: v["rewards"]["recipes"]
                 .as_array()
                 .into_iter()
@@ -273,9 +365,221 @@ fn book(ctx: &ServerContext) -> Arc<Book> {
             b.recipes.insert(id);
         }
     }
+    for kids in b.children.values_mut() {
+        kids.sort();
+    }
+    lay_out(&mut b);
     let b = Arc::new(b);
     lock(&ctx.rare).book = Some(b.clone());
     b
+}
+
+/// Places the advancements of each tab: a column per step from the root,
+/// each leaf on a row of its own and a parent level with the middle of its
+/// children.
+fn lay_out(b: &mut Book) {
+    fn place(
+        b: &Book,
+        id: &str,
+        column: f32,
+        next_row: &mut f32,
+        at: &mut Vec<(String, (f32, f32))>,
+    ) -> f32 {
+        let kids: Vec<&String> = b
+            .children
+            .get(id)
+            .into_iter()
+            .flatten()
+            .filter(|k| b.advs[k.as_str()].icon.is_some())
+            .collect();
+        let row = if kids.is_empty() {
+            let row = *next_row;
+            *next_row += 1.0;
+            row
+        } else {
+            let rows: Vec<f32> = kids
+                .iter()
+                .map(|k| place(b, k, column + 1.0, next_row, at))
+                .collect();
+            (rows[0] + rows[rows.len() - 1]) / 2.0
+        };
+        at.push((id.to_owned(), (column, row)));
+        row
+    }
+    let mut at = Vec::new();
+    for (id, adv) in &b.advs {
+        if adv.icon.is_some() && b.root_of(id) == id.as_str() {
+            place(b, id, 0.0, &mut 0.0, &mut at);
+        }
+    }
+    for (id, pos) in at {
+        if let Some(a) = b.advs.get_mut(&id) {
+            a.at = pos;
+        }
+    }
+}
+
+impl Book {
+    /// The first advancement up the parents that has no shown parent.
+    fn root_of<'a>(&'a self, mut id: &'a str) -> &'a str {
+        while let Some(p) = self.advs[id].parent.as_deref()
+            && self.advs.get(p).is_some_and(|a| a.icon.is_some())
+        {
+            id = p;
+        }
+        id
+    }
+
+    /// The advancement as the client is told of it.
+    fn for_client(&self, id: &str) -> Advancement {
+        let a = &self.advs[id];
+        let display = a.icon.as_ref().map(|icon| AdvancementDisplay {
+            title: a
+                .title
+                .clone()
+                .unwrap_or_else(|| Tag::String(id.to_owned())),
+            description: a
+                .description
+                .clone()
+                .unwrap_or_else(|| Tag::String(String::new())),
+            icon: icon.clone(),
+            frame: match a.frame.as_str() {
+                "challenge" => 1,
+                "goal" => 2,
+                _ => 0,
+            },
+            background: a.background.clone(),
+            show_toast: a.show_toast,
+            hidden: a.hidden,
+            x: a.at.0,
+            y: a.at.1,
+        });
+        Advancement {
+            parent: a.parent.clone().filter(|p| self.advs.contains_key(p)),
+            display,
+            requirements: a.requirements.clone(),
+            telemetry: a.telemetry,
+        }
+    }
+
+    /// What of an advancement is done: each criterion, with when if it is.
+    fn progress(
+        &self,
+        id: &str,
+        have: Option<&BTreeSet<String>>,
+        when: i64,
+    ) -> Vec<(String, Option<i64>)> {
+        self.advs[id]
+            .criteria
+            .iter()
+            .map(|c| {
+                (
+                    c.clone(),
+                    have.is_some_and(|h| h.contains(c)).then_some(when),
+                )
+            })
+            .collect()
+    }
+
+    /// The advancements a player sees in the screen: those done and the
+    /// ones up to two steps past them, with the parents of what is shown; a
+    /// hidden one only once done. A tab shows once anything in it is done.
+    fn visible(&self, done: Option<&HashMap<String, BTreeSet<String>>>) -> BTreeSet<String> {
+        let is_done = |id: &str| {
+            done.and_then(|d| d.get(id))
+                .is_some_and(|h| self.advs[id].complete(Some(h)))
+        };
+        let mut out = BTreeSet::new();
+        for (id, adv) in &self.advs {
+            if adv.icon.is_none() {
+                continue;
+            }
+            let near = is_done(id)
+                || adv.parent.as_deref().is_some_and(|p| {
+                    is_done(p)
+                        || self
+                            .advs
+                            .get(p)
+                            .and_then(|a| a.parent.as_deref())
+                            .is_some_and(is_done)
+                });
+            if !near {
+                continue;
+            }
+            // Up the parents, so the tree stays whole.
+            let mut at = Some(id.as_str());
+            while let Some(i) = at {
+                let Some(a) = self.advs.get(i).filter(|a| a.icon.is_some()) else {
+                    break;
+                };
+                if a.hidden && !is_done(i) {
+                    break;
+                }
+                out.insert(i.to_owned());
+                at = a.parent.as_deref();
+            }
+        }
+        // What lost a hidden parent on the way stays out.
+        let kept: BTreeSet<String> = out
+            .iter()
+            .filter(|id| {
+                let mut at = self.advs[id.as_str()].parent.as_deref();
+                while let Some(p) = at {
+                    let Some(a) = self.advs.get(p).filter(|a| a.icon.is_some()) else {
+                        break;
+                    };
+                    if !out.contains(p) {
+                        return false;
+                    }
+                    at = a.parent.as_deref();
+                }
+                true
+            })
+            .cloned()
+            .collect();
+        kept
+    }
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
+/// The whole advancements screen a joining player starts with.
+pub fn initial_advancements(ctx: &ServerContext, uuid: u128) -> UpdateAdvancements {
+    let b = book(ctx);
+    let mut state = lock(&ctx.rare);
+    let done = state.progress.done.get(&uuid);
+    let shown = b.visible(done);
+    let when = now_millis();
+    let packet = UpdateAdvancements {
+        reset: true,
+        added: shown
+            .iter()
+            .map(|id| (id.clone(), b.for_client(id)))
+            .collect(),
+        removed: Vec::new(),
+        progress: shown
+            .iter()
+            .map(|id| {
+                (
+                    id.clone(),
+                    b.progress(id, done.and_then(|d| d.get(id)), when),
+                )
+            })
+            .collect(),
+        show: false,
+    };
+    state.progress.shown.insert(uuid, shown);
+    packet
+}
+
+/// The advancements screen opened on a tab or closed: the server agrees on
+/// the tab.
+pub fn seen_tab(tab: Option<String>) -> Option<mc_protocol::packets::play::SelectAdvancementsTab> {
+    tab.map(|t| mc_protocol::packets::play::SelectAdvancementsTab { tab: Some(t) })
 }
 
 /// The items a predicate's `items` names: an item, a `#tag`, or a list.
@@ -805,7 +1109,7 @@ fn tick_awards(r: &mut Sink, b: &Book, p: &Target) {
         if adv.ticks.is_empty() {
             continue;
         }
-        let (was, now) = {
+        let (was, now, changed) = {
             let mut st = lock(&r.ctx.rare);
             let have = st
                 .progress
@@ -815,9 +1119,13 @@ fn tick_awards(r: &mut Sink, b: &Book, p: &Target) {
                 .entry(id.clone())
                 .or_default();
             let was = adv.complete(Some(have));
+            let before = have.len();
             have.extend(adv.ticks.iter().cloned());
-            (was, adv.complete(Some(have)))
+            (was, adv.complete(Some(have)), have.len() != before)
         };
+        if changed {
+            r.advancement_changed(b, p.uuid(), id);
+        }
         if !was && now {
             rewarded(r, b, p, id, adv);
         }
@@ -852,6 +1160,9 @@ fn grant(r: &mut Sink, b: &Book, p: &Target, id: &str, only: Option<&str>) -> bo
         .get(&p.uuid())
         .and_then(|d| d.get(id))
         .is_some_and(|h| adv.complete(Some(h)));
+    if changed {
+        r.advancement_changed(b, p.uuid(), id);
+    }
     if now && !was {
         rewarded(r, b, p, id, adv);
     }
@@ -859,7 +1170,14 @@ fn grant(r: &mut Sink, b: &Book, p: &Target, id: &str, only: Option<&str>) -> bo
 }
 
 fn revoke(r: &mut Sink, b: &Book, p: &Target, id: &str, only: Option<&str>) -> bool {
-    let _ = b;
+    let changed = take_back(r, p, id, only);
+    if changed {
+        r.advancement_changed(b, p.uuid(), id);
+    }
+    changed
+}
+
+fn take_back(r: &mut Sink, p: &Target, id: &str, only: Option<&str>) -> bool {
     let mut st = lock(&r.ctx.rare);
     let Some(have) = st
         .progress
@@ -1067,6 +1385,109 @@ mod tests {
 
     fn drain(rx: &mut crate::context::EventReceiver) -> Vec<Event> {
         std::iter::from_fn(|| rx.try_changed()).collect()
+    }
+
+    /// The advancement updates among a player's packets, as one.
+    fn screen(events: &[Event]) -> UpdateAdvancements {
+        let mut all = UpdateAdvancements {
+            reset: false,
+            added: vec![],
+            removed: vec![],
+            progress: vec![],
+            show: false,
+        };
+        for e in events {
+            if let Event::Direct {
+                packet: Direct::Advancements(u),
+                ..
+            } = e
+            {
+                all.added.extend(u.added.iter().cloned());
+                all.removed.extend(u.removed.iter().cloned());
+                all.progress.extend(u.progress.iter().cloned());
+                all.show |= u.show;
+            }
+        }
+        all
+    }
+
+    #[test]
+    fn the_screen_shows_what_is_done_and_two_steps_past_it() {
+        let Some(ctx) = setup() else { return };
+        // Nothing done: no tab yet.
+        let start = initial_advancements(&ctx, ME);
+        assert!(start.reset && start.added.is_empty());
+        let out = screen(&run(&ctx, "advancement grant P52 only minecraft:story/root").events);
+        let ids: Vec<&str> = out.added.iter().map(|(i, _)| i.as_str()).collect();
+        for shown in [
+            "minecraft:story/root",
+            "minecraft:story/mine_stone",
+            "minecraft:story/upgrade_tools",
+        ] {
+            assert!(ids.contains(&shown), "{shown} in {ids:?}");
+        }
+        assert!(!ids.contains(&"minecraft:story/smelt_iron"));
+        assert!(out.show);
+        let root = &out
+            .added
+            .iter()
+            .find(|(i, _)| i == "minecraft:story/root")
+            .unwrap()
+            .1;
+        let d = root.display.as_ref().unwrap();
+        assert_eq!(
+            d.background.as_deref(),
+            Some("minecraft:gui/advancements/backgrounds/stone")
+        );
+        assert_eq!(d.x, 0.0);
+        assert!(root.parent.is_none());
+        let stone = &out
+            .added
+            .iter()
+            .find(|(i, _)| i == "minecraft:story/mine_stone")
+            .unwrap()
+            .1;
+        assert_eq!(stone.display.as_ref().unwrap().x, 1.0);
+        assert_eq!(stone.parent.as_deref(), Some("minecraft:story/root"));
+        let (_, crit) = out
+            .progress
+            .iter()
+            .find(|(i, _)| i == "minecraft:story/root")
+            .unwrap();
+        assert!(crit.iter().all(|(_, when)| when.is_some()));
+        // A rejoin sees the same.
+        let again = initial_advancements(&ctx, ME);
+        assert_eq!(again.added.len(), out.added.len());
+        // Taking it back empties the tab.
+        let out = screen(&run(&ctx, "advancement revoke P52 only minecraft:story/root").events);
+        assert!(out.removed.iter().any(|i| i == "minecraft:story/root"));
+        assert!(out.added.is_empty());
+    }
+
+    #[test]
+    fn a_hidden_advancement_shows_only_once_done() {
+        let Some(ctx) = setup() else { return };
+        let b = book(&ctx);
+        let (id, adv) = b
+            .advs
+            .iter()
+            .find(|(_, a)| a.hidden && a.icon.is_some())
+            .unwrap();
+        let parent = adv.parent.clone().unwrap();
+        run(&ctx, &format!("advancement grant P52 only {parent}"));
+        assert!(
+            !initial_advancements(&ctx, ME)
+                .added
+                .iter()
+                .any(|(i, _)| i == id)
+        );
+        run(&ctx, &format!("advancement grant P52 only {id}"));
+        assert!(
+            initial_advancements(&ctx, ME)
+                .added
+                .iter()
+                .any(|(i, _)| i == id)
+        );
     }
 
     #[test]

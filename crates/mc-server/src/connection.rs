@@ -527,6 +527,7 @@ async fn play(
     writer.queue(&ctx.recipes.update_packet())?;
     writer.queue(&crate::commands::settings_packet(&ctx, uuid))?;
     writer.queue(&crate::commands::initial_book(&ctx, uuid))?;
+    writer.queue(&crate::commands::initial_advancements(&ctx, uuid))?;
     let mut awaiting_teleport = Some(1);
     let mut next_teleport = 1;
     writer.queue(&play::PlayerPosition {
@@ -825,6 +826,11 @@ async fn play(
                         }
                         play::Serverbound::RecipeBookSeenRecipe { recipe } => {
                             crate::commands::recipe_seen(&ctx, uuid, recipe);
+                        }
+                        play::Serverbound::SeenAdvancements { tab } => {
+                            if let Some(p) = crate::commands::seen_tab(tab) {
+                                writer.queue(&p)?;
+                            }
                         }
                         play::Serverbound::ContainerSlotStateChanged { slot, window, enabled } => {
                             windows.slot_state(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, slot, enabled)?;
@@ -1624,6 +1630,7 @@ async fn play(
                                 Direct::Map(p) => writer.queue(&p)?,
                                 Direct::RecipeAdd(p) => writer.queue(&p)?,
                                 Direct::RecipeRemove(p) => writer.queue(&p)?,
+                                Direct::Advancements(p) => writer.queue(&p)?,
                             }
                         }
                         Ok(Event::Scoreboard(p)) => send_scoreboard(writer, &p)?,

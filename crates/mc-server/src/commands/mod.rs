@@ -41,8 +41,9 @@ pub(crate) use functions::tick as run_functions;
 pub(crate) use run::resolve_text;
 
 pub use progress::{
-    book_settings, book_state, in_water, initial_book, known_recipes, knows_recipe, load_progress,
-    recipe_seen, save_advancements, settings_packet, unlock, watch,
+    book_settings, book_state, in_water, initial_advancements, initial_book, known_recipes,
+    knows_recipe, load_progress, recipe_seen, save_advancements, seen_tab, settings_packet, unlock,
+    watch,
 };
 pub use scoreboard::stat_scores;
 pub use suggest::suggest;

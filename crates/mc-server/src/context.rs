@@ -82,6 +82,8 @@ pub enum Direct {
     RecipeAdd(mc_protocol::packets::play::RecipeBookAdd),
     /// Recipes lost by the recipe book.
     RecipeRemove(mc_protocol::packets::play::RecipeBookRemove),
+    /// Advancements shown, dropped or progressed.
+    Advancements(mc_protocol::packets::play::UpdateAdvancements),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
