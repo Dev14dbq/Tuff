@@ -779,11 +779,42 @@ pub mod play {
         Other(String),
     }
 
-    /// Player Action statuses.
+    /// Player Action statuses, as the server works with them (the order
+    /// older protocols used; see [`dig::from_wire`]).
     pub mod dig {
         pub const START: i32 = 0;
         pub const CANCEL: i32 = 1;
         pub const FINISH: i32 = 2;
+        pub const DROP_ALL: i32 = 3;
+        pub const DROP_ONE: i32 = 4;
+        pub const RELEASE: i32 = 5;
+        pub const SWAP_HANDS: i32 = 6;
+        pub const STAB: i32 = 7;
+        /// A status the server does not act on.
+        pub const UNKNOWN: i32 = -1;
+
+        /// The 26.3 client numbers the statuses with one more value after
+        /// "start": it sends 2 when it lets go of a block, 3 when it has
+        /// broken one, 5 for the drop key (seen in a 26.3 client's traffic:
+        /// a start, then 3 with the block's sequence once it breaks; 2 with
+        /// sequence 0 when the aim moves off; 5 on Q). The rest follow the
+        /// same shift.
+        pub fn from_wire(status: i32) -> i32 {
+            match status {
+                0 => START,
+                2..=8 => status - 1,
+                _ => UNKNOWN,
+            }
+        }
+
+        /// What a 26.3 client sends for a status (tests).
+        pub fn to_wire(status: i32) -> i32 {
+            match status {
+                START => 0,
+                1..=7 => status + 1,
+                _ => 1,
+            }
+        }
     }
 
     pub use crate::components::{HashedStack, ItemStack, int_component_hash};
@@ -845,7 +876,7 @@ pub mod play {
                     text: r.string(32500)?,
                 },
                 "minecraft:player_action" => Serverbound::PlayerAction {
-                    status: r.varint()?,
+                    status: dig::from_wire(r.varint()?),
                     position: r.position()?,
                     face: r.i8()?,
                     sequence: r.varint()?,
@@ -4110,5 +4141,23 @@ mod recipe_book_tests {
             },
         };
         assert_eq!(bytes(&ghost), [2, 3, 4, 1, 0, 1]);
+    }
+}
+
+#[cfg(test)]
+mod player_action_tests {
+    use super::play::dig;
+
+    #[test]
+    fn statuses_of_a_26_3_client_are_shifted_after_start() {
+        assert_eq!(dig::from_wire(0), dig::START);
+        assert_eq!(dig::from_wire(1), dig::UNKNOWN);
+        assert_eq!(dig::from_wire(2), dig::CANCEL);
+        assert_eq!(dig::from_wire(3), dig::FINISH);
+        assert_eq!(dig::from_wire(5), dig::DROP_ONE);
+        assert_eq!(dig::from_wire(7), dig::SWAP_HANDS);
+        for s in [dig::START, dig::CANCEL, dig::FINISH, dig::DROP_ALL, dig::RELEASE, dig::STAB] {
+            assert_eq!(dig::from_wire(dig::to_wire(s)), s);
+        }
     }
 }

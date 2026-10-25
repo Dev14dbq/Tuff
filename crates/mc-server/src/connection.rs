@@ -751,6 +751,12 @@ async fn play(
                                 (pose.yaw, pose.pitch) = (yaw, pitch);
                             }
                         }
+                        // Landing or leaving the ground without moving: the client
+                        // sends only the flags (the dig check needs them right).
+                        play::Serverbound::MovePlayerStatusOnly { flags } if settled => {
+                            pose.on_ground = flags & 1 != 0;
+                            moved = true;
+                        }
                         play::Serverbound::MovePlayerRot { yaw, pitch, flags } if settled => {
                             if yaw.is_finite() && pitch.is_finite() {
                                 (pose.yaw, pose.pitch, pose.on_ground) = (yaw, pitch, flags & 1 != 0);
@@ -916,6 +922,20 @@ async fn play(
                             }
                             if let Some((slot, item)) = changed_slot {
                                 windows.inventory_slot(writer, slot as i16, item)?;
+                            }
+                        }
+                        play::Serverbound::PlayerAction { status: 6, .. } if game_mode != 3 => {
+                            // F: the main hand and the off hand trade places.
+                            let mut swapped = None;
+                            change_hands(&ctx, uuid, entity_id, |hands| {
+                                let main = hands.hand_slot(0);
+                                hands.slots.swap(main, 45);
+                                swapped = Some((main, hands.slots[main].clone(), hands.slots[45].clone()));
+                            });
+                            if let Some((main, in_main, in_off)) = swapped {
+                                windows.inventory_slot(writer, main as i16, in_main)?;
+                                windows.inventory_slot(writer, 45, in_off.clone())?;
+                                let _ = ctx.events.send(Event::Equipment { uuid, entity_id, slots: vec![(1, in_off)] });
                             }
                         }
                         play::Serverbound::ClientCommand { action: 0 } => {
@@ -1232,6 +1252,7 @@ async fn play(
                                 parts: info.skin_parts,
                             });
                         }
+                        play::Serverbound::Other(name) => debug!("{}: unhandled {name}", me.profile.name),
                         other => trace!("play: {other:?}"),
                     }
                     if moved {

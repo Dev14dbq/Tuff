@@ -960,7 +960,7 @@ async fn survival_breaking_drops_items_that_get_picked_up() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     let action = |status: i32, sequence: i32| {
         let mut dig = Vec::new();
-        dig.put_varint(status);
+        dig.put_varint(mc_protocol::packets::play::dig::to_wire(status));
         dig.put_position(mc_protocol::Position::new(1, -60, 0));
         dig.put_i8(1);
         dig.put_varint(sequence);
@@ -1680,7 +1680,7 @@ async fn changes_to_a_vanilla_world_are_saved_on_shutdown() {
         mc_protocol::Position::new(x.floor() as i32, y.floor() as i32 - 1, z.floor() as i32);
     let action = |status: i32, sequence: i32| {
         let mut dig = Vec::new();
-        dig.put_varint(status);
+        dig.put_varint(mc_protocol::packets::play::dig::to_wire(status));
         dig.put_position(below);
         dig.put_i8(1);
         dig.put_varint(sequence);
@@ -3544,7 +3544,7 @@ async fn thrown_items_fly_and_are_picked_up_for_everyone() {
 
     // Q: one item out of the hand, looking straight ahead (south).
     let mut drop = Vec::new();
-    drop.put_varint(4);
+    drop.put_varint(mc_protocol::packets::play::dig::to_wire(4));
     drop.put_position(mc_protocol::Position::new(0, 0, 0));
     drop.put_i8(0);
     drop.put_varint(0);
@@ -3854,7 +3854,7 @@ async fn survival_dig_times_are_checked_by_the_server() {
     };
     let action = |status: i32, at: (i32, i32, i32), sequence: i32| {
         let mut dig = Vec::new();
-        dig.put_varint(status);
+        dig.put_varint(mc_protocol::packets::play::dig::to_wire(status));
         dig.put_position(mc_protocol::Position::new(at.0, at.1, at.2));
         dig.put_i8(1);
         dig.put_varint(sequence);
@@ -3918,6 +3918,17 @@ async fn survival_dig_times_are_checked_by_the_server() {
         .send("minecraft:player_action", action(2, (1, -60, 0), 4))
         .await;
     miner.recv_until("minecraft:add_entity").await;
+    // The finish did not throw the pickaxe (the 26.3 "finished" number is
+    // what older clients sent for "drop the stack").
+    let pickaxe = ctx.items.id("minecraft:diamond_pickaxe").unwrap();
+    assert!(
+        ctx.inventories
+            .lock()
+            .unwrap()
+            .values()
+            .any(|h| h.slots.iter().flatten().any(|s| s.item == pickaxe)),
+        "the pickaxe stayed in the hand"
+    );
 
     // A block that breaks at once does, on the start.
     miner
@@ -3971,7 +3982,7 @@ async fn a_thrown_block_is_gone_from_the_hand_for_the_server_too() {
 
     // Q: drop one.
     let mut drop = Vec::new();
-    drop.put_varint(4);
+    drop.put_varint(mc_protocol::packets::play::dig::to_wire(4));
     drop.put_position(mc_protocol::Position::new(0, 0, 0));
     drop.put_i8(0);
     drop.put_varint(0);

@@ -227,7 +227,7 @@ pub fn may_finish(ctx: &ServerContext, actor: &Actor, position: Position, state:
         && finished_in_time(per_tick, now - dig.started);
     if !ok {
         tracing::debug!(
-            "dig: finish at {position:?} after {} ticks refused (needs {:?}, progress {per_tick:.4}/tick)",
+            "dig: finish at {position:?} after {} ticks refused (needs {:?}, progress {per_tick:.4}/tick, {f:?})",
             now - dig.started,
             ticks_to_break(&f),
         );
