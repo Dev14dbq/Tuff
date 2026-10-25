@@ -55,6 +55,45 @@ pub enum Act {
     Charge,
     /// A vex drifts about near where it was called up.
     Drift,
+    /// A raider with nothing to fight walks where its patrol or its raid
+    /// goes (the patrol target, or the raid's centre); `done` once there.
+    March { done: bool },
+}
+
+/// How near a raid's centre a raider has to come before it roams there.
+const RAID_NEAR: f64 = 8.0;
+
+fn march_to(m: &Mob, b: &Body) -> Option<[f64; 3]> {
+    let q = &m.quirks.illager;
+    if m.target.is_some() || q.celebrating || !(q.patrolling || q.raid.is_some()) {
+        return None;
+    }
+    let to = q.patrol_target?;
+    let near = if q.raid.is_some() { RAID_NEAR } else { 2.0 };
+    (dist_sq(b.pos, to) > near * near).then_some(to)
+}
+
+/// A patrol's leader picks somewhere new to go when it arrives (up to 500
+/// blocks off on each side).
+fn new_patrol_target(m: &mut Mob, b: &Body) {
+    let q = &m.quirks.illager;
+    if !q.patrol_leader || q.raid.is_some() || !q.patrolling {
+        return;
+    }
+    let dx = f64::from(m.below(1000)) - 500.0;
+    let dz = f64::from(m.below(1000)) - 500.0;
+    m.quirks.illager.patrol_target = Some([b.pos[0] + dx, b.pos[1], b.pos[2] + dz]);
+}
+
+fn march_speed(m: &Mob) -> f64 {
+    let q = &m.quirks.illager;
+    if q.raid.is_some() {
+        1.0
+    } else if q.patrol_leader {
+        0.7
+    } else {
+        0.595
+    }
 }
 
 /// Extra state on [`super::Quirks`].
@@ -219,6 +258,20 @@ pub(super) fn can_use(act: &mut Act, m: &mut Mob, b: &Body, s: &Senses) -> bool 
             !m.quirks.illager.lunging && m.below(7) == 0 && dist_sq(b.pos, t.pos) > 4.0
         }
         Act::Drift => m.below(7) == 0 && m.nav.goal.is_none(),
+        Act::March { .. } => {
+            if march_to(m, b).is_none() {
+                if m.target.is_none()
+                    && m.quirks
+                        .illager
+                        .patrol_target
+                        .is_some_and(|t| dist_sq(b.pos, t) <= 4.0)
+                {
+                    new_patrol_target(m, b);
+                }
+                return false;
+            }
+            true
+        }
     }
 }
 
@@ -228,6 +281,9 @@ pub(super) fn can_continue(act: &Act, m: &Mob, s: &Senses) -> bool {
         Act::Cast { left, .. } => *left > 0,
         Act::Charge => m.quirks.illager.lunging && m.target.and_then(|t| s.seen(t)).is_some(),
         Act::Drift => false,
+        Act::March { done } => {
+            !*done && m.target.is_none() && m.quirks.illager.patrol_target.is_some()
+        }
     }
 }
 
@@ -265,6 +321,7 @@ pub(super) fn start(act: &mut Act, m: &mut Mob, b: &Body, s: &Senses, out: &mut 
                 });
             }
         }
+        Act::March { done } => *done = false,
         Act::Drift => {
             let home = m.quirks.illager.bound.unwrap_or(b.pos);
             for _ in 0..3 {
@@ -302,6 +359,7 @@ pub(super) fn stop(act: &Act, m: &mut Mob) {
             m.quirks.illager.lunging = false;
             m.dirty = true;
         }
+        Act::March { .. } => m.nav.stop(),
         Act::Drift => {}
     }
 }
@@ -346,6 +404,13 @@ pub(super) fn tick(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses, out: &m
                 m.goto = Some((aim, 1.0));
             }
         }
+        Act::March { done } => match march_to(m, b) {
+            Some(to) => m.goto = Some((to, march_speed(m))),
+            None => {
+                *done = true;
+                new_patrol_target(m, b);
+            }
+        },
         Act::Drift => {}
     }
 }

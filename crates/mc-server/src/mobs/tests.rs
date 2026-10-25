@@ -8,6 +8,7 @@ mod aquatic;
 // Land animals (Cursor)
 mod illagers;
 mod land;
+mod raids;
 mod villages;
 
 #[test]

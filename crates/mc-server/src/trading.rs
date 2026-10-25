@@ -923,7 +923,7 @@ fn biome_name(ctx: &ServerContext, p: Position) -> Option<String> {
 }
 
 /// Feet y on the world surface where a mob can stand, or nothing.
-fn surface_stand(ctx: &ServerContext, x: i32, z: i32) -> Option<i32> {
+pub(crate) fn surface_stand(ctx: &ServerContext, x: i32, z: i32) -> Option<i32> {
     let y = ctx.world.top_where(x, z, |s| !ctx.data.blocks.is_air(s))?;
     standable_at(ctx, x, y, z).then_some(y)
 }

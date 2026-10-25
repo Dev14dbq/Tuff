@@ -69,6 +69,7 @@ mod pots;
 mod precipitation;
 mod projectiles;
 pub mod properties;
+mod raids;
 mod random_ticks;
 mod recipe_book;
 mod respawn;
