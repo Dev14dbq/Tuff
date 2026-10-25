@@ -2135,8 +2135,6 @@ pub mod play {
                     if let Some(b) = &d.background {
                         out.put_string(b);
                     }
-                    out.put_f32(d.x);
-                    out.put_f32(d.y);
                 }
                 out.put_len(a.requirements.len());
                 for group in &a.requirements {
@@ -2146,6 +2144,11 @@ pub mod play {
                     }
                 }
                 out.put_bool(a.telemetry);
+                // The place in the tab closes the advancement, zero when it
+                // has no display.
+                let (x, y) = a.display.as_ref().map_or((0.0, 0.0), |d| (d.x, d.y));
+                out.put_f32(x);
+                out.put_f32(y);
             }
             out.put_len(self.removed.len());
             for id in &self.removed {
@@ -4260,8 +4263,8 @@ mod recipe_book_tests {
         assert_eq!(
             out,
             [
-                1, 1, 3, b'a', b':', b'b', 0, 0, 1, 1, 1, b'c', 0, 0, 1, 3, b'a', b':', b'b', 1, 1,
-                b'c', 1, 0, 0, 0, 0, 0, 0, 0, 1, 1
+                1, 1, 3, b'a', b':', b'b', 0, 0, 1, 1, 1, b'c', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3,
+                b'a', b':', b'b', 1, 1, b'c', 1, 0, 0, 0, 0, 0, 0, 0, 1, 1
             ]
         );
         // A shown one: its icon is item first, then the count.
@@ -4280,8 +4283,8 @@ mod recipe_book_tests {
                         background: None,
                         show_toast: true,
                         hidden: false,
-                        x: 0.0,
-                        y: 0.0,
+                        x: 3.0,
+                        y: 1.5,
                     }),
                     requirements: vec![],
                     telemetry: false,
@@ -4295,6 +4298,12 @@ mod recipe_book_tests {
         // reset, 1 added, "a:b", no parent, a display, the two texts (string tags).
         let icon_at = 1 + 1 + 4 + 1 + 1 + 4 + 4;
         assert_eq!(&out[icon_at..icon_at + 5], &[54, 1, 0, 0, 2]);
+        // As a vanilla server sends it: the place comes after the
+        // telemetry flag, not inside the display.
+        assert_eq!(
+            &out[out.len() - 17..],
+            &[0, 0, 0, 2, 0, 0, 0x40, 0x40, 0, 0, 0x3f, 0xc0, 0, 0, 0, 0, 0]
+        );
         let seen = Serverbound::decode("minecraft:recipe_book_seen_recipe", &mut Reader::new(&[7]))
             .unwrap();
         assert_eq!(seen, Serverbound::RecipeBookSeenRecipe { recipe: 7 });
