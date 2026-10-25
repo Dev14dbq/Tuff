@@ -1072,6 +1072,9 @@ fn a_cod_in_a_pool_swims_about_in_it_for_a_minute() {
     join(&ctx, [30.5, -60.0, 30.5]);
     fill(&ctx, [-6, -60, -6], [6, -52, 6], "minecraft:water");
     let id = put(&ctx, Species::Cod, [0.5, -56.0, 0.5]);
+    // Kept, as from a bucket: the player is over 32 blocks away, where a
+    // fish may otherwise go at random.
+    set_mob(&ctx, id, |m| m.persistent = true);
     let mut seen = std::collections::HashSet::new();
     for _ in 0..1200 {
         run(&ctx, 1);
