@@ -306,15 +306,93 @@ fn in_reach(pose: &Pose, p: Position) -> bool {
     dx * dx + dy * dy + dz * dz <= REACH * REACH
 }
 
-fn intersects(pose: &Pose, p: Position) -> bool {
+/// A player's box: 1.5 high while sneaking.
+fn player_box(pose: &Pose, sneaking: bool) -> mc_entity::Aabb {
     let half = PLAYER_WIDTH / 2.0;
-    let (bx, by, bz) = (f64::from(p.x), f64::from(p.y), f64::from(p.z));
-    pose.x - half < bx + 1.0
-        && pose.x + half > bx
-        && pose.y < by + 1.0
-        && pose.y + PLAYER_HEIGHT > by
-        && pose.z - half < bz + 1.0
-        && pose.z + half > bz
+    let height = if sneaking { 1.5 } else { PLAYER_HEIGHT };
+    mc_entity::Aabb {
+        min: [pose.x - half, pose.y, pose.z - half],
+        max: [pose.x + half, pose.y + height, pose.z + half],
+    }
+}
+
+/// Entities a block may not be placed into (vanilla's `blocksBuilding`):
+/// living ones, boats and minecarts, lit TNT, end crystals; not items, orbs,
+/// projectiles, frames or markers.
+fn blocks_building(e: &mc_entity::Entity) -> bool {
+    use mc_entity::Kind;
+    if e.removed {
+        return false;
+    }
+    match &e.kind {
+        Kind::Mob(m) => m.dying.is_none(),
+        Kind::Merchant(_) | Kind::Tnt { .. } | Kind::Vehicle(_) | Kind::Crystal(_) => true,
+        Kind::Hung(h) => matches!(&h.decor, mc_entity::extra::Decor::Stand(s) if !s.marker),
+        _ => false,
+    }
+}
+
+/// The boxes a state collides with in the world, at `p`: its shape (a fence
+/// or wall stands 1.5 high), or a full cube.
+fn placed_boxes(ctx: &ServerContext, p: Position, state: u32) -> Vec<mc_entity::Aabb> {
+    if !ctx.rules.blocks_motion(state) {
+        return Vec::new();
+    }
+    let name = ctx.data.blocks.block_name(state).unwrap_or_default();
+    let tall = name.ends_with("_fence")
+        || name.ends_with("_wall")
+        || name.ends_with("_fence_gate") && ctx.data.blocks.property(state, "open") != Some("true");
+    let shapes = crate::collision::table(ctx)
+        .get(state as usize)
+        .cloned()
+        .flatten()
+        .unwrap_or_else(|| vec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]);
+    let (x, y, z) = (f64::from(p.x), f64::from(p.y), f64::from(p.z));
+    shapes
+        .into_iter()
+        .map(|b| {
+            let top = if tall && b[4] >= 1.0 { 1.5 } else { b[4] };
+            mc_entity::Aabb {
+                min: [x + b[0], y + b[1], z + b[2]],
+                max: [x + b[3], y + top, z + b[5]],
+            }
+        })
+        .collect()
+}
+
+fn overlap(a: &mc_entity::Aabb, b: &mc_entity::Aabb) -> bool {
+    (0..3).all(|i| a.min[i] < b.max[i] && b.min[i] < a.max[i])
+}
+
+/// Whether placing these states would put a block into a player or an
+/// entity that blocks building. Only the block's real shape counts: a slab
+/// goes under the feet of a player standing in the top half of its cell.
+fn obstructed(ctx: &ServerContext, actor: &Actor, placed: &[(Position, u32)]) -> bool {
+    let shapes: Vec<mc_entity::Aabb> = placed
+        .iter()
+        .flat_map(|&(p, state)| placed_boxes(ctx, p, state))
+        .collect();
+    if shapes.is_empty() {
+        return false;
+    }
+    let mut boxes = vec![player_box(&actor.pose, actor.sneaking)];
+    boxes.extend(
+        ctx.players
+            .lock()
+            .expect("players lock")
+            .values()
+            .filter(|p| p.dimension == ctx.world.dimension)
+            .filter(|p| p.profile.uuid != actor.uuid && p.game_mode != 3)
+            .filter_map(|p| p.pose)
+            .map(|pose| player_box(&pose, false)),
+    );
+    boxes.extend(
+        crate::tick::lock(&ctx.entities)
+            .iter()
+            .filter(|e| blocks_building(e))
+            .map(|e| e.aabb()),
+    );
+    shapes.iter().any(|s| boxes.iter().any(|b| overlap(s, b)))
 }
 
 /// Whether the held item lets a creative player break blocks: swords, the
@@ -892,26 +970,6 @@ pub fn use_item_on(
         return refuse(outcome);
     };
 
-    // A solid block may not go where a player stands.
-    let others: Vec<Pose> = ctx
-        .players
-        .lock()
-        .expect("players lock")
-        .values()
-        .filter(|p| p.dimension == ctx.world.dimension)
-        .filter(|p| p.profile.uuid != actor.uuid)
-        .filter_map(|p| p.pose)
-        .collect();
-    let blocked = placed.blocks.iter().any(|&(p, state)| {
-        ctx.rules.blocks_motion(state)
-            && std::iter::once(&actor.pose)
-                .chain(&others)
-                .any(|pose| intersects(pose, p))
-    });
-    if blocked {
-        return refuse(outcome);
-    }
-
     let mut level = WorldLevel::new(ctx);
     // Nothing to hold it up there: not placed.
     let unsupported = placed
@@ -921,11 +979,23 @@ pub fn use_item_on(
     if unsupported {
         return refuse(outcome);
     }
+    // Connections and shape from the neighbours, as the block is placed.
+    let finals: Vec<(Position, u32)> = placed
+        .blocks
+        .iter()
+        .map(|&(p, state)| {
+            let state = mc_tick::placement_state(&level, level.logic(), to_pos(p), state);
+            let state =
+                mc_tick::redstone::player_placement(&level, level.logic(), to_pos(p), state);
+            (p, state)
+        })
+        .collect();
+    // No block goes into a player or a mob.
+    if obstructed(ctx, &actor, &finals) {
+        return refuse(outcome);
+    }
     let mut placed_any = false;
-    for &(p, state) in &placed.blocks {
-        // Connections and shape from the neighbours, as the block is placed.
-        let state = mc_tick::placement_state(&level, level.logic(), to_pos(p), state);
-        let state = mc_tick::redstone::player_placement(&level, level.logic(), to_pos(p), state);
+    for &(p, state) in &finals {
         placed_any |= level.set_block(p, state);
     }
     if !placed_any {
@@ -1499,13 +1569,99 @@ mod tests {
     }
 
     #[test]
-    fn player_box() {
+    fn player_box_is_its_cell_column() {
         let me = pose(-9.5, -60.0, 10.5);
-        assert!(intersects(&me, Position::new(-10, -60, 10)));
-        assert!(intersects(&me, Position::new(-10, -59, 10)));
-        assert!(!intersects(&me, Position::new(-10, -61, 10)));
-        assert!(!intersects(&me, Position::new(-8, -60, 10)));
-        assert!(!intersects(&me, Position::new(-10, -58, 10)));
+        let cube = |x: i32, y: i32, z: i32| {
+            let (x, y, z) = (f64::from(x), f64::from(y), f64::from(z));
+            mc_entity::Aabb {
+                min: [x, y, z],
+                max: [x + 1.0, y + 1.0, z + 1.0],
+            }
+        };
+        let b = super::player_box(&me, false);
+        assert!(overlap(&cube(-10, -60, 10), &b));
+        assert!(overlap(&cube(-10, -59, 10), &b));
+        assert!(!overlap(&cube(-10, -61, 10), &b));
+        assert!(!overlap(&cube(-8, -60, 10), &b));
+        assert!(!overlap(&cube(-10, -58, 10), &b));
+        // Sneaking, the head is lower.
+        let low = pose(-9.5, -59.6, 10.5);
+        assert!(overlap(
+            &cube(-10, -58, 10),
+            &super::player_box(&low, false)
+        ));
+        assert!(!overlap(
+            &cube(-10, -58, 10),
+            &super::player_box(&low, true)
+        ));
+    }
+
+    #[test]
+    fn blocks_go_by_their_shape_and_not_into_mobs() {
+        let Some(ctx) = crate::testkit::flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        // Standing in the top half of the cell: a slab fits under the feet,
+        // a full block does not.
+        crate::testkit::join(&ctx, 1, 10, [0.5, -59.5, 0.5], 0);
+        let me = Actor {
+            uuid: 1,
+            entity_id: 10,
+            game_mode: 0,
+            pose: pose(0.5, -59.5, 0.5),
+            sneaking: false,
+        };
+        let hold = |name: &str| {
+            crate::testkit::wear(
+                &ctx,
+                1,
+                36,
+                crate::testkit::stack(&ctx, name.trim_start_matches("minecraft:"), &[]),
+            )
+        };
+        let floor = Position::new(0, -61, 0);
+        hold("minecraft:stone");
+        use_item_on(&ctx, me, 0, floor, 1, [0.5, 1.0, 0.5], 1);
+        assert_eq!(crate::testkit::block(&ctx, [0, -60, 0]), "minecraft:air");
+        hold("minecraft:oak_slab");
+        use_item_on(&ctx, me, 0, floor, 1, [0.5, 1.0, 0.5], 2);
+        assert_eq!(
+            crate::testkit::block(&ctx, [0, -60, 0]),
+            "minecraft:oak_slab"
+        );
+        // A fence reaches 1.5 up: not under someone standing half a block
+        // above its cell.
+        hold("minecraft:oak_fence");
+        let side = Position::new(1, -61, 0);
+        let me_up = Actor {
+            pose: pose(1.5, -59.5, 0.5),
+            ..me
+        };
+        use_item_on(&ctx, me_up, 0, side, 1, [0.5, 1.0, 0.5], 3);
+        assert_eq!(crate::testkit::block(&ctx, [1, -60, 0]), "minecraft:air");
+        // Not into a cow; next to it, yes.
+        let cow = crate::mobs::new_mob(&ctx, mc_entity::Species::Cow, [3.5, -60.0, 0.5]);
+        crate::tick::lock(&ctx.entities).push(cow);
+        hold("minecraft:stone");
+        use_item_on(&ctx, me, 0, Position::new(3, -61, 0), 1, [0.5, 1.0, 0.5], 4);
+        assert_eq!(crate::testkit::block(&ctx, [3, -60, 0]), "minecraft:air");
+        use_item_on(&ctx, me, 0, Position::new(5, -61, 0), 1, [0.5, 1.0, 0.5], 5);
+        assert_eq!(crate::testkit::block(&ctx, [5, -60, 0]), "minecraft:stone");
+        // An item on the ground does not stop a block.
+        let stick = ctx.items.id("minecraft:stick").unwrap();
+        crate::tick::spawn_item_at(&ctx, [-1.5, -60.0, 0.5], stick, 1);
+        hold("minecraft:stone");
+        use_item_on(
+            &ctx,
+            me,
+            0,
+            Position::new(-2, -61, 0),
+            1,
+            [0.5, 1.0, 0.5],
+            6,
+        );
+        assert_eq!(crate::testkit::block(&ctx, [-2, -60, 0]), "minecraft:stone");
     }
 
     #[test]
