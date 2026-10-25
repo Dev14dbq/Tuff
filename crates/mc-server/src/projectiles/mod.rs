@@ -17,6 +17,7 @@ pub mod fireball;
 pub mod firework;
 pub mod fishing;
 pub mod lightning;
+pub mod omen;
 pub mod potions;
 pub mod thrown;
 pub mod trident;
@@ -164,6 +165,7 @@ enum Class {
     Cloud,
     Boss,
     Fangs,
+    Omen,
 }
 
 /// One tick of a projectile.
@@ -183,6 +185,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         Shot::Bobber { .. } => Class::Bobber,
         Shot::Cloud { .. } => Class::Cloud,
         Shot::Fangs { .. } => Class::Fangs,
+        Shot::ItemSpawner { .. } => Class::Omen,
         Shot::WitherSkull { .. } | Shot::DragonFireball | Shot::Breath { .. } => Class::Boss,
         _ => Class::Thrown,
     };
@@ -200,6 +203,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         Class::Cloud => potions::tick_cloud(t, e),
         Class::Boss => crate::bosses::projectile::tick(t, e),
         Class::Fangs => fangs::tick(t, e),
+        Class::Omen => omen::tick(t, e),
     }
     if e.removed {
         return;

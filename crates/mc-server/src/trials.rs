@@ -43,6 +43,11 @@ const VAULT_EJECT_EVERY: i64 = 20;
 const VAULT_ACTIVATE: f64 = 4.0;
 const VAULT_DEACTIVATE: f64 = 4.5;
 const SPAWN_RANGE: i32 = 4;
+/// An ominous spawner hangs an item over somebody this often, within this
+/// many blocks of it.
+const ITEM_EVERY: i64 = 160;
+const ITEM_RANGE: f64 = 14.0;
+const OMINOUS_ITEMS: &str = "minecraft:spawners/trial_chamber/items_to_drop_when_ominous";
 
 fn below(n: u32) -> u32 {
     (crate::util::random_u64() >> 33) as u32 % n.max(1)
@@ -276,6 +281,9 @@ pub struct Trial {
     /// When the next state step is due (reward ejection).
     due: i64,
     queue: Vec<Drop>,
+    /// What an ominous spawner hangs over players, and when next.
+    omen_items: Vec<ItemStack>,
+    next_item: i64,
 }
 
 pub type Trials = HashMap<(usize, i32, i32, i32), Trial>;
@@ -447,10 +455,15 @@ pub fn tick(
                     trial.players.insert(t.uuid);
                 }
                 if !ominous && near.iter().any(|t| has_omen(ctx, t.uuid)) {
-                    become_ominous(ctx, p, &be.data, mid, trial);
+                    become_ominous(ctx, mid, trial, now);
+                    set_property(ctx, p, "ominous", "true");
                     continue;
                 }
                 trial.mobs.retain(|u| mob_alive(entities, *u));
+                if ominous && now >= trial.next_item {
+                    trial.next_item = now + ITEM_EVERY;
+                    out.extend(hang_item(ctx, trial, entities, &near, mid));
+                }
                 let want_total = cfg.target_total(trial.players.len());
                 let want_now = cfg.target_simultaneous(trial.players.len());
                 if trial.spawned >= want_total {
@@ -548,16 +561,9 @@ fn has_omen(ctx: &ServerContext, uuid: u128) -> bool {
         .is_some_and(|v| v.effects.has("trial_omen"))
 }
 
-/// The spawner turns ominous: the omen's cost is paid, the items it drops
-/// when it does appear, and the wave begins again.
-fn become_ominous(
-    ctx: &ServerContext,
-    p: Position,
-    _data: &Compound,
-    mid: [f64; 3],
-    trial: &mut Trial,
-) {
-    set_property(ctx, p, "ominous", "true");
+/// The spawner turns ominous: it rolls the items it will hang over
+/// players, and the wave begins again.
+fn become_ominous(ctx: &ServerContext, mid: [f64; 3], trial: &mut Trial, now: i64) {
     fx::sound(
         ctx,
         "block.trial_spawner.ominous_activate",
@@ -567,15 +573,79 @@ fn become_ominous(
         1.0,
     );
     fx::level_event(ctx, 3020, mid, 1);
-    for drop in roll_table(
-        ctx,
-        "minecraft:spawners/trial_chamber/items_to_drop_when_ominous",
-        mid,
-    ) {
-        crate::tick::spawn_stack_at(ctx, [mid[0], mid[1] + 1.0, mid[2]], &drop.stack());
-    }
+    trial.omen_items = ominous_items(ctx, mid);
+    trial.next_item = now + ITEM_EVERY;
     trial.mobs.clear();
     trial.spawned = 0;
+}
+
+fn ominous_items(ctx: &ServerContext, mid: [f64; 3]) -> Vec<ItemStack> {
+    roll_table(ctx, OMINOUS_ITEMS, mid)
+        .iter()
+        .map(Drop::stack)
+        .collect()
+}
+
+/// An ominous item spawner over a player or one of the spawner's mobs:
+/// 2 to 5 blocks above their feet, or under the block in the way.
+fn hang_item(
+    ctx: &ServerContext,
+    trial: &mut Trial,
+    entities: &[Entity],
+    near: &[&Target],
+    mid: [f64; 3],
+) -> Option<Entity> {
+    if trial.omen_items.is_empty() {
+        // Ominous before a restart: the items were not kept.
+        trial.omen_items = ominous_items(ctx, mid);
+    }
+    let close = |pos: &[f64; 3]| dist2(*pos, mid) <= ITEM_RANGE * ITEM_RANGE;
+    let candidates: Vec<[f64; 3]> = near
+        .iter()
+        .map(|t| t.pos)
+        .chain(
+            entities
+                .iter()
+                .filter(|e| !e.removed && trial.mobs.contains(&e.uuid))
+                .map(|e| e.pos),
+        )
+        .filter(close)
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let feet = candidates[below(candidates.len() as u32) as usize];
+    let top = feet[1] + 2.0 + crate::hits::rnd() * 3.0;
+    let (x, z) = (feet[0].floor() as i32, feet[2].floor() as i32);
+    let hit = (feet[1].floor() as i32 + 1..=top.floor() as i32)
+        .find(|&y| crate::hits::stops(ctx, [x, y, z]));
+    let pos = match hit {
+        Some(y) => [
+            f64::from(x) + 0.5,
+            f64::from(y - 1) + 0.5,
+            f64::from(z) + 0.5,
+        ],
+        None => [feet[0], top, feet[2]],
+    };
+    let item = trial.omen_items[below(trial.omen_items.len() as u32) as usize].clone();
+    let e = crate::projectiles::omen::new(ctx, pos, item, 60 + below(61) as i32);
+    fx::sound(
+        ctx,
+        "block.trial_spawner.about_to_spawn_item",
+        fx::category::BLOCKS,
+        mid,
+        1.0,
+        1.0,
+    );
+    fx::sound(
+        ctx,
+        "block.trial_spawner.spawn_item_begin",
+        fx::category::BLOCKS,
+        pos,
+        1.0,
+        0.8 + crate::hits::rnd() as f32 * 0.4,
+    );
+    Some(e)
 }
 
 /// One loot table's items per player.
@@ -905,6 +975,7 @@ pub fn tick_vaults(ctx: &ServerContext, targets: &[Target], now: i64) {
 mod tests {
     use super::*;
     use crate::level::WorldLevel;
+    use mc_entity::extra::Shot;
 
     fn context() -> Option<std::sync::Arc<ServerContext>> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
@@ -1131,5 +1202,104 @@ mod tests {
             blocks.property(s, "trial_spawner_state"),
             Some("waiting_for_players")
         );
+    }
+
+    #[test]
+    fn an_ominous_spawner_hangs_an_item_over_a_player_that_falls_on_them() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let blocks = &ctx.data.blocks;
+        let p = Position::new(40, -60, 0);
+        WorldLevel::new(&ctx).set_block(
+            p,
+            blocks
+                .state_id(
+                    "minecraft:trial_spawner",
+                    &[("trial_spawner_state", "active"), ("ominous", "false")],
+                )
+                .unwrap(),
+        );
+        let mut data = Compound::new();
+        data.insert(
+            "ominous_config",
+            Tag::String("minecraft:trial_chamber/melee/zombie/ominous".into()),
+        );
+        ctx.world.set_block_entity(
+            mc_world::BlockEntity {
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                id: SPAWNER.into(),
+                data,
+            },
+            blocks,
+        );
+        let mut effect = Compound::new();
+        effect.insert("id", "minecraft:trial_omen");
+        effect.insert("duration", Tag::Int(1000));
+        let mut v = crate::vitals::Vitals::default();
+        v.effects =
+            crate::effects::Effects::from_nbt(Some(&Tag::List(vec![Tag::Compound(effect)])));
+        lock(&ctx.vitals).insert(9, v);
+        let feet = [40.5, -60.0, 3.5];
+        let near = [target(9, feet)];
+        let ground = Ground::new(&ctx);
+        assert!(tick(&ctx, &ground, &[], &near, 2, 0).is_empty());
+        // Nothing dropped when it turns: it hangs its items later.
+        assert!(lock(&ctx.entities).is_empty());
+        // (No mobs are passed in, so each wave counts as beaten at once:
+        // the trial is only looked at now and then.)
+        let out = tick(&ctx, &ground, &[], &near, 2, 159);
+        assert!(
+            !out.iter().any(|e| matches!(&e.kind, Kind::Projectile(_))),
+            "an item before its time"
+        );
+        let out = tick(&ctx, &ground, &[], &near, 2, 160);
+        let mut e = out
+            .into_iter()
+            .find(|e| matches!(&e.kind, Kind::Projectile(_)))
+            .expect("an item spawner");
+        let Kind::Projectile(pr) = &e.kind else {
+            unreachable!()
+        };
+        let Shot::ItemSpawner { item, after } = &pr.shot else {
+            panic!("{:?}", pr.shot)
+        };
+        assert!((60..=120).contains(after));
+        let name = ctx.items.name(item.item).unwrap();
+        assert!(
+            [
+                "minecraft:lingering_potion",
+                "minecraft:arrow",
+                "minecraft:fire_charge",
+                "minecraft:wind_charge"
+            ]
+            .contains(&name),
+            "{name}"
+        );
+        assert_eq!([e.pos[0], e.pos[2]], [feet[0], feet[2]]);
+        assert!((feet[1] + 2.0..=feet[1] + 5.0).contains(&e.pos[1]));
+        // It lets the item go when its time comes, and is gone.
+        let mut out = crate::hits::Out::default();
+        let mut t = crate::hits::Tick {
+            ctx: &ctx,
+            players: &[],
+            targets: &[],
+            out: &mut out,
+            shooter: None,
+        };
+        for _ in 0..120 {
+            crate::projectiles::omen::tick(&mut t, &mut e);
+        }
+        assert!(e.removed);
+        let let_go = lock(&ctx.entities);
+        assert_eq!(let_go.len(), 1);
+        match &let_go[0].kind {
+            Kind::Projectile(_) => assert!(let_go[0].vel[1] < 0.0, "not shot down"),
+            Kind::Item { .. } => {}
+            other => panic!("{other:?}"),
+        }
     }
 }

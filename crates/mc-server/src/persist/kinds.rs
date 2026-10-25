@@ -574,7 +574,7 @@ fn projectile(ctx: &ServerContext, e: &Entity, p: &Projectile, c: &mut Compound)
     if let Some(o) = p.owner {
         c.insert("Owner", uuid_tag(o));
     }
-    if !matches!(p.shot, Shot::Cloud { .. }) {
+    if !matches!(p.shot, Shot::Cloud { .. } | Shot::ItemSpawner { .. }) {
         // Projectiles here start outside their owner's box.
         c.insert("HasBeenShot", Tag::Byte(1));
         c.insert("LeftOwner", Tag::Byte(1));
@@ -732,6 +732,15 @@ fn projectile(ctx: &ServerContext, e: &Entity, p: &Projectile, c: &mut Compound)
         }
         Shot::DragonFireball | Shot::WindCharge { .. } => {
             c.insert("acceleration_power", Tag::Double(0.1));
+        }
+        Shot::ItemSpawner { item, after } => {
+            if let Some(stack) = stack_tag(ctx, item) {
+                c.insert("item", Tag::Compound(stack));
+            }
+            c.insert(
+                "spawn_item_after_ticks",
+                Tag::Long(i64::from(*after) - i64::from(e.age)),
+            );
         }
         Shot::Spit
         | Shot::ShulkerBullet { .. }
@@ -1136,6 +1145,12 @@ fn projectile_kind(ctx: &ServerContext, name: &str, c: &Compound) -> Option<Kind
                 left: (int(c, "Duration").unwrap_or(600) - int(c, "Age").unwrap_or(0)).max(1),
             }
         }
+        "minecraft:ominous_item_spawner" => Shot::ItemSpawner {
+            item: stack_of(ctx, c.get("item"))?,
+            after: long(c, "spawn_item_after_ticks")
+                .unwrap_or(0)
+                .clamp(0, i64::from(i32::MAX)) as i32,
+        },
         _ => return None,
     };
     Some(Kind::Projectile(Projectile {

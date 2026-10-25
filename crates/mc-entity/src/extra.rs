@@ -153,6 +153,12 @@ pub enum Shot {
         life: i32,
         snapped: bool,
     },
+    /// An ominous item spawner (trial chambers): it shows `item` and lets
+    /// it go, shot down or dropped, at the age of `after` ticks.
+    ItemSpawner {
+        item: mc_protocol::packets::play::ItemStack,
+        after: i32,
+    },
     /// A wind charge: a player's (thrown) or a breeze's.
     WindCharge {
         breeze: bool,

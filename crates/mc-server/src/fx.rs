@@ -295,6 +295,12 @@ pub fn describe(ctx: &ServerContext, e: &Entity) -> Option<Spawn> {
                 }
                 Shot::Bobber { .. } => {}
                 Shot::Lightning { .. } => s.data = 0,
+                Shot::ItemSpawner { item, .. } => {
+                    s.meta.push((
+                        play::metadata::ITEM,
+                        MetadataValue::Item(Some(item.clone())),
+                    ));
+                }
                 Shot::WindCharge { .. } | Shot::ShulkerBullet { .. } | Shot::Fangs { .. } => {}
             }
         }
@@ -489,6 +495,7 @@ pub fn type_name(kind: &Kind) -> Option<String> {
             Shot::WindCharge { breeze: false } => "wind_charge",
             Shot::ShulkerBullet { .. } => "shulker_bullet",
             Shot::Fangs { .. } => "evoker_fangs",
+            Shot::ItemSpawner { .. } => "ominous_item_spawner",
         }
         .into(),
         Kind::Hung(h) => match &h.decor {
