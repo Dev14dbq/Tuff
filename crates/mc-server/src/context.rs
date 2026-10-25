@@ -551,6 +551,10 @@ pub struct ServerContext {
     pub poi: Mutex<crate::poi::Poi>,
     /// Raids, omens and the patrol clock.
     pub raids: Mutex<crate::raids::Raids>,
+    /// Game events, vibrations on their way, shrieker warnings.
+    pub vibrations: Mutex<crate::vibrations::Vibrations>,
+    /// Sculk charges spreading from catalysts.
+    pub catalysts: Mutex<crate::catalysts::Catalysts>,
 }
 
 impl Deref for ServerContext {
@@ -826,6 +830,8 @@ impl ServerContext {
             bosses: Mutex::default(),
             poi,
             raids: Mutex::new(crate::raids::Raids::default()),
+            vibrations: Mutex::new(crate::vibrations::Vibrations::default()),
+            catalysts: Mutex::new(crate::catalysts::Catalysts::default()),
         }))
     }
 
@@ -1150,6 +1156,8 @@ impl ServerContext {
             bosses: Mutex::default(),
             poi,
             raids: Mutex::new(crate::raids::Raids::default()),
+            vibrations: Mutex::new(crate::vibrations::Vibrations::default()),
+            catalysts: Mutex::new(crate::catalysts::Catalysts::default()),
         });
         *shared.dims[0].lock().expect("dimensions lock") = Some(Arc::clone(&overworld));
         Ok(overworld)

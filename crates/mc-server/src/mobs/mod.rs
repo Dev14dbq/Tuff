@@ -34,6 +34,7 @@ pub(crate) mod spawn;
 mod spawner;
 mod terrain;
 pub mod village;
+pub mod warden;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -597,6 +598,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         creaking::tick(ctx, level, &mut entities, now, day);
         copper::tick(ctx, level, &mut entities, now);
         cube::tick(ctx, &mut entities, &targets, now);
+        warden::tick(ctx, &mut entities, &targets, now);
     }
     illager::tend(&mut entities);
 
@@ -824,6 +826,23 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
 }
 
 /// Carries out one thing the mob at `i` did.
+/// Who a mob's game events come from.
+fn mob_source(id: i32, species: Species) -> crate::vibrations::Source {
+    crate::vibrations::Source {
+        warden: species == Species::Warden,
+        ..crate::vibrations::Source::entity(id)
+    }
+}
+
+/// The block under the feet.
+fn below(ctx: &ServerContext, pos: [f64; 3]) -> Option<u32> {
+    ctx.world.block_if_loaded(mc_protocol::Position::new(
+        pos[0].floor() as i32,
+        (pos[1] - 0.2).floor() as i32,
+        pos[2].floor() as i32,
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle(
     ctx: &ServerContext,
@@ -887,6 +906,16 @@ fn handle(
         MobEvent::Landed { distance } => {
             trample_farmland(ctx, level, m, pos, distance);
             aqua::trample_eggs(ctx, level, m, pos, Some(distance));
+            crate::vibrations::emit(
+                ctx,
+                "hit_ground",
+                pos,
+                mob_source(id, species),
+                below(ctx, pos),
+            );
+        }
+        MobEvent::Stepped => {
+            crate::vibrations::emit(ctx, "step", pos, mob_source(id, species), below(ctx, pos));
         }
         MobEvent::Breed { partner } => {
             if let Some(baby) = hurt::breed(ctx, entities, i, partner) {

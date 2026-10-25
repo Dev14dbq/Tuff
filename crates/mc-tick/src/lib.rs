@@ -23,6 +23,7 @@ pub mod rails;
 pub mod random;
 pub mod redstone;
 pub mod rng;
+pub mod sculk;
 pub mod shapes;
 pub mod sponge;
 pub mod support;

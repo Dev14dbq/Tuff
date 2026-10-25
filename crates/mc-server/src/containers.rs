@@ -634,6 +634,10 @@ pub fn open(ctx: &ServerContext, uuid: u128, p: Position, kind: Kind) -> Vec<Opt
     if first {
         lid(ctx, p, viewers);
     }
+    if first && viewers == 1 {
+        let source = crate::vibrations::Source::player(ctx, uuid);
+        crate::vibrations::emit_at(ctx, "container_open", p, source, None);
+    }
     // Trapped chests give power by how many look in.
     ctx.container_updates
         .lock()
@@ -721,6 +725,10 @@ pub fn close(ctx: &ServerContext, uuid: u128, p: Position) {
         drop(all);
         if viewers != before {
             lid(ctx, p, viewers);
+        }
+        if viewers == 0 && before > 0 {
+            let source = crate::vibrations::Source::player(ctx, uuid);
+            crate::vibrations::emit_at(ctx, "container_close", p, source, None);
         }
         ctx.container_updates
             .lock()

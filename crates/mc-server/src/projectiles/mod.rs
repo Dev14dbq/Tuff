@@ -138,6 +138,10 @@ pub fn shoot(
     let len = dir.iter().map(|c| c * c).sum::<f64>().sqrt().max(1e-9);
     let spread = 0.0075 * inaccuracy;
     let vel = dir.map(|c| (c / len + hits::gauss() * spread) * speed);
+    let source = owner.map_or_else(Default::default, |u| {
+        crate::vibrations::Source::player(ctx, u)
+    });
+    crate::vibrations::emit(ctx, "projectile_shoot", pos, source, None);
     spawn(ctx, shot, owner, pos, vel)
 }
 

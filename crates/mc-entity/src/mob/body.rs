@@ -650,6 +650,7 @@ pub(super) fn physics(
         m.walked += walked;
         if m.walked > 1.6 {
             m.walked = 0.0;
+            out.push(MobEvent::Stepped);
             if let Some(e) = m.sound(Sound::Step) {
                 out.push(e);
             }

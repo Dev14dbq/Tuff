@@ -306,6 +306,27 @@ fn in_reach(pose: &Pose, p: Position) -> bool {
     dx * dx + dy * dy + dz * dz <= REACH * REACH
 }
 
+/// The game event of a block a player used: a door or gate opens or
+/// closes, a lever or button turns on or off, anything else changes.
+fn used_event(blocks: &mc_data::Blocks, before: u32, after: u32) -> &'static str {
+    let flag = |s: u32, k: &str| blocks.property(s, k) == Some("true");
+    if flag(before, "open") != flag(after, "open") {
+        if flag(after, "open") {
+            "block_open"
+        } else {
+            "block_close"
+        }
+    } else if flag(before, "powered") != flag(after, "powered") {
+        if flag(after, "powered") {
+            "block_activate"
+        } else {
+            "block_deactivate"
+        }
+    } else {
+        "block_change"
+    }
+}
+
 /// A player's box: 1.5 high while sneaking.
 fn player_box(pose: &Pose, sneaking: bool) -> mc_entity::Aabb {
     let half = PLAYER_WIDTH / 2.0;
@@ -637,6 +658,8 @@ pub fn dig(
         position,
         state: shown,
     });
+    let source = crate::vibrations::Source::player(ctx, actor.uuid);
+    crate::vibrations::emit_at(ctx, "block_destroy", position, source, Some(state));
     // Everyone gets every change, the breaker included (vanilla sends the
     // broken block to the breaker twice: as the answer and with the rest).
     outcome.events.push(Event::BlocksChanged {
@@ -759,9 +782,15 @@ pub fn use_item_on(
     // something placed against them.
     let mut level = WorldLevel::new(ctx);
     let logic = level.logic();
+    let before = block_at(clicked);
     if use_blocks && mc_tick::use_block(&mut level, logic, to_pos(clicked)) {
         if let Some(state) = block_at(clicked) {
             outcome.updates.push((clicked, state));
+            if let Some(before) = before {
+                let name = used_event(&ctx.data.blocks, before, state);
+                let source = crate::vibrations::Source::player(ctx, actor.uuid);
+                crate::vibrations::emit_at(ctx, name, clicked, source, Some(state));
+            }
         }
         outcome.events.push(Event::BlocksChanged {
             by: 0,
@@ -997,6 +1026,10 @@ pub fn use_item_on(
     let mut placed_any = false;
     for &(p, state) in &finals {
         placed_any |= level.set_block(p, state);
+    }
+    if placed_any && let Some(&(p, state)) = finals.first() {
+        let source = crate::vibrations::Source::player(ctx, actor.uuid);
+        crate::vibrations::emit_at(ctx, "block_place", p, source, Some(state));
     }
     if !placed_any {
         return refuse(outcome);

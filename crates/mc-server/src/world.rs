@@ -73,6 +73,9 @@ pub struct World {
     /// with: chunks that came into memory, blocks that may have become or
     /// stopped being one.
     poi_log: Mutex<PoiLog>,
+    /// The same for the blocks that hear vibrations (see
+    /// [`crate::vibrations`]).
+    sculk_log: Mutex<PoiLog>,
     /// New chunks are lit with their neighbours outside the chunks lock;
     /// overlapping 3×3 areas take turns.
     lighting: crate::util::Claims,
@@ -345,6 +348,7 @@ impl World {
             entity_chunks: Mutex::new(HashMap::new()),
             relit: Mutex::new(Vec::new()),
             poi_log: Mutex::default(),
+            sculk_log: Mutex::default(),
             lighting: crate::util::Claims::default(),
             no_autosave: std::sync::atomic::AtomicBool::new(false),
             dimension: dim.name,
@@ -512,6 +516,7 @@ impl World {
             entity_chunks: Mutex::new(HashMap::new()),
             relit: Mutex::new(Vec::new()),
             poi_log: Mutex::default(),
+            sculk_log: Mutex::default(),
             lighting: crate::util::Claims::default(),
             no_autosave: std::sync::atomic::AtomicBool::new(false),
             dimension: dim.name,
@@ -537,6 +542,11 @@ impl World {
             self.poi_log
                 .lock()
                 .expect("poi log lock")
+                .loaded
+                .push((x, z));
+            self.sculk_log
+                .lock()
+                .expect("sculk log lock")
                 .loaded
                 .push((x, z));
         }
@@ -805,6 +815,12 @@ impl World {
     /// of interest.
     pub fn take_poi_log(&self) -> PoiLog {
         std::mem::take(&mut *self.poi_log.lock().expect("poi log lock"))
+    }
+
+    /// Chunks read and blocks changed since the last call, for the blocks
+    /// that hear vibrations.
+    pub fn take_sculk_log(&self) -> PoiLog {
+        std::mem::take(&mut *self.sculk_log.lock().expect("sculk log lock"))
     }
 
     /// Where the points of interest are stored (`None` for a world with no
@@ -1428,6 +1444,18 @@ impl World {
             let poi_block = |s| blocks.block_name(s).is_some_and(crate::poi::is_poi_block);
             if poi_block(old) || poi_block(state) {
                 self.poi_log.lock().expect("poi log lock").changed.push(p);
+            }
+            let hears = |s| {
+                blocks
+                    .block_name(s)
+                    .is_some_and(crate::vibrations::is_listener_block)
+            };
+            if hears(old) || hears(state) {
+                self.sculk_log
+                    .lock()
+                    .expect("sculk log lock")
+                    .changed
+                    .push(p);
             }
             slot.frame = None;
             slot.changes += 1;

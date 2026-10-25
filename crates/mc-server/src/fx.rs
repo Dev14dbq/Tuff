@@ -108,6 +108,7 @@ pub mod category {
     pub const PLAYERS: i32 = 7;
     pub const AMBIENT: i32 = 8;
     pub const BLOCKS: i32 = 4;
+    pub const HOSTILE: i32 = 5;
 }
 
 /// Particles that need no data (`crit`, `poof`, ...), by name.

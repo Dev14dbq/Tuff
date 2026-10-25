@@ -468,6 +468,14 @@ pub fn hurt_player(ctx: &ServerContext, uuid: u128, hit: &Hit) -> Option<bool> {
     if let Some(by) = hit.by {
         thorns(ctx, uuid, by, mode);
     }
+    crate::vibrations::emit(
+        ctx,
+        "entity_damage",
+        [pose.x, pose.y, pose.z],
+        hit.by
+            .map_or_else(Default::default, crate::vibrations::Source::entity),
+        None,
+    );
     if !crate::damage::bypasses_armor(hit.kind) && mode != 1 {
         let wear = ((hit.amount / 4.0).floor() as i32).max(1);
         let worn: Vec<usize> = {

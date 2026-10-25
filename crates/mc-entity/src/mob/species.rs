@@ -134,6 +134,7 @@ species! {
     Giant => "minecraft:giant", "Giant";
     Shulker => "minecraft:shulker", "Shulker";
     Creaking => "minecraft:creaking", "Creaking";
+    Warden => "minecraft:warden", "Warden";
     CopperGolem => "minecraft:copper_golem", "Copper Golem";
     SulfurCube => "minecraft:sulfur_cube", "Sulfur Cube";
     // Illagers and their kin
@@ -283,6 +284,7 @@ impl Species {
             Giant => (3.6, 12.0),
             Shulker => (1.0, 1.0),
             Creaking => (0.9, 2.7),
+            Warden => (0.9, 2.9),
             CopperGolem => (0.49, 0.98),
             SulfurCube => (0.98, 0.98),
             // Illagers and their kin
@@ -332,6 +334,7 @@ impl Species {
             Bogged | Parched => 1.74 / 1.99,
             Giant => 0.87,
             Creaking => 2.3 / 2.7,
+            Warden => 2.465 / 2.9,
             CopperGolem => 0.8125 / 0.98,
             SulfurCube => 0.625,
             // Illagers and their kin
@@ -387,6 +390,7 @@ impl Species {
             Bogged | Parched => 16.0,
             Giant => 100.0,
             Creaking => 1.0,
+            Warden => 500.0,
             CopperGolem => 12.0,
             SulfurCube => 8.0,
             // Illagers and their kin
@@ -437,6 +441,7 @@ impl Species {
             Giant => 0.5,
             Shulker => 0.0,
             Creaking => 0.3,
+            Warden => 0.3,
             CopperGolem => 0.2,
             SulfurCube => 0.4,
             // Illagers and their kin
@@ -464,6 +469,7 @@ impl Species {
             Bee | Allay => 48.0,
             Breeze => 24.0,
             Creaking => 32.0,
+            Warden => 24.0,
             // Illagers and their kin
             Pillager | Ravager => 32.0,
             Vindicator | Evoker => 12.0,
@@ -504,6 +510,7 @@ impl Species {
             Bee | Allay | Bogged | Parched => 2.0,
             Giant => 50.0,
             Creaking => 3.0,
+            Warden => 30.0,
             // Illagers and their kin
             Pillager | Vindicator => 5.0,
             Vex => 4.0,
@@ -531,6 +538,7 @@ impl Species {
             // Flying mobs (flying-mobs): a shulker never budges.
             Species::Shulker => 1.0,
             Species::Ravager => 0.75,
+            Species::Warden => 1.0,
             _ => 0.0,
         }
     }
@@ -591,6 +599,7 @@ impl Species {
                 | Strider
                 | EnderDragon
                 | Wither
+                | Warden
         )
     }
 
@@ -834,6 +843,7 @@ impl Species {
                 // Flying mobs (flying-mobs)
                 Breeze => (10, 10),
                 Creaking => (0, 0),
+                Warden => (5, 5),
                 SulfurCube => (1, 2),
                 PiglinBrute | Ravager => (20, 20),
                 Evoker => (10, 10),
@@ -863,7 +873,7 @@ impl Species {
         let ok = match which {
             Sound::Ambient => !matches!(
                 self,
-                Creeper | Slime | MagmaCube | IronGolem | Bee | CopperGolem | SulfurCube
+                Creeper | Slime | MagmaCube | IronGolem | Bee | CopperGolem | SulfurCube | Warden
             ),
             Sound::Step => matches!(
                 self,
@@ -905,6 +915,7 @@ impl Species {
                     | Creaking
                     | CopperGolem
                     | Ravager
+                    | Warden
             ),
             Sound::Hurt | Sound::Death => true,
         };

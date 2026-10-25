@@ -401,6 +401,7 @@ impl Level for WorldLevel<'_> {
     fn block_entity_signal(&self, p: BlockPos) -> Option<u8> {
         crate::command_blocks::signal(self.ctx, to_position(p))
             .or_else(|| crate::blockuse::comparator_signal(self.ctx, to_position(p)))
+            .or_else(|| crate::vibrations::comparator(self.ctx, to_position(p)))
     }
 
     fn command_block_power(&mut self, p: BlockPos, powered: bool) -> Option<(bool, bool)> {

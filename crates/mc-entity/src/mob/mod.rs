@@ -23,6 +23,7 @@ pub mod goals;
 pub mod illager;
 pub mod land;
 pub mod species;
+pub mod warden;
 
 pub use goals::{Goal, Slot};
 pub use species::{Category, Sound, Species};
@@ -343,6 +344,8 @@ pub enum MobEvent {
     Breed {
         partner: i32,
     },
+    /// A step on the ground (a game event others may hear).
+    Stepped,
     /// A sound of the mob (`entity.cow.ambient`, without `minecraft:`).
     Sound {
         name: String,
@@ -500,6 +503,7 @@ pub struct Quirks {
     pub air: air::Air,
     /// Illagers, vexes and ravagers.
     pub illager: illager::Illager,
+    pub warden: warden::Warden,
 }
 
 #[derive(Clone, Debug, PartialEq)]

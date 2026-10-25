@@ -234,7 +234,8 @@ fn emitted(level: &dyn Level, ctx: Ctx, at: BlockPos, state: u32, toward: Dir, w
             .max(crate::tripwire::emits(ctx, state, toward, false))
             .max(other_power(ctx, state))
             .max(jukebox_power(level, ctx, at, state))
-            .max(trapped_chest(level, ctx, at, state)),
+            .max(trapped_chest(level, ctx, at, state))
+            .max(crate::sculk::power(ctx, state, toward)),
     }
 }
 
@@ -338,7 +339,8 @@ fn emitted_strong(
             15
         }
         _ => crate::rails::emits(ctx, state, toward, true)
-            .max(crate::tripwire::emits(ctx, state, toward, true)),
+            .max(crate::tripwire::emits(ctx, state, toward, true))
+            .max(crate::sculk::strong_power(ctx, state, toward)),
     }
 }
 
@@ -520,6 +522,13 @@ fn update_wire(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
 
 fn torch_should_light(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> bool {
     attached(ctx, state).is_none_or(|a| power_from(level, ctx, p, a, true) == 0)
+}
+
+/// The signal coming into `p` from its neighbour on `side`, as a repeater
+/// takes it (dust counts).
+pub fn signal_from(level: &dyn Level, ctx: Ctx, p: BlockPos, side: Dir) -> u8 {
+    let s = level.block(p.offset(side));
+    power_from(level, ctx, p, side, true).max(wire_power(ctx, s))
 }
 
 fn repeater_input(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> u8 {

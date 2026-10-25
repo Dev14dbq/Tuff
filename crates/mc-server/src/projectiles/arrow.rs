@@ -168,6 +168,12 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                     a.stuck = 1;
                     a.crit = false;
                     e.vel = [0.0; 3];
+                    // A warden is angered at the shooter.
+                    let source = owner.map_or_else(
+                        || crate::vibrations::Source::entity(e.id),
+                        |u| crate::vibrations::Source::player(ctx, u),
+                    );
+                    crate::vibrations::emit(ctx, "projectile_land", e.pos, source, None);
                     return;
                 }
                 Strike::Player(i) => {

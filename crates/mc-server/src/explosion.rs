@@ -964,6 +964,13 @@ pub fn explode_all(
     if blasts.is_empty() {
         return Vec::new();
     }
+    for b in blasts {
+        let source = crate::vibrations::Source {
+            player: b.owner,
+            ..crate::vibrations::Source::entity(b.source)
+        };
+        crate::vibrations::emit(ctx, "explode", b.center, source, None);
+    }
     let mut sc = Scratch::default();
     let mut grid = Grid::new(entities);
     let mut rng = rng();

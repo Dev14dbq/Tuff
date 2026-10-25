@@ -10,6 +10,7 @@ mod illagers;
 mod land;
 mod raids;
 mod villages;
+mod warden;
 
 #[test]
 fn darkness_follows_the_day() {

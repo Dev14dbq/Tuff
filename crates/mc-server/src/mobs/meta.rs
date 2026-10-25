@@ -274,6 +274,7 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
             v.push((17, MetadataValue::Byte(m.quirks.air.peek as i8)));
             v.push((18, MetadataValue::Byte(m.quirks.air.color as i8)));
         }
+        Warden => v.extend(super::warden::metadata(m)),
         Creaking => {
             let air = &m.quirks.air;
             v.push((16, MetadataValue::Boolean(!air.frozen)));

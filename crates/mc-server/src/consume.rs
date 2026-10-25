@@ -32,6 +32,18 @@ pub fn eaten(ctx: &ServerContext, uuid: u128, stack: &ItemStack) {
         .get(&uuid)
         .and_then(|p| p.pose)
         .map_or([0.0; 3], |p| [p.x, p.y, p.z]);
+    let event = if ctx.items.component(stack, "food").is_some() {
+        "eat"
+    } else {
+        "drink"
+    };
+    crate::vibrations::emit(
+        ctx,
+        event,
+        pos,
+        crate::vibrations::Source::player(ctx, uuid),
+        None,
+    );
     if ctx.items.component(stack, "food").is_some() {
         let pitch = 0.9 + crate::hits::rnd() as f32 * 0.1;
         fx::sound(

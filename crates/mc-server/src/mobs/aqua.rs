@@ -65,6 +65,26 @@ fn hurt_target(
     targets: &[Target],
     difficulty: i32,
 ) -> Option<Option<u128>> {
+    hurt_with(
+        ctx, entities, i, target, amount, kind, death_key, targets, difficulty, 0.0,
+    )
+}
+
+/// A mob hurts its target (a player or a mob) with a push this strong;
+/// `Some(Some(player))` when it was a player.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn hurt_with(
+    ctx: &ServerContext,
+    entities: &mut [Entity],
+    i: usize,
+    target: i32,
+    amount: f32,
+    kind: &'static str,
+    death_key: &'static str,
+    targets: &[Target],
+    difficulty: i32,
+    knockback: f64,
+) -> Option<Option<u128>> {
     let (id, pos) = (entities[i].id, entities[i].pos);
     let Kind::Mob(m) = &entities[i].kind else {
         return None;
@@ -81,7 +101,7 @@ fn hurt_target(
             attacker: Some(species.display_name()),
             by: Some(id),
             from: Some(pos),
-            knockback: 0.0,
+            knockback,
             disables_shield: 0.0,
         };
         return crate::combat::hurt_player(ctx, t.uuid, &hit).map(|_| Some(t.uuid));
@@ -94,6 +114,7 @@ fn hurt_target(
         by: Some(id),
         from: Some(pos),
         killer: Some(species.id().to_owned()),
+        knockback,
         ..Harm::new(amount, kind)
     };
     hurt::harm(ctx, &mut entities[j], &harm).then_some(None)

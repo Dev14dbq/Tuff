@@ -110,6 +110,9 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     if m.dying.is_some() || m.is_dead() {
         return false;
     }
+    if let Some(done) = super::warden::hurt(m, h.by, h.kind, h.from, e.pos) {
+        return done;
+    }
     if m.species.fire_immune()
         && (FIRE.contains(&h.kind) || h.kind == "minecraft:fireball" && h.fire > 0)
     {
@@ -208,6 +211,12 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
         }),
     );
     let dead = m.is_dead();
+    let source = crate::vibrations::Source {
+        player: h.player,
+        ..h.by
+            .map_or_else(Default::default, crate::vibrations::Source::entity)
+    };
+    crate::vibrations::emit(ctx, "entity_damage", e.pos, source, None);
     if let Some(mc_entity::mob::MobEvent::Sound {
         name,
         volume,
@@ -776,6 +785,11 @@ pub fn die(
     }
     m.dying = Some(20);
     m.health = 0.0;
+    let source = crate::vibrations::Source {
+        warden: m.species == Species::Warden,
+        ..crate::vibrations::Source::entity(id)
+    };
+    crate::vibrations::emit(ctx, "entity_die", e.pos, source, None);
     // Its lead falls where it died.
     crate::decor::leash::unleash(ctx, id, e.pos, true);
     let Kind::Mob(m) = &mut e.kind else {
@@ -799,7 +813,8 @@ pub fn die(
     let drops_on = ctx.game_rule_bool("minecraft:mob_drops");
     if by_player.is_some() && drops_on {
         let xp = experience(m);
-        if xp > 0 {
+        // A sculk catalyst nearby takes it.
+        if xp > 0 && !crate::catalysts::took(ctx, pos, xp) {
             crate::xp::spawn(ctx, [pos[0], pos[1] + 0.3, pos[2]], xp);
         }
     }

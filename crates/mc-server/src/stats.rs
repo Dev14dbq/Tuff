@@ -132,6 +132,10 @@ struct Watch {
     asleep: bool,
     /// Where they were in the last tick.
     last: Option<Pose>,
+    /// Vanilla's `moveDist` and the next whole step, for the step game
+    /// events.
+    walked: f64,
+    next_step: f64,
 }
 
 /// The counters of everyone online.
@@ -298,6 +302,14 @@ pub fn opened(ctx: &ServerContext, uuid: u128, block: Option<&str>) {
 }
 
 /// The player sneaks or stops (Player Input).
+/// Whether the player sneaks now.
+pub fn sneaking(ctx: &ServerContext, uuid: u128) -> bool {
+    lock(&ctx.stats)
+        .watch
+        .get(&uuid)
+        .is_some_and(|w| w.sneaking)
+}
+
 pub fn set_sneaking(ctx: &ServerContext, uuid: u128, on: bool) {
     if let Some(w) = lock(&ctx.stats).watch.get_mut(&uuid) {
         w.sneaking = on;
@@ -411,6 +423,77 @@ pub fn fell(ctx: &ServerContext, uuid: u128, distance: f64) {
     if distance >= 2.0 {
         custom(ctx, uuid, "fall_one_cm", cm(distance));
     }
+    if distance > 0.0
+        && let Some(pose) = lock(&ctx.players).get(&uuid).and_then(|p| p.pose)
+    {
+        let below = ground(ctx, pose);
+        crate::vibrations::emit(
+            ctx,
+            "hit_ground",
+            [pose.x, pose.y, pose.z],
+            crate::vibrations::Source::player(ctx, uuid),
+            below,
+        );
+    }
+}
+
+/// The block a player stands on.
+fn ground(ctx: &ServerContext, pose: Pose) -> Option<u32> {
+    ctx.world.block_if_loaded(mc_protocol::Position::new(
+        pose.x.floor() as i32,
+        (pose.y - 0.2).floor() as i32,
+        pose.z.floor() as i32,
+    ))
+}
+
+/// Every whole step on the ground is a step game event (`moveDist` grows
+/// by six tenths of the way walked). Standing on a shrieker sets it off.
+fn steps(ctx: &ServerContext, uuid: u128, (before, after): (Pose, Pose), game_mode: i32) {
+    if game_mode == 3 || !after.on_ground {
+        return;
+    }
+    let below = ground(ctx, after);
+    let blocks = &ctx.data.blocks;
+    let name = below.and_then(|s| blocks.block_name(s));
+    if name == Some(crate::vibrations::SHRIEKER) {
+        crate::vibrations::stepped_on(
+            ctx,
+            mc_protocol::Position::new(
+                after.x.floor() as i32,
+                (after.y - 0.2).floor() as i32,
+                after.z.floor() as i32,
+            ),
+            uuid,
+        );
+    }
+    let flat = (after.x - before.x).hypot(after.z - before.z);
+    if flat == 0.0 || flat > 16.0 {
+        return;
+    }
+    let step = {
+        let mut all = lock(&ctx.stats);
+        let Some(w) = all.watch.get_mut(&uuid) else {
+            return;
+        };
+        w.walked += flat * 0.6;
+        if w.walked > w.next_step {
+            w.next_step = w.walked.floor() + 1.0;
+            true
+        } else {
+            false
+        }
+    };
+    if step {
+        let mut source = crate::vibrations::Source::player(ctx, uuid);
+        // A sensor stepped on hears even a sneaking player.
+        if matches!(
+            name,
+            Some(crate::vibrations::SENSOR | crate::vibrations::CALIBRATED)
+        ) {
+            source.sneaking = false;
+        }
+        crate::vibrations::emit(ctx, "step", [after.x, after.y, after.z], source, below);
+    }
 }
 
 /// One tick for every online player: the clocks, and how far they went.
@@ -455,6 +538,7 @@ pub fn tick(ctx: &ServerContext) {
             w.asleep = asleep;
         }
         if let Some(before) = before {
+            steps(ctx, uuid, (before, pose), game_mode);
             travelled(
                 ctx,
                 uuid,

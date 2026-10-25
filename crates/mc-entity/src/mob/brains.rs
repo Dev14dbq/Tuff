@@ -935,6 +935,22 @@ pub(super) fn brain(species: Species) -> Brain {
             ],
             vec![hurt_by(1, false), nearest(2, 16.0, false)],
         ),
+        Warden => (
+            vec![
+                float(),
+                slot(
+                    0,
+                    MOVE | LOOK | JUMP,
+                    Goal::Warden(super::warden::Act::Busy),
+                ),
+                melee(1, 1.2, false),
+                slot(3, MOVE, Goal::Warden(super::warden::Act::Investigate)),
+                stroll(5, 0.5),
+                look(8, 8.0),
+                random_look(8),
+            ],
+            Vec::new(),
+        ),
         Creaking => (
             vec![
                 float(),

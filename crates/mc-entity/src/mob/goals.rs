@@ -270,6 +270,7 @@ pub enum Goal {
     Air(super::air::Act),
     /// Illagers, vexes and ravagers.
     Illager(super::illager::Act),
+    Warden(super::warden::Act),
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -919,6 +920,7 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         Goal::Aqua(act) => super::aqua::can_use(act, m, b, s),
         Goal::Air(act) => super::air::can_use(act, m, b, s),
         Goal::Illager(act) => super::illager::can_use(act, m, b, s),
+        Goal::Warden(act) => super::warden::can_use(act, m, b),
     }
 }
 
@@ -1126,6 +1128,7 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         Goal::Aqua(act) => super::aqua::can_continue(act, m, b, s),
         Goal::Air(act) => super::air::can_continue(act, m, b, s),
         Goal::Illager(act) => super::illager::can_continue(act, m, s),
+        Goal::Warden(act) => super::warden::can_continue(act, m, b),
     }
 }
 
@@ -1321,6 +1324,7 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
         Goal::Aqua(act) => super::aqua::stop(act, m),
         Goal::Air(act) => super::air::stop(act, m),
         Goal::Illager(act) => super::illager::stop(act, m),
+        Goal::Warden(act) => super::warden::stop(act, m),
         _ => {}
     }
 }
@@ -1703,6 +1707,7 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
         Goal::Aqua(act) => super::aqua::tick(act, m, b, s, out),
         Goal::Air(act) => super::air::tick(act, m, b, s, out),
         Goal::Illager(act) => super::illager::tick(act, m, b, s, out),
+        Goal::Warden(act) => super::warden::tick(act, m, b, s, out),
     }
 }
 
