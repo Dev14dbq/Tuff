@@ -1805,11 +1805,17 @@ pub mod play {
                     out.put_varint(*item);
                 }
                 Self::ItemStack(stack) => {
+                    // A template, as vanilla records it: the item first, then
+                    // the count and the component changes.
                     out.put_varint(5);
-                    ItemStack::encode(Some(stack), out);
+                    out.put_varint(stack.item);
+                    out.put_varint(stack.count);
+                    stack.components.encode(stack.damage, out);
                 }
                 Self::Tag(tag) => {
+                    // A set of items named by a tag: 0, then the tag.
                     out.put_varint(6);
+                    out.put_varint(0);
                     out.put_string(tag);
                 }
                 Self::Dyed(dye, target) => {
@@ -4069,9 +4075,13 @@ mod recipe_book_tests {
         let out = bytes(&packet);
         // One entry, id 2, display type 0 with two ingredients.
         assert_eq!(&out[..4], &[1, 2, 0, 2]);
-        // The tag display (type 6) names the tag.
-        assert_eq!(out[4], 6);
-        assert_eq!(&out[5..5 + 17], b"\x10minecraft:planks");
+        // The tag display (type 6) is a set named by a tag: 0, then the tag
+        // (as a vanilla server sends it).
+        assert_eq!(&out[4..6], &[6, 0]);
+        assert_eq!(&out[6..6 + 17], b"\x10minecraft:planks");
+        // An item stack display is item, count, then no component changes.
+        let stack = [5, 9, 4, 0, 0];
+        assert!(out.windows(5).any(|w| w == stack), "item first, then the count");
         // At the end: group 0 is written as 1, category 3, ingredients
         // present: one set of two ids, flags 3, not replacing.
         assert_eq!(&out[out.len() - 9..], [1, 3, 1, 1, 3, 5, 6, 3, 0]);

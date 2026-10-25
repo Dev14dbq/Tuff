@@ -232,7 +232,7 @@ impl Components {
 
     /// Writes the patch (added count, removed count, entries) with `damage`
     /// first. Components we cannot encode are left out.
-    fn encode(&self, damage: i32, out: &mut Vec<u8>) {
+    pub(crate) fn encode(&self, damage: i32, out: &mut Vec<u8>) {
         let mut added = Vec::new();
         let mut added_count = 0;
         let mut removed = Vec::new();
