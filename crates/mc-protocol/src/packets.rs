@@ -4302,7 +4302,9 @@ mod recipe_book_tests {
         // telemetry flag, not inside the display.
         assert_eq!(
             &out[out.len() - 17..],
-            &[0, 0, 0, 2, 0, 0, 0x40, 0x40, 0, 0, 0x3f, 0xc0, 0, 0, 0, 0, 0]
+            &[
+                0, 0, 0, 2, 0, 0, 0x40, 0x40, 0, 0, 0x3f, 0xc0, 0, 0, 0, 0, 0
+            ]
         );
         let seen = Serverbound::decode("minecraft:recipe_book_seen_recipe", &mut Reader::new(&[7]))
             .unwrap();
