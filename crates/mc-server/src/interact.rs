@@ -611,6 +611,14 @@ pub fn dig(
         .is_some_and(crate::mobs::bees::is_hive)
         && actor.game_mode != CREATIVE
     {
+        let tool = crate::held::held(ctx, actor.uuid, 0).map(|h| h.stack);
+        crate::criteria::bee_nest(
+            ctx,
+            actor.uuid,
+            blocks.block_name(state).unwrap_or(""),
+            tool.as_ref(),
+            crate::mobs::bees::inside(ctx, position).len(),
+        );
         crate::mobs::bees::disturbed(ctx, position, Some(actor.uuid), false);
     }
     if blocks.block_name(state) == Some("minecraft:creaking_heart") {

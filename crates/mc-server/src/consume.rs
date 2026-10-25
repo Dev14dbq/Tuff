@@ -148,7 +148,7 @@ fn effect_set(ctx: &ServerContext, v: &Value) -> Vec<&'static Kind> {
     }
 }
 
-fn consume_effect(ctx: &ServerContext, uuid: u128, effect: &Value, pos: [f64; 3]) {
+pub(crate) fn consume_effect(ctx: &ServerContext, uuid: u128, effect: &Value, pos: [f64; 3]) {
     match effect["type"].as_str().unwrap_or("") {
         "minecraft:apply_effects" => {
             let chance = effect["probability"].as_f64().unwrap_or(1.0);

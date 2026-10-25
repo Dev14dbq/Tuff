@@ -82,13 +82,14 @@ fn a_silverfish_hides_in_the_stone_it_walks_by() {
     // Far from the player, a floor of stone bricks under it.
     let _ = join(&ctx, [0.5, -60.0, 0.5]);
     let bricks = state_named(&ctx, "minecraft:stone_bricks");
-    let cells: Vec<[i32; 3]> = (14..=44)
-        .flat_map(|x| (14..=44).map(move |z| [x, -61, z]))
+    // Wide enough that it does not wander off onto grass, where it cannot hide.
+    let cells: Vec<[i32; 3]> = (4..=46)
+        .flat_map(|x| (4..=46).map(move |z| [x, -61, z]))
         .collect();
     for c in &cells {
         set_state(&ctx, *c, bricks);
     }
-    let id = put(&ctx, Species::Silverfish, [24.5, -60.0, 24.5]);
+    let id = put(&ctx, Species::Silverfish, [25.5, -60.0, 25.5]);
     // Far from everyone, but it does not go away on its own.
     if let Some(Kind::Mob(m)) = lock(&ctx.entities)
         .iter_mut()

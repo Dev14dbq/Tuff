@@ -552,6 +552,13 @@ pub fn try_hurt_by_entity(
         v.dead = died;
         (v.packet(), died, tally)
     };
+    // A totem in hand cheats death, though not the void or /kill.
+    let (packet, died) = if died && !bypass && undying(ctx, uuid, entity_id) {
+        let packet = lock(&ctx.vitals).get(&uuid).map(Vitals::packet)?;
+        (packet, false)
+    } else {
+        (packet, died)
+    };
     for (stat, n) in ["damage_taken", "damage_absorbed", "damage_resisted"]
         .into_iter()
         .zip(tally)
@@ -590,6 +597,39 @@ pub fn try_hurt_by_entity(
         });
     }
     Some(died)
+}
+
+/// A held item with `death_protection` (the totem of undying) saves a
+/// dying player: it is used up, they keep 1 health, its death effects
+/// apply (minecraft.wiki, "Totem of Undying"). The main hand is looked at
+/// first.
+fn undying(ctx: &ServerContext, uuid: u128, entity_id: i32) -> bool {
+    let Some((held, protection)) = [0, 1].into_iter().find_map(|hand| {
+        let h = crate::held::held(ctx, uuid, hand)?;
+        let p = ctx
+            .items
+            .component(&h.stack, "minecraft:death_protection")?;
+        Some((h, p))
+    }) else {
+        return false;
+    };
+    crate::held::consume(ctx, uuid, held.slot, 1);
+    if let Some(v) = lock(&ctx.vitals).get_mut(&uuid) {
+        v.health = 1.0;
+        v.dead = false;
+    }
+    let pos = lock(&ctx.players)
+        .get(&uuid)
+        .and_then(|p| p.pose)
+        .map_or([0.0; 3], |q| [q.x, q.y, q.z]);
+    for effect in protection["death_effects"].as_array().into_iter().flatten() {
+        crate::consume::consume_effect(ctx, uuid, effect, pos);
+    }
+    // Clients show the totem and play its sound.
+    crate::fx::status(ctx, entity_id, 35);
+    crate::stats::add(ctx, uuid, crate::stats::USED, &held.name, 1);
+    crate::criteria::with_item(ctx, uuid, "minecraft:used_totem", &held.stack);
+    true
 }
 
 /// A player moved: track falling and hurt them when they land.
@@ -957,5 +997,62 @@ pub fn announce_death(ctx: &ServerContext, uuid: u128, message: Tag) {
                 overlay: false,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod totem_tests {
+    use super::*;
+    use crate::testkit::{flat, join, stack, wear};
+
+    const U: u128 = 0x7073;
+
+    #[test]
+    fn a_totem_in_the_off_hand_cheats_death_but_not_the_void() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        join(&ctx, U, 3, [0.5, -60.0, 0.5], 0);
+        wear(&ctx, U, 45, stack(&ctx, "totem_of_undying", &[]));
+        assert_eq!(
+            try_hurt(
+                &ctx,
+                U,
+                100.0,
+                "minecraft:generic",
+                "death.attack.generic",
+                None
+            ),
+            Some(false)
+        );
+        {
+            let all = lock(&ctx.vitals);
+            let v = &all[&U];
+            assert_eq!(v.health, 1.0);
+            assert!(!v.dead);
+            for effect in ["regeneration", "absorption", "fire_resistance"] {
+                let kind = crate::effects::kind_of(effect).unwrap();
+                assert!(v.effects.get(kind).is_some(), "no {effect}");
+            }
+        }
+        assert!(lock(&ctx.inventories)[&U].slots[45].is_none(), "totem kept");
+        // With another, the void still takes them.
+        wear(&ctx, U, 45, stack(&ctx, "totem_of_undying", &[]));
+        if let Some(v) = lock(&ctx.vitals).get_mut(&U) {
+            v.immune = 0;
+        }
+        assert_eq!(
+            try_hurt(
+                &ctx,
+                U,
+                1000.0,
+                "minecraft:out_of_world",
+                "death.attack.outOfWorld",
+                None
+            ),
+            Some(true)
+        );
+        assert!(lock(&ctx.inventories)[&U].slots[45].is_some());
     }
 }

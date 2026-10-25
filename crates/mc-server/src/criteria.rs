@@ -706,6 +706,22 @@ pub fn on_block(
     });
 }
 
+/// `bee_nest_destroyed`: a player broke a hive or nest with `tool`, with
+/// `bees` inside.
+pub fn bee_nest(
+    ctx: &ServerContext,
+    uuid: u128,
+    block: &str,
+    tool: Option<&ItemStack>,
+    bees: usize,
+) {
+    criterion(ctx, uuid, "minecraft:bee_nest_destroyed", |c, _| {
+        (c["blocks"].is_null() || is(ctx, "minecraft:block", &c["blocks"], block))
+            && item(ctx, &c["item"], tool)
+            && range(&c["num_bees_inside"], bees as f64)
+    });
+}
+
 /// `recipe_crafted`, `crafter_recipe_crafted`: a recipe was made from these
 /// ingredients.
 pub fn crafted(
@@ -1065,6 +1081,22 @@ fn motion<R>(uuid: u128, f: impl FnOnce(&mut Motion) -> R) -> R {
 
 /// The player moved: a fall begins or ends (`fall_from_height`, and
 /// `fall_after_explosion` after a launch).
+/// `enter_block`: the blocks (not air) a player's box is in.
+fn entered(ctx: &ServerContext, uuid: u128, feet: [f64; 3]) {
+    criterion(ctx, uuid, "minecraft:enter_block", |c, _| {
+        let cells = |lo: f64, hi: f64| lo.floor() as i32..=hi.floor() as i32;
+        cells(feet[0] - 0.3, feet[0] + 0.3).any(|x| {
+            cells(feet[1], feet[1] + 1.8).any(|y| {
+                cells(feet[2] - 0.3, feet[2] + 0.3).any(|z| {
+                    let at = Position::new(x, y, z);
+                    block_at(ctx, at).is_some_and(|(_, s)| !ctx.shapes.is_air(s))
+                        && block_is(ctx, c, at)
+                })
+            })
+        })
+    });
+}
+
 pub fn moved(
     ctx: &ServerContext,
     uuid: u128,
@@ -1074,6 +1106,11 @@ pub fn moved(
     on_ground: bool,
     in_water: bool,
 ) {
+    // Entering is looked at when the feet or the head go to another cell.
+    let cell = |p: [f64; 3], up: f64| [p[0].floor(), (p[1] + up).floor(), p[2].floor()];
+    if cell(before, 0.0) != cell(after, 0.0) || cell(before, 1.8) != cell(after, 1.8) {
+        entered(ctx, uuid, after);
+    }
     let landed = motion(uuid, |m| {
         if in_water {
             m.fall_start = None;
@@ -1290,6 +1327,64 @@ mod tests {
 
     fn stack(ctx: &ServerContext, name: &str) -> ItemStack {
         ItemStack::new(ctx.items.id(name).unwrap(), 1)
+    }
+
+    #[test]
+    fn walking_into_an_end_gateway_is_entering_it() {
+        let Some(ctx) = setup() else { return };
+        testkit::set(&ctx, [5, -60, 0], "minecraft:end_gateway");
+        moved(
+            &ctx,
+            ME,
+            [3.5, -60.0, 0.5],
+            true,
+            [4.5, -60.0, 0.5],
+            true,
+            false,
+        );
+        assert!(!has_done(&ctx, ME, "minecraft:end/enter_end_gateway", None));
+        moved(
+            &ctx,
+            ME,
+            [4.5, -60.0, 0.5],
+            true,
+            [5.5, -60.0, 0.5],
+            true,
+            false,
+        );
+        assert!(has_done(&ctx, ME, "minecraft:end/enter_end_gateway", None));
+    }
+
+    #[test]
+    fn a_nest_broken_with_silk_touch_and_three_bees_inside() {
+        let Some(ctx) = setup() else { return };
+        let mut pick = stack(&ctx, "minecraft:wooden_pickaxe");
+        crate::enchants::set_levels(
+            &mut pick,
+            "minecraft:enchantments",
+            &[("minecraft:silk_touch".into(), 1)],
+        );
+        bee_nest(&ctx, ME, "minecraft:bee_nest", Some(&pick), 2);
+        assert!(!has_done(
+            &ctx,
+            ME,
+            "minecraft:husbandry/silk_touch_nest",
+            None
+        ));
+        bee_nest(&ctx, ME, "minecraft:beehive", Some(&pick), 3);
+        assert!(!has_done(
+            &ctx,
+            ME,
+            "minecraft:husbandry/silk_touch_nest",
+            None
+        ));
+        bee_nest(&ctx, ME, "minecraft:bee_nest", Some(&pick), 3);
+        assert!(has_done(
+            &ctx,
+            ME,
+            "minecraft:husbandry/silk_touch_nest",
+            None
+        ));
     }
 
     #[test]
