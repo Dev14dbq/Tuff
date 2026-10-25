@@ -123,7 +123,7 @@ fn player_plain(ctx: &ServerContext, uuid: u128) -> Option<Subject> {
         id,
         pos: [pose.x, pose.y, pose.z],
         dimension,
-        sneaking: crate::stats::is_sneaking(ctx, uuid),
+        sneaking: crate::stats::sneaking(ctx, uuid),
         ..Subject::default()
     };
     if let Some(h) = lock(&ctx.inventories).get(&uuid) {

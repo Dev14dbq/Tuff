@@ -833,6 +833,7 @@ pub fn die(
         crate::stats::killed(ctx, player, e);
     }
     let pos = e.pos;
+    let victim = by_player.map(|_| crate::criteria::entity(ctx, e));
     let Kind::Mob(m) = &mut e.kind else {
         return;
     };
@@ -843,6 +844,15 @@ pub fn die(
         // A sculk catalyst nearby takes it.
         if xp > 0 && !crate::catalysts::took(ctx, pos, xp) {
             crate::xp::spawn(ctx, [pos[0], pos[1] + 0.3, pos[2]], xp);
+        } else if xp > 0
+            && let (Some(player), Some(victim)) = (by_player, &victim)
+        {
+            crate::criteria::with_entity(
+                ctx,
+                player,
+                "minecraft:kill_mob_near_sculk_catalyst",
+                victim,
+            );
         }
     }
     let looting = killer

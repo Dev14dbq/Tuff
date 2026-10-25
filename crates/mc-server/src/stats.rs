@@ -301,7 +301,6 @@ pub fn opened(ctx: &ServerContext, uuid: u128, block: Option<&str>) {
     custom(ctx, uuid, stat, 1);
 }
 
-/// The player sneaks or stops (Player Input).
 /// Whether the player sneaks now.
 pub fn sneaking(ctx: &ServerContext, uuid: u128) -> bool {
     lock(&ctx.stats)
@@ -310,6 +309,7 @@ pub fn sneaking(ctx: &ServerContext, uuid: u128) -> bool {
         .is_some_and(|w| w.sneaking)
 }
 
+/// The player sneaks or stops (Player Input).
 pub fn set_sneaking(ctx: &ServerContext, uuid: u128, on: bool) {
     if let Some(w) = lock(&ctx.stats).watch.get_mut(&uuid) {
         w.sneaking = on;
@@ -321,14 +321,6 @@ pub fn set_sprinting(ctx: &ServerContext, uuid: u128, on: bool) {
     if let Some(w) = lock(&ctx.stats).watch.get_mut(&uuid) {
         w.sprinting = on;
     }
-}
-
-/// Whether the player is sprinting (dolphins watch for swimmers).
-pub fn is_sneaking(ctx: &ServerContext, uuid: u128) -> bool {
-    lock(&ctx.stats)
-        .watch
-        .get(&uuid)
-        .is_some_and(|w| w.sneaking)
 }
 
 pub fn is_sprinting(ctx: &ServerContext, uuid: u128) -> bool {

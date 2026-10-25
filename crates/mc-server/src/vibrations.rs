@@ -503,6 +503,13 @@ fn route(ctx: &ServerContext, events: Vec<GameEvent>, now: i64) {
                 }
             }
             if !audible(ctx, e) {
+                // A sneaking player kept quiet near something that hears.
+                if e.source.sneaking
+                    && let Some(uuid) = e.source.player
+                    && !near(&v, e.pos, 16.0).is_empty()
+                {
+                    crate::criteria::plain(ctx, uuid, "minecraft:avoid_vibration");
+                }
                 continue;
             }
             if t.vibrations.contains(&name) && freq > 0 && !e.source.warden {
