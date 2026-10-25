@@ -320,11 +320,13 @@ fn pick_up(ctx: &ServerContext, entity: &mut Entity, players: &[Player]) {
         count,
         damage,
         owner,
+        ref components,
         ..
     } = entity.kind
     else {
         return;
     };
+    let components = components.clone();
     // An owned item is its owner's until its last 10 seconds.
     let anyone = owner.is_none() || LIFETIME.saturating_sub(entity.age) <= 200;
     for (uuid, player_entity, mode, pose) in players {
@@ -336,8 +338,10 @@ fn pick_up(ctx: &ServerContext, entity: &mut Entity, players: &[Player]) {
         let Some(hands) = inventories.get_mut(uuid) else {
             continue;
         };
+        // The whole stack: enchantments, names and the rest come along.
         let stack = play::ItemStack {
             damage,
+            components: components.clone(),
             ..play::ItemStack::new(item, count)
         };
         let (taken, changed) = hands.insert_stack(&stack, max);
@@ -430,6 +434,7 @@ pub fn merge(
                     count: a_count,
                     damage: a_damage,
                     owner: a_owner,
+                    components: a_components,
                     ..
                 },
                 Kind::Item {
@@ -437,6 +442,7 @@ pub fn merge(
                     count: b_count,
                     damage: b_damage,
                     owner: b_owner,
+                    components: b_components,
                     ..
                 },
             ) = (&entities[i].kind, &entities[j].kind)
@@ -445,6 +451,7 @@ pub fn merge(
             };
             // Only stacks that fit together join.
             if (a_item, a_damage, a_owner) != (b_item, b_damage, b_owner)
+                || a_components != b_components
                 || a_count + b_count > ctx.items.max_stack(*a_item)
             {
                 continue;
@@ -562,6 +569,68 @@ mod tests {
     fn set(ctx: &ServerContext, p: Position, block: &str) {
         let state = ctx.data.blocks.default_state(block).unwrap();
         WorldLevel::new(ctx).set_block(p, state);
+    }
+
+    #[test]
+    fn a_picked_up_stack_keeps_its_enchantments_and_wear() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let sword = ctx.items.id("minecraft:diamond_sword").unwrap();
+        let mut components = mc_protocol::components::Components::default();
+        let mut levels = mc_nbt::Compound::new();
+        levels.insert("minecraft:sharpness", mc_nbt::Tag::Int(5));
+        components.set("enchantments", mc_nbt::Tag::Compound(levels));
+        let stack = play::ItemStack {
+            damage: 300,
+            components: components.clone(),
+            ..play::ItemStack::new(sword, 1)
+        };
+        let mut e = Entity {
+            kind: Kind::stack(&stack, 0),
+            ..item(&ctx, "minecraft:stone", 1, [0.5, -60.0, 0.5])
+        };
+        lock(&ctx.inventories).entry(9).or_default();
+        let pose = crate::context::Pose {
+            x: 0.5,
+            y: -60.0,
+            z: 0.5,
+            yaw: 0.0,
+            pitch: 0.0,
+            on_ground: true,
+        };
+        pick_up(&ctx, &mut e, &[(9, 90, 0, pose)]);
+        assert!(e.removed, "not picked up");
+        let got = lock(&ctx.inventories)[&9]
+            .slots
+            .iter()
+            .flatten()
+            .find(|s| s.item == sword)
+            .cloned()
+            .expect("no sword");
+        assert_eq!(got.damage, 300);
+        assert_eq!(got.components, components);
+        // A plain sword and an enchanted one stay apart on the ground.
+        let mut both = vec![
+            Entity {
+                kind: Kind::stack(&stack, 0),
+                ..item(&ctx, "minecraft:stone", 1, [4.5, -60.0, 4.5])
+            },
+            Entity {
+                kind: Kind::stack(
+                    &play::ItemStack {
+                        damage: 300,
+                        ..play::ItemStack::new(sword, 1)
+                    },
+                    0,
+                ),
+                ..item(&ctx, "minecraft:stone", 1, [4.5, -60.0, 4.5])
+            },
+        ];
+        let ids: Vec<i32> = both.iter().map(|e| e.id).collect();
+        merge(&ctx, &mut both, &ids);
+        assert!(both.iter().all(|e| !e.removed));
     }
 
     #[test]
