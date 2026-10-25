@@ -2122,7 +2122,11 @@ pub mod play {
                 if let Some(d) = &a.display {
                     crate::codec::put_nbt(out, &d.title);
                     crate::codec::put_nbt(out, &d.description);
-                    ItemStack::encode(Some(&d.icon), out);
+                    // The icon is a template, as in recipe displays: the
+                    // item first, then the count and the component changes.
+                    out.put_varint(d.icon.item);
+                    out.put_varint(d.icon.count);
+                    d.icon.components.encode(d.icon.damage, out);
                     out.put_varint(d.frame);
                     let flags = i32::from(d.background.is_some())
                         | i32::from(d.show_toast) << 1
@@ -4260,6 +4264,37 @@ mod recipe_book_tests {
                 b'c', 1, 0, 0, 0, 0, 0, 0, 0, 1, 1
             ]
         );
+        // A shown one: its icon is item first, then the count.
+        let mut out = Vec::new();
+        super::play::UpdateAdvancements {
+            reset: false,
+            added: vec![(
+                "a:b".into(),
+                super::play::Advancement {
+                    parent: None,
+                    display: Some(super::play::AdvancementDisplay {
+                        title: mc_nbt::Tag::String("t".into()),
+                        description: mc_nbt::Tag::String("d".into()),
+                        icon: ItemStack::new(54, 1),
+                        frame: 2,
+                        background: None,
+                        show_toast: true,
+                        hidden: false,
+                        x: 0.0,
+                        y: 0.0,
+                    }),
+                    requirements: vec![],
+                    telemetry: false,
+                },
+            )],
+            removed: vec![],
+            progress: vec![],
+            show: false,
+        }
+        .encode(&mut out);
+        // reset, 1 added, "a:b", no parent, a display, the two texts (string tags).
+        let icon_at = 1 + 1 + 4 + 1 + 1 + 4 + 4;
+        assert_eq!(&out[icon_at..icon_at + 5], &[54, 1, 0, 0, 2]);
         let seen = Serverbound::decode("minecraft:recipe_book_seen_recipe", &mut Reader::new(&[7]))
             .unwrap();
         assert_eq!(seen, Serverbound::RecipeBookSeenRecipe { recipe: 7 });
