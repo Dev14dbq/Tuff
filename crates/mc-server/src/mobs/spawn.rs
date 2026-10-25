@@ -645,9 +645,11 @@ fn spawn_round(
             .clone()
     };
 
-    // Animals that come with a chunk.
+    // Animals that come with a chunk: only one generated just now, as
+    // vanilla places them while generating; a chunk read from disk has
+    // its animals saved with it.
     for &chunk in &list {
-        if spawner.populated.insert(chunk) {
+        if ctx.world.take_fresh(chunk.0, chunk.1) && spawner.populated.insert(chunk) {
             let Some(b) = in_biome(chunk.0 * 16 + 8, chunk.1 * 16 + 8, biomes) else {
                 continue;
             };
@@ -1235,6 +1237,32 @@ pub fn despawn(
 mod tests {
     use super::*;
     use mc_entity::Mob;
+
+    #[test]
+    fn only_a_chunk_generated_just_now_is_owed_its_animals() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let Ok(data) = mc_data::McData::load(&dir) else {
+            return;
+        };
+        let folder = std::env::temp_dir().join(format!("mc-fresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let mut config = crate::Config::new(dir.clone());
+        config.world = Some(folder.clone());
+        config.seed = Some(12345);
+        let ctx = ServerContext::new(config, data).unwrap();
+        ctx.world.section_count(3, 4, &ctx.data.blocks);
+        assert!(ctx.world.take_fresh(3, 4));
+        assert!(!ctx.world.take_fresh(3, 4));
+        crate::save(&ctx);
+        drop(ctx);
+        // Read back from disk after a restart, it has its animals already.
+        let mut config = crate::Config::new(dir.clone());
+        config.world = Some(folder.clone());
+        let again = ServerContext::new(config, mc_data::McData::load(&dir).unwrap()).unwrap();
+        again.world.section_count(3, 4, &again.data.blocks);
+        assert!(!again.world.take_fresh(3, 4));
+        let _ = std::fs::remove_dir_all(folder);
+    }
 
     #[test]
     fn slime_chunks_match_known_seed() {
