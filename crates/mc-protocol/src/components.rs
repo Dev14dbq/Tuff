@@ -305,6 +305,45 @@ impl Components {
         }
         Ok((damage, patch))
     }
+
+    /// A patch as clients send it in packets they are not trusted with
+    /// (the creative inventory): each added value comes after its length,
+    /// so one we cannot read is skipped.
+    fn decode_delimited(r: &mut Reader) -> Result<(i32, Self)> {
+        let (added, removed) = (r.varint()?, r.varint()?);
+        if !(0..=256).contains(&added) || !(0..=256).contains(&removed) {
+            return Err(DecodeError::Invalid("component count"));
+        }
+        let mut damage = 0;
+        let mut patch = Self::new();
+        for _ in 0..added {
+            let id = r.varint()?;
+            let len = r.length_prefix()?;
+            let mut value = Reader::new(r.bytes(len)?);
+            let name = registry_name(COMPONENT_TYPES, id).or((id == 3).then_some(DAMAGE));
+            let Some(name) = name else {
+                continue;
+            };
+            if name == DAMAGE {
+                damage = value.varint()?;
+                continue;
+            }
+            let Some(net) = codec(name) else {
+                continue;
+            };
+            // A value we cannot make out is dropped, not the packet.
+            if let Ok(v) = read(net, &mut value, 0) {
+                patch.set(name, v);
+            }
+        }
+        for _ in 0..removed {
+            let id = r.varint()?;
+            if let Some(name) = registry_name(COMPONENT_TYPES, id) {
+                patch.set_removed(name);
+            }
+        }
+        Ok((damage, patch))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -361,6 +400,23 @@ impl ItemStack {
         }
         let item = r.varint()?;
         let (damage, components) = Components::decode(r)?;
+        Ok(Some(Self {
+            count,
+            item,
+            damage,
+            components,
+        }))
+    }
+
+    /// Slot data as the creative inventory sends it: the components after
+    /// their lengths.
+    pub fn decode_untrusted(r: &mut Reader) -> Result<Option<Self>> {
+        let count = r.varint()?;
+        if count <= 0 {
+            return Ok(None);
+        }
+        let item = r.varint()?;
+        let (damage, components) = Components::decode_delimited(r)?;
         Ok(Some(Self {
             count,
             item,

@@ -899,7 +899,7 @@ pub mod play {
                 "minecraft:set_carried_item" => Serverbound::SetCarriedItem { slot: r.i16()? },
                 "minecraft:set_creative_mode_slot" => Serverbound::SetCreativeModeSlot {
                     slot: r.i16()?,
-                    item: ItemStack::decode(r)?,
+                    item: ItemStack::decode_untrusted(r)?,
                 },
                 "minecraft:punch" => Serverbound::Punch,
                 "minecraft:container_click" => {
@@ -3869,6 +3869,25 @@ mod tests {
              00000000000000003f9bd06099876905bfbf3a021b0c735b1dc00502453f0000003f\
              80000001483f8000003f8000000101"
         );
+    }
+
+    #[test]
+    fn creative_slot_components_come_after_their_lengths() {
+        // A 26.3 client's enchanted item put in slot 41: one added component
+        // (13, enchantments), 9 bytes long: three enchantments.
+        let body = [
+            0x00, 0x29, 0x01, 0xa0, 0x08, 0x01, 0x00, 0x0d, 0x09, 0x03, 0x28, 0xff, 0x01, 0x17,
+            0x01, 0x08, 0xff, 0x01,
+        ];
+        let mut r = Reader::new(&body);
+        let packet = play::Serverbound::decode("minecraft:set_creative_mode_slot", &mut r).unwrap();
+        assert_eq!(r.remaining(), 0);
+        let play::Serverbound::SetCreativeModeSlot { slot, item } = packet else {
+            panic!("{packet:?}");
+        };
+        assert_eq!(slot, 41);
+        let item = item.unwrap();
+        assert_eq!((item.count, item.item), (1, 1056));
     }
 
     #[test]

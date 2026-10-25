@@ -634,6 +634,40 @@ mod tests {
     }
 
     #[test]
+    fn a_creative_slot_with_enchantments_keeps_them() {
+        // The server's registries name the components.
+        let Some(_ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        // As a 26.3 client sends it: each component after its length.
+        let body = [
+            0x00, 0x29, 0x01, 0xa0, 0x08, 0x01, 0x00, 0x0d, 0x09, 0x03, 0x28, 0xff, 0x01, 0x17,
+            0x01, 0x08, 0xff, 0x01,
+        ];
+        let packet = play::Serverbound::decode(
+            "minecraft:set_creative_mode_slot",
+            &mut mc_protocol::codec::Reader::new(&body),
+        )
+        .unwrap();
+        let play::Serverbound::SetCreativeModeSlot {
+            item: Some(item), ..
+        } = packet
+        else {
+            panic!("{packet:?}");
+        };
+        let Some(mc_nbt::Tag::Compound(levels)) = item.components.get("enchantments") else {
+            panic!("no enchantments: {:?}", item.components);
+        };
+        assert_eq!(levels.len(), 3, "{levels:?}");
+        assert!(
+            levels.iter().any(|(_, l)| *l == mc_nbt::Tag::Int(255)),
+            "{levels:?}"
+        );
+        assert_eq!(item.damage, 0);
+    }
+
+    #[test]
     fn items_fall_land_and_are_synced_rarely() {
         let Some(ctx) = flat() else {
             eprintln!("skipped: no game data");
