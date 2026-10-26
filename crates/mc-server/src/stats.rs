@@ -330,6 +330,11 @@ pub fn is_sprinting(ctx: &ServerContext, uuid: u128) -> bool {
         .is_some_and(|w| w.sprinting)
 }
 
+/// Whether the player rides anything.
+pub fn riding(ctx: &ServerContext, entity_id: i32) -> bool {
+    vehicle_of(ctx, entity_id).is_some()
+}
+
 /// Whether the player sits in a boat.
 pub fn in_boat(ctx: &ServerContext, entity_id: i32) -> bool {
     vehicle_of(ctx, entity_id).is_some_and(|v| v.ends_with("boat") || v.ends_with("raft"))

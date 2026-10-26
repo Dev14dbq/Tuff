@@ -326,7 +326,23 @@ fn allay(
     if let Some((item, count)) = m.quirks.air.carried {
         m.quirks.air.errand = Some(goal);
         if dist_sq(pos, goal) <= 3.0 * 3.0 {
-            crate::tick::spawn_item_at(ctx, [pos[0], pos[1] + 0.3, pos[2]], item, count);
+            let stack = mc_protocol::packets::play::ItemStack::new(item, count);
+            let allay = entities[i].uuid;
+            crate::criteria::note_thrower(allay, "minecraft:allay");
+            crate::tick::spawn_thrown_at(ctx, [pos[0], pos[1] + 0.3, pos[2]], &stack, Some(allay));
+            let Kind::Mob(m) = &mut entities[i].kind else {
+                return;
+            };
+            if let Some((cell, _)) = m.quirks.air.note {
+                let at = mc_protocol::Position::new(cell[0], cell[1], cell[2]);
+                crate::criteria::on_block(
+                    ctx,
+                    owner.uuid,
+                    "minecraft:allay_drop_item_on_block",
+                    at,
+                    Some(&stack),
+                );
+            }
             m.quirks.air.carried = None;
             m.quirks.air.errand = None;
             m.quirks.air.errand_cd = 60;

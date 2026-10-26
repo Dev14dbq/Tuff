@@ -61,6 +61,18 @@ fn swap_one(ctx: &ServerContext, by: &Actor, slot: usize, into: &str) {
     }
 }
 
+/// `player_sheared_equipment`: shears took `stack` off the mob.
+fn sheared_off(ctx: &ServerContext, e: &Entity, by: &Actor, stack: &play::ItemStack) {
+    let mob = crate::criteria::entity(ctx, e);
+    crate::criteria::entity_and_item(
+        ctx,
+        by.uuid,
+        "minecraft:player_sheared_equipment",
+        &mob,
+        Some(stack),
+    );
+}
+
 fn swing(ctx: &ServerContext, by: &Actor) {
     let _ = ctx.events.send(Event::Swing {
         uuid: by.uuid,
@@ -146,6 +158,29 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
         swing(ctx, by);
         return;
     }
+    let mut taken = None;
+    if super::wolf_armor::used(
+        ctx,
+        e,
+        by,
+        held.as_ref().map(|h| &h.stack),
+        &name,
+        &mut taken,
+    ) {
+        if name == "minecraft:shears" {
+            if by.game_mode != 1 {
+                crate::held::wear(ctx, by.uuid, hslot, 1);
+            }
+        } else {
+            consume(ctx, by, hslot);
+        }
+        if let Some(stack) = taken {
+            sheared_off(ctx, e, by, &stack);
+        }
+        swing(ctx, by);
+        send_equipment(ctx, e);
+        return;
+    }
     let Kind::Mob(m) = &mut e.kind else {
         return;
     };
@@ -212,7 +247,26 @@ pub fn used(ctx: &ServerContext, e: &mut Entity, by: &Actor, hand: i32, others: 
     }
     // Shears.
     if name == "minecraft:shears" {
+        let before = m.gear.clone();
         if shear(ctx, e) {
+            if let Kind::Mob(m) = &e.kind {
+                let off: Vec<play::ItemStack> = before
+                    .iter()
+                    .zip(&m.gear)
+                    .filter_map(|(was, now)| match (was, now) {
+                        (Some(g), None) => Some(play::ItemStack {
+                            count: g.count,
+                            item: g.item,
+                            damage: g.damage,
+                            components: g.components.clone(),
+                        }),
+                        _ => None,
+                    })
+                    .collect();
+                for stack in off {
+                    sheared_off(ctx, e, by, &stack);
+                }
+            }
             if by.game_mode != 1 {
                 crate::held::wear(ctx, by.uuid, hslot, 1);
             }

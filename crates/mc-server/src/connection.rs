@@ -1071,6 +1071,10 @@ async fn play(
                         }
                         play::Serverbound::Punch => {
                             let _ = ctx.events.send(Event::Swing { uuid, entity_id, times: 1 });
+                            if game_mode != 3 {
+                                let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                                let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action: Action::Punch, reply: replies_tx.clone() });
+                            }
                         }
                         // Block changes happen on the tick thread; the answer comes back
                         // through `replies`.
@@ -1104,7 +1108,9 @@ async fn play(
                                 }
                                 writer.queue(&play::OpenBook { hand })?;
                             }
-                            crate::vitals::start_using(&ctx, uuid, entity_id, hand, game_mode);
+                            if !crate::spear::start(&ctx, uuid, entity_id, hand, game_mode) {
+                                crate::vitals::start_using(&ctx, uuid, entity_id, hand, game_mode);
+                            }
                             if crate::combat::holds_shield(&ctx, uuid, hand) {
                                 crate::combat::shield(&ctx, uuid, true);
                             }

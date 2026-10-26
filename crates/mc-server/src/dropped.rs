@@ -326,6 +326,7 @@ fn pick_up(ctx: &ServerContext, entity: &mut Entity, players: &[Player]) {
         count,
         damage,
         owner,
+        thrower,
         ref components,
         ..
     } = entity.kind
@@ -360,6 +361,9 @@ fn pick_up(ctx: &ServerContext, entity: &mut Entity, players: &[Player]) {
             .collect();
         drop(inventories);
         crate::stats::item(ctx, *uuid, crate::stats::PICKED_UP, item, taken);
+        if let Some(t) = thrower {
+            crate::criteria::picked_up_thrown(ctx, *uuid, t, &stack);
+        }
         let _ = ctx.events.send(Event::ItemTaken {
             item_entity: entity.id,
             collector: *player_entity,

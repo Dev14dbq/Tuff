@@ -245,6 +245,13 @@ pub fn start_using(
 
 /// The player let go of use (or changed what they hold).
 pub fn stop_using(ctx: &ServerContext, uuid: u128) {
+    if let Some(entity_id) = crate::spear::stop(uuid) {
+        let _ = ctx.events.send(Event::UsingItem {
+            uuid,
+            entity_id,
+            hand: None,
+        });
+    }
     crate::archaeology::stop(ctx, uuid);
     crate::criteria::spyglass(uuid, None);
     if let Some(using) = lock(&ctx.using).remove(&uuid) {

@@ -937,6 +937,13 @@ pub fn killed_by_arrow(
     });
 }
 
+/// `spear_mobs`: one spear charge struck this many mobs so far.
+pub fn spear_mobs(ctx: &ServerContext, uuid: u128, count: i32) {
+    criterion(ctx, uuid, "minecraft:spear_mobs", |c, _| {
+        range(&c["count"], f64::from(count))
+    });
+}
+
 /// The distance triggers (`fall_from_height`, `ride_entity_in_lava`,
 /// `nether_travel`, `levitation`, `fall_after_explosion`): the player went
 /// from `start` to where they are; `cause` is what launched them.
@@ -1097,6 +1104,31 @@ fn entered(ctx: &ServerContext, uuid: u128, feet: [f64; 3]) {
     });
 }
 
+/// `slide_down_block`: falling pressed against the side of a block whose
+/// faces stand a sixteenth in (a honey block), the player slides down it.
+fn slid(ctx: &ServerContext, uuid: u128, feet: [f64; 3]) {
+    // The box is 0.6 wide; a honey block's side is a sixteenth in.
+    let reach = 0.3 + 1.0 / 16.0 + 0.01;
+    let sides = [(reach, 0.0), (-reach, 0.0), (0.0, reach), (0.0, -reach)];
+    for (dx, dz) in sides {
+        let at = block_pos([feet[0] + dx, feet[1] + 0.1, feet[2] + dz]);
+        let Some((name, state)) = block_at(ctx, at) else {
+            continue;
+        };
+        if name != "minecraft:honey_block" {
+            continue;
+        }
+        criterion(ctx, uuid, "minecraft:slide_down_block", |c, _| {
+            c["block"]
+                .as_str()
+                .is_none_or(|b| crate::enchant_effects::full(b) == name)
+                && (c["blocks"].is_null() || is(ctx, "minecraft:block", &c["blocks"], &name))
+                && state_is(ctx, state, &c["state"])
+        });
+        return;
+    }
+}
+
 pub fn moved(
     ctx: &ServerContext,
     uuid: u128,
@@ -1110,6 +1142,9 @@ pub fn moved(
     let cell = |p: [f64; 3], up: f64| [p[0].floor(), (p[1] + up).floor(), p[2].floor()];
     if cell(before, 0.0) != cell(after, 0.0) || cell(before, 1.8) != cell(after, 1.8) {
         entered(ctx, uuid, after);
+    }
+    if !on_ground && before[1] - after[1] > 0.03 {
+        slid(ctx, uuid, after);
     }
     let landed = motion(uuid, |m| {
         if in_water {
@@ -1157,6 +1192,42 @@ pub fn moved(
             0,
         );
     }
+}
+
+/// The kinds of the mobs that threw items (allays), by uuid, for
+/// `thrown_item_picked_up_by_player`: the item keeps only its thrower's
+/// uuid, and the mob may be gone or out of reach by the time it is picked
+/// up.
+static THROWERS: std::sync::Mutex<Option<std::collections::HashMap<u128, String>>> =
+    std::sync::Mutex::new(None);
+
+/// A mob of `kind` threw an item.
+pub fn note_thrower(uuid: u128, kind: &str) {
+    lock(&THROWERS)
+        .get_or_insert_with(Default::default)
+        .insert(uuid, kind.to_owned());
+}
+
+/// `thrown_item_picked_up_by_player`: the player picked up `stack`, thrown
+/// by `thrower`.
+pub fn picked_up_thrown(ctx: &ServerContext, uuid: u128, thrower: u128, stack: &ItemStack) {
+    let Some(kind) = lock(&THROWERS)
+        .as_ref()
+        .and_then(|t| t.get(&thrower).cloned())
+    else {
+        return;
+    };
+    let by = Subject {
+        kind,
+        ..Subject::default()
+    };
+    entity_and_item(
+        ctx,
+        uuid,
+        "minecraft:thrown_item_picked_up_by_player",
+        &by,
+        Some(stack),
+    );
 }
 
 /// An explosion or wind burst launched the player from `at`.
@@ -1327,6 +1398,107 @@ mod tests {
 
     fn stack(ctx: &ServerContext, name: &str) -> ItemStack {
         ItemStack::new(ctx.items.id(name).unwrap(), 1)
+    }
+
+    #[test]
+    fn falling_against_a_honey_block_is_sliding_down_it() {
+        let Some(ctx) = setup() else { return };
+        let id = "minecraft:adventure/honey_block_slide";
+        // Pressed against the west face of the block east of the player.
+        let x = 1.0 + 1.0 / 16.0 - 0.3;
+        moved(
+            &ctx,
+            ME,
+            [x, -59.3, 0.5],
+            false,
+            [x, -59.5, 0.5],
+            false,
+            false,
+        );
+        assert!(!has_done(&ctx, ME, id, None));
+        testkit::set(&ctx, [1, -60, 0], "minecraft:honey_block");
+        // Standing still against it is not sliding.
+        moved(
+            &ctx,
+            ME,
+            [x, -59.5, 0.5],
+            false,
+            [x, -59.5, 0.5],
+            false,
+            false,
+        );
+        assert!(!has_done(&ctx, ME, id, None));
+        moved(
+            &ctx,
+            ME,
+            [x, -59.3, 0.5],
+            false,
+            [x, -59.5, 0.5],
+            false,
+            false,
+        );
+        assert!(has_done(&ctx, ME, id, None));
+    }
+
+    #[test]
+    fn what_an_allay_brings_counts_when_picked_up_and_at_a_note_block() {
+        let Some(ctx) = setup() else { return };
+        let allay = 0xa11a;
+        let cake = stack(&ctx, "minecraft:cake");
+        // Thrown by someone not known to be an allay: nothing.
+        picked_up_thrown(&ctx, ME, 0xbeef, &cake);
+        assert!(!has_done(
+            &ctx,
+            ME,
+            "minecraft:husbandry/allay_deliver_item_to_player",
+            None
+        ));
+        note_thrower(allay, "minecraft:allay");
+        picked_up_thrown(&ctx, ME, allay, &cake);
+        assert!(has_done(
+            &ctx,
+            ME,
+            "minecraft:husbandry/allay_deliver_item_to_player",
+            None
+        ));
+        let note = "minecraft:husbandry/allay_deliver_cake_to_note_block";
+        testkit::set(&ctx, [4, -60, 4], "minecraft:note_block");
+        let at = Position::new(4, -60, 4);
+        on_block(
+            &ctx,
+            ME,
+            "minecraft:allay_drop_item_on_block",
+            at,
+            Some(&stack(&ctx, "minecraft:apple")),
+        );
+        assert!(!has_done(&ctx, ME, note, None));
+        on_block(
+            &ctx,
+            ME,
+            "minecraft:allay_drop_item_on_block",
+            at,
+            Some(&cake),
+        );
+        assert!(has_done(&ctx, ME, note, None));
+    }
+
+    #[test]
+    fn five_mobs_in_one_charge_is_a_mob_kabob() {
+        let Some(ctx) = setup() else { return };
+        spear_mobs(&ctx, ME, 4);
+        assert!(!has_done(
+            &ctx,
+            ME,
+            "minecraft:adventure/spear_many_mobs",
+            None
+        ));
+        spear_mobs(&ctx, ME, 5);
+        assert!(has_done(
+            &ctx,
+            ME,
+            "minecraft:adventure/spear_many_mobs",
+            None
+        ));
     }
 
     #[test]

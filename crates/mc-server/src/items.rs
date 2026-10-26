@@ -53,6 +53,8 @@ pub struct Item {
     pub enchantable: Option<i32>,
     /// `jukebox_playable`: the song's id.
     pub jukebox_song: Option<String>,
+    /// A spear: its jab, charge and reach.
+    pub spear: Option<crate::spear::Spear>,
     /// Every default component (`minecraft:dye`...), as in the report.
     pub defaults: Value,
     /// `damage_resistant` against fire: survives fire and lava as an item.
@@ -258,6 +260,7 @@ fn parse(name: &str, c: &Value) -> Item {
                 .collect(),
             _ => Vec::new(),
         },
+        spear: crate::spear::Spear::parse(c),
         jukebox_song: match &c["minecraft:jukebox_playable"] {
             Value::String(s) => Some(s.clone()),
             other => other["song"].as_str().map(str::to_owned),

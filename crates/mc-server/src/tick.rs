@@ -183,6 +183,8 @@ impl Default for TickControl {
 /// Something a player (or the console) asked for, done during the tick.
 #[derive(Debug)]
 pub enum Action {
+    /// An attack at nothing in particular: a spear's jab.
+    Punch,
     Command {
         line: String,
         source: crate::commands::Source,
@@ -353,6 +355,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             crate::projectiles::trident::tick_spins(&ctx);
             crate::projectiles::crossbow::tick_charging(&ctx);
             crate::vitals::tick_using(&ctx);
+            crate::spear::tick(&ctx);
             crate::portals::tick(&ctx);
             crate::useblocks::tick(&ctx);
             let advance = ctx.game_rule_bool("advance_weather");
@@ -781,13 +784,29 @@ pub fn spawn_stack_at(
     pos: [f64; 3],
     stack: &mc_protocol::packets::play::ItemStack,
 ) {
+    spawn_thrown_at(ctx, pos, stack, None);
+}
+
+/// [`spawn_stack_at`] with who threw it (its `Thrower`).
+pub fn spawn_thrown_at(
+    ctx: &ServerContext,
+    pos: [f64; 3],
+    stack: &mc_protocol::packets::play::ItemStack,
+    by: Option<u128>,
+) {
     let r = |spread: f64| {
         (crate::util::random_u64() >> 11) as f64 / (1u64 << 53) as f64 * spread - spread / 2.0
     };
     let entity = mc_entity::Entity {
         id: ctx.next_entity_id(),
         uuid: crate::util::random_uuid(),
-        kind: mc_entity::Kind::stack(stack, 10),
+        kind: {
+            let mut kind = mc_entity::Kind::stack(stack, 10);
+            if let mc_entity::Kind::Item { thrower, .. } = &mut kind {
+                *thrower = by;
+            }
+            kind
+        },
         pos,
         vel: [r(0.2), 0.2, r(0.2)],
         on_ground: false,
@@ -1316,6 +1335,10 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             let mut outcome = Outcome::default();
             crate::mobs::chest::open_riding(ctx, &actor, &mut outcome);
             outcome
+        }
+        Action::Punch => {
+            crate::spear::jab(ctx, &actor);
+            Outcome::default()
         }
         Action::MountJump { power } => {
             crate::mobs::ride::jump(ctx, &actor, power);

@@ -120,12 +120,16 @@ pub struct Blow {
     pub breach: f32,
     /// The attacker's weapon, for the effects after the hit.
     pub weapon: Option<mc_protocol::packets::play::ItemStack>,
+    /// A spear's jab or charge (`minecraft:spear` damage).
+    pub spear: bool,
 }
 
 impl Blow {
     /// The damage type: a smash is `mace_smash`.
     pub fn kind(&self) -> &'static str {
-        if self.smash.is_some() {
+        if self.spear {
+            "minecraft:spear"
+        } else if self.smash.is_some() {
             "minecraft:mace_smash"
         } else {
             "minecraft:player_attack"
@@ -133,7 +137,9 @@ impl Blow {
     }
 
     pub fn death_key(&self) -> &'static str {
-        if self.smash.is_some() {
+        if self.spear {
+            "death.attack.spear"
+        } else if self.smash.is_some() {
             "death.attack.mace_smash.player"
         } else {
             "death.attack.player"
@@ -164,6 +170,22 @@ pub fn swing(ctx: &ServerContext, uuid: u128, pose: Pose) -> Blow {
 /// [`swing`] with the base damage set (a riptide spin hits for 8 instead
 /// of the attack damage).
 pub fn swing_with(ctx: &ServerContext, uuid: u128, pose: Pose, base: Option<f32>) -> Blow {
+    swing_inner(ctx, uuid, pose, base, false)
+}
+
+/// A spear's jab (minecraft.wiki, "Spear"): a blow that is never critical
+/// and gets no sprint knockback, of `minecraft:spear` damage.
+pub fn jab(ctx: &ServerContext, uuid: u128, pose: Pose) -> Blow {
+    swing_inner(ctx, uuid, pose, None, true)
+}
+
+fn swing_inner(
+    ctx: &ServerContext,
+    uuid: u128,
+    pose: Pose,
+    base: Option<f32>,
+    spear: bool,
+) -> Blow {
     let held = crate::held::held(ctx, uuid, 0);
     let info = held.as_ref().and_then(|h| ctx.items.get(h.stack.item));
     let comps = held.as_ref().and_then(|h| h.comps.as_ref());
@@ -213,8 +235,8 @@ pub fn swing_with(ctx: &ServerContext, uuid: u128, pose: Pose, base: Option<f32>
     let breach = weapon.as_ref().map_or(0.0, |w| {
         crate::enchant_effects::modify(ctx, "minecraft:armor_effectiveness", w, &none, 0.0)
     });
-    let sprint_blow = sprinting && full;
-    let crit = full && fall > 0.0 && !pose.on_ground && !in_water && !sprinting;
+    let sprint_blow = sprinting && full && !spear;
+    let crit = full && fall > 0.0 && !pose.on_ground && !in_water && !sprinting && !spear;
     if crit {
         damage *= 1.5;
     }
@@ -226,7 +248,7 @@ pub fn swing_with(ctx: &ServerContext, uuid: u128, pose: Pose, base: Option<f32>
             .tag("minecraft:item", "minecraft:swords")
             .contains(&h.name)
     });
-    let sweep = full && !crit && !sprint_blow && pose.on_ground && sword;
+    let sweep = full && !crit && !sprint_blow && pose.on_ground && sword && !spear;
     let sweeping = level("sweeping_edge");
     let mut knockback = f64::from(level("knockback"));
     if sprint_blow {
@@ -255,6 +277,7 @@ pub fn swing_with(ctx: &ServerContext, uuid: u128, pose: Pose, base: Option<f32>
         smash,
         breach,
         weapon,
+        spear,
     }
 }
 
@@ -720,6 +743,19 @@ pub fn player_hits_player_with(
     base: Option<f32>,
 ) {
     let blow = swing_with(ctx, attacker.uuid, attacker.pose, base);
+    blow_hits_player(ctx, attacker, name, victim, blow, true);
+}
+
+/// A blow, worked out already, lands on a player; `knock` is whether it
+/// pushes them.
+pub fn blow_hits_player(
+    ctx: &ServerContext,
+    attacker: &crate::interact::Actor,
+    name: &str,
+    victim: u128,
+    blow: Blow,
+    knock: bool,
+) {
     let Some(at) = lock(&ctx.players).get(&victim).and_then(|p| p.pose) else {
         return;
     };
@@ -730,7 +766,7 @@ pub fn player_hits_player_with(
         death_key: blow.death_key(),
         attacker: Some(name),
         by: Some(attacker.entity_id),
-        from: Some(blow.from),
+        from: knock.then_some(blow.from),
         knockback: blow.knockback,
         disables_shield: blow.disables_shield,
     };

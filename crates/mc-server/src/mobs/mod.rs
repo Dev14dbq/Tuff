@@ -35,6 +35,7 @@ mod spawner;
 mod terrain;
 pub mod village;
 pub mod warden;
+pub mod wolf_armor;
 
 use std::collections::HashMap;
 use std::sync::Mutex;

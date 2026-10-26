@@ -78,6 +78,7 @@ mod recipe_book;
 mod respawn;
 pub mod rules;
 mod scoreboard;
+mod spear;
 mod stats;
 mod storage;
 mod structure_blocks;

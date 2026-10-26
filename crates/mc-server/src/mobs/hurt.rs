@@ -163,8 +163,17 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     let Some(amount) = super::air::filter(ctx, m, h, amount) else {
         return false;
     };
+    let health_before = m.health;
     if !m.hurt(amount, h.by.or(h.player.map(|_| -1))) {
         return false;
+    }
+    // A wolf's armor takes what the wolf would have: a point of wear for
+    // each point of the blow as it came.
+    let absorbed = m.species == Species::Wolf
+        && m.health < health_before
+        && super::wolf_armor::absorb(ctx, m, e.pos, h.kind, h.amount);
+    if absorbed {
+        m.health = health_before;
     }
     if let Some(p) = h.player {
         crate::stats::custom(ctx, p, "damage_dealt", (amount * 10.0).round() as i32);
@@ -227,6 +236,7 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
         volume,
         pitch,
     }) = m.sound(if dead { Sound::Death } else { Sound::Hurt })
+        && !absorbed
     {
         fx::sound(ctx, &name, category(m.species), e.pos, volume, pitch);
     }
