@@ -657,14 +657,18 @@ fn a_bat_hangs_from_the_ceiling_until_a_player_comes_near() {
         return;
     };
     let _ = join(&ctx, [30.5, -60.0, 30.5]);
+    // A low room, so the bat flits about under its ceiling.
     for x in -6..=6 {
         for z in -6..=6 {
             set(&ctx, [x, -59, z], "minecraft:stone");
+            if x.abs() == 6 || z.abs() == 6 {
+                set(&ctx, [x, -60, z], "minecraft:stone");
+            }
         }
     }
     let id = put(&ctx, Species::Bat, [0.5, -60.0, 0.5]);
     let mut hung = false;
-    for _ in 0..600 {
+    for _ in 0..1200 {
         run(&ctx, 1);
         if with_mob(&ctx, id, |m| m.quirks.air.hanging) {
             hung = true;
@@ -677,13 +681,47 @@ fn a_bat_hangs_from_the_ceiling_until_a_player_comes_near() {
         meta.entries
             .contains(&(16, mc_protocol::packets::play::MetadataValue::Byte(1)))
     );
-    // A player three blocks off wakes it.
-    move_steve(&ctx, [0.5, -60.0, 3.5]);
+    // It hangs right under the ceiling until a player three blocks off
+    // wakes it.
+    let at = mob_of(&ctx, id).unwrap().pos;
+    assert!((at[1] - (-59.0 - 0.9)).abs() < 1e-6, "hangs at {at:?}");
+    run(&ctx, 20);
+    assert_eq!(mob_of(&ctx, id).unwrap().pos, at, "moved while hanging");
+    move_steve(&ctx, [at[0], -60.0, at[2] + 3.0]);
     run(&ctx, 5);
     assert!(
         !with_mob(&ctx, id, |m| m.quirks.air.hanging),
         "still hanging"
     );
+}
+
+#[test]
+fn a_flying_bat_flits_about_instead_of_hanging_in_the_air() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let _ = join(&ctx, [12.5, -60.0, 0.5]);
+    let start = [0.5, -52.0, 0.5];
+    let id = put(&ctx, Species::Bat, start);
+    let (mut far, mut path, mut cells) = (0.0f64, 0.0f64, std::collections::HashSet::new());
+    let mut last = start;
+    for _ in 0..200 {
+        run(&ctx, 1);
+        let pos = mob_of(&ctx, id).expect("bat still there").pos;
+        let step = |a: [f64; 3], b: [f64; 3]| {
+            ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+        };
+        far = far.max(step(pos, start));
+        path += step(pos, last);
+        last = pos;
+        cells.insert([pos[0].floor() as i32, pos[1].floor() as i32, pos[2].floor() as i32]);
+    }
+    assert!(!with_mob(&ctx, id, |m| m.quirks.air.hanging));
+    // Ten seconds of flight covers ground, wanders off and keeps turning.
+    assert!(path > 20.0, "flew only {path:.2} blocks");
+    assert!(far > 3.0, "never got more than {far:.2} blocks away");
+    assert!(cells.len() >= 10, "visited only {} cells", cells.len());
 }
 
 #[test]

@@ -867,7 +867,7 @@ pub(super) fn brain(species: Species) -> Brain {
         Bat => (
             vec![
                 slot(0, MOVE | JUMP, Goal::Air(air::Act::Roost { spot: None })),
-                air(1, 0.0, 6.0),
+                slot(1, MOVE, Goal::Air(air::Act::Flutter { to: None })),
             ],
             vec![],
         ),

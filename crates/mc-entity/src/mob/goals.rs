@@ -1023,7 +1023,9 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             !m.sitting && owner_of(m, s).is_some_and(|o| dist_sq(b.pos, o.pos) > *stop * *stop)
         }
         Goal::Hop { .. } | Goal::Swoop { .. } => true,
-        Goal::Hover { .. } => !m.nav.is_done() && m.below(200) != 0,
+        // Fliers never path (they head straight for the spot), so the goal
+        // lasts while it has somewhere to go, not while a path does.
+        Goal::Hover { .. } => m.nav.goal.is_some() && m.below(200) != 0,
         Goal::Sleep => {
             s.day
                 && m.revenge.is_none()
