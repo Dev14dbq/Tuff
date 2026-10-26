@@ -150,6 +150,18 @@ pub fn update_neighbor_shapes(
         new = crate::fire::update_shape(level, ctx, np, new);
         new = crate::portal::update_shape(level, ctx, np, new, dir.opposite(), state);
         crate::leaves::shape_updated(level, ctx, np, new);
+        // What the change undid (the other half of a door, a bed or a tall
+        // plant gone) breaks as if mined and drops what it would; fire just
+        // goes out.
+        let undone = ctx.shapes.is_air(new)
+            && !ctx.shapes.is_air(current)
+            && !matches!(
+                ctx.shapes.block_name(current),
+                Some("minecraft:fire" | "minecraft:soul_fire")
+            );
+        if undone {
+            level.destroyed(np, current);
+        }
         // Something that lost what held it up breaks (or looks again next
         // tick).
         let from = dir.opposite();

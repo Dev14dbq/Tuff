@@ -519,7 +519,18 @@ impl Windows {
                 .expect("players lock")
                 .get(&uuid)
                 .is_some_and(|p| p.game_mode == 1);
+            let mut quick = None;
             change_hands(ctx, uuid, entity_id, |hands| {
+                // Shift on the result crafts all it can; the client only
+                // guesses one.
+                if click.mode == 1 && click.slot == 0 && hands.slots[0].is_some() {
+                    let mut grid = hands.slots[..5].to_vec();
+                    let made = quick_craft(ctx, uuid, &mut grid, 2, hands);
+                    hands.slots[..5].clone_from_slice(&grid);
+                    undone = Some((hands.slots.clone(), hands.carried.clone()));
+                    quick = Some(made);
+                    return;
+                }
                 let before = hands.clone();
                 thrown = hands.click(
                     click.slot,
@@ -554,6 +565,9 @@ impl Windows {
                     result = Some(made);
                 }
             });
+            if let Some(made) = quick {
+                thrown = made.settle(ctx, uuid, 2);
+            }
             if let Some((item, count)) = crafted {
                 crate::stats::item(ctx, uuid, crate::stats::CRAFTED, item, count);
             }
@@ -625,6 +639,32 @@ impl Windows {
                 crate::stats::threw(ctx, uuid, &stack);
                 crate::tick::throw_item(ctx, pose, stack);
             }
+        }
+        if let Kind::Crafting { grid } = &mut open.kind
+            && click.mode == 1
+            && click.slot == 0
+            && grid[0].is_some()
+        {
+            let mut made = None;
+            let mut shown = Vec::new();
+            let mut carried = None;
+            change_hands(ctx, uuid, entity_id, |hands| {
+                made = Some(quick_craft(ctx, uuid, grid, 3, hands));
+                shown = grid.clone();
+                shown.extend(hands.slots[9..45].iter().cloned());
+                carried = hands.carried.clone();
+            });
+            let id = open.id;
+            for stack in made.map(|m| m.settle(ctx, uuid, 3)).unwrap_or_default() {
+                crate::tick::throw_item(ctx, pose, stack);
+            }
+            self.state_id += 1;
+            return writer.queue(&play::ContainerSetContent {
+                window: id,
+                state_id: self.state_id,
+                slots: shown,
+                carried,
+            });
         }
         // What both sides held before, for the stacks' damage.
         let window_stacks: Vec<ItemStack> = match &open.kind {
@@ -1355,6 +1395,108 @@ impl Windows {
 }
 
 /// The part of a container window that holds window slot `slot`.
+/// What a shift-click on a crafting result made.
+struct QuickCraft {
+    item: i32,
+    count: i32,
+    /// The grid as it was for each craft.
+    grids: Vec<Vec<Option<ItemStack>>>,
+    /// Leftovers (empty buckets) with no room.
+    thrown: Vec<ItemStack>,
+}
+
+impl QuickCraft {
+    /// Counts the crafts and unlocks their recipe once the inventory is no
+    /// longer held; gives what has to be thrown.
+    fn settle(self, ctx: &ServerContext, uuid: u128, size: usize) -> Vec<ItemStack> {
+        if self.count > 0 {
+            crate::stats::item(ctx, uuid, crate::stats::CRAFTED, self.item, self.count);
+        }
+        for grid in &self.grids {
+            crate::recipe_book::used(ctx, uuid, grid, size);
+        }
+        self.thrown
+    }
+}
+
+/// Shift-click on the result of a crafting `grid` (0 result, then
+/// `size`×`size`): the same result is made again and again while the whole
+/// of it fits into the inventory, which fills from the last hotbar slot
+/// back, joining stacks before taking empty slots.
+fn quick_craft(
+    ctx: &ServerContext,
+    uuid: u128,
+    grid: &mut [Option<ItemStack>],
+    size: usize,
+    hands: &mut crate::interact::Hands,
+) -> QuickCraft {
+    let mut out = QuickCraft {
+        item: grid[0].as_ref().map_or(0, |s| s.item),
+        count: 0,
+        grids: Vec::new(),
+        thrown: Vec::new(),
+    };
+    while let Some(made) = crate::recipe_book::craft(ctx, uuid, &grid[1..], size)
+        && made.item == out.item
+        && let Some(slots) = fits(ctx, &hands.slots, &made)
+    {
+        hands.slots = slots;
+        out.count += made.count;
+        out.grids.push(grid[1..].to_vec());
+        for slot in grid[1..].iter_mut() {
+            let Some(used) = slot.take() else {
+                continue;
+            };
+            *slot = (used.count > 1).then(|| used.with_count(used.count - 1));
+            let Some(left) = crate::brewing::remainder(ctx, used.item) else {
+                continue;
+            };
+            if slot.is_none() {
+                *slot = Some(left);
+            } else {
+                let max = ctx.items.max_stack(left.item);
+                let (went, _) = hands.insert_stack(&left, max);
+                if went < left.count {
+                    out.thrown.push(left.with_count(left.count - went));
+                }
+            }
+        }
+    }
+    grid[0] = crate::recipe_book::craft(ctx, uuid, &grid[1..], size);
+    out
+}
+
+/// The inventory `slots` with all of `stack` moved in, as a shift-click
+/// moves a result (hotbar from its end, then the main inventory from its
+/// end), or `None` if it does not all fit.
+fn fits(
+    ctx: &ServerContext,
+    slots: &[Option<ItemStack>],
+    stack: &ItemStack,
+) -> Option<Vec<Option<ItemStack>>> {
+    let mut slots = slots.to_vec();
+    let max = ctx.items.max_stack(stack.item);
+    let mut left = stack.count;
+    for i in (9..45).rev() {
+        if let Some(s) = &mut slots[i]
+            && s.same_kind(stack)
+            && s.count < max
+        {
+            let n = (max - s.count).min(left);
+            s.count += n;
+            left -= n;
+        }
+    }
+    for i in (9..45).rev() {
+        if left > 0 && slots[i].is_none() {
+            let n = max.min(left);
+            slots[i] = Some(stack.with_count(n));
+            left -= n;
+        }
+    }
+    (left == 0).then_some(slots)
+}
+
 fn open_part(parts: &[(Position, usize)], slot: usize) -> Option<(Position, usize)> {
     let mut start = 0;
     for &(p, n) in parts {
@@ -1364,4 +1506,84 @@ fn open_part(parts: &[(Position, usize)], slot: usize) -> Option<(Position, usiz
         start += n;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interact::Hands;
+
+    #[test]
+    fn shift_on_the_result_crafts_all_it_can() {
+        let Some(ctx) = crate::testkit::flat() else {
+            return;
+        };
+        let log = ctx.items.id("minecraft:oak_log").unwrap();
+        let planks = ctx.items.id("minecraft:oak_planks").unwrap();
+        let mut hands = Hands::default();
+        let mut grid = vec![None; 5];
+        grid[1] = Some(ItemStack::new(log, 20));
+        grid[0] = crate::recipe_book::craft(&ctx, 1, &grid[1..], 2);
+        let made = quick_craft(&ctx, 1, &mut grid, 2, &mut hands);
+        assert_eq!((made.item, made.count, made.grids.len()), (planks, 80, 20));
+        assert_eq!(grid, vec![None; 5]);
+        // The last hotbar slot fills first, then the one before it.
+        assert_eq!(hands.slots[44], Some(ItemStack::new(planks, 64)));
+        assert_eq!(hands.slots[43], Some(ItemStack::new(planks, 16)));
+    }
+
+    #[test]
+    fn shift_crafting_stops_when_the_result_no_longer_fits() {
+        let Some(ctx) = crate::testkit::flat() else {
+            return;
+        };
+        let log = ctx.items.id("minecraft:oak_log").unwrap();
+        let planks = ctx.items.id("minecraft:oak_planks").unwrap();
+        let stone = ctx.items.id("minecraft:stone").unwrap();
+        let mut hands = Hands::default();
+        for slot in 9..45 {
+            hands.slots[slot] = Some(ItemStack::new(stone, 64));
+        }
+        hands.slots[20] = Some(ItemStack::new(planks, 58));
+        let mut grid = vec![None; 5];
+        grid[1] = Some(ItemStack::new(log, 5));
+        grid[0] = crate::recipe_book::craft(&ctx, 1, &grid[1..], 2);
+        let made = quick_craft(&ctx, 1, &mut grid, 2, &mut hands);
+        // Room for six: one craft of four, not a second.
+        assert_eq!(made.count, 4);
+        assert_eq!(hands.slots[20], Some(ItemStack::new(planks, 62)));
+        assert_eq!(grid[1], Some(ItemStack::new(log, 4)));
+        assert_eq!(grid[0], Some(ItemStack::new(planks, 4)));
+    }
+
+    #[test]
+    fn shift_crafting_a_cake_leaves_the_buckets() {
+        let Some(ctx) = crate::testkit::flat() else {
+            return;
+        };
+        let id = |n: &str| ctx.items.id(n).unwrap();
+        let mut hands = Hands::default();
+        let mut grid = vec![None; 10];
+        for (i, n, c) in [
+            (1, "minecraft:milk_bucket", 1),
+            (2, "minecraft:milk_bucket", 1),
+            (3, "minecraft:milk_bucket", 1),
+            (4, "minecraft:sugar", 2),
+            (5, "minecraft:egg", 2),
+            (6, "minecraft:sugar", 2),
+            (7, "minecraft:wheat", 2),
+            (8, "minecraft:wheat", 2),
+            (9, "minecraft:wheat", 2),
+        ] {
+            grid[i] = Some(ItemStack::new(id(n), c));
+        }
+        grid[0] = crate::recipe_book::craft(&ctx, 1, &grid[1..], 3);
+        assert!(grid[0].is_some());
+        let made = quick_craft(&ctx, 1, &mut grid, 3, &mut hands);
+        // The buckets left behind stop a second cake.
+        assert_eq!(made.count, 1);
+        let bucket = Some(ItemStack::new(id("minecraft:bucket"), 1));
+        assert_eq!(grid[1..4], [bucket.clone(), bucket.clone(), bucket]);
+        assert_eq!(grid[0], None);
+    }
 }

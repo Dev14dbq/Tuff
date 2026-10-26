@@ -544,9 +544,27 @@ pub fn dig(
             crate::pots::Breaker::player(ctx, actor.uuid, actor.game_mode == CREATIVE),
         )
     });
-    // The other half of a door or bed goes with the shape updates.
-    let left = blocks::break_block(&ctx.data, &ctx.rules, position, state, &block_at)[0].1;
+    // The other half of a door, bed or tall plant goes with the shape
+    // updates and drops what it would. A player who gets nothing for this
+    // block (in creative, or without the tool it needs: an iron door by
+    // hand) breaking the half that drops nothing (a top, a bed's foot)
+    // takes the other half first, so it drops nothing either; this half
+    // then goes with that.
+    let changes = blocks::break_block(&ctx.data, &ctx.rules, position, state, &block_at);
+    let left = changes[0].1;
     let mut level = WorldLevel::new(ctx);
+    let drops = actor.game_mode != CREATIVE
+        && ctx.game_rule_bool("block_drops")
+        && crate::digging::factors(ctx, actor.uuid, &actor.pose, state)
+            .is_none_or(|f| f.right_tool);
+    let dropless_half = blocks.property(state, "half") == Some("upper")
+        || blocks.property(state, "part") == Some("foot");
+    if !drops
+        && dropless_half
+        && let Some(&(partner, gone)) = changes.get(1)
+    {
+        level.set_block(partner, gone);
+    }
     // String cut with shears does not trip its line.
     if blocks.block_name(state) == Some("minecraft:tripwire")
         && crate::held::held(ctx, actor.uuid, 0).is_some_and(|h| h.name == "minecraft:shears")
@@ -554,7 +572,7 @@ pub fn dig(
         let logic = level.logic();
         mc_tick::tripwire::disarm(&mut level, logic, to_pos(position));
     }
-    if !level.set_block(position, left) {
+    if !level.set_block(position, left) && world.block(position, blocks) != Some(left) {
         outcome.updates.push((position, state));
         return outcome;
     }
@@ -670,11 +688,41 @@ pub fn dig(
     crate::vibrations::emit_at(ctx, "block_destroy", position, source, Some(state));
     // Everyone gets every change, the breaker included (vanilla sends the
     // broken block to the breaker twice: as the answer and with the rest).
+    if actor.game_mode != CREATIVE {
+        wear_tool(ctx, actor.uuid, state);
+    }
     outcome.events.push(Event::BlocksChanged {
         by: 0,
         changes: level.into_changes(),
     });
     outcome
+}
+
+/// The tool in the main hand wears with each block it breaks
+/// (minecraft.wiki, "Item durability"): by its `damage_per_block` (2 for a
+/// sword), but not on a block that breaks at once; shears wear on anything
+/// but fire.
+fn wear_tool(ctx: &ServerContext, uuid: u128, state: u32) {
+    let Some(held) = crate::held::held(ctx, uuid, 0) else {
+        return;
+    };
+    let Some(tool) = ctx
+        .items
+        .get(held.stack.item)
+        .and_then(|i| i.defaults.get("minecraft:tool"))
+    else {
+        return;
+    };
+    let per_block = tool["damage_per_block"].as_i64().unwrap_or(1) as i32;
+    let name = ctx.data.blocks.block_name(state).unwrap_or("");
+    let wears = if held.name == "minecraft:shears" {
+        !matches!(name, "minecraft:fire" | "minecraft:soul_fire")
+    } else {
+        crate::hardness::hardness(name).is_some_and(|h| h != 0.0)
+    };
+    if per_block > 0 && wears {
+        crate::held::wear(ctx, uuid, held.slot, per_block);
+    }
 }
 
 fn centre(p: Position) -> [f64; 3] {
@@ -1901,6 +1949,157 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    /// Puts the two halves (`lower`, `upper` property values of `key`) of
+    /// `block` at x=1, breaks `half` as `actor` long enough after starting,
+    /// and gives the items it dropped, wherever they went.
+    fn break_two_halves(
+        ctx: &ServerContext,
+        actor: Actor,
+        block: &str,
+        key: &str,
+        [first, second]: [(&str, Position); 2],
+        broken: usize,
+    ) -> Vec<(i32, i32)> {
+        let blocks = &ctx.data.blocks;
+        let mut level = WorldLevel::new(ctx);
+        for (value, at) in [first, second] {
+            let state = blocks.state_id(block, &[(key, value)]).unwrap();
+            level.set_block(at, state);
+            assert_eq!(ctx.world.block(at, blocks), Some(state));
+        }
+        let at = [first, second][broken].1;
+        dig(ctx, actor, dig::START, at, 1, 1);
+        ctx.time.lock().unwrap().age += 1000;
+        let outcome = dig(ctx, actor, dig::FINISH, at, 1, 1);
+        for (_, at) in [first, second] {
+            assert!(blocks.is_air(ctx.world.block(at, blocks).unwrap()));
+        }
+        let mut got: Vec<(i32, i32)> = outcome
+            .drops
+            .iter()
+            .map(|(_, d)| (d.item, d.count))
+            .collect();
+        got.extend(
+            ctx.entities
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|e| e.kind.as_stack().map(|s| (s.item, s.count))),
+        );
+        got
+    }
+
+    const LOWER: Position = Position { x: 1, y: -60, z: 0 };
+    const UPPER: Position = Position { x: 1, y: -59, z: 0 };
+
+    #[test]
+    fn a_door_drops_once_whichever_half_breaks() {
+        for broken in [0, 1] {
+            let Some((ctx, actor)) = with_flint(0) else {
+                eprintln!("skipped: no game data");
+                return;
+            };
+            let door = ctx.items.id("minecraft:oak_door").unwrap();
+            let halves = [("lower", LOWER), ("upper", UPPER)];
+            let got = break_two_halves(&ctx, actor, "minecraft:oak_door", "half", halves, broken);
+            assert_eq!(got, [(door, 1)], "breaking half {broken}");
+        }
+    }
+
+    #[test]
+    fn a_door_top_drops_nothing_in_creative_or_without_the_tool() {
+        let Some((ctx, mut actor)) = with_flint(0) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        actor.game_mode = CREATIVE;
+        let halves = [("lower", LOWER), ("upper", UPPER)];
+        assert!(break_two_halves(&ctx, actor, "minecraft:oak_door", "half", halves, 1).is_empty());
+        let (ctx, actor) = with_flint(0).unwrap();
+        assert!(break_two_halves(&ctx, actor, "minecraft:iron_door", "half", halves, 1).is_empty());
+    }
+
+    #[test]
+    fn a_bed_and_a_tall_flower_drop_from_their_other_half() {
+        let Some((ctx, actor)) = with_flint(0) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        // Facing south, the head is south (+z) of the foot.
+        let bed = ctx.items.id("minecraft:red_bed").unwrap();
+        let blocks = &ctx.data.blocks;
+        let mut level = WorldLevel::new(&ctx);
+        let (foot, head) = (LOWER, Position { z: 1, ..LOWER });
+        for (part, at) in [("foot", foot), ("head", head)] {
+            let state = blocks
+                .state_id("minecraft:red_bed", &[("part", part), ("facing", "south")])
+                .unwrap();
+            level.set_block(at, state);
+        }
+        dig(&ctx, actor, dig::START, foot, 1, 1);
+        ctx.time.lock().unwrap().age += 1000;
+        let outcome = dig(&ctx, actor, dig::FINISH, foot, 1, 1);
+        assert!(blocks.is_air(ctx.world.block(head, blocks).unwrap()));
+        assert!(outcome.drops.is_empty());
+        let dropped: Vec<_> = ctx
+            .entities
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e.kind.as_stack().map(|s| (s.item, s.count)))
+            .collect();
+        assert_eq!(dropped, [(bed, 1)]);
+
+        let (ctx, actor) = with_flint(0).unwrap();
+        let rose = ctx.items.id("minecraft:rose_bush").unwrap();
+        let halves = [("lower", LOWER), ("upper", UPPER)];
+        let got = break_two_halves(&ctx, actor, "minecraft:rose_bush", "half", halves, 1);
+        assert_eq!(got, [(rose, 1)]);
+    }
+
+    #[test]
+    fn tools_wear_with_the_blocks_they_break() {
+        let Some((ctx, actor)) = with_flint(0) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let held = |item: &str| {
+            let id = ctx.items.id(item).unwrap();
+            ctx.inventories.lock().unwrap().get_mut(&7).unwrap().slots[36] =
+                Some(ItemStack::new(id, 1));
+        };
+        let damage = || {
+            ctx.inventories.lock().unwrap()[&7].slots[36]
+                .as_ref()
+                .map(|s| s.damage)
+        };
+        let mut mine = |block: &str| {
+            let at = Position::new(1, -60, 0);
+            let state = ctx.data.blocks.default_state(block).unwrap();
+            WorldLevel::new(&ctx).set_block(at, state);
+            dig(&ctx, actor, dig::START, at, 1, 1);
+            ctx.time.lock().unwrap().age += 1000;
+            dig(&ctx, actor, dig::FINISH, at, 1, 1);
+            assert!(
+                ctx.data
+                    .blocks
+                    .is_air(ctx.world.block(at, &ctx.data.blocks).unwrap())
+            );
+        };
+        held("minecraft:iron_pickaxe");
+        mine("minecraft:stone");
+        assert_eq!(damage(), Some(1));
+        // A block that breaks at once costs nothing.
+        mine("minecraft:short_grass");
+        assert_eq!(damage(), Some(1));
+        held("minecraft:diamond_sword");
+        mine("minecraft:oak_planks");
+        assert_eq!(damage(), Some(2));
+        held("minecraft:shears");
+        mine("minecraft:short_grass");
+        assert_eq!(damage(), Some(1));
     }
 
     #[test]
