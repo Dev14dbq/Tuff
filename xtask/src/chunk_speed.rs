@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use mc_protocol::Write as _;
 
-use crate::probe::{is_timeout, join_player_with, load_packet_ids, teleport_confirmation};
+use crate::probe::{Pose, follow_teleport, is_timeout, join_player_with, load_packet_ids};
 
 pub fn run(args: &[String]) -> Result<()> {
     let mut addr = "127.0.0.1:25565".to_owned();
@@ -57,6 +57,7 @@ pub(crate) fn measure(
     let mut bytes = 0usize;
     let mut seen = std::collections::HashSet::new();
     let mut forgotten = 0usize;
+    let mut pose = Pose::default();
     let mut last = Instant::now();
     // The first chunk may take long (a new world); then quiet for 3 s ends it.
     while last.elapsed()
@@ -92,7 +93,7 @@ pub(crate) fn measure(
             "minecraft:keep_alive" => client.send("minecraft:keep_alive", body)?,
             "minecraft:player_position" => client.send(
                 "minecraft:accept_teleportation",
-                teleport_confirmation(&body)?,
+                follow_teleport(&body, &mut pose)?,
             )?,
             _ => {}
         }

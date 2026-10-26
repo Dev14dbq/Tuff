@@ -364,22 +364,55 @@ pub(crate) fn join_player_with(
 }
 
 /// Confirm Teleportation for a Synchronize Player Position body: the teleport
-/// id plus the position and rotation we end up with (absolute teleport assumed).
+/// id plus the position and rotation we end up with (absolute teleport assumed;
+/// a client that may get corrections uses `follow_teleport`).
 pub(crate) fn teleport_confirmation(position: &[u8]) -> Result<Vec<u8>> {
-    let mut r = Reader::new(position);
+    follow_teleport(position, &mut Pose::default())
+}
+
+/// Where a client stands.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Pose {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+/// Moves `pose` by a Synchronize Player Position body and gives the Confirm
+/// Teleportation for it, which carries the resulting pose. Relative bits
+/// (X, Y, Z, yaw, pitch) add to `pose`: vanilla's corrections ("moved too
+/// quickly") are relative teleports by zero, and echoing those zeros as a
+/// position makes it correct again, at network speed.
+pub(crate) fn follow_teleport(body: &[u8], pose: &mut Pose) -> Result<Vec<u8>> {
+    let mut r = Reader::new(body);
     let id = r.varint()?;
     let (x, y, z) = (r.f64()?, r.f64()?, r.f64()?);
     for _ in 0..3 {
         r.f64()?; // velocity
     }
     let (yaw, pitch) = (r.f32()?, r.f32()?);
+    let flags = r.i32()?;
+    let relative = |bit: u32| flags & (1 << bit) != 0;
+    *pose = Pose {
+        x: if relative(0) { pose.x + x } else { x },
+        y: if relative(1) { pose.y + y } else { y },
+        z: if relative(2) { pose.z + z } else { z },
+        yaw: if relative(3) { pose.yaw + yaw } else { yaw },
+        pitch: if relative(4) {
+            pose.pitch + pitch
+        } else {
+            pitch
+        },
+    };
     let mut confirm = Vec::new();
     confirm.put_varint(id);
-    for v in [x, y, z] {
+    for v in [pose.x, pose.y, pose.z] {
         confirm.put_f64(v);
     }
-    confirm.put_f32(yaw);
-    confirm.put_f32(pitch);
+    confirm.put_f32(pose.yaw);
+    confirm.put_f32(pose.pitch);
     Ok(confirm)
 }
 

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail, ensure};
 use mc_protocol::{PacketIds, Reader, State, Write as _};
 
-use crate::probe::{Client, is_timeout, load_packet_ids, teleport_confirmation};
+use crate::probe::{Client, Pose, follow_teleport, is_timeout, load_packet_ids};
 
 #[derive(Default)]
 struct Stats {
@@ -18,6 +18,8 @@ struct Stats {
     failed: AtomicUsize,
     packets: AtomicU64,
     chunks: AtomicU64,
+    moves: AtomicU64,
+    teleports: AtomicU64,
     join_ms_total: AtomicU64,
     join_ms_max: AtomicU64,
 }
@@ -76,9 +78,11 @@ pub fn run(args: &[String]) -> Result<()> {
         stats.join_ms_max.load(Ordering::Relaxed)
     );
     println!(
-        "received {} packets, {} chunks in {:.1} s",
+        "received {} packets, {} chunks, {} teleports; sent {} moves in {:.1} s",
         stats.packets.load(Ordering::Relaxed),
         stats.chunks.load(Ordering::Relaxed),
+        stats.teleports.load(Ordering::Relaxed),
+        stats.moves.load(Ordering::Relaxed),
         started.elapsed().as_secs_f64()
     );
     ensure!(failed == 0, "{failed} bots failed");
@@ -141,27 +145,47 @@ fn bot(
     // Short reads so the bot keeps sending movement while the server is quiet.
     client.set_read_timeout(Duration::from_millis(50))?;
 
-    let mut position = None;
+    let mut position: Option<(f64, f64, f64)> = None;
+    let mut pose = Pose::default();
     let mut spawned = false;
-    let mut next_move = Instant::now();
+    let mut next_tick = Instant::now();
+    // The newest teleport, confirmed on the bot's next tick as a client
+    // does: confirming each at once can ping-pong with a lagging vanilla
+    // server, which then teleports again at network speed.
+    let mut confirm: Option<Vec<u8>> = None;
     let mut step = 0u32;
-    // Each bot walks its own circle, so chunk loading is spread out.
-    let angle0 = index as f64 * 0.7;
+    // Each bot flies its own circle, so chunk loading is spread out, 40
+    // blocks above where it spawned: over the terrain vanilla takes every
+    // step ("moved wrongly" corrections would hold a walking bot in place
+    // while a server without collision checks lets it roam). It climbs a
+    // block a tick to get there.
+    let mut angle0 = index as f64 * 0.7;
+    let mut cruise: Option<f64> = None;
     while Instant::now() < deadline {
-        if spawned && Instant::now() >= next_move {
-            let (x0, y, z0) = position.expect("spawned implies a position");
-            step += 1;
-            let angle = angle0 + f64::from(step) * 0.05;
-            let radius = 40.0;
-            // The circle starts where the bot stands: no jump on the first step.
-            let mut moved = Vec::new();
-            moved.put_f64(x0 + radius * (angle.cos() - angle0.cos()));
-            moved.put_f64(y);
-            moved.put_f64(z0 + radius * (angle.sin() - angle0.sin()));
-            moved.put_u8(0x01);
-            client.send("minecraft:move_player_pos", moved)?;
-            client.send("minecraft:client_tick_end", Vec::new())?;
-            next_move = Instant::now() + Duration::from_millis(50);
+        if Instant::now() >= next_tick {
+            if let Some(confirm) = confirm.take() {
+                client.send("minecraft:accept_teleportation", confirm)?;
+            }
+            if spawned {
+                let (x0, y, z0) = position.expect("spawned implies a position");
+                let top = *cruise.get_or_insert(y + 40.0);
+                let y = (y + 1.0).min(top);
+                position = Some((x0, y, z0));
+                step += 1;
+                let angle = angle0 + f64::from(step) * 0.05;
+                let radius = 40.0;
+                // The circle starts where the bot stands: no jump on the
+                // first step.
+                let mut moved = Vec::new();
+                moved.put_f64(x0 + radius * (angle.cos() - angle0.cos()));
+                moved.put_f64(y);
+                moved.put_f64(z0 + radius * (angle.sin() - angle0.sin()));
+                moved.put_u8(0x01);
+                client.send("minecraft:move_player_pos", moved)?;
+                stats.moves.fetch_add(1, Ordering::Relaxed);
+                client.send("minecraft:client_tick_end", Vec::new())?;
+            }
+            next_tick = Instant::now() + Duration::from_millis(50);
         }
         let (packet, body) = match client.recv() {
             Ok(p) => p,
@@ -173,18 +197,26 @@ fn bot(
         match packet.as_str() {
             "minecraft:keep_alive" => client.send("minecraft:keep_alive", body)?,
             "minecraft:player_position" => {
-                let mut r = Reader::new(&body);
-                r.varint()?;
-                position = Some((r.f64()?, r.f64()?, r.f64()?));
-                client.send(
-                    "minecraft:accept_teleportation",
-                    teleport_confirmation(&body)?,
-                )?;
+                stats.teleports.fetch_add(1, Ordering::Relaxed);
+                confirm = Some(follow_teleport(&body, &mut pose)?);
+                position = Some((pose.x, pose.y, pose.z));
+                // The circle goes on from where the server put the bot; from
+                // the old start the next step would land far away.
+                angle0 += f64::from(step) * 0.05;
+                step = 0;
             }
             "minecraft:level_chunk_with_light" => {
                 stats.chunks.fetch_add(1, Ordering::Relaxed);
             }
-            "minecraft:chunk_batch_finished" if !spawned => {
+            "minecraft:chunk_batch_finished" => {
+                // As a client acknowledges each batch; vanilla sends the
+                // next one only then.
+                let mut received = Vec::new();
+                received.put_f32(1000.0); // chunks per tick we could take
+                client.send("minecraft:chunk_batch_received", received)?;
+                if spawned {
+                    continue;
+                }
                 spawned = true;
                 // As a client does once its world is shown; vanilla rejects
                 // movement before it.

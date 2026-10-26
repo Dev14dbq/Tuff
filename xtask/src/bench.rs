@@ -75,7 +75,7 @@ pub fn run(args: &[String]) -> Result<()> {
         cores: 4,
     };
     let mut rounds = 3usize;
-    let mut background = 0.5f64;
+    let mut background = 1.0f64;
     let mut noisy = false;
     let mut jfr = false;
     let mut it = args.iter();

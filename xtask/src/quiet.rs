@@ -1,8 +1,9 @@
 //! A quiet machine for `cargo xtask bench`. macOS cannot reserve cores for a
 //! process, so the benchmark makes the machine quiet instead and checks it:
 //!
-//! - `Guard::new` refuses to run on battery and keeps the Mac awake
-//!   (`caffeinate`) while the benchmark runs;
+//! - `Guard::new` refuses to run on battery and keeps the Mac from sleeping
+//!   (`caffeinate -ims`; the display may turn off, which quiets
+//!   WindowServer) while the benchmark runs;
 //! - `Guard::wait` holds every run until no Minecraft client is open and the
 //!   other processes used at most the allowed background (in cores, from
 //!   `top`) on average over the last 10 s;
@@ -40,7 +41,7 @@ impl Guard {
             }
         }
         let awake = Command::new("caffeinate")
-            .args(["-dimsu", "-w", &std::process::id().to_string()])
+            .args(["-ims", "-w", &std::process::id().to_string()])
             .spawn()
             .ok();
         Ok(Self {
