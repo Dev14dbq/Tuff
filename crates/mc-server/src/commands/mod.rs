@@ -90,6 +90,8 @@ impl Commands {
 #[derive(Clone, Debug)]
 pub enum Source {
     Console,
+    /// The remote console: as the console, but its output goes back to it.
+    Rcon,
     Player {
         uuid: u128,
         name: String,
@@ -219,12 +221,17 @@ impl Src {
 
     pub(crate) fn of(ctx: &ServerContext, source: &Source) -> Self {
         match source {
-            Source::Console => {
+            Source::Console | Source::Rcon => {
                 let spawn = ctx.spawn.lock().expect("spawn lock").pos;
                 let (x, y, z) = (f64::from(spawn.0), f64::from(spawn.1), f64::from(spawn.2));
                 Src {
                     who: Who::Console,
-                    name: "Server".into(),
+                    name: if matches!(source, Source::Rcon) {
+                        "Rcon"
+                    } else {
+                        "Server"
+                    }
+                    .into(),
                     pos: [x, y, z],
                     rot: [0.0, 0.0],
                     level: 4,
@@ -375,13 +382,15 @@ pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, lin
         let text = commands.lang.render(&message);
         match source {
             Source::Console => {}
+            Source::Rcon => info!("[Rcon: {text}]"),
             Source::Player { name, .. }
             | Source::Block { name, .. }
             | Source::Cart { name, .. } => {
                 info!("[{name}: {text}]")
             }
         }
-        if ctx.game_rule_bool("log_admin_commands") {
+        let quiet_rcon = matches!(source, Source::Rcon) && !ctx.config.broadcast_rcon_to_ops;
+        if ctx.game_rule_bool("log_admin_commands") && !quiet_rcon {
             out.events.push(Event::AdminFeedback {
                 from: src.player().unwrap_or(0),
                 line: admin_line(&src.name, message),
@@ -400,7 +409,7 @@ pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, lin
 fn report(ctx: &ServerContext, source: &Source, e: &CommandError, out: &mut Output) {
     match source {
         Source::Console => warn!("{}", e.console(&ctx.commands.lang)),
-        Source::Player { .. } | Source::Block { .. } | Source::Cart { .. } => {
+        Source::Rcon | Source::Player { .. } | Source::Block { .. } | Source::Cart { .. } => {
             out.lines.extend(e.lines())
         }
     }

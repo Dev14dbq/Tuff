@@ -47,6 +47,9 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
         other => bail!("expected a handshake, got {other:?}"),
     };
     match intention.intent {
+        // With `enable-status` off the server does not answer, as if it
+        // were not there.
+        1 if !ctx.config.enable_status => Ok(()),
         1 => status(&mut reader, &mut writer).await,
         2 | 3 => {
             let login = login(&mut reader, &mut writer, &intention, peer);
@@ -114,24 +117,8 @@ async fn status(reader: &mut PacketReader, writer: &mut PacketWriter) -> Result<
     loop {
         match reader.next(State::Status).await? {
             Packet::Status(status::Serverbound::StatusRequest) => {
-                let sample: Vec<_> = ctx
-                    .players
-                    .lock()
-                    .expect("players lock")
-                    .values()
-                    .take(12)
-                    .map(|p| {
-                        serde_json::json!({"name": p.profile.name, "id": uuid_string(p.profile.uuid)})
-                    })
-                    .collect();
-                let json = serde_json::json!({
-                    "version": {"name": ctx.data.version.name, "protocol": mc_protocol::PROTOCOL_VERSION},
-                    "players": {"max": ctx.config.max_players, "online": ctx.online_count(), "sample": sample},
-                    "description": {"text": ctx.config.motd},
-                    "enforcesSecureChat": false,
-                });
                 let response = status::StatusResponse {
-                    json: json.to_string(),
+                    json: crate::serverlist::status(&ctx).to_string(),
                 };
                 writer.send(&response).await?;
             }
@@ -457,6 +444,50 @@ async fn configure(
         writer.queue(registry)?;
     }
     writer.queue(&ctx.tags)?;
+    if let Some(pack) = &ctx.config.resource_pack {
+        writer.queue(&configuration::ResourcePackPush {
+            id: pack.id,
+            url: pack.url.clone(),
+            hash: pack.hash.clone(),
+            forced: pack.required,
+            prompt: pack.prompt.clone(),
+        })?;
+        writer.flush().await?;
+        // The client answers as it goes; joining waits for it to be done.
+        loop {
+            match reader.next(State::Configuration).await? {
+                Packet::Configuration(configuration::Serverbound::ResourcePack { id, result })
+                    if id == pack.id =>
+                {
+                    let (done, refused) = crate::serverlist::pack_outcome(result);
+                    if refused && pack.required {
+                        info!(
+                            "Disconnecting {} due to resource pack {} rejection",
+                            session.player.profile.name,
+                            uuid_string(pack.id)
+                        );
+                        writer
+                            .send(&configuration::Disconnect {
+                                reason: text::translate(
+                                    "multiplayer.requiredTexturePrompt.disconnect",
+                                    vec![],
+                                ),
+                            })
+                            .await?;
+                        return Ok(false);
+                    }
+                    if done {
+                        break;
+                    }
+                }
+                Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
+                    session.view_distance = view_distance(&info);
+                    session.skin_parts = info.skin_parts;
+                }
+                other => trace!("configuration: {other:?}"),
+            }
+        }
+    }
     writer.queue(&configuration::FinishConfiguration)?;
     writer.flush().await?;
 
@@ -659,6 +690,9 @@ async fn play(
     let mut sneaking = false;
     // The vehicle the player sits in.
     let mut riding: Option<i32> = None;
+    let mut floating = crate::guard::Floating::default();
+    let mut spam = crate::guard::Spam::default();
+    let mut rate = crate::guard::Rate::new(ctx.config.rate_limit, Instant::now());
     let mut windows = windows::Windows::new();
     let vitals = session
         .saved
@@ -734,6 +768,17 @@ async fn play(
                     let Packet::Play(packet) = packet? else {
                         unreachable!("play state decodes play packets")
                     };
+                    if rate.received(Instant::now()) {
+                        let reason = text::translate("disconnect.exceeded_packet_rate", vec![]);
+                        writer.send(&play::Disconnect { reason }).await?;
+                        bail!("{} exceeded the packet rate limit", me.profile.name);
+                    }
+                    let chatting = matches!(packet, play::Serverbound::Chat { .. } | play::Serverbound::ChatCommand { .. });
+                    if chatting && spam.said(Instant::now()) && crate::tick::lock(&ctx.lists).op(uuid, &me.profile.name).is_none() {
+                        let reason = text::translate("disconnect.spam", vec![]);
+                        writer.send(&play::Disconnect { reason }).await?;
+                        bail!("{} was kicked for spamming", me.profile.name);
+                    }
                     // Movement sent before the client saw our teleport is stale.
                     let settled = awaiting_teleport.is_none() && riding.is_none();
                     let mut moved = false;
@@ -1272,6 +1317,42 @@ async fn play(
                         }
                         play::Serverbound::Other(name) => debug!("{}: unhandled {name}", me.profile.name),
                         other => trace!("play: {other:?}"),
+                    }
+                    if moved && settled {
+                        let (gliding, levitating) = crate::tick::lock(&ctx.vitals)
+                            .get(&uuid)
+                            .map_or((false, false), |v| (v.gliding, v.effects.has("levitation")));
+                        if crate::guard::too_far(&ctx, before, pose, gliding) {
+                            warn!("{} moved too quickly! {},{},{}", me.profile.name, pose.x - before.x, pose.y - before.y, pose.z - before.z);
+                            pose = before;
+                            moved = false;
+                            next_teleport += 1;
+                            awaiting_teleport = Some(next_teleport);
+                            writer.queue(&play::PlayerPosition {
+                                teleport_id: next_teleport,
+                                x: pose.x,
+                                y: pose.y,
+                                z: pose.z,
+                                velocity: [0.0; 3],
+                                yaw: pose.yaw,
+                                pitch: pose.pitch,
+                                flags: 0,
+                            })?;
+                        } else {
+                            // Survival and adventure players held up by nothing.
+                            let afloat = !ctx.config.allow_flight
+                                && matches!(game_mode, 0 | 2)
+                                && !gliding
+                                && !levitating
+                                && pose.y - before.y >= -0.03125
+                                && crate::guard::nothing_around(&ctx, pose);
+                            if floating.moved(afloat, Instant::now()) {
+                                warn!("{} was kicked for floating too long!", me.profile.name);
+                                let reason = text::translate("multiplayer.disconnect.flying", vec![]);
+                                writer.send(&play::Disconnect { reason }).await?;
+                                bail!("{} was flying", me.profile.name);
+                            }
+                        }
                     }
                     if moved {
                         let feet = Position::new(pose.x.floor() as i32, pose.y.floor() as i32, pose.z.floor() as i32);

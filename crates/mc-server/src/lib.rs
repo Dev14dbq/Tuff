@@ -74,10 +74,15 @@ mod projectiles;
 pub mod properties;
 mod raids;
 mod random_ticks;
+pub mod crash;
+pub mod guard;
+pub mod query;
+pub mod rcon;
 mod recipe_book;
 mod respawn;
 pub mod rules;
 mod scoreboard;
+pub mod serverlist;
 mod spear;
 mod stats;
 mod storage;
@@ -153,6 +158,28 @@ pub struct Config {
     pub new_world_difficulty: i32,
     /// The level `/op` gives (`op-permission-level`).
     pub op_permission_level: i32,
+    /// Answer server list pings (`enable-status`).
+    pub enable_status: bool,
+    /// Leave who is online out of server list pings (`hide-online-players`).
+    pub hide_online_players: bool,
+    /// `server-icon.png`, as the data URL server list pings carry.
+    pub icon: Option<String>,
+    /// The pack players are offered as they join (`resource-pack`...).
+    pub resource_pack: Option<serverlist::ResourcePack>,
+    /// Remote console: port and password (`enable-rcon`, `rcon.port`,
+    /// `rcon.password`), and whether operators see what it does.
+    pub rcon: Option<(u16, String)>,
+    pub broadcast_rcon_to_ops: bool,
+    /// The query port (`enable-query`, `query.port`).
+    pub query_port: Option<u16>,
+    /// Players may stay in the air (`allow-flight`).
+    pub allow_flight: bool,
+    /// Packets a second a player may send before being kicked; 0 for no
+    /// limit (`rate-limit`).
+    pub rate_limit: u32,
+    /// A tick taking longer than this stops the server with a crash report
+    /// (`max-tick-time`; `None` for -1).
+    pub max_tick_time: Option<std::time::Duration>,
 }
 
 impl Config {
@@ -180,6 +207,16 @@ impl Config {
             new_world_game_mode: 0,
             new_world_difficulty: 2,
             op_permission_level: 4,
+            enable_status: true,
+            hide_online_players: false,
+            icon: None,
+            resource_pack: None,
+            rcon: None,
+            broadcast_rcon_to_ops: true,
+            query_port: None,
+            allow_flight: false,
+            rate_limit: 0,
+            max_tick_time: None,
         }
     }
 }
@@ -271,6 +308,9 @@ impl Server {
             started().elapsed().as_secs_f64()
         );
         tokio::pin!(shutdown);
+        if let Some(dir) = &self.ctx.config.server_dir {
+            crash::install(dir.clone(), self.ctx.data.version.name.clone());
+        }
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let ticking = {
             let requests = self
@@ -285,13 +325,42 @@ impl Server {
                 .name("tick".into())
                 // Functions calling functions run deep.
                 .stack_size(256 << 20)
-                .spawn(move || tick::run(ctx, requests, stop))?
+                .spawn(move || {
+                    let ticked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        tick::run(ctx.clone(), requests, stop)
+                    }));
+                    // A crashed tick stops the server (the report is written).
+                    if ticked.is_err() {
+                        ctx.shutdown.notify_one();
+                    }
+                })?
         };
+        if let Some(max) = self.ctx.config.max_tick_time {
+            crash::watchdog(self.ctx.clone(), max);
+        }
         if self.ctx.config.console {
             let ctx = self.ctx.clone();
             std::thread::Builder::new()
                 .name("console".into())
                 .spawn(move || console(&ctx))?;
+        }
+        if let Some((port, password)) = self.ctx.config.rcon.clone() {
+            let at = SocketAddr::new(self.ctx.config.bind, port);
+            let ctx = self.ctx.clone();
+            tokio::spawn(async move {
+                if let Err(err) = rcon::serve(ctx, at, password).await {
+                    tracing::warn!("RCON on {at} stopped: {err:#}");
+                }
+            });
+        }
+        if let Some(port) = self.ctx.config.query_port {
+            let at = SocketAddr::new(self.ctx.config.bind, port);
+            let ctx = self.ctx.clone();
+            tokio::spawn(async move {
+                if let Err(err) = query::serve(ctx, at).await {
+                    tracing::warn!("Query on {at} stopped: {err:#}");
+                }
+            });
         }
         loop {
             tokio::select! {

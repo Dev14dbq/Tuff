@@ -150,7 +150,7 @@ pub fn suggest(
     let input = text.strip_prefix('/').unwrap_or(text);
     let offset = text.len() - input.len();
     let level = match source {
-        Source::Console => 4,
+        Source::Console | Source::Rcon => 4,
         Source::Player { uuid, name, .. } => super::level(ctx, *uuid, name),
         Source::Block { .. } | Source::Cart { .. } => 2,
     };

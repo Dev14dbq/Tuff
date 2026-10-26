@@ -284,7 +284,42 @@ pub mod configuration {
         FinishConfiguration,
         KeepAlive(i64),
         SelectKnownPacks(Vec<KnownPack>),
+        /// What became of a pushed resource pack: 0 loaded, 1 declined, 2
+        /// failed to download, 3 accepted, 4 downloaded, 5 invalid URL, 6
+        /// failed to reload, 7 discarded.
+        ResourcePack {
+            id: u128,
+            result: i32,
+        },
         Other(String),
+    }
+
+    /// Resource Pack Push: a pack for the client to load.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ResourcePackPush {
+        pub id: u128,
+        pub url: String,
+        /// SHA-1, hex; may be empty.
+        pub hash: String,
+        pub forced: bool,
+        pub prompt: Option<Tag>,
+    }
+    packet!(
+        ResourcePackPush,
+        Configuration,
+        "minecraft:resource_pack_push"
+    );
+    impl Encode for ResourcePackPush {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_uuid(self.id);
+            out.put_string(&self.url);
+            out.put_string(&self.hash);
+            out.put_bool(self.forced);
+            out.put_bool(self.prompt.is_some());
+            if let Some(p) = &self.prompt {
+                crate::codec::put_nbt(out, p);
+            }
+        }
     }
 
     #[derive(Clone, Debug, PartialEq)]
@@ -331,6 +366,10 @@ pub mod configuration {
                 "minecraft:select_known_packs" => {
                     Serverbound::SelectKnownPacks(read_known_packs(r)?)
                 }
+                "minecraft:resource_pack" => Serverbound::ResourcePack {
+                    id: r.uuid()?,
+                    result: r.varint()?,
+                },
                 other => Serverbound::Other(other.to_owned()),
             })
         }

@@ -459,6 +459,8 @@ pub struct Shared {
     pub ticking: Mutex<TickingState>,
     /// Notified by `/stop`.
     pub shutdown: tokio::sync::Notify,
+    /// When the tick running now began, for the watchdog.
+    pub heartbeat: crate::crash::Heartbeat,
     /// The command tree and what commands are checked against.
     pub commands: crate::commands::Commands,
     pub game_rules: Mutex<crate::rules::GameRules>,
@@ -1101,6 +1103,7 @@ impl ServerContext {
                 frozen: false,
             }),
             shutdown: tokio::sync::Notify::new(),
+            heartbeat: crate::crash::Heartbeat::default(),
             next_entity_id: AtomicI32::new(1),
             packs: Mutex::new(packs),
             commands,

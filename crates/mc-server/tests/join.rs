@@ -281,12 +281,15 @@ async fn ping_login_spawn_and_chat() {
     bot.send("minecraft:accept_teleportation", confirm).await;
 
     // Walk 3 chunks east: new column of chunks arrives, old one is forgotten.
-    let mut moved = Vec::new();
-    for v in [48.5, -60.0, 0.5] {
-        moved.put_f64(v);
+    // (In steps: ten blocks or more at once is moving too quickly.)
+    for x in [8.5, 16.5, 24.5, 32.5, 40.5, 48.5] {
+        let mut moved = Vec::new();
+        for v in [x, -60.0, 0.5] {
+            moved.put_f64(v);
+        }
+        moved.put_u8(0x01);
+        bot.send("minecraft:move_player_pos", moved).await;
     }
-    moved.put_u8(0x01);
-    bot.send("minecraft:move_player_pos", moved).await;
     // They may come in several batches, as they get ready.
     let (mut chunks, mut forgotten) = (0, 0);
     while chunks < EDGE_3 {
@@ -1439,7 +1442,17 @@ async fn falls_hurt_and_kill_and_players_respawn() {
     jumper.recv_until("minecraft:game_event").await;
     let fall = |from: f64, to: f64| {
         let mut packets = Vec::new();
-        let mut y = from;
+        // Up first, a few blocks a step (more is moving too quickly).
+        let mut y = to;
+        while y < from {
+            y = (y + 5.0).min(from);
+            let mut b = Vec::new();
+            b.put_f64(spawn.0);
+            b.put_f64(y);
+            b.put_f64(spawn.2);
+            b.put_u8(0);
+            packets.push(b);
+        }
         while y > to {
             let mut b = Vec::new();
             b.put_f64(spawn.0);
@@ -4035,5 +4048,52 @@ async fn a_thrown_block_is_gone_from_the_hand_for_the_server_too() {
         matches!(placed, Err(_) | Ok(0)),
         "a block was placed from an empty hand"
     );
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn too_quick_moves_are_sent_back_and_chat_spam_is_kicked() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.online_mode = false;
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ctx = server.context().clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let (mut bot, spawn) = join_offline(addr, ctx.ids.clone(), "Hasty").await;
+    // Twenty blocks in one step: back where it was.
+    let mut far = Vec::new();
+    for v in [spawn.0 + 20.0, spawn.1, spawn.2] {
+        far.put_f64(v);
+    }
+    far.put_u8(0x01);
+    bot.send("minecraft:move_player_pos", far).await;
+    let (_, back) = bot.recv_until("minecraft:player_position").await;
+    let mut r = Reader::new(&back);
+    r.varint().unwrap();
+    assert_eq!(r.f64().unwrap(), spawn.0);
+    // Eleven chat lines at once from someone who is no operator.
+    for i in 0..11 {
+        let mut chat = Vec::new();
+        chat.put_string(&format!("spam {i}"));
+        chat.put_i64(0);
+        chat.put_i64(0);
+        chat.put_bool(false);
+        chat.put_varint(0);
+        chat.put_slice(&[0, 0, 0]);
+        chat.put_u8(0);
+        bot.send("minecraft:chat", chat).await;
+    }
+    let (_, body) = bot.recv_until("minecraft:disconnect").await;
+    let (tag, _) = mc_nbt::read_network(&body).unwrap();
+    assert!(format!("{tag:?}").contains("disconnect.spam"));
     let _ = stop.send(());
 }

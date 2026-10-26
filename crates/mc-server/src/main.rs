@@ -178,6 +178,28 @@ async fn run() -> Result<()> {
     config.seed = seed(seed_arg.as_deref().unwrap_or(props.get("level-seed")));
     config.console = console;
     config.ops = ops;
+    config.enable_status = props.bool("enable-status");
+    config.hide_online_players = props.bool("hide-online-players");
+    config.icon = mc_server::serverlist::icon(&server_dir.join("server-icon.png"));
+    config.resource_pack = mc_server::serverlist::ResourcePack::from_properties(&props);
+    if props.bool("enable-rcon") {
+        let password = props.get("rcon.password").to_owned();
+        if password.is_empty() {
+            tracing::warn!("No rcon password set in server.properties, rcon disabled!");
+        } else {
+            config.rcon = Some((props.int("rcon.port").unwrap_or(25575) as u16, password));
+        }
+    }
+    config.broadcast_rcon_to_ops = props.bool("broadcast-rcon-to-ops");
+    if props.bool("enable-query") {
+        config.query_port = Some(props.int("query.port").unwrap_or(25565) as u16);
+    }
+    config.allow_flight = props.bool("allow-flight");
+    config.rate_limit = props.int("rate-limit").unwrap_or(0).max(0) as u32;
+    config.max_tick_time = props
+        .int("max-tick-time")
+        .filter(|&ms| ms > 0)
+        .map(|ms| std::time::Duration::from_millis(ms as u64));
     let level_name = props.get("level-name").to_owned();
     let flat = props.get("level-type").contains("flat");
     config.level_dir = Some(server_dir.join(&level_name));
