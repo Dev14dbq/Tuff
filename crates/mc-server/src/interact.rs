@@ -572,6 +572,43 @@ pub fn dig(
         let logic = level.logic();
         mc_tick::tripwire::disarm(&mut level, logic, to_pos(position));
     }
+    // A block entity goes with its block: what it holds is taken first.
+    let name = blocks.block_name(state).unwrap_or("");
+    let container = crate::containers::kind_of(name).map(|_| {
+        let furnace = matches!(
+            name,
+            "minecraft:furnace" | "minecraft:blast_furnace" | "minecraft:smoker"
+        );
+        let points = if furnace && actor.game_mode != CREATIVE {
+            crate::furnaces::collect_xp(ctx, position)
+        } else {
+            0
+        };
+        (crate::containers::broken(ctx, position).0, points)
+    });
+    let food = crate::campfires::is_campfire(name).then(|| crate::campfires::broken(ctx, position));
+    let record = (name == "minecraft:jukebox")
+        .then(|| ctx.world.block_entity(position, blocks))
+        .flatten()
+        .and_then(|be| match be.data.get("RecordItem") {
+            Some(mc_nbt::Tag::Compound(record)) => match record.get("id") {
+                Some(mc_nbt::Tag::String(id)) => ctx.items.id(id),
+                _ => None,
+            },
+            _ => None,
+        });
+    // Flying mobs (flying-mobs): the bees of a broken hive come out angry.
+    if crate::mobs::bees::is_hive(name) && actor.game_mode != CREATIVE {
+        let tool = crate::held::held(ctx, actor.uuid, 0).map(|h| h.stack);
+        crate::criteria::bee_nest(
+            ctx,
+            actor.uuid,
+            name,
+            tool.as_ref(),
+            crate::mobs::bees::inside(ctx, position).len(),
+        );
+        crate::mobs::bees::disturbed(ctx, position, Some(actor.uuid), false);
+    }
     if !level.set_block(position, left) && world.block(position, blocks) != Some(left) {
         outcome.updates.push((position, state));
         return outcome;
@@ -593,61 +630,24 @@ pub fn dig(
         let _ = ctx.events.send(Event::EntitySpawned(tnt.clone()));
         ctx.entities.lock().expect("entities lock").push(tnt);
     }
-    if blocks
-        .block_name(state)
-        .and_then(crate::containers::kind_of)
-        .is_some()
-    {
-        if matches!(
-            blocks.block_name(state),
-            Some("minecraft:furnace" | "minecraft:blast_furnace" | "minecraft:smoker")
-        ) && actor.game_mode != CREATIVE
-        {
-            let points = crate::furnaces::collect_xp(ctx, position);
-            crate::xp::spawn(ctx, centre(position), points);
-        }
-        for stack in crate::containers::broken(ctx, position).0 {
+    if let Some((items, points)) = container {
+        crate::xp::spawn(ctx, centre(position), points);
+        for stack in items {
             outcome
                 .drops
                 .push((position, crate::loot::Drop::of(&stack)));
         }
         outcome.events.push(Event::ContainerGone { position });
     }
-    if blocks
-        .block_name(state)
-        .is_some_and(crate::campfires::is_campfire)
-    {
-        for stack in crate::campfires::broken(ctx, position) {
-            outcome
-                .drops
-                .push((position, crate::loot::Drop::of(&stack)));
-        }
-    }
-    // Flying mobs (flying-mobs): the bees of a broken hive come out angry.
-    if blocks
-        .block_name(state)
-        .is_some_and(crate::mobs::bees::is_hive)
-        && actor.game_mode != CREATIVE
-    {
-        let tool = crate::held::held(ctx, actor.uuid, 0).map(|h| h.stack);
-        crate::criteria::bee_nest(
-            ctx,
-            actor.uuid,
-            blocks.block_name(state).unwrap_or(""),
-            tool.as_ref(),
-            crate::mobs::bees::inside(ctx, position).len(),
-        );
-        crate::mobs::bees::disturbed(ctx, position, Some(actor.uuid), false);
+    for stack in food.into_iter().flatten() {
+        outcome
+            .drops
+            .push((position, crate::loot::Drop::of(&stack)));
     }
     if blocks.block_name(state) == Some("minecraft:creaking_heart") {
         crate::mobs::creaking::broken(ctx, position, state, Some(actor.uuid));
     }
-    if blocks.block_name(state) == Some("minecraft:jukebox")
-        && let Some(be) = ctx.world.block_entity(position, blocks)
-        && let Some(mc_nbt::Tag::Compound(record)) = be.data.get("RecordItem")
-        && let Some(mc_nbt::Tag::String(id)) = record.get("id")
-        && let Some(item) = ctx.items.id(id)
-    {
+    if let Some(item) = record {
         outcome.drops.push((
             position,
             crate::loot::Drop {
@@ -2075,7 +2075,7 @@ mod tests {
                 .as_ref()
                 .map(|s| s.damage)
         };
-        let mut mine = |block: &str| {
+        let mine = |block: &str| {
             let at = Position::new(1, -60, 0);
             let state = ctx.data.blocks.default_state(block).unwrap();
             WorldLevel::new(&ctx).set_block(at, state);
@@ -2100,6 +2100,47 @@ mod tests {
         held("minecraft:shears");
         mine("minecraft:short_grass");
         assert_eq!(damage(), Some(1));
+    }
+
+    #[test]
+    fn a_broken_furnace_gives_back_what_was_in_it() {
+        let Some((ctx, actor)) = with_flint(0) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let id = |n: &str| ctx.items.id(n).unwrap();
+        ctx.inventories.lock().unwrap().get_mut(&7).unwrap().slots[36] =
+            Some(ItemStack::new(id("minecraft:iron_pickaxe"), 1));
+        let at = Position::new(1, -60, 0);
+        let furnace = ctx.data.blocks.default_state("minecraft:furnace").unwrap();
+        WorldLevel::new(&ctx).set_block(at, furnace);
+        crate::containers::placed(&ctx, at, furnace);
+        let kind = crate::containers::kind_of("minecraft:furnace").unwrap();
+        crate::containers::put(
+            &ctx,
+            at,
+            kind,
+            &[
+                (0, Some(ItemStack::new(id("minecraft:raw_iron"), 5))),
+                (1, Some(ItemStack::new(id("minecraft:coal"), 3))),
+            ],
+        );
+        dig(&ctx, actor, dig::START, at, 1, 1);
+        ctx.time.lock().unwrap().age += 1000;
+        let outcome = dig(&ctx, actor, dig::FINISH, at, 1, 1);
+        let mut got: Vec<(i32, i32)> = outcome
+            .drops
+            .iter()
+            .map(|(_, d)| (d.item, d.count))
+            .collect();
+        got.sort();
+        let mut want = vec![
+            (id("minecraft:furnace"), 1),
+            (id("minecraft:raw_iron"), 5),
+            (id("minecraft:coal"), 3),
+        ];
+        want.sort();
+        assert_eq!(got, want);
     }
 
     #[test]
