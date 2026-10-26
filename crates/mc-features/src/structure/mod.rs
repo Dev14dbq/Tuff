@@ -605,9 +605,7 @@ impl Structures {
                 }
                 found.unwrap_or((cx, cz))
             };
-            let threads = std::thread::available_parallelism()
-                .map_or(4, |n| n.get())
-                .min(spots.len().max(1));
+            let threads = crate::worker_threads().min(spots.len().max(1));
             let per = spots.len().div_ceil(threads).max(1);
             let list: Vec<(i32, i32)> = std::thread::scope(|s| {
                 let parts: Vec<_> = spots

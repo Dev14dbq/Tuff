@@ -219,11 +219,17 @@ impl Server {
 
     /// Starts the vanilla server jar in `dir`.
     pub(crate) fn start_java(root: &Path, dir: &Path) -> Result<Self> {
-        let jar = root.join("reference/26.3/server.jar");
+        Self::start_jar(&root.join("reference/26.3/server.jar"), dir, &[])
+    }
+
+    /// Starts a server `jar` (vanilla or a launcher that wraps it) in `dir`,
+    /// with extra JVM options.
+    pub(crate) fn start_jar(jar: &Path, dir: &Path, jvm: &[String]) -> Result<Self> {
         let child = Command::new("java")
             .arg("-Xmx2G")
+            .args(jvm)
             .arg("-jar")
-            .arg(&jar)
+            .arg(jar)
             .arg("nogui")
             .current_dir(dir)
             .stdin(Stdio::piped())
@@ -249,12 +255,32 @@ impl Server {
         Self::ours_in_with(root, dir, properties, &|_| Ok(()))
     }
 
+    /// `ours_in` with extra environment variables for the server.
+    pub(crate) fn ours_in_env(
+        root: &Path,
+        dir: &Path,
+        properties: &str,
+        env: &[(&str, String)],
+    ) -> Result<Self> {
+        Self::ours_start(root, dir, properties, &|_| Ok(()), env)
+    }
+
     /// `ours_in`, with `setup` run on the fresh folder before the start.
     pub(crate) fn ours_in_with(
         root: &Path,
         dir: &Path,
         properties: &str,
         setup: &dyn Fn(&Path) -> Result<()>,
+    ) -> Result<Self> {
+        Self::ours_start(root, dir, properties, setup, &[])
+    }
+
+    fn ours_start(
+        root: &Path,
+        dir: &Path,
+        properties: &str,
+        setup: &dyn Fn(&Path) -> Result<()>,
+        env: &[(&str, String)],
     ) -> Result<Self> {
         let status = Command::new("cargo")
             .args(["build", "--release", "-q", "-p", "mc-server"])
@@ -269,6 +295,7 @@ impl Server {
         let child = Command::new(root.join("target/release/mc-server"))
             .args(["--universe".as_ref(), dir.as_os_str()])
             .env("NO_COLOR", "1")
+            .envs(env.iter().map(|(k, v)| (k, v)))
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

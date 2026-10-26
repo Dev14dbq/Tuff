@@ -631,9 +631,7 @@ impl Pipeline {
         if todo <= 1 {
             return (0..list.len()).map(|i| (list[i], make(i))).collect();
         }
-        let threads = std::thread::available_parallelism()
-            .map_or(4, |n| n.get())
-            .min(todo);
+        let threads = mc_features::worker_threads().min(todo);
         let next = std::sync::atomic::AtomicUsize::new(0);
         let out = Mutex::new(Vec::with_capacity(list.len()));
         std::thread::scope(|s| {

@@ -154,3 +154,13 @@ pub trait Region {
     /// `id` and `Pos`.
     fn add_entity(&mut self, _nbt: mc_nbt::Compound) {}
 }
+
+/// How many worker threads parallel work may use: `MC_THREADS` if set (the
+/// benchmarks pin every server to the same count), else every core.
+pub fn worker_threads() -> usize {
+    std::env::var("MC_THREADS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, usize::from))
+}

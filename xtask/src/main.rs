@@ -9,11 +9,13 @@ mod chunk_speed;
 mod extract_data;
 mod gen_speed;
 mod hash_check;
+mod mixins;
 mod observe;
 mod observe_commands;
 mod observe_structures;
 mod parity;
 mod probe;
+mod quiet;
 mod registry_diff;
 mod similarity;
 mod vanilla_locate;
@@ -40,10 +42,14 @@ Tasks:
   bots [--addr <host:port>] [--count <n>] [--seconds <s>] [--view-distance <n>] [--version <id>]
       Load test: n bots (default 100) log in, get their chunks and walk around
       for s seconds (default 30). The server must run with --offline.
-  bench [--only vanilla|ours] [--scenarios a,b] [--bots <n>] [--entities <n>] [--seconds <s>]
+  bench [--only vanilla,modded,ours] [--scenarios a,b] [--rounds <n>] [--cores <n>]
+        [--background <cores>] [--noisy] [--jfr] [--bots <n>] [--entities <n>] [--seconds <s>]
+        | --summarize <file.jfr>
       Baseline table (docs/BENCHMARKS.md): world generation at view distance
       10 and 32, n bots (50), hoppers, redstone clocks, n cows (2000) — on
-      vanilla and ours, each from a new world; MSPT from `tick query`.
+      vanilla, vanilla + Lithium/C2ME and ours, each from a new world; MSPT
+      from `tick query`. Runs only on a quiet machine (see quiet.rs), the
+      sides taking turns over n rounds (3); --jfr adds a profiled round.
   blocks [--addr <host:port>] [--version <id>]
       Two players on an offline creative server with a superflat world: one
       places and breaks blocks, and what both receive is printed.
@@ -83,6 +89,10 @@ Tasks:
   chunk-diff <dump a> <dump b>
       Compare chunk packets saved by `probe --dump` from two servers, decoded
       to blocks, biomes, heightmaps, light and block entities.
+  mixins [--top <n>] [--show <n>]
+      Rank vanilla classes/methods by how many top open-source Modrinth mods
+      (26.x builds, into tools/modrinth/) patch them with Mixin; writes
+      cache/mixins/{methods,classes}.tsv and ranking.md
   similarity [--reference <dir>] [--fail <n>] [--top <n>] [--self-test]
       Clean-room guard: compare our Rust sources with the decompiled vanilla
       sources (reference/26.3/server-src, or $MC_REFERENCE) by winnowing
@@ -104,6 +114,7 @@ fn main() -> ExitCode {
         Some("chunk-diff") => chunk_diff::run(&args[1..]),
         Some("chunk-speed") => chunk_speed::run(&args[1..]),
         Some("gen-speed") => gen_speed::run(&args[1..]),
+        Some("mixins") => mixins::run(&args[1..]),
         Some("similarity") => similarity::run(&args[1..]),
         Some("watch") => watch::run(&args[1..]),
         Some("hash-check") => hash_check::run(&args[1..]),

@@ -2429,10 +2429,7 @@ fn load_chunks(
     coords: Vec<(i32, i32)>,
 ) -> tokio::sync::mpsc::UnboundedReceiver<ReadyChunk> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let workers = std::thread::available_parallelism()
-        .map_or(4, usize::from)
-        .min(coords.len())
-        .max(1);
+    let workers = mc_features::worker_threads().min(coords.len()).max(1);
     let coords = Arc::new(coords);
     let next = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     for _ in 0..workers {

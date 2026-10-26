@@ -1,6 +1,7 @@
 //! `cargo xtask bench`: the baseline table. Runs fixed scenarios on vanilla
-//! (`reference/26.3/server.jar`) and on our server, each from a new world,
-//! and prints a Markdown table for docs/BENCHMARKS.md:
+//! (`reference/26.3/server.jar`), on vanilla with Lithium and C2ME
+//! (`modded`) and on our server, each from a new world, and prints a
+//! Markdown table for docs/BENCHMARKS.md:
 //!
 //! - `gen10`, `gen32`: a player joins a new world (fixed seed) with view
 //!   distance 10 / 32; chunks per second until the whole view has arrived.
@@ -14,68 +15,247 @@
 //! - `entities`: N cows in a fenced, forceloaded 128×128 field.
 //!
 //! MSPT comes from `tick query` (percentiles of the last 100 ticks), asked
-//! every 5 s during the measured window; the table shows the median of those
-//! P50s and P99s. RAM is the memory footprint at the end (see `rss_mb`); vanilla
-//! runs with `-Xmx2G` as in the parity tools.
+//! every 5 s during the measured window; a run's numbers are the median of
+//! those P50s and P99s. RAM is the memory footprint at the end (see
+//! `rss_mb`).
+//!
+//! Fair runs (see `quiet`): every server gets the same `--cores` (JVM
+//! `-XX:ActiveProcessorCount`, our `MC_THREADS` / `TOKIO_WORKER_THREADS`)
+//! and 2 GB of heap; a run starts only on a quiet machine (no Minecraft
+//! client, on AC power, other processes under `--background` cores) and is
+//! redone when the background got busy during it. `--rounds` runs every
+//! scenario that many times, the sides taking turns in a different order
+//! each round; the table shows the median and the range.
+//!
+//! The `modded` side is vanilla under Fabric with Lithium and C2ME, from
+//! `tools/fabric/26.3` (`fabric-server-launch.jar` and `mods/`).
+//!
+//! With `--jfr`, one more round runs the Java servers under their `/jfr`
+//! profiler (its numbers stay out of the table: the profiler costs time);
+//! each recording is kept as `cache/jfr/<scenario>-<side>.jfr` and
+//! summarized (see `jfr_summary`; `--summarize <file.jfr>` redoes that).
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 
 use crate::parity::Server;
+use crate::quiet::{self, Background, Watch};
 
 const SEED: i64 = -1294266004;
 const VANILLA_PORT: u16 = 25600;
 const OURS_PORT: u16 = 25601;
+const MODDED_PORT: u16 = 25602;
+const VANILLA_DIR: &str = "cache/vanilla-server/26.3-bench";
+const MODDED_DIR: &str = "cache/vanilla-server/26.3-bench-modded";
+const FABRIC: &str = "tools/fabric/26.3";
 const ALL: &str = "gen10,gen32,bots,idle,hoppers,redstone,entities";
 
+/// What a scenario run gives: what was measured and its numbers.
+struct Run {
+    what: String,
+    metrics: Vec<(&'static str, f64)>,
+}
+
+struct Options {
+    bots: usize,
+    entities: usize,
+    seconds: u64,
+    cores: usize,
+}
+
 pub fn run(args: &[String]) -> Result<()> {
-    let mut only: Option<String> = None;
+    let mut only = "vanilla,modded,ours".to_owned();
     let mut scenarios = ALL.to_owned();
-    let mut bots = 50usize;
-    let mut entities = 2000usize;
-    let mut seconds = 60u64;
+    let mut options = Options {
+        bots: 50,
+        entities: 2000,
+        seconds: 60,
+        cores: 4,
+    };
+    let mut rounds = 3usize;
+    let mut background = 0.5f64;
+    let mut noisy = false;
+    let mut jfr = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().with_context(|| format!("{a} needs a value"));
         match a.as_str() {
-            "--only" => only = Some(value()?.clone()),
+            "--only" => only = value()?.clone(),
             "--scenarios" => scenarios = value()?.clone(),
-            "--bots" => bots = value()?.parse()?,
-            "--entities" => entities = value()?.parse()?,
-            "--seconds" => seconds = value()?.parse()?,
+            "--bots" => options.bots = value()?.parse()?,
+            "--entities" => options.entities = value()?.parse()?,
+            "--seconds" => options.seconds = value()?.parse()?,
+            "--cores" => options.cores = value()?.parse()?,
+            "--rounds" => rounds = value()?.parse::<usize>()?.max(1),
+            "--background" => background = value()?.parse()?,
+            "--noisy" => noisy = true,
+            "--jfr" => jfr = true,
+            "--summarize" => {
+                println!("{}", jfr_summary(std::path::Path::new(value()?))?);
+                return Ok(());
+            }
             other => bail!("unknown option `{other}`"),
         }
     }
     let root = crate::workspace_root();
-    let sides: Vec<&str> = match only.as_deref() {
-        Some(side @ ("vanilla" | "ours")) => vec![side],
-        Some(other) => bail!("--only vanilla|ours, not `{other}`"),
-        None => vec!["vanilla", "ours"],
-    };
-    let mut rows = Vec::new();
-    for scenario in scenarios.split(',') {
-        for &side in &sides {
-            eprintln!("bench: {scenario} on {side}");
-            let row = match scenario {
-                "gen10" => generation(&root, side, 10),
-                "gen32" => generation(&root, side, 32),
-                "bots" => with_bots(&root, side, bots, seconds),
-                "idle" | "hoppers" | "redstone" | "entities" => {
-                    contraption(&root, side, scenario, entities, seconds)
+    let sides: Vec<&str> = only
+        .split(',')
+        .map(|side| match side {
+            "vanilla" | "modded" | "ours" => Ok(side),
+            other => bail!("--only vanilla,modded,ours, not `{other}`"),
+        })
+        .collect::<Result<_>>()?;
+    let scenarios: Vec<&str> = scenarios.split(',').collect();
+    if let Some(bad) = scenarios.iter().find(|s| !ALL.split(',').any(|a| a == **s)) {
+        bail!("unknown scenario `{bad}` (one of {ALL})");
+    }
+    if sides.contains(&"ours") {
+        // Build first so the compiler is not the background of a run.
+        let status = std::process::Command::new("cargo")
+            .args(["build", "--release", "-q", "-p", "mc-server"])
+            .current_dir(&root)
+            .status()?;
+        anyhow::ensure!(status.success(), "building mc-server failed");
+    }
+    let guard = quiet::Guard::new(background, noisy)?;
+    eprintln!("bench: {}", guard.conditions(options.cores));
+
+    let mut results: BTreeMap<(usize, usize), Vec<(Run, Background)>> = BTreeMap::new();
+    let extra = usize::from(jfr);
+    for round in 0..rounds + extra {
+        let profile = round == rounds;
+        for (si, &scenario) in scenarios.iter().enumerate() {
+            for k in 0..sides.len() {
+                let di = (k + round) % sides.len();
+                let side = sides[di];
+                if profile && side == "ours" {
+                    continue;
                 }
-                other => bail!("unknown scenario `{other}` (one of {ALL})"),
-            };
-            let row = row.unwrap_or_else(|err| format!("error: {err:#}"));
-            eprintln!("bench: {scenario} on {side}: {row}");
-            rows.push(format!("| {scenario} | {side} | {row} |"));
+                let label = if profile {
+                    "jfr".to_owned()
+                } else {
+                    format!("{}/{rounds}", round + 1)
+                };
+                // A run is redone (twice at most) when the background was
+                // busy on average during it; then it is kept, marked.
+                let mut attempt = 0;
+                let (run, bg) = loop {
+                    guard.wait()?;
+                    eprintln!("bench: [{label}] {scenario} on {side}");
+                    let watch = Watch::start(&guard);
+                    let run = run_scenario(&root, side, scenario, &options, profile, &watch);
+                    let bg = watch.stop();
+                    match run {
+                        Ok(run) if bg.mean <= background || noisy || attempt == 2 => {
+                            break (run, bg);
+                        }
+                        Ok(_) => {
+                            eprintln!(
+                                "bench: background averaged {:.2} cores (at worst {}), running again",
+                                bg.mean, bg.who
+                            );
+                            attempt += 1;
+                        }
+                        Err(err) => {
+                            eprintln!("bench: {scenario} on {side}: error: {err:#}");
+                            let run = Run {
+                                what: format!("error: {err:#}"),
+                                metrics: Vec::new(),
+                            };
+                            break (run, bg);
+                        }
+                    }
+                };
+                eprintln!(
+                    "bench: [{label}] {scenario} on {side}: {} (at the peak: {})",
+                    describe(&[(&run, &bg)], background),
+                    bg.who
+                );
+                if !profile {
+                    results.entry((si, di)).or_default().push((run, bg));
+                }
+            }
         }
     }
+    println!("{}\n", guard.conditions(options.cores));
     println!("| scenario | server | result |\n|---|---|---|");
-    for row in rows {
-        println!("{row}");
+    for ((si, di), runs) in &results {
+        let runs: Vec<(&Run, &Background)> = runs.iter().map(|(r, b)| (r, b)).collect();
+        println!(
+            "| {} | {} | {} |",
+            scenarios[*si],
+            sides[*di],
+            describe(&runs, background)
+        );
     }
     Ok(())
+}
+
+/// One table cell: what was measured, each number as the median over the
+/// runs with its range, and the background (the highest run mean and the
+/// highest one-second peak, in cores).
+fn describe(runs: &[(&Run, &Background)], background: f64) -> String {
+    let ok: Vec<&Run> = runs
+        .iter()
+        .map(|(r, _)| *r)
+        .filter(|r| !r.metrics.is_empty())
+        .collect();
+    let Some(first) = ok.first() else {
+        return runs.first().map_or(String::new(), |(r, _)| r.what.clone());
+    };
+    let mut parts = Vec::new();
+    for (i, (name, _)) in first.metrics.iter().enumerate() {
+        let mut values: Vec<f64> = ok
+            .iter()
+            .filter_map(|r| r.metrics.get(i))
+            .map(|m| m.1)
+            .collect();
+        values.sort_by(f64::total_cmp);
+        let digits = usize::from(name.starts_with("MSPT"));
+        let median = values[values.len() / 2];
+        let (lo, hi) = (values[0], values[values.len() - 1]);
+        parts.push(if values.len() > 1 {
+            format!("{name} {median:.digits$} [{lo:.digits$}–{hi:.digits$}]")
+        } else {
+            format!("{name} {median:.digits$}")
+        });
+    }
+    let mean = runs.iter().map(|(_, b)| b.mean).fold(0.0, f64::max);
+    let peak = runs.iter().map(|(_, b)| b.peak).fold(0.0, f64::max);
+    let errors = runs.len() - ok.len();
+    let mut cell = format!(
+        "{}: {}; background ≤ {mean:.2} cores (peak {peak:.1})",
+        first.what,
+        parts.join(", ")
+    );
+    if ok.len() > 1 {
+        cell += &format!(", {} runs", ok.len());
+    }
+    if mean > background {
+        cell += " ⚠ noisy";
+    }
+    if errors > 0 {
+        cell += &format!(", {errors} failed");
+    }
+    cell
+}
+
+fn run_scenario(
+    root: &std::path::Path,
+    side: &str,
+    scenario: &str,
+    options: &Options,
+    profile: bool,
+    watch: &Watch,
+) -> Result<Run> {
+    match scenario {
+        "gen10" => generation(root, side, 10, options, watch),
+        "gen32" => generation(root, side, 32, options, watch),
+        "bots" => with_bots(root, side, options, profile, watch),
+        _ => contraption(root, side, scenario, options, profile, watch),
+    }
 }
 
 fn properties(port: u16, flat: bool, view_distance: u8) -> String {
@@ -93,61 +273,132 @@ fn properties(port: u16, flat: bool, view_distance: u8) -> String {
     )
 }
 
-/// Starts `side` on a new world.
-fn start(root: &std::path::Path, side: &str, properties: &str) -> Result<(Server, String)> {
-    Ok(if side == "vanilla" {
-        let dir = root.join("cache/vanilla-server/26.3-bench");
-        let _ = std::fs::remove_dir_all(dir.join("world"));
-        Server::prepare(root, &dir, properties)?;
-        (
-            Server::start_java(root, &dir)?,
-            format!("127.0.0.1:{VANILLA_PORT}"),
-        )
-    } else {
-        (
-            Server::ours_in(root, &root.join("cache/ours-bench"), properties)?,
-            format!("127.0.0.1:{OURS_PORT}"),
-        )
-    })
+/// Starts `side` on a new world with `cores` threads' worth of parallelism,
+/// and tells `watch` which process is the server.
+fn start(
+    root: &std::path::Path,
+    side: &str,
+    properties: &str,
+    cores: usize,
+    watch: &Watch,
+) -> Result<(Server, String)> {
+    let addr = format!("127.0.0.1:{}", port(side));
+    let jvm = vec![format!("-XX:ActiveProcessorCount={cores}")];
+    let server = match side {
+        "vanilla" => {
+            let dir = root.join(VANILLA_DIR);
+            let _ = std::fs::remove_dir_all(dir.join("world"));
+            Server::prepare(root, &dir, properties)?;
+            Server::start_jar(&root.join("reference/26.3/server.jar"), &dir, &jvm)?
+        }
+        "modded" => {
+            let dir = root.join(MODDED_DIR);
+            let _ = std::fs::remove_dir_all(dir.join("world"));
+            Server::prepare(root, &dir, properties)?;
+            let fabric = root.join(FABRIC);
+            let _ = std::fs::remove_dir_all(dir.join("mods"));
+            std::fs::create_dir_all(dir.join("mods"))?;
+            for mod_jar in std::fs::read_dir(fabric.join("mods"))
+                .with_context(|| format!("no {FABRIC}/mods"))?
+            {
+                let mod_jar = mod_jar?.path();
+                std::fs::copy(
+                    &mod_jar,
+                    dir.join("mods").join(mod_jar.file_name().unwrap()),
+                )?;
+            }
+            // The launcher takes the user's own server.jar instead of
+            // downloading one.
+            let server_jar = root.join("reference/26.3/server.jar");
+            std::fs::write(
+                dir.join("fabric-server-launcher.properties"),
+                format!("serverJar={}\n", server_jar.display()),
+            )?;
+            Server::start_jar(&fabric.join("fabric-server-launch.jar"), &dir, &jvm)?
+        }
+        _ => Server::ours_in_env(
+            root,
+            &root.join("cache/ours-bench"),
+            properties,
+            &[
+                ("MC_THREADS", cores.to_string()),
+                ("TOKIO_WORKER_THREADS", cores.to_string()),
+            ],
+        )?,
+    };
+    watch.ignore(server.pid());
+    Ok((server, addr))
 }
 
 fn port(side: &str) -> u16 {
-    if side == "vanilla" {
-        VANILLA_PORT
-    } else {
-        OURS_PORT
+    match side {
+        "vanilla" => VANILLA_PORT,
+        "modded" => MODDED_PORT,
+        _ => OURS_PORT,
     }
 }
 
-fn generation(root: &std::path::Path, side: &str, view_distance: u8) -> Result<String> {
-    let (mut server, addr) = start(root, side, &properties(port(side), false, view_distance))?;
+fn generation(
+    root: &std::path::Path,
+    side: &str,
+    view_distance: u8,
+    options: &Options,
+    watch: &Watch,
+) -> Result<Run> {
+    let (mut server, addr) = start(
+        root,
+        side,
+        &properties(port(side), false, view_distance),
+        options.cores,
+        watch,
+    )?;
     let ids = crate::probe::load_packet_ids(None)?;
     let result = crate::chunk_speed::measure(&addr, ids, "Bench", view_distance as i8);
     let rss = rss_mb(server.pid());
     server.stop();
     let result = result?;
     // "... all 1234 ms (567 chunks/s)": keep the rate and the total time.
-    let rate = result
-        .rsplit_once('(')
-        .and_then(|(_, r)| r.strip_suffix(" chunks/s)"))
-        .unwrap_or("?");
-    let all = between(&result, ", all ", " ms").unwrap_or("?");
-    let chunks = between(&result, "ms, ", " chunks").unwrap_or("?");
-    Ok(format!(
-        "{rate} chunks/s ({chunks} chunks in {all} ms), RAM {rss} MB"
-    ))
+    let number = |s: Option<&str>| s.map_or(f64::NAN, ms);
+    let rate = number(
+        result
+            .rsplit_once('(')
+            .and_then(|(_, r)| r.strip_suffix(" chunks/s)")),
+    );
+    let all = number(between(&result, ", all ", " ms"));
+    let chunks = number(between(&result, "ms, ", " chunks"));
+    Ok(Run {
+        what: format!("view distance {view_distance}"),
+        metrics: vec![
+            ("chunks/s", rate),
+            ("chunks", chunks),
+            ("ms", all),
+            ("RAM MB", rss as f64),
+        ],
+    })
 }
 
-fn with_bots(root: &std::path::Path, side: &str, count: usize, seconds: u64) -> Result<String> {
-    let (mut server, addr) = start(root, side, &properties(port(side), false, 10))?;
+fn with_bots(
+    root: &std::path::Path,
+    side: &str,
+    options: &Options,
+    profile: bool,
+    watch: &Watch,
+) -> Result<Run> {
+    let (mut server, addr) = start(
+        root,
+        side,
+        &properties(port(side), false, 10),
+        options.cores,
+        watch,
+    )?;
     let warmup = 30;
     let bot_args: Vec<String> = [
         "--addr",
         &addr,
         "--count",
-        &count.to_string(),
+        &options.bots.to_string(),
         "--seconds",
-        &(seconds + warmup + 5).to_string(),
+        &(options.seconds + warmup + 5).to_string(),
         "--view-distance",
         "10",
     ]
@@ -156,30 +407,45 @@ fn with_bots(root: &std::path::Path, side: &str, count: usize, seconds: u64) -> 
     .collect();
     let bots = std::thread::spawn(move || crate::bots::run(&bot_args));
     std::thread::sleep(Duration::from_secs(warmup));
-    let mspt = sample(&mut server, seconds);
+    let seconds = options.seconds;
+    let mspt = profiled(root, &mut server, side, "bots", profile, |s| {
+        sample(s, seconds)
+    });
     let rss = rss_mb(server.pid());
     let bots = bots.join().expect("bots thread");
     server.stop();
-    let mspt = mspt?;
-    let bots = match bots {
-        Ok(()) => String::new(),
-        Err(err) => format!(" ({err:#})"),
+    let mut metrics = mspt?;
+    metrics.push(("RAM MB", rss as f64));
+    let what = match bots {
+        Ok(()) => format!("{} bots", options.bots),
+        Err(err) => format!("{} bots ({err:#})", options.bots),
     };
-    Ok(format!("{count} bots: {mspt}, RAM {rss} MB{bots}"))
+    Ok(Run { what, metrics })
 }
 
 fn contraption(
     root: &std::path::Path,
     side: &str,
     scenario: &str,
-    entities: usize,
-    seconds: u64,
-) -> Result<String> {
-    let (mut server, _) = start(root, side, &properties(port(side), true, 4))?;
-    let result = build(&mut server, scenario, entities).and_then(|what| {
+    options: &Options,
+    profile: bool,
+    watch: &Watch,
+) -> Result<Run> {
+    let (mut server, _) = start(
+        root,
+        side,
+        &properties(port(side), true, 4),
+        options.cores,
+        watch,
+    )?;
+    let seconds = options.seconds;
+    let result = build(&mut server, scenario, options.entities).and_then(|what| {
         std::thread::sleep(Duration::from_secs(20));
-        let mspt = sample(&mut server, seconds)?;
-        Ok(format!("{what}: {mspt}, RAM {} MB", rss_mb(server.pid())))
+        let mut metrics = profiled(root, &mut server, side, scenario, profile, |s| {
+            sample(s, seconds)
+        })?;
+        metrics.push(("RAM MB", rss_mb(server.pid()) as f64));
+        Ok(Run { what, metrics })
     });
     server.stop();
     result
@@ -285,9 +551,140 @@ fn fill(server: &mut Server, command: &str) -> Result<()> {
     bail!("no reply to fill")
 }
 
+/// Runs `measure`, on the Java sides with `jfr` under their `/jfr`
+/// profiler, and keeps the recording as `cache/jfr/<scenario>-<side>.jfr`.
+fn profiled(
+    root: &std::path::Path,
+    server: &mut Server,
+    side: &str,
+    scenario: &str,
+    jfr: bool,
+    measure: impl FnOnce(&mut Server) -> Result<Vec<(&'static str, f64)>>,
+) -> Result<Vec<(&'static str, f64)>> {
+    let dir = match side {
+        "vanilla" => VANILLA_DIR,
+        "modded" => MODDED_DIR,
+        _ => return measure(server),
+    };
+    if !jfr {
+        return measure(server);
+    }
+    let debug = root.join(dir).join("debug");
+    let _ = std::fs::remove_dir_all(&debug);
+    server.wait_for("jfr start", "profiling", Duration::from_secs(30))?;
+    let result = measure(server);
+    server.wait_for("jfr stop", "profiling", Duration::from_secs(60))?;
+    // The dump is written after the reply; wait for the file to settle.
+    let mut recording = None;
+    for _ in 0..60 {
+        std::thread::sleep(Duration::from_millis(500));
+        recording = std::fs::read_dir(&debug)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|e| e == "jfr"));
+        if recording.is_some() {
+            break;
+        }
+    }
+    let recording = recording.context("no .jfr recording in debug/")?;
+    std::thread::sleep(Duration::from_secs(2));
+    let kept = root
+        .join("cache/jfr")
+        .join(format!("{scenario}-{side}.jfr"));
+    std::fs::create_dir_all(kept.parent().unwrap())?;
+    std::fs::rename(&recording, &kept)?;
+    eprintln!("bench: {scenario}: recording {}", kept.display());
+    eprintln!("{}", jfr_summary(&kept)?);
+    result
+}
+
+/// The execution samples of the server thread (the tick) in a recording:
+/// the 15 vanilla methods most often on top (the first `net.minecraft` frame
+/// of the stack, so JDK and fastutil leaves count for their caller) and the
+/// 15 most often anywhere on the stack.
+fn jfr_summary(recording: &std::path::Path) -> Result<String> {
+    let out = std::process::Command::new(jdk_tool("jfr"))
+        .args(["print", "--json", "--stack-depth", "128", "--events"])
+        .arg("jdk.ExecutionSample")
+        .arg(recording)
+        .output()
+        .context("running jfr print")?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&out.stdout).context("jfr print output")?;
+    let events = json["recording"]["events"]
+        .as_array()
+        .context("no events")?;
+    let mut top: std::collections::HashMap<String, usize> = Default::default();
+    let mut inclusive: std::collections::HashMap<String, usize> = Default::default();
+    let mut samples = 0;
+    for event in events {
+        let values = &event["values"];
+        if values["sampledThread"]["javaName"] != "Server thread" {
+            continue;
+        }
+        samples += 1;
+        let frames = values["stackTrace"]["frames"].as_array();
+        let mut seen = std::collections::HashSet::new();
+        let mut first = true;
+        for frame in frames.into_iter().flatten() {
+            let class = frame["method"]["type"]["name"].as_str().unwrap_or("");
+            if !class.starts_with("net/minecraft/") {
+                continue;
+            }
+            let class = class.trim_start_matches("net/minecraft/").replace('/', ".");
+            let method = format!("{class}.{}", frame["method"]["name"].as_str().unwrap_or(""));
+            if first {
+                *top.entry(method.clone()).or_default() += 1;
+                first = false;
+            }
+            if seen.insert(method.clone()) {
+                *inclusive.entry(method).or_default() += 1;
+            }
+        }
+    }
+    let table = |map: &std::collections::HashMap<String, usize>, title: &str| {
+        let mut rows: Vec<_> = map.iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        let mut s = format!("| {title} | % |\n|---|---|\n");
+        for (method, n) in rows.into_iter().take(15) {
+            s += &format!(
+                "| `{method}` | {:.1} |\n",
+                100.0 * *n as f64 / samples.max(1) as f64
+            );
+        }
+        s
+    };
+    Ok(format!(
+        "{samples} samples of the server thread\n\n{}\n{}",
+        table(&top, "top vanilla frame"),
+        table(&inclusive, "on the stack")
+    ))
+}
+
+/// A JDK tool next to `java`: from `JAVA_HOME`, or `/usr/libexec/java_home`
+/// on macOS, or the bare name on `PATH`.
+fn jdk_tool(name: &str) -> std::path::PathBuf {
+    let home = std::env::var_os("JAVA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            let out = std::process::Command::new("/usr/libexec/java_home")
+                .output()
+                .ok()?;
+            out.status
+                .success()
+                .then(|| String::from_utf8_lossy(&out.stdout).trim().into())
+        });
+    match home {
+        Some(home) if home.join("bin").join(name).is_file() => home.join("bin").join(name),
+        _ => name.into(),
+    }
+}
+
 /// Median P50 and P99 (and the mean of the average) over `tick query`
 /// replies every 5 s for `seconds`.
-fn sample(server: &mut Server, seconds: u64) -> Result<String> {
+fn sample(server: &mut Server, seconds: u64) -> Result<Vec<(&'static str, f64)>> {
     let (mut p50, mut p99, mut avg) = (Vec::new(), Vec::new(), Vec::new());
     let end = Instant::now() + Duration::from_secs(seconds);
     while Instant::now() < end {
@@ -307,11 +704,11 @@ fn sample(server: &mut Server, seconds: u64) -> Result<String> {
         v.get(v.len() / 2).copied().unwrap_or(f64::NAN)
     };
     let mean = avg.iter().sum::<f64>() / avg.len().max(1) as f64;
-    Ok(format!(
-        "MSPT mean {mean:.1}, p50 {:.1}, p99 {:.1}",
-        median(&mut p50),
-        median(&mut p99)
-    ))
+    Ok(vec![
+        ("MSPT p50", median(&mut p50)),
+        ("MSPT p99", median(&mut p99)),
+        ("MSPT mean", mean),
+    ])
 }
 
 fn ms(s: &str) -> f64 {
