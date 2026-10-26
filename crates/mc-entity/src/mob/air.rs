@@ -25,6 +25,9 @@ pub enum Act {
     Freeze,
     /// A bat hangs from the ceiling above `spot` until disturbed.
     Roost { spot: Option<[i32; 3]> },
+    /// A bat flits about aimlessly, heading for a cell near it (`to`) and
+    /// picking another when there, blocked or on a whim.
+    Flutter { to: Option<[i32; 3]> },
 }
 
 /// Extra state on [`super::Quirks`].
@@ -204,6 +207,7 @@ pub(super) fn can_use(act: &mut Act, m: &mut Mob, b: &Body, s: &Senses) -> bool 
             }
             false
         }
+        Act::Flutter { .. } => true,
     }
 }
 
@@ -212,7 +216,7 @@ pub(super) fn can_continue(act: &Act, m: &Mob, b: &Body, s: &Senses) -> bool {
         Act::Follow => liked(m, s).is_some(),
         Act::Errand => m.quirks.air.errand.is_some(),
         Act::Shoot { .. } | Act::Bounce { .. } => m.target.is_some() && !m.is_dead(),
-        Act::Peek { .. } => !m.is_dead(),
+        Act::Peek { .. } | Act::Flutter { .. } => !m.is_dead(),
         Act::Freeze => m.quirks.air.frozen,
         Act::Roost { spot } => {
             !s.players.iter().any(|p| dist_sq(p.pos, b.pos) < 16.0)
@@ -319,12 +323,44 @@ pub(super) fn tick(act: &mut Act, m: &mut Mob, b: &mut Body, s: &Senses, out: &m
             b.vel[0] = 0.0;
             b.vel[2] = 0.0;
         }
-        Act::Roost { .. } => {
+        Act::Roost { spot } => {
             m.goto = None;
             m.nav.stop();
             b.vel = [0.0; 3];
+            // Hangs right under the block, now and then turning about.
+            if let Some(c) = spot {
+                b.pos[1] = f64::from(c[1]) - m.size().1;
+            }
+            if m.below(200) == 0 {
+                m.yaw = m.below(360) as f32;
+                m.head_yaw = m.yaw;
+            }
+        }
+        Act::Flutter { to } => {
+            let here = cell_of(b.pos);
+            let stale = to.is_none_or(|c| {
+                s.world.solid(c[0], c[1], c[2]) || dist_sq(b.pos, flutter_point(c)) < 4.0
+            });
+            if stale || m.below(30) == 0 {
+                let dx = m.below(7) as i32 - m.below(7) as i32;
+                let dy = m.below(6) as i32 - 2;
+                let dz = m.below(7) as i32 - m.below(7) as i32;
+                *to = Some([here[0] + dx, here[1] + dy, here[2] + dz]);
+            }
+            if let Some(c) = *to {
+                // Bats dart about quicker than the other fliers drift.
+                m.goto = Some((flutter_point(c), 2.0));
+            }
         }
     }
+}
+
+fn flutter_point(c: [i32; 3]) -> [f64; 3] {
+    [
+        f64::from(c[0]) + 0.5,
+        f64::from(c[1]) + 0.1,
+        f64::from(c[2]) + 0.5,
+    ]
 }
 
 /// The shulker's shell: open while a target is within 16 blocks (and
