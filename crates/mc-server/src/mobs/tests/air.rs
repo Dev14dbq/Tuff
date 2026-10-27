@@ -715,7 +715,11 @@ fn a_flying_bat_flits_about_instead_of_hanging_in_the_air() {
         far = far.max(step(pos, start));
         path += step(pos, last);
         last = pos;
-        cells.insert([pos[0].floor() as i32, pos[1].floor() as i32, pos[2].floor() as i32]);
+        cells.insert([
+            pos[0].floor() as i32,
+            pos[1].floor() as i32,
+            pos[2].floor() as i32,
+        ]);
     }
     assert!(!with_mob(&ctx, id, |m| m.quirks.air.hanging));
     // Ten seconds of flight covers ground, wanders off and keeps turning.

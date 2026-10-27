@@ -408,7 +408,7 @@ fn riders_land(ctx: &ServerContext, riders: &[i32], pos: [f64; 3], fell: f64) {
         let safe = lock(&ctx.vitals).get(&uuid).map_or(3.0, |v| {
             v.effects.value(crate::effects::Attr::SafeFallDistance)
         });
-        let damage = (fell - safe).ceil();
+        let damage = (fell - safe).floor();
         if damage > 0.0 {
             crate::vitals::hurt_by(ctx, uuid, damage as f32, "minecraft:fall", key, None);
         }

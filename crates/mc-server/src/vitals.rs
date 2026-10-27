@@ -566,6 +566,8 @@ pub fn try_hurt_by_entity(
     } else {
         (packet, died)
     };
+    // A hurt sleeper wakes.
+    crate::useblocks::wake(ctx, uuid);
     for (stat, n) in ["damage_taken", "damage_absorbed", "damage_resisted"]
         .into_iter()
         .zip(tally)
@@ -703,7 +705,9 @@ pub fn moved(ctx: &ServerContext, uuid: u128, before: Pose, after: Pose, in_wate
                 let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
             }
         }
-        let damage = (fell - safe).ceil();
+        // Whole blocks past the safe distance (minecraft.wiki, "Damage" →
+        // "Fall damage"): a jump off two blocks, 3.25 from its top, is safe.
+        let damage = (fell - safe).floor();
         if damage > 0.0 && !floating {
             let below = mc_protocol::Position::new(
                 after.x.floor() as i32,
@@ -921,8 +925,12 @@ fn may_harm(ctx: &ServerContext, by: &str, victim: &str) -> bool {
 }
 
 /// A dead player respawns with full health; with `keep_inventory` they
-/// keep their experience.
+/// keep their experience. Until they are at the respawn point they are
+/// nowhere, so the lava they died in does not set them alight again.
 pub fn respawn(ctx: &ServerContext, uuid: u128) -> SetHealth {
+    if let Some(p) = lock(&ctx.players).get_mut(&uuid) {
+        p.pose = None;
+    }
     let keep = ctx.game_rule_bool("keep_inventory");
     let mut all = lock(&ctx.vitals);
     let v = all.entry(uuid).or_default();
@@ -1061,5 +1069,58 @@ mod totem_tests {
             Some(true)
         );
         assert!(lock(&ctx.inventories)[&U].slots[45].is_some());
+    }
+
+    #[test]
+    fn a_jump_off_two_blocks_is_safe_and_five_blocks_hurt() {
+        let Some(ctx) = crate::testkit::flat() else {
+            return;
+        };
+        crate::testkit::join(&ctx, 5, 5, [0.5, -50.0, 0.5], 0);
+        let at = |y: f64, on_ground: bool| crate::context::Pose {
+            x: 0.5,
+            y,
+            z: 0.5,
+            yaw: 0.0,
+            pitch: 0.0,
+            on_ground,
+        };
+        // Down from a jump's top 3.25 blocks, in steps, then landing.
+        let fall = |from: f64, to: f64| {
+            let mut y = from;
+            while y - 0.5 > to {
+                moved(&ctx, 5, at(y, false), at(y - 0.5, false), false);
+                y -= 0.5;
+            }
+            moved(&ctx, 5, at(y, false), at(to, true), false);
+        };
+        let health = || lock(&ctx.vitals)[&5].health;
+        fall(-50.0, -53.25);
+        assert_eq!(health(), 20.0);
+        fall(-53.25, -58.25);
+        assert_eq!(health(), 18.0);
+    }
+
+    #[test]
+    fn a_player_who_died_in_lava_respawns_without_burning() {
+        let Some(ctx) = flat() else {
+            return;
+        };
+        join(&ctx, U, 3, [0.5, -60.0, 0.5], 0);
+        crate::testkit::set(&ctx, [0, -60, 0], "minecraft:lava");
+        while !lock(&ctx.vitals)[&U].dead {
+            tick(&ctx);
+        }
+        respawn(&ctx, U);
+        for _ in 0..40 {
+            tick(&ctx);
+        }
+        let v = &lock(&ctx.vitals)[&U];
+        assert!(
+            v.fire <= 0 && v.health == 20.0,
+            "fire {} health {}",
+            v.fire,
+            v.health
+        );
     }
 }

@@ -414,6 +414,32 @@ fn bed(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, p: Position, st
         lock(&ctx.pending_blasts).push(crate::explosion::Blast::respawn_point(p, false));
         return true;
     }
+    // The head is where a sleeper lies; vanilla measures from both halves.
+    let blocks = &ctx.data.blocks;
+    let facing = blocks
+        .property(state, "facing")
+        .and_then(mc_tick::Dir::from_name);
+    let to_head = |p: Position, sign: i32| match facing {
+        Some(f) => {
+            let (dx, _, dz) = f.offset();
+            Position::new(p.x + sign * dx, p.y, p.z + sign * dz)
+        }
+        None => p,
+    };
+    let (head, foot) = if blocks.property(state, "part") == Some("head") {
+        (p, to_head(p, -1))
+    } else {
+        (to_head(p, 1), p)
+    };
+    let near = |b: Position| {
+        (actor.pose.x - (f64::from(b.x) + 0.5)).abs() <= 3.0
+            && (actor.pose.y - f64::from(b.y)).abs() <= 2.0
+            && (actor.pose.z - (f64::from(b.z) + 0.5)).abs() <= 3.0
+    };
+    if !near(head) && !near(foot) {
+        message(outcome, actor, "block.minecraft.bed.too_far_away");
+        return true;
+    }
     let respawn = crate::players::Respawn {
         dimension: ctx.world.dimension.clone(),
         pos: (p.x, p.y, p.z),
@@ -431,36 +457,105 @@ fn bed(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, p: Position, st
     {
         pl.extra.respawn = Some(respawn);
     }
-    let night = {
-        let time = ctx.time.lock().expect("time lock");
-        let t = time
+    // Sleep comes when the sky is dark enough (minecraft.wiki, "Bed"):
+    // at night, a little longer in the rain, at any time in a thunderstorm.
+    let dark = {
+        let t = ctx
+            .time
+            .lock()
+            .expect("time lock")
             .clocks
             .iter()
             .find(|c| c.name == "minecraft:overworld")
             .map_or(0, |c| c.ticks)
             .rem_euclid(24000);
-        (12542..=23459).contains(&t)
+        let weather = lock(&ctx.weather);
+        (weather.raining && weather.thundering)
+            || (12542..=23459).contains(&t)
+            || (weather.raining && (12010..=23991).contains(&t))
     };
     let can_sleep = match rule.can_sleep.as_str() {
         "always" => true,
         "never" => false,
-        _ => night,
+        _ => dark,
     };
-    if can_sleep {
-        if set_spawn {
-            message(outcome, actor, "block.minecraft.set_spawn");
-        }
-        ctx.sleepers
-            .lock()
-            .expect("sleepers lock")
-            .insert(actor.uuid, ctx.time.lock().expect("time lock").age);
-    } else {
-        message(outcome, actor, "block.minecraft.bed.no_sleep");
-        if set_spawn {
-            message(outcome, actor, "block.minecraft.set_spawn");
-        }
+    if set_spawn {
+        message(outcome, actor, "block.minecraft.set_spawn");
     }
+    if !can_sleep {
+        message(outcome, actor, "block.minecraft.bed.no_sleep");
+        return true;
+    }
+    if actor.game_mode != 1 && monsters_near(ctx, head, actor.entity_id) {
+        message(outcome, actor, "block.minecraft.bed.not_safe");
+        return true;
+    }
+    let age = ctx.time.lock().expect("time lock").age;
+    {
+        let mut sleepers = lock(&ctx.sleepers);
+        if sleepers
+            .iter()
+            .any(|(u, s)| *u != actor.uuid && s.bed == head)
+        {
+            drop(sleepers);
+            message(outcome, actor, "block.minecraft.bed.occupied");
+            return true;
+        }
+        sleepers.insert(
+            actor.uuid,
+            Sleeper {
+                since: age,
+                bed: head,
+                entity_id: actor.entity_id,
+            },
+        );
+    }
+    // Lying down: the pose and the bed tell every client (the sleeper's
+    // own too) to lay the player in it.
+    let _ = ctx.events.send(Event::EntityData {
+        uuid: actor.uuid,
+        packet: crate::mobs::blocks::sleep_data(actor.entity_id, Some([head.x, head.y, head.z])),
+    });
     true
+}
+
+/// Monsters that keep a player awake: within 8 blocks of the bed's head
+/// across and 5 up or down (minecraft.wiki, "Bed"), most hostile mobs; a
+/// zombified piglin only when after this player.
+fn monsters_near(ctx: &ServerContext, head: Position, player: i32) -> bool {
+    use mc_entity::mob::Species::*;
+    let (x, y, z) = (
+        f64::from(head.x) + 0.5,
+        f64::from(head.y),
+        f64::from(head.z) + 0.5,
+    );
+    lock(&ctx.entities).iter().any(|e| {
+        let mc_entity::Kind::Mob(m) = &e.kind else {
+            return false;
+        };
+        let keeps_awake = match m.species {
+            ZombifiedPiglin => m.target == Some(player),
+            Slime | MagmaCube | Ghast | Hoglin | EnderDragon | CamelHusk | ZombieNautilus => false,
+            s => s.category() == mc_entity::mob::Category::Monster,
+        };
+        keeps_awake
+            && !m.is_dead()
+            && (e.pos[0] - x).abs() <= 8.0
+            && (e.pos[1] - y).abs() <= 5.0
+            && (e.pos[2] - z).abs() <= 8.0
+    })
+}
+
+/// A sleeping player gets up (the leave bed button, a hit, the morning):
+/// the clients stand them up again.
+pub fn wake(ctx: &ServerContext, uuid: u128) {
+    let Some(sleeper) = lock(&ctx.sleepers).remove(&uuid) else {
+        return;
+    };
+    let _ = ctx.events.send(Event::EntityData {
+        uuid,
+        packet: crate::mobs::blocks::sleep_data(sleeper.entity_id, None),
+    });
 }
 
 fn anchor(
@@ -547,19 +642,27 @@ fn anchor(
     true
 }
 
-/// Players who lay down in a bed at night, and when (world age): when all
-/// of the players have, the night passes.
-pub type Sleepers = std::collections::HashMap<u128, i64>;
+/// A player asleep in a bed.
+#[derive(Clone, Copy, Debug)]
+pub struct Sleeper {
+    /// World age when they lay down.
+    pub since: i64,
+    /// The bed's head.
+    pub bed: Position,
+    pub entity_id: i32,
+}
 
-/// One game tick: once enough players have been in bed 100 ticks, morning
-/// comes.
+/// Players asleep in beds: when enough of them have slept long enough, the
+/// night passes.
+pub type Sleepers = std::collections::HashMap<u128, Sleeper>;
+
+/// How long a player must have slept before the night may pass.
+const SLEEP_TICKS: i64 = 100;
+
+/// One game tick: once enough players have slept 100 ticks, morning comes
+/// and they all wake (with `advance_time` off they only wake).
 pub fn tick(ctx: &ServerContext) {
     let age = ctx.time.lock().expect("time lock").age;
-    let mut sleepers = ctx.sleepers.lock().expect("sleepers lock");
-    sleepers.retain(|_, since| age - *since < 101);
-    if sleepers.is_empty() {
-        return;
-    }
     let online: Vec<u128> = ctx
         .players
         .lock()
@@ -568,23 +671,36 @@ pub fn tick(ctx: &ServerContext) {
         .filter(|p| p.game_mode != 3)
         .map(|p| p.profile.uuid)
         .collect();
+    let slept = {
+        let mut sleepers = lock(&ctx.sleepers);
+        // Those who left the game are no longer in bed.
+        sleepers.retain(|u, _| online.contains(u));
+        if sleepers.is_empty() {
+            return;
+        }
+        sleepers
+            .values()
+            .filter(|s| age - s.since >= SLEEP_TICKS)
+            .count()
+    };
     // `players_sleeping_percentage` of the players (at least one) must
-    // have slept 100 ticks.
+    // have slept.
     let percentage = ctx
         .game_rules
         .lock()
         .expect("rules lock")
         .int("players_sleeping_percentage");
     let required = ((online.len() as f64 * f64::from(percentage) / 100.0).ceil() as usize).max(1);
-    let slept = online
-        .iter()
-        .filter(|u| sleepers.get(u).is_some_and(|&since| age - since >= 100))
-        .count();
-    if online.is_empty() || slept < required {
+    if slept < required {
         return;
     }
-    sleepers.clear();
-    drop(sleepers);
+    let asleep: Vec<u128> = lock(&ctx.sleepers).keys().copied().collect();
+    for uuid in asleep {
+        wake(ctx, uuid);
+    }
+    if !ctx.game_rule_bool("advance_time") {
+        return;
+    }
     let packet = {
         let mut time = ctx.time.lock().expect("time lock");
         if let Some(clock) = time
@@ -655,5 +771,123 @@ mod tests {
         WorldLevel::new(&ctx).set_block(p, empty);
         assert!(!anchor(&ctx, &mut outcome, actor, 0, p, empty, None));
         assert_eq!(lock(&ctx.pending_blasts).len(), 1);
+    }
+
+    fn sleeper(ctx: &ServerContext) -> (Actor, Position, u32) {
+        crate::testkit::join(ctx, 9, 9, [0.5, -60.0, 0.5], 0);
+        let actor = Actor {
+            uuid: 9,
+            entity_id: 9,
+            game_mode: 0,
+            pose: Pose {
+                x: 0.5,
+                y: -60.0,
+                z: 0.5,
+                yaw: 0.0,
+                pitch: 0.0,
+                on_ground: true,
+            },
+            sneaking: false,
+        };
+        // Head at z=2, foot at z=1.
+        let blocks = &ctx.data.blocks;
+        let mut level = WorldLevel::new(ctx);
+        for (part, z) in [("foot", 1), ("head", 2)] {
+            let state = blocks
+                .state_id("minecraft:red_bed", &[("part", part), ("facing", "south")])
+                .unwrap();
+            level.set_block(Position::new(0, -60, z), state);
+        }
+        let foot = Position::new(0, -60, 1);
+        (actor, foot, ctx.world.block(foot, blocks).unwrap())
+    }
+
+    fn set_clock(ctx: &ServerContext, ticks: i64) {
+        let mut time = lock(&ctx.time);
+        let clock = time
+            .clocks
+            .iter_mut()
+            .find(|c| c.name == "minecraft:overworld")
+            .unwrap();
+        clock.ticks = ticks;
+    }
+
+    fn clock(ctx: &ServerContext) -> i64 {
+        lock(&ctx.time)
+            .clocks
+            .iter()
+            .find(|c| c.name == "minecraft:overworld")
+            .unwrap()
+            .ticks
+    }
+
+    #[test]
+    fn a_player_lies_down_at_night_and_morning_comes() {
+        let Some(ctx) = crate::testkit::flat() else {
+            return;
+        };
+        let (actor, foot, state) = sleeper(&ctx);
+        let mut events = ctx.events.subscribe();
+        // By day they only get their spawn set.
+        set_clock(&ctx, 1000);
+        let mut outcome = Outcome::default();
+        assert!(bed(&ctx, &mut outcome, actor, foot, state));
+        assert!(lock(&ctx.sleepers).is_empty());
+        set_clock(&ctx, 18000);
+        assert!(bed(&ctx, &mut outcome, actor, foot, state));
+        // Laid in the bed's head, for everyone to see.
+        let laid = std::iter::from_fn(|| events.try_changed()).any(|e| {
+            matches!(e, Event::EntityData { uuid: 9, packet }
+                if packet.entries.iter().any(|(k, v)| *k == mc_protocol::packets::play::metadata::POSE
+                    && matches!(v, mc_protocol::packets::play::MetadataValue::Pose(2))))
+        });
+        assert!(laid);
+        assert_eq!(lock(&ctx.sleepers)[&9].bed, Position::new(0, -60, 2));
+        for _ in 0..SLEEP_TICKS {
+            lock(&ctx.time).age += 1;
+            tick(&ctx);
+        }
+        assert_eq!(clock(&ctx), 24000);
+        assert!(lock(&ctx.sleepers).is_empty());
+    }
+
+    #[test]
+    fn leaving_the_bed_keeps_the_night() {
+        let Some(ctx) = crate::testkit::flat() else {
+            return;
+        };
+        let (actor, foot, state) = sleeper(&ctx);
+        set_clock(&ctx, 18000);
+        assert!(bed(&ctx, &mut Outcome::default(), actor, foot, state));
+        lock(&ctx.time).age += 50;
+        wake(&ctx, 9);
+        for _ in 0..SLEEP_TICKS {
+            lock(&ctx.time).age += 1;
+            tick(&ctx);
+        }
+        assert_eq!(clock(&ctx), 18000);
+    }
+
+    #[test]
+    fn a_zombie_by_the_bed_keeps_the_player_up() {
+        let Some(ctx) = crate::testkit::flat() else {
+            return;
+        };
+        let (actor, foot, state) = sleeper(&ctx);
+        set_clock(&ctx, 18000);
+        crate::commands::execute(
+            &ctx,
+            &mut crate::tick::TickControl::default(),
+            &crate::commands::Source::Console,
+            "summon minecraft:zombie 4 -60 4",
+        );
+        assert!(!lock(&ctx.entities).is_empty());
+        let mut outcome = Outcome::default();
+        assert!(bed(&ctx, &mut outcome, actor, foot, state));
+        assert!(lock(&ctx.sleepers).is_empty());
+        let told = outcome.events.iter().any(|e| {
+            matches!(e, Event::Message { line, .. } if format!("{line:?}").contains("not_safe"))
+        });
+        assert!(told);
     }
 }

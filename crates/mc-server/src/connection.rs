@@ -945,6 +945,10 @@ async fn play(
                             crate::combat::set_sprinting(&ctx, uuid, action == 1);
                             crate::stats::set_sprinting(&ctx, uuid, action == 1);
                         }
+                        play::Serverbound::PlayerCommand { action: 0, .. } => {
+                            // The leave bed button.
+                            crate::useblocks::wake(&ctx, uuid);
+                        }
                         play::Serverbound::PlayerCommand { action: 6, .. } => {
                             crate::worn::start_gliding(&ctx, uuid);
                         }

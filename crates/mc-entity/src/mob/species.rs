@@ -680,7 +680,7 @@ impl Species {
         ) {
             (over * 0.5).floor()
         } else {
-            over.ceil()
+            over.floor()
         };
         damage.max(0.0) as f32
     }

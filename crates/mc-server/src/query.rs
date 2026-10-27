@@ -135,7 +135,8 @@ struct Tokens(HashMap<SocketAddr, (i32, Instant)>);
 
 impl Tokens {
     fn give(&mut self, to: SocketAddr, now: Instant) -> i32 {
-        self.0.retain(|_, (_, at)| now.duration_since(*at) < TOKEN_LIFE);
+        self.0
+            .retain(|_, (_, at)| now.duration_since(*at) < TOKEN_LIFE);
         let token = (crate::util::random_u64() & 0x7FFF_FFFF) as i32;
         self.0.insert(to, (token, now));
         token
@@ -224,10 +225,35 @@ mod tests {
             .parse()
             .unwrap();
         // A wrong token gets nothing; an old one neither.
-        assert!(answer(&mut tokens, from, &request(STAT, 1, &(token ^ 1).to_be_bytes()), t0, facts).is_none());
+        assert!(
+            answer(
+                &mut tokens,
+                from,
+                &request(STAT, 1, &(token ^ 1).to_be_bytes()),
+                t0,
+                facts
+            )
+            .is_none()
+        );
         let late = t0 + TOKEN_LIFE + Duration::from_secs(1);
-        assert!(answer(&mut tokens, from, &request(STAT, 1, &token.to_be_bytes()), late, facts).is_none());
-        let basic_stat = answer(&mut tokens, from, &request(STAT, 1, &token.to_be_bytes()), t0, facts).unwrap();
+        assert!(
+            answer(
+                &mut tokens,
+                from,
+                &request(STAT, 1, &token.to_be_bytes()),
+                late,
+                facts
+            )
+            .is_none()
+        );
+        let basic_stat = answer(
+            &mut tokens,
+            from,
+            &request(STAT, 1, &token.to_be_bytes()),
+            t0,
+            facts,
+        )
+        .unwrap();
         assert_eq!(basic_stat, basic(1, &facts()));
         let mut padded = token.to_be_bytes().to_vec();
         padded.extend_from_slice(&[0; 4]);
@@ -249,7 +275,9 @@ mod tests {
     fn the_full_stat_lists_keys_then_players() {
         let f = full(0, &facts());
         let s = String::from_utf8_lossy(&f);
-        assert!(s.contains("splitnum\0\u{FFFD}\0hostname\0A Minecraft Server\0gametype\0SMP\0game_id\0MINECRAFT\0"));
+        assert!(s.contains(
+            "splitnum\0\u{FFFD}\0hostname\0A Minecraft Server\0gametype\0SMP\0game_id\0MINECRAFT\0"
+        ));
         assert!(s.ends_with("\0\u{1}player_\0\0alex\0steve\0\0"));
     }
 
