@@ -1907,3 +1907,43 @@ fn a_brute_spawns_with_a_golden_axe() {
         .map(|g| g.item);
     assert_eq!(axe, ctx.items.id("minecraft:golden_axe"));
 }
+
+#[test]
+fn a_piglin_walks_to_gold_thrown_near_it_and_barters() {
+    let Some(ctx) = flat() else {
+        return;
+    };
+    // Someone about (mobs rest without players), out of the piglin's sight.
+    join(&ctx, [40.5, -60.0, 0.5]);
+    let piglin = put(&ctx, Species::Piglin, [0.5, -60.0, 0.5]);
+    let gold = ctx.items.id("minecraft:gold_ingot").unwrap();
+    lock(&ctx.entities).push(Entity {
+        id: ctx.next_entity_id(),
+        uuid: crate::util::random_uuid(),
+        kind: Kind::item(gold, 1, 0, 0),
+        pos: [6.5, -60.0, 0.5],
+        vel: [0.0; 3],
+        on_ground: true,
+        age: 0,
+        removed: false,
+        tags: Vec::new(),
+    });
+    let mut taken = false;
+    for _ in 0..200 {
+        run(&ctx, 1);
+        if with_mob(&ctx, piglin, |m| {
+            m.gear[mc_entity::mob::slot::OFFHAND].is_some()
+        }) {
+            taken = true;
+            break;
+        }
+    }
+    assert!(taken, "the piglin went for the gold and took it");
+    assert_eq!(items_of(&ctx, "minecraft:gold_ingot"), 0);
+    // Six seconds of looking at it, then something in return.
+    run(&ctx, 121);
+    let traded = lock(&ctx.entities)
+        .iter()
+        .any(|e| matches!(e.kind, Kind::Item { .. }));
+    assert!(traded, "the piglin bartered");
+}

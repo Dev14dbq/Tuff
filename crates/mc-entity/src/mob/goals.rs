@@ -162,6 +162,9 @@ pub enum Goal {
     Sleep,
     /// A piglin looks at the gold it was given.
     Admire,
+    /// A piglin goes for the gold it saw lying about
+    /// ([`super::Quirks::wanted`]).
+    Fetch,
     // Target goals.
     /// Go after whoever hurt the mob; `alert` calls the others of its kind.
     HurtBy {
@@ -614,6 +617,7 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                 && !chores::fox_alerted(b, s)
         }
         Goal::Admire => m.charge > 0,
+        Goal::Fetch => m.quirks.wanted.is_some() && m.charge <= 0 && m.target.is_none(),
         Goal::HurtBy { .. } => {
             let Some((id, _)) = m.revenge else {
                 return false;
@@ -1034,6 +1038,7 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
                 && !chores::fox_alerted(b, s)
         }
         Goal::Admire => m.charge > 0,
+        Goal::Fetch => m.quirks.wanted.is_some() && m.charge <= 0 && m.target.is_none(),
         Goal::HurtBy { .. } | Goal::OwnerHurtBy | Goal::OwnerHurt => {
             target(m, s).is_some_and(|t| dist_sq(b.pos, t.pos) <= m.species.follow_range().powi(2))
         }
@@ -1327,6 +1332,7 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
         Goal::Air(act) => super::air::stop(act, m),
         Goal::Illager(act) => super::illager::stop(act, m),
         Goal::Warden(act) => super::warden::stop(act, m),
+        Goal::Fetch => m.nav.stop(),
         _ => {}
     }
 }
@@ -1561,6 +1567,12 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
         }
         Goal::Swoop { timer, angle } => swoop(m, b, s, timer, angle, out),
         Goal::Sleep | Goal::Admire => m.nav.stop(),
+        Goal::Fetch => {
+            if let Some(at) = m.quirks.wanted {
+                m.goto = Some((at, 1.0));
+                m.look = Some(at);
+            }
+        }
         Goal::HurtBy { .. } | Goal::Nearest { .. } | Goal::Prey { .. } => {}
         Goal::OwnerHurtBy | Goal::OwnerHurt => {}
         Goal::Stare {

@@ -495,6 +495,9 @@ pub struct Quirks {
     pub scorned: Vec<u128>,
     /// Snow golem: still wears its pumpkin.
     pub pumpkin: bool,
+    /// Piglin: where the gold it goes for lies. Set by the server, not
+    /// saved.
+    pub wanted: Option<[f64; 3]>,
     // Land animals (Cursor)
     pub land: land::Land,
     // Aquatic (Claude)

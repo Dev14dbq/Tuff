@@ -615,6 +615,7 @@ pub(super) fn brain(species: Species) -> Brain {
             vec![
                 float(),
                 slot(1, MOVE | LOOK, Goal::Admire),
+                slot(1, MOVE | LOOK, Goal::Fetch),
                 melee(2, 1.0, false),
                 stroll(7, 0.6),
                 look(8, 8.0),

@@ -1139,4 +1139,37 @@ mod tests {
             assert_eq!(crate::mob_effects::attribute(&ctx, m, "armor", 2.0), 8.0);
         }
     }
+
+    #[test]
+    fn a_player_set_alight_is_shown_burning_and_put_out_shown_so() {
+        let Some(ctx) = flat() else {
+            return;
+        };
+        join(&ctx, U, 4, [0.5, -60.0, 0.5], 0);
+        let mut events = ctx.events.subscribe();
+        let mut fire_flag = || {
+            std::iter::from_fn(|| events.try_changed())
+                .filter_map(|e| match e {
+                    Event::EntityData { uuid: U, packet } => packet
+                        .entries
+                        .iter()
+                        .find(|(k, _)| *k == mc_protocol::packets::play::metadata::FLAGS)
+                        .map(|(_, v)| v.clone()),
+                    _ => None,
+                })
+                .last()
+        };
+        ignite(&ctx, U, 100);
+        let lit = fire_flag();
+        assert!(
+            matches!(lit, Some(mc_protocol::packets::play::MetadataValue::Byte(b)) if b & 1 == 1),
+            "{lit:?}"
+        );
+        extinguish(&ctx, U);
+        let out = fire_flag();
+        assert!(
+            matches!(out, Some(mc_protocol::packets::play::MetadataValue::Byte(b)) if b & 1 == 0),
+            "{out:?}"
+        );
+    }
 }

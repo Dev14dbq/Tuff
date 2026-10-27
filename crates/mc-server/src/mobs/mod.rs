@@ -790,6 +790,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         }
     }
     interact::pick_up(ctx, &mut entities, &mut out.data, now);
+    interact::want_gold(ctx, &mut entities);
     aqua::play(ctx, &mut entities, now);
     interact::admire(ctx, &mut entities);
 

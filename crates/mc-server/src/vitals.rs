@@ -652,12 +652,17 @@ pub fn moved(ctx: &ServerContext, uuid: u128, before: Pose, after: Pose, in_wate
         after.on_ground,
         in_water,
     );
+    // Flying, in creative or as a spectator nothing is a fall: a player
+    // who stops flying or turns to survival in the air falls from there.
+    let flies = lock(&ctx.players)
+        .get(&uuid)
+        .is_some_and(|p| p.flying || matches!(p.game_mode, 1 | 3));
     let landed_from = {
         let mut all = lock(&ctx.vitals);
         let Some(v) = all.get_mut(&uuid) else {
             return;
         };
-        if in_water {
+        if in_water || flies {
             v.fall_distance = 0.0;
             None
         } else if after.on_ground {
@@ -1098,6 +1103,17 @@ mod totem_tests {
         fall(-50.0, -53.25);
         assert_eq!(health(), 20.0);
         fall(-53.25, -58.25);
+        assert_eq!(health(), 18.0);
+        // Flown high in creative, then a step down in survival: no harm.
+        lock(&ctx.players).get_mut(&5).unwrap().game_mode = 1;
+        let mut y = -58.25;
+        while y < -30.0 {
+            moved(&ctx, 5, at(y, false), at(y + 1.0, false), false);
+            y += 1.0;
+        }
+        moved(&ctx, 5, at(y, false), at(y - 20.0, false), false);
+        lock(&ctx.players).get_mut(&5).unwrap().game_mode = 0;
+        fall(y - 20.0, y - 21.0);
         assert_eq!(health(), 18.0);
     }
 

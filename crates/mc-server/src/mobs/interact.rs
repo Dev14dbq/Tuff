@@ -870,6 +870,55 @@ fn worth(ctx: &ServerContext, item: i32) -> f32 {
         .map_or(0.0, |i| i.armor * 10.0 + i.toughness + i.attack_damage)
 }
 
+/// How far a piglin walks for gold it sees (minecraft.wiki, "Piglin" →
+/// "Bartering").
+const GOLD_SEEN: f64 = 9.0;
+
+/// Piglins that are free to (not admiring, not after anyone, grown up)
+/// make for the nearest gold item lying within 9 blocks.
+pub fn want_gold(ctx: &ServerContext, entities: &mut [Entity]) {
+    let griefing = ctx.game_rule_bool("minecraft:mob_griefing");
+    let loved = ctx
+        .commands
+        .env
+        .tag("minecraft:item", "minecraft:piglin_loved");
+    let gold: Vec<[f64; 3]> = entities
+        .iter()
+        .filter(|e| !e.removed)
+        .filter_map(|e| match &e.kind {
+            Kind::Item { item, .. } => ctx
+                .items
+                .name(*item)
+                .is_some_and(|n| loved.iter().any(|l| l == n))
+                .then_some(e.pos),
+            _ => None,
+        })
+        .collect();
+    for e in entities.iter_mut() {
+        let Kind::Mob(m) = &mut e.kind else {
+            continue;
+        };
+        if m.species != Species::Piglin {
+            continue;
+        }
+        let free = griefing
+            && !m.is_baby()
+            && m.dying.is_none()
+            && m.charge <= 0
+            && m.target.is_none()
+            && m.gear[slot::OFFHAND].is_none();
+        let dist = |p: &[f64; 3]| {
+            (p[0] - e.pos[0]).powi(2) + (p[1] - e.pos[1]).powi(2) + (p[2] - e.pos[2]).powi(2)
+        };
+        m.quirks.wanted = gold
+            .iter()
+            .filter(|_| free)
+            .filter(|p| dist(p) <= GOLD_SEEN * GOLD_SEEN)
+            .min_by(|a, b| dist(a).total_cmp(&dist(b)))
+            .copied();
+    }
+}
+
 /// Mobs that may pick things up take items they stand on: better armor or
 /// weapons (dropping what they had), and piglins gold.
 pub fn pick_up(
