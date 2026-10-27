@@ -456,4 +456,58 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(folder);
     }
+
+    #[test]
+    fn bastions_come_with_persistent_piglins_and_brutes() {
+        let Ok(data) = mc_data::McData::load(&game_dir()) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let folder = std::env::temp_dir().join(format!("mc-bastion-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let mut config = crate::Config::new(game_dir());
+        config.world = Some(folder.clone());
+        config.seed = Some(1);
+        let ctx = ServerContext::new(config, data).unwrap();
+        let nether = ctx.dimension(1).expect("the nether");
+        let blocks = &nether.data.blocks;
+        let pipeline = nether.world.pipeline().expect("a generating world");
+        pipeline.prepare();
+        let starts = pipeline.starts_within(0, 0, 60, Some("minecraft:bastion_remnant"));
+        let (_, _, centre) = starts.first().expect("a bastion near the origin");
+        let mut made = Vec::new();
+        for cx in (centre.x >> 4) - 5..=(centre.x >> 4) + 5 {
+            for cz in (centre.z >> 4) - 5..=(centre.z >> 4) + 5 {
+                let _ = nether
+                    .world
+                    .block(Position::new(cx * 16, 0, cz * 16), blocks);
+                made.extend(nether.world.take_generated_entities());
+            }
+        }
+        let of = |id: &str| -> Vec<&Compound> {
+            made.iter()
+                .filter(|n| n.get("id") == Some(&Tag::String(id.into())))
+                .collect()
+        };
+        let (piglins, brutes) = (of("minecraft:piglin"), of("minecraft:piglin_brute"));
+        assert!(!piglins.is_empty(), "piglins in the bastion");
+        assert!(!brutes.is_empty(), "brutes in the bastion");
+        let axe = nether.items.id("minecraft:golden_axe");
+        let mut uuids = std::collections::HashSet::new();
+        for nbt in piglins.iter().chain(&brutes).chain(&of("minecraft:hoglin")) {
+            let e = from_saved(&nether, nbt).expect("a mob");
+            assert!(uuids.insert(e.uuid), "each placed copy has its own UUID");
+            let d = (e.pos[0] - f64::from(centre.x)).hypot(e.pos[2] - f64::from(centre.z));
+            assert!(d < 100.0, "placed in the bastion, {d} away");
+            let Kind::Mob(m) = &e.kind else { panic!() };
+            assert!(m.persistent, "{:?} does not despawn", m.species);
+            if m.species == mc_entity::Species::PiglinBrute {
+                let held = m.gear[mc_entity::mob::slot::MAINHAND]
+                    .as_ref()
+                    .map(|g| g.item);
+                assert_eq!(held, axe, "a brute holds a golden axe");
+            }
+        }
+        let _ = std::fs::remove_dir_all(folder);
+    }
 }

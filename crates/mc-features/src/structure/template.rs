@@ -146,6 +146,35 @@ pub fn transform(p: P, mirror: Mirror, rot: Rotation, pivot: P) -> P {
     }
 }
 
+/// Where a template's relative point (an entity's position) ends up: as
+/// [`transform`], with a flipped axis measured from the block's far side.
+pub fn transform_vec(v: [f64; 3], mirror: Mirror, rot: Rotation, pivot: P) -> [f64; 3] {
+    let [mut i, j, mut k] = v;
+    match mirror {
+        Mirror::LeftRight => k = 1.0 - k,
+        Mirror::FrontBack => i = 1.0 - i,
+        Mirror::None => {}
+    }
+    let (l, m) = (f64::from(pivot.x), f64::from(pivot.z));
+    match rot.0 {
+        3 => [l - m + k, j, l + m + 1.0 - i],
+        1 => [l + m + 1.0 - k, j, m - l + i],
+        2 => [l + l + 1.0 - i, j, m + m + 1.0 - k],
+        _ => [i, j, k],
+    }
+}
+
+/// Where an entity facing `yaw` (0 south, 90 west) looks once mirrored and
+/// turned with its template.
+pub fn transform_yaw(yaw: f32, mirror: Mirror, rot: Rotation) -> f32 {
+    let mirrored = match mirror {
+        Mirror::LeftRight => 180.0 - yaw,
+        Mirror::FrontBack => -yaw,
+        Mirror::None => yaw,
+    };
+    (mirrored + 90.0 * f32::from(rot.0)).rem_euclid(360.0)
+}
+
 const HORIZONTAL: [&str; 4] = ["north", "east", "south", "west"];
 
 fn turn(d: &str, rot: Rotation) -> &'static str {
@@ -350,8 +379,16 @@ pub struct TBlock {
 pub struct Template {
     pub size: P,
     pub palettes: Vec<Vec<TBlock>>,
-    /// Entities (relative position and data).
-    pub entities: Vec<(P, Compound)>,
+    pub entities: Vec<TEntity>,
+}
+
+/// One entity of a template: the block it stands in, its exact position
+/// (both relative) and its saved data.
+#[derive(Clone, Debug)]
+pub struct TEntity {
+    pub block: P,
+    pub pos: [f64; 3],
+    pub nbt: Compound,
 }
 
 fn ints(t: Option<&Tag>) -> Option<Vec<i32>> {
@@ -475,11 +512,30 @@ impl Template {
                 .iter()
                 .filter_map(|e| {
                     let Tag::Compound(e) = e else { return None };
-                    let pos = ints(e.get("blockPos"))?;
+                    let b = ints(e.get("blockPos"))?;
+                    let block = P::new(b[0], b[1], b[2]);
                     let Some(Tag::Compound(nbt)) = e.get("nbt") else {
                         return None;
                     };
-                    Some((P::new(pos[0], pos[1], pos[2]), nbt.clone()))
+                    let pos = match e.get("pos") {
+                        Some(Tag::List(l)) if l.len() == 3 => {
+                            let d = |i: usize| match l[i] {
+                                Tag::Double(v) => v,
+                                _ => 0.0,
+                            };
+                            [d(0), d(1), d(2)]
+                        }
+                        _ => [
+                            f64::from(block.x) + 0.5,
+                            f64::from(block.y),
+                            f64::from(block.z) + 0.5,
+                        ],
+                    };
+                    Some(TEntity {
+                        block,
+                        pos,
+                        nbt: nbt.clone(),
+                    })
                 })
                 .collect(),
             _ => Vec::new(),
@@ -620,7 +676,43 @@ impl Template {
             }
         }
         settle(facts, region, &settled);
+        self.place_entities(region, offset, settings);
         placed
+    }
+
+    /// Adds the template's entities (a bastion's piglins, a village's
+    /// villagers and animals, a camp's cushions) where they end up, each
+    /// in the chunk its block is in. Copies get fresh UUIDs; a mob keeps
+    /// the template's `PersistenceRequired`.
+    fn place_entities(&self, region: &mut dyn Region, offset: P, settings: &Settings) {
+        let (mirror, rot, pivot) = (settings.mirror, settings.rotation, settings.pivot);
+        for e in &self.entities {
+            let cell = transform(e.block, mirror, rot, pivot).add(offset);
+            if settings.bbox.is_some_and(|b| !b.inside(cell)) {
+                continue;
+            }
+            let [x, y, z] = transform_vec(e.pos, mirror, rot, pivot);
+            let mut nbt = e.nbt.clone();
+            nbt.remove("UUID");
+            nbt.insert(
+                "Pos",
+                Tag::List(vec![
+                    Tag::Double(x + f64::from(offset.x)),
+                    Tag::Double(y + f64::from(offset.y)),
+                    Tag::Double(z + f64::from(offset.z)),
+                ]),
+            );
+            if let Some(Tag::List(r)) = nbt.get_mut("Rotation")
+                && let Some(Tag::Float(yaw)) = r.first_mut()
+            {
+                *yaw = transform_yaw(*yaw, mirror, rot);
+            }
+            // A cushion's block, saved where the template was made.
+            if nbt.get("block_pos").is_some() {
+                nbt.insert("block_pos", Tag::IntArray(vec![cell.x, cell.y, cell.z]));
+            }
+            region.add_entity(nbt);
+        }
     }
 }
 
@@ -1250,5 +1342,39 @@ impl Templates {
         let t = Template::load(&path, facts).map(std::sync::Arc::new);
         cache.insert(id.to_owned(), t.clone());
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entities_turn_with_the_blocks_they_stand_in() {
+        let pivot = P::new(3, 0, 1);
+        for mirror in [Mirror::None, Mirror::LeftRight, Mirror::FrontBack] {
+            for rot in Rotation::ALL {
+                let b = P::new(2, 4, 5);
+                let c = transform(b, mirror, rot, pivot);
+                let v = transform_vec([2.5, 4.0, 5.5], mirror, rot, pivot);
+                assert_eq!(v, [f64::from(c.x) + 0.5, 4.0, f64::from(c.z) + 0.5]);
+                // A step the way the yaw looks lands where the turned yaw looks.
+                for yaw in [0.0f32, 90.0, 180.0, 270.0] {
+                    let r = yaw.to_radians();
+                    let step = P::new(
+                        b.x - r.sin().round() as i32,
+                        b.y,
+                        b.z + r.cos().round() as i32,
+                    );
+                    let s = transform(step, mirror, rot, pivot);
+                    let t = transform_yaw(yaw, mirror, rot).to_radians();
+                    assert_eq!(
+                        (s.x - c.x, s.z - c.z),
+                        (-t.sin().round() as i32, t.cos().round() as i32),
+                        "{mirror:?} {rot:?} {yaw}"
+                    );
+                }
+            }
+        }
     }
 }
