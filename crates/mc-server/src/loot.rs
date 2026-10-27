@@ -232,6 +232,29 @@ impl BlockLoot {
         properties: &dyn Fn(&str) -> Option<String>,
         radius: Option<f32>,
     ) -> Vec<Drop> {
+        self.block_drops(&Plain, block, properties, None, radius)
+    }
+
+    /// [`BlockLoot::drops`] for a block a player breaks with `tool` in the
+    /// main hand: Silk Touch, Fortune and shears count.
+    pub fn drops_mined(
+        &self,
+        env: &dyn LootEnv,
+        block: &str,
+        properties: &dyn Fn(&str) -> Option<String>,
+        tool: Option<Tool>,
+    ) -> Vec<Drop> {
+        self.block_drops(env, block, properties, tool, None)
+    }
+
+    fn block_drops(
+        &self,
+        env: &dyn LootEnv,
+        block: &str,
+        properties: &dyn Fn(&str) -> Option<String>,
+        tool: Option<Tool>,
+        radius: Option<f32>,
+    ) -> Vec<Drop> {
         let Some(table) = self.tables.get(&format!(
             "minecraft:blocks/{}",
             block.trim_start_matches("minecraft:")
@@ -244,10 +267,11 @@ impl BlockLoot {
             .collect();
         let cx = LootCtx {
             block: Some((block.to_owned(), props)),
+            tool,
             radius,
             ..LootCtx::default()
         };
-        self.roll(&Plain, table, &cx)
+        self.roll(env, table, &cx)
     }
 
     /// Runs item functions (an inline `/item modify` modifier) over stacks.

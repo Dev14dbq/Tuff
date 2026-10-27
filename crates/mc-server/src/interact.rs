@@ -670,7 +670,12 @@ pub fn dig(
         && let Some(name) = blocks.block_name(state)
     {
         let props = |k: &str| blocks.property(state, k).map(str::to_owned);
-        for drop in ctx.loot.drops(name, &props) {
+        let tool = crate::held::held(ctx, actor.uuid, 0).map(|h| crate::loot::Tool {
+            item: h.name.clone(),
+            enchants: crate::mobs::hurt::enchant_list(h.comps.as_ref()),
+        });
+        let env = crate::commands::loot::Env(ctx);
+        for drop in ctx.loot.drops_mined(&env, name, &props, tool) {
             outcome.drops.push((position, drop));
         }
         if !silk_touch(ctx, actor.uuid) {
@@ -2006,6 +2011,50 @@ mod tests {
             let got = break_two_halves(&ctx, actor, "minecraft:oak_door", "half", halves, broken);
             assert_eq!(got, [(door, 1)], "breaking half {broken}");
         }
+    }
+
+    #[test]
+    fn the_tool_in_hand_decides_the_drop() {
+        let Some((ctx, actor)) = with_flint(0) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let item = |n: &str| ctx.items.id(&format!("minecraft:{n}")).unwrap();
+        let mut sequence = 0;
+        let mut mine = |block: &str, tool: &str, enchants: &[(&str, i32)]| {
+            crate::testkit::wear(&ctx, 7, 36, crate::testkit::stack(&ctx, tool, enchants));
+            let state = ctx.data.blocks.default_state(block).unwrap();
+            WorldLevel::new(&ctx).set_block(LOWER, state);
+            sequence += 1;
+            // Shears take leaves at once, on the first swing.
+            let first = dig(&ctx, actor, dig::START, LOWER, 1, sequence);
+            ctx.time.lock().unwrap().age += 1000;
+            let last = dig(&ctx, actor, dig::FINISH, LOWER, 1, sequence);
+            first
+                .drops
+                .iter()
+                .chain(&last.drops)
+                .map(|(_, d)| (d.item, d.count))
+                .collect::<Vec<_>>()
+        };
+        let silk = [("silk_touch", 1)];
+        assert_eq!(
+            mine("minecraft:stone", "diamond_pickaxe", &[]),
+            [(item("cobblestone"), 1)]
+        );
+        assert_eq!(
+            mine("minecraft:stone", "diamond_pickaxe", &silk),
+            [(item("stone"), 1)]
+        );
+        assert!(mine("minecraft:glass", "diamond_pickaxe", &[]).is_empty());
+        assert_eq!(
+            mine("minecraft:glass", "diamond_pickaxe", &silk),
+            [(item("glass"), 1)]
+        );
+        assert_eq!(
+            mine("minecraft:oak_leaves", "shears", &[]),
+            [(item("oak_leaves"), 1)]
+        );
     }
 
     #[test]
