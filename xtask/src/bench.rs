@@ -5,6 +5,9 @@
 //!
 //! - `gen10`, `gen32`: a player joins a new world (fixed seed) with view
 //!   distance 10 / 32; chunks per second until the whole view has arrived.
+//! - `load16`: the same, view distance 16, in a world vanilla generated
+//!   beforehand (`cache/bench-world/26.3`, made on first use): reading and
+//!   sending stored chunks, no generation.
 //! - `bots`: N bots (`xtask bots`) walk around a new world, view distance 10.
 //! - `idle`: the superflat world below with its 128×128 field forceloaded and
 //!   nothing built, the floor for the next three.
@@ -50,7 +53,8 @@ const MODDED_PORT: u16 = 25602;
 const VANILLA_DIR: &str = "cache/vanilla-server/26.3-bench";
 const MODDED_DIR: &str = "cache/vanilla-server/26.3-bench-modded";
 const FABRIC: &str = "tools/fabric/26.3";
-const ALL: &str = "gen10,gen32,bots,idle,hoppers,redstone,entities";
+const ALL: &str = "gen10,gen32,load16,bots,idle,hoppers,redstone,entities";
+const BENCH_WORLD: &str = "cache/bench-world/26.3";
 
 /// What a scenario run gives: what was measured and its numbers.
 struct Run {
@@ -118,6 +122,9 @@ pub fn run(args: &[String]) -> Result<()> {
             .current_dir(&root)
             .status()?;
         anyhow::ensure!(status.success(), "building mc-server failed");
+    }
+    if scenarios.contains(&"load16") {
+        bench_world(&root)?;
     }
     let guard = quiet::Guard::new(background, noisy)?;
     eprintln!("bench: {}", guard.conditions(options.cores));
@@ -253,6 +260,7 @@ fn run_scenario(
     match scenario {
         "gen10" => generation(root, side, 10, options, watch),
         "gen32" => generation(root, side, 32, options, watch),
+        "load16" => loading(root, side, options, watch),
         "bots" => with_bots(root, side, options, profile, watch),
         _ => contraption(root, side, scenario, options, profile, watch),
     }
@@ -279,6 +287,7 @@ fn start(
     root: &std::path::Path,
     side: &str,
     properties: &str,
+    world: Option<&std::path::Path>,
     cores: usize,
     watch: &Watch,
 ) -> Result<(Server, String)> {
@@ -289,12 +298,18 @@ fn start(
             let dir = root.join(VANILLA_DIR);
             let _ = std::fs::remove_dir_all(dir.join("world"));
             Server::prepare(root, &dir, properties)?;
+            if let Some(world) = world {
+                crate::mcc::copy_dir(world, &dir.join("world"))?;
+            }
             Server::start_jar(&root.join("reference/26.3/server.jar"), &dir, &jvm)?
         }
         "modded" => {
             let dir = root.join(MODDED_DIR);
             let _ = std::fs::remove_dir_all(dir.join("world"));
             Server::prepare(root, &dir, properties)?;
+            if let Some(world) = world {
+                crate::mcc::copy_dir(world, &dir.join("world"))?;
+            }
             let fabric = root.join(FABRIC);
             let _ = std::fs::remove_dir_all(dir.join("mods"));
             std::fs::create_dir_all(dir.join("mods"))?;
@@ -320,6 +335,10 @@ fn start(
             root,
             &root.join("cache/ours-bench"),
             properties,
+            &|dir| match world {
+                Some(world) => crate::mcc::copy_dir(world, &dir.join("world")),
+                None => Ok(()),
+            },
             &[
                 ("MC_THREADS", cores.to_string()),
                 ("TOKIO_WORKER_THREADS", cores.to_string()),
@@ -349,6 +368,7 @@ fn generation(
         root,
         side,
         &properties(port(side), false, view_distance),
+        None,
         options.cores,
         watch,
     )?;
@@ -377,6 +397,60 @@ fn generation(
     })
 }
 
+fn loading(root: &std::path::Path, side: &str, options: &Options, watch: &Watch) -> Result<Run> {
+    let world = root.join(BENCH_WORLD);
+    let (mut server, addr) = start(
+        root,
+        side,
+        &properties(port(side), false, 16),
+        Some(&world),
+        options.cores,
+        watch,
+    )?;
+    let ids = crate::probe::load_packet_ids(None)?;
+    let result = crate::chunk_speed::measure(&addr, ids, "Bench", 16);
+    let rss = rss_mb(server.pid());
+    server.stop();
+    let result = result?;
+    let number = |s: Option<&str>| s.map_or(f64::NAN, ms);
+    let rate = number(
+        result
+            .rsplit_once('(')
+            .and_then(|(_, r)| r.strip_suffix(" chunks/s)")),
+    );
+    Ok(Run {
+        what: "stored world, view distance 16".into(),
+        metrics: vec![
+            ("chunks/s", rate),
+            ("chunks", number(between(&result, "ms, ", " chunks"))),
+            ("ms", number(between(&result, ", all ", " ms"))),
+            ("RAM MB", rss as f64),
+        ],
+    })
+}
+
+/// The stored world of `load16`: vanilla generates it once (a player with
+/// view distance 18 at spawn, fixed seed) unless it is there.
+fn bench_world(root: &std::path::Path) -> Result<()> {
+    let target = root.join(BENCH_WORLD);
+    if target.join("level.dat").is_file() {
+        return Ok(());
+    }
+    eprintln!("bench: generating the stored world for load16 with vanilla");
+    let dir = root.join("cache/vanilla-server/26.3-bench-world");
+    let _ = std::fs::remove_dir_all(dir.join("world"));
+    Server::prepare(root, &dir, &properties(VANILLA_PORT, false, 18))?;
+    let mut server = Server::start_java(root, &dir)?;
+    let ids = crate::probe::load_packet_ids(None)?;
+    let result = crate::chunk_speed::measure(&format!("127.0.0.1:{VANILLA_PORT}"), ids, "Gen", 18);
+    let saved = server.wait_for("save-all flush", "Saved the game", Duration::from_secs(300));
+    server.stop();
+    eprintln!("bench: stored world: {}", result?);
+    saved?;
+    let _ = std::fs::remove_dir_all(&target);
+    crate::mcc::copy_dir(&dir.join("world"), &target)
+}
+
 fn with_bots(
     root: &std::path::Path,
     side: &str,
@@ -388,6 +462,7 @@ fn with_bots(
         root,
         side,
         &properties(port(side), false, 10),
+        None,
         options.cores,
         watch,
     )?;
@@ -435,6 +510,7 @@ fn contraption(
         root,
         side,
         &properties(port(side), true, 4),
+        None,
         options.cores,
         watch,
     )?;

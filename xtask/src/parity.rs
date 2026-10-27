@@ -255,14 +255,15 @@ impl Server {
         Self::ours_in_with(root, dir, properties, &|_| Ok(()))
     }
 
-    /// `ours_in` with extra environment variables for the server.
+    /// `ours_in_with` with extra environment variables for the server.
     pub(crate) fn ours_in_env(
         root: &Path,
         dir: &Path,
         properties: &str,
+        setup: &dyn Fn(&Path) -> Result<()>,
         env: &[(&str, String)],
     ) -> Result<Self> {
-        Self::ours_start(root, dir, properties, &|_| Ok(()), env)
+        Self::ours_start(root, dir, properties, setup, env)
     }
 
     /// `ours_in`, with `setup` run on the fresh folder before the start.

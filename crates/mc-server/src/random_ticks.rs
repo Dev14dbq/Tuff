@@ -13,14 +13,11 @@ use crate::tick::lock;
 /// Vanilla's level-wide random tick generator state.
 static LCG: AtomicI32 = AtomicI32::new(0x2A5F_1C3B);
 
-/// Simulation distance in chunks (`simulation-distance`, default 10),
-/// never more than what players are sent.
-const SIMULATION_DISTANCE: i32 = 10;
-
-/// The chunks that tick: within simulation distance of a player, and
+/// The chunks that tick: within simulation distance of a player
+/// (`simulation-distance`, never more than what players are sent), and
 /// force-loaded ones.
 pub(crate) fn ticking_chunks(ctx: &ServerContext) -> Vec<(i32, i32)> {
-    let radius = SIMULATION_DISTANCE.min(i32::from(ctx.config.view_distance));
+    let radius = i32::from(ctx.config.simulation_distance.min(ctx.config.view_distance));
     let centres: HashSet<(i32, i32)> = lock(&ctx.players)
         .values()
         .filter(|p| p.dimension == ctx.world.dimension)
@@ -130,6 +127,26 @@ fn portal_piglin(ctx: &ServerContext, at: mc_tick::BlockPos, roll: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The simulation distance the cost tests tick (the default).
+    const SIMULATION_DISTANCE: i32 = 10;
+
+    #[test]
+    fn random_ticks_reach_as_far_as_the_simulation_distance() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        let Ok(data) = mc_data::McData::load(&dir) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut config = crate::Config::new(dir);
+        config.simulation_distance = 4;
+        config.view_distance = 10;
+        let ctx = ServerContext::new(config, data).expect("context");
+        crate::testkit::join(&ctx, 1, 1, [8.0, -60.0, 8.0], 1);
+        let chunks = ticking_chunks(&ctx);
+        assert_eq!(chunks.len(), 9 * 9);
+        assert!(chunks.contains(&(4, -4)) && !chunks.contains(&(5, 0)));
+    }
 
     #[test]
     fn an_overworld_portal_now_and_then_lets_a_zombified_piglin_out() {

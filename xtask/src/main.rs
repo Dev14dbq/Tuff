@@ -9,6 +9,7 @@ mod chunk_speed;
 mod extract_data;
 mod gen_speed;
 mod hash_check;
+mod mcc;
 mod mixins;
 mod observe;
 mod observe_commands;
@@ -46,7 +47,8 @@ Tasks:
         [--background <cores>] [--noisy] [--jfr] [--bots <n>] [--entities <n>] [--seconds <s>]
         | --summarize <file.jfr>
       Baseline table (docs/BENCHMARKS.md): world generation at view distance
-      10 and 32, n bots (50), hoppers, redstone clocks, n cows (2000) — on
+      10 and 32, loading a stored world (16), n bots (50), hoppers, redstone
+      clocks, n cows (2000) — on
       vanilla, vanilla + Lithium/C2ME and ours, each from a new world; MSPT
       from `tick query`. Runs only on a quiet machine (see quiet.rs), the
       sides taking turns over n rounds (3); --jfr adds a profiled round.
@@ -89,6 +91,9 @@ Tasks:
   chunk-diff <dump a> <dump b>
       Compare chunk packets saved by `probe --dump` from two servers, decoded
       to blocks, biomes, heightmaps, light and block entities.
+  mcc
+      Oversized chunks (external .mcc) both ways: vanilla writes one, we
+      read it, change it and save, vanilla reads ours.
   mixins [--top <n>] [--show <n>]
       Rank vanilla classes/methods by how many top open-source Modrinth mods
       (26.x builds, into tools/modrinth/) patch them with Mixin; writes
@@ -114,6 +119,7 @@ fn main() -> ExitCode {
         Some("chunk-diff") => chunk_diff::run(&args[1..]),
         Some("chunk-speed") => chunk_speed::run(&args[1..]),
         Some("gen-speed") => gen_speed::run(&args[1..]),
+        Some("mcc") => mcc::run(&args[1..]),
         Some("mixins") => mixins::run(&args[1..]),
         Some("similarity") => similarity::run(&args[1..]),
         Some("watch") => watch::run(&args[1..]),
