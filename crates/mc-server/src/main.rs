@@ -203,11 +203,10 @@ async fn run() -> Result<()> {
     let level_name = props.get("level-name").to_owned();
     let flat = props.get("level-type").contains("flat");
     config.level_dir = Some(server_dir.join(&level_name));
-    config.world = if flat {
-        None
-    } else {
-        Some(server_dir.join(&level_name))
-    };
+    // `level-type` only decides what a new world is; a folder that is there
+    // keeps the generator its settings name.
+    config.new_world_flat = flat;
+    config.world = Some(server_dir.join(&level_name));
     info!(
         "Default game type: {}",
         ["SURVIVAL", "CREATIVE", "ADVENTURE", "SPECTATOR"][config.new_world_game_mode as usize]

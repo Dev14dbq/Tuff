@@ -186,6 +186,132 @@ pub fn seed_of(dir: &Path) -> Option<i64> {
     }
 }
 
+/// A superflat overworld: its layers from the bottom up (block, height) and
+/// its biome. Features, lakes and structures of flat worlds are not made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FlatSettings {
+    pub layers: Vec<(String, u32)>,
+    pub biome: String,
+}
+
+impl FlatSettings {
+    /// What vanilla makes for `level-type=flat`: bedrock, two dirt, grass,
+    /// in plains.
+    pub fn classic() -> Self {
+        Self {
+            layers: vec![
+                ("minecraft:bedrock".into(), 1),
+                ("minecraft:dirt".into(), 2),
+                ("minecraft:grass_block".into(), 1),
+            ],
+            biome: "minecraft:plains".into(),
+        }
+    }
+
+    /// The `settings` of a `minecraft:flat` generator.
+    fn to_nbt(&self) -> Tag {
+        let layers = self
+            .layers
+            .iter()
+            .map(|(block, height)| {
+                let mut layer = Compound::new();
+                layer.insert("block", Tag::String(block.clone()));
+                layer.insert("height", Tag::Int(*height as i32));
+                Tag::Compound(layer)
+            })
+            .collect();
+        let mut settings = Compound::new();
+        settings.insert("layers", Tag::List(layers));
+        settings.insert("biome", Tag::String(self.biome.clone()));
+        settings.insert("features", Tag::Byte(0));
+        settings.insert("lakes", Tag::Byte(0));
+        Tag::Compound(settings)
+    }
+
+    fn from_nbt(settings: &Compound) -> Option<Self> {
+        let Some(Tag::List(layers)) = settings.get("layers") else {
+            return None;
+        };
+        let layers = layers
+            .iter()
+            .map(|layer| {
+                let Tag::Compound(layer) = layer else {
+                    return None;
+                };
+                match (layer.get("block"), layer.get("height")) {
+                    (Some(Tag::String(block)), Some(Tag::Int(h))) => {
+                        Some((block.clone(), (*h).max(0) as u32))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let biome = match settings.get("biome") {
+            Some(Tag::String(b)) => b.clone(),
+            _ => "minecraft:plains".into(),
+        };
+        Some(Self { layers, biome })
+    }
+}
+
+/// The world generation settings of a world folder: from
+/// `data/minecraft/world_gen_settings.dat`, or (older layout)
+/// `WorldGenSettings` in `level.dat`.
+fn world_gen_settings(dir: &Path) -> Option<Compound> {
+    let settings =
+        super::world::read_nbt_gz(&dir.join("data/minecraft/world_gen_settings.dat")).ok();
+    let from_settings = settings.and_then(|root| match root.get("data") {
+        Some(Tag::Compound(data)) => Some(data.clone()),
+        _ => None,
+    });
+    from_settings.or_else(|| {
+        let level = super::world::read_nbt_gz(&dir.join("level.dat")).ok()?;
+        let Some(Tag::Compound(data)) = level.get("Data") else {
+            return None;
+        };
+        match data.get("WorldGenSettings") {
+            Some(Tag::Compound(wgs)) => Some(wgs.clone()),
+            _ => None,
+        }
+    })
+}
+
+/// The seed of a world folder, whatever its overworld looks like (the
+/// Nether and the End of a superflat world still grow from it).
+pub fn raw_seed(dir: &Path) -> Option<i64> {
+    match world_gen_settings(dir)?.get("seed") {
+        Some(Tag::Long(s)) => Some(*s),
+        _ => None,
+    }
+}
+
+/// The overworld's generator of a world folder.
+fn overworld_generator(dir: &Path) -> Option<Compound> {
+    let wgs = world_gen_settings(dir)?;
+    let Some(Tag::Compound(dims)) = wgs.get("dimensions") else {
+        return None;
+    };
+    let Some(Tag::Compound(ow)) = dims.get("minecraft:overworld") else {
+        return None;
+    };
+    match ow.get("generator") {
+        Some(Tag::Compound(generator)) => Some(generator.clone()),
+        _ => None,
+    }
+}
+
+/// The layers and biome of a world folder whose overworld is superflat.
+pub fn flat_settings(dir: &Path) -> Option<FlatSettings> {
+    let generator = overworld_generator(dir)?;
+    if !matches!(generator.get("type"), Some(Tag::String(t)) if t == "minecraft:flat") {
+        return None;
+    }
+    match generator.get("settings") {
+        Some(Tag::Compound(settings)) => FlatSettings::from_nbt(settings),
+        _ => None,
+    }
+}
+
 fn noise_overworld(settings: &Compound) -> bool {
     let Some(Tag::Compound(dims)) = settings.get("dimensions") else {
         return false;
@@ -230,11 +356,13 @@ pub fn find_spawn(generator: &NoiseGenerator, blocks: &Blocks) -> (i32, i32, i32
 
 /// Writes a new world folder for `seed` with its spawn.
 /// How a new world starts (from `server.properties`).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct NewWorld {
     pub game_mode: i32,
     pub difficulty: i32,
     pub hardcore: bool,
+    /// A superflat overworld (`level-type=flat`) instead of the noise one.
+    pub flat: Option<FlatSettings>,
 }
 
 pub fn create(
@@ -313,14 +441,23 @@ pub fn create(
         Tag::Compound(d)
     };
     let mut dims = Compound::new();
-    dims.insert(
-        "minecraft:overworld",
-        dimension(
+    let overworld = match &new.flat {
+        Some(flat) => {
+            let mut generator = Compound::new();
+            generator.insert("type", s("minecraft:flat"));
+            generator.insert("settings", flat.to_nbt());
+            let mut d = Compound::new();
+            d.insert("type", s("minecraft:overworld"));
+            d.insert("generator", Tag::Compound(generator));
+            Tag::Compound(d)
+        }
+        None => dimension(
             "minecraft:overworld",
             Some("minecraft:overworld"),
             "minecraft:overworld",
         ),
-    );
+    };
+    dims.insert("minecraft:overworld", overworld);
     dims.insert(
         "minecraft:the_nether",
         dimension(

@@ -156,6 +156,8 @@ pub struct Config {
     /// Game mode (0–3) and difficulty (0–3) of a new world.
     pub new_world_game_mode: i32,
     pub new_world_difficulty: i32,
+    /// A new world is superflat (`level-type=flat`).
+    pub new_world_flat: bool,
     /// The level `/op` gives (`op-permission-level`).
     pub op_permission_level: i32,
     /// Answer server list pings (`enable-status`).
@@ -206,6 +208,7 @@ impl Config {
             white_list: false,
             new_world_game_mode: 0,
             new_world_difficulty: 2,
+            new_world_flat: false,
             op_permission_level: 4,
             enable_status: true,
             hide_online_players: false,

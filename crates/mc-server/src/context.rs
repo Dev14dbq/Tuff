@@ -770,7 +770,14 @@ impl ServerContext {
                     .iter()
                     .map(|(k, &v)| (k.clone(), v as u32))
                     .collect();
-                let generator = match crate::generation::seed_of(dir) {
+                let seed = crate::generation::seed_of(dir).or_else(|| {
+                    // A superflat (or otherwise custom) overworld: the
+                    // Nether and the End still use the world's seed.
+                    (kind != Kind::Overworld)
+                        .then(|| crate::generation::raw_seed(dir))
+                        .flatten()
+                });
+                let generator = match seed {
                     Some(seed) => Some((
                         crate::generation::dimension(&self.data, seed, &biome_ids, kind)?,
                         seed,
@@ -781,6 +788,7 @@ impl ServerContext {
                     dir,
                     kind,
                     generator,
+                    None,
                     &self.data,
                     synced,
                     light,
@@ -963,6 +971,9 @@ impl ServerContext {
                         game_mode: config.new_world_game_mode,
                         difficulty: config.new_world_difficulty,
                         hardcore: false,
+                        flat: config
+                            .new_world_flat
+                            .then(crate::generation::FlatSettings::classic),
                     },
                 )?
             }

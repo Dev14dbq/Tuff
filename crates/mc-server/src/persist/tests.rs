@@ -869,3 +869,124 @@ fn a_players_boat_leaves_and_comes_back_with_them() {
     assert_eq!(lock(&ctx.entities).len(), 2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A server on `folder` with `level-type=flat`, as `main` sets it up.
+fn open_flat(folder: &Path) -> Arc<ServerContext> {
+    let dir = data_dir();
+    let mut config = crate::Config::new(dir.clone());
+    config.world = Some(folder.to_path_buf());
+    config.new_world_flat = true;
+    ServerContext::new(config, mc_data::McData::load(&dir).unwrap()).unwrap()
+}
+
+#[test]
+fn a_superflat_world_lives_in_its_folder_and_keeps_what_is_built() {
+    if mc_data::McData::load(&data_dir()).is_err() {
+        eprintln!("skipped: no game data");
+        return;
+    }
+    let dir = folder("flat");
+    let ctx = open_flat(&dir);
+    assert!(ctx.world.is_flat);
+    // The classic layers, far from spawn too.
+    for x in [0, 40, -500] {
+        assert_eq!(
+            crate::testkit::block(&ctx, [x, -61, 7]),
+            "minecraft:grass_block"
+        );
+        assert_eq!(crate::testkit::block(&ctx, [x, -62, 7]), "minecraft:dirt");
+        assert_eq!(
+            crate::testkit::block(&ctx, [x, -64, 7]),
+            "minecraft:bedrock"
+        );
+        assert_eq!(crate::testkit::block(&ctx, [x, -60, 7]), "minecraft:air");
+    }
+    crate::testkit::set(&ctx, [40, -60, 7], "minecraft:gold_block");
+    crate::save(&ctx);
+    drop(ctx);
+    assert!(dir.join("level.dat").is_file());
+    assert!(dir.join("dimensions/minecraft/overworld/region").is_dir());
+    // Opened again, the folder (not `level-type`) decides: the build is
+    // there and the world is still flat.
+    let mut config = crate::Config::new(data_dir());
+    config.world = Some(dir.clone());
+    let ctx = ServerContext::new(config, mc_data::McData::load(&data_dir()).unwrap()).unwrap();
+    assert!(ctx.world.is_flat);
+    assert_eq!(
+        crate::testkit::block(&ctx, [40, -60, 7]),
+        "minecraft:gold_block"
+    );
+    assert_eq!(
+        crate::testkit::block(&ctx, [41, -61, 7]),
+        "minecraft:grass_block"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_superflat_world_made_elsewhere_keeps_its_own_layers_and_biome() {
+    if mc_data::McData::load(&data_dir()).is_err() {
+        eprintln!("skipped: no game data");
+        return;
+    }
+    let dir = folder("flat-custom");
+    // A flat world of ours with its settings rewritten: sand over stone,
+    // in a desert (what a player's own preset would store).
+    drop(open_flat(&dir));
+    let path = dir.join("data/minecraft/world_gen_settings.dat");
+    let mut root = crate::world::read_nbt_gz(&path).unwrap();
+    let custom = crate::generation::FlatSettings {
+        layers: vec![
+            ("minecraft:bedrock".into(), 1),
+            ("minecraft:stone".into(), 3),
+            ("minecraft:sand".into(), 2),
+        ],
+        biome: "minecraft:desert".into(),
+    };
+    let Some(Tag::Compound(data)) = root.get_mut("data") else {
+        panic!("no data")
+    };
+    let Some(Tag::Compound(dims)) = data.get_mut("dimensions") else {
+        panic!("no dimensions")
+    };
+    let Some(Tag::Compound(ow)) = dims.get_mut("minecraft:overworld") else {
+        panic!("no overworld")
+    };
+    let Some(Tag::Compound(generator)) = ow.get_mut("generator") else {
+        panic!("no generator")
+    };
+    let mut settings = Compound::new();
+    settings.insert(
+        "layers",
+        Tag::List(
+            custom
+                .layers
+                .iter()
+                .map(|(b, h)| {
+                    let mut l = Compound::new();
+                    l.insert("block", Tag::String(b.clone()));
+                    l.insert("height", Tag::Int(*h as i32));
+                    Tag::Compound(l)
+                })
+                .collect(),
+        ),
+    );
+    settings.insert("biome", Tag::String(custom.biome.clone()));
+    generator.insert("settings", Tag::Compound(settings));
+    crate::world::write_nbt_gz(&path, &root).unwrap();
+    assert_eq!(crate::generation::flat_settings(&dir), Some(custom));
+
+    let mut config = crate::Config::new(data_dir());
+    config.world = Some(dir.clone());
+    let ctx = ServerContext::new(config, mc_data::McData::load(&data_dir()).unwrap()).unwrap();
+    assert_eq!(
+        crate::testkit::block(&ctx, [3, -64, 3]),
+        "minecraft:bedrock"
+    );
+    assert_eq!(crate::testkit::block(&ctx, [3, -62, 3]), "minecraft:stone");
+    assert_eq!(crate::testkit::block(&ctx, [3, -60, 3]), "minecraft:sand");
+    assert_eq!(crate::testkit::block(&ctx, [3, -59, 3]), "minecraft:sand");
+    assert_eq!(crate::testkit::block(&ctx, [3, -58, 3]), "minecraft:air");
+    assert_eq!(ctx.world.noise_biome(0, 0, 0), Some("minecraft:desert"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -7,6 +7,7 @@ mod chunk_diff;
 mod chunk_info;
 mod chunk_speed;
 mod extract_data;
+mod flat;
 mod gen_speed;
 mod hash_check;
 mod mcc;
@@ -91,6 +92,9 @@ Tasks:
   chunk-diff <dump a> <dump b>
       Compare chunk packets saved by `probe --dump` from two servers, decoded
       to blocks, biomes, heightmaps, light and block entities.
+  flat
+      A superflat world saved by vanilla, served and changed by us, and back:
+      chunk packets identical (read and made), and vanilla finds our build.
   mcc
       Oversized chunks (external .mcc) both ways: vanilla writes one, we
       read it, change it and save, vanilla reads ours.
@@ -118,6 +122,7 @@ fn main() -> ExitCode {
         Some("chunk-info") => chunk_info::run(&args[1..]),
         Some("chunk-diff") => chunk_diff::run(&args[1..]),
         Some("chunk-speed") => chunk_speed::run(&args[1..]),
+        Some("flat") => flat::run(&args[1..]),
         Some("gen-speed") => gen_speed::run(&args[1..]),
         Some("mcc") => mcc::run(&args[1..]),
         Some("mixins") => mixins::run(&args[1..]),

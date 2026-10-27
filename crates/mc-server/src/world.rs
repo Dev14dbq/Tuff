@@ -162,10 +162,35 @@ struct Anvil {
     entities: Mutex<RegionStorage>,
     /// Makes the chunks the folder does not have.
     generation: Option<Generation>,
+    /// The same for a superflat world.
+    flat: Option<FlatWorld>,
     biome_ids: HashMap<String, u32>,
     fallback_biome: u32,
     air: u32,
     unresolved_reported: AtomicU32,
+}
+
+/// A superflat world's generator, with the heightmap table.
+#[derive(Debug)]
+struct FlatWorld {
+    generator: FlatGenerator,
+    /// Per state: which heightmaps count it (a bit per [`HEIGHTMAPS`] entry).
+    counts: Vec<u8>,
+}
+
+/// Per state: which heightmaps count it (a bit per [`HEIGHTMAPS`] entry).
+fn heightmap_bits(data: &McData, rules: &BlockRules) -> Vec<u8> {
+    (0..data.blocks.state_count())
+        .map(|s| {
+            HEIGHTMAPS.iter().enumerate().fold(0u8, |bits, (i, name)| {
+                if heightmap_counts(name, s, &data.blocks, rules) {
+                    bits | (1 << i)
+                } else {
+                    bits
+                }
+            })
+        })
+        .collect()
 }
 
 /// The world's generator, with what turning its output into chunks needs.
@@ -386,7 +411,21 @@ impl World {
             .map(|(k, &v)| (k.clone(), v as u32))
             .collect();
         let mut seed_found = None;
-        if !dir.join("level.dat").is_file() {
+        let mut flat = None;
+        if !dir.join("level.dat").is_file() && new.flat.is_some() {
+            // A new superflat world: spawn on the layers at 0, 0.
+            let seed = seed.unwrap_or_else(|| crate::util::random_u64() as i64);
+            tracing::debug!(
+                "creating a superflat world in {} (seed {seed})",
+                dir.display()
+            );
+            let settings = new.flat.clone().expect("checked above");
+            let dim = dimension_info(data, synced, "minecraft:overworld")?;
+            let top: u32 = settings.layers.iter().map(|(_, h)| h).sum();
+            let spawn = (0, dim.min_y + top as i32, 0);
+            crate::generation::create(dir, data, seed, spawn, new)?;
+            flat = Some(settings);
+        } else if !dir.join("level.dat").is_file() {
             let seed = seed.unwrap_or_else(|| crate::util::random_u64() as i64);
             tracing::debug!("creating a new world in {} (seed {seed})", dir.display());
             let g = crate::generation::overworld(data, seed, &biome_ids)?;
@@ -396,11 +435,15 @@ impl World {
         } else if let Some(seed) = crate::generation::seed_of(dir) {
             seed_found = Some((crate::generation::overworld(data, seed, &biome_ids)?, seed));
             tracing::debug!("new chunks are generated from seed {seed}");
+        } else if let Some(settings) = crate::generation::flat_settings(dir) {
+            tracing::debug!("new chunks are superflat: {settings:?}");
+            flat = Some(settings);
         }
         Self::open_dimension(
             dir,
             mc_worldgen::generator::Dimension::Overworld,
             seed_found,
+            flat,
             data,
             synced,
             light,
@@ -416,6 +459,7 @@ impl World {
         dir: &Path,
         kind: mc_worldgen::generator::Dimension,
         generator: Option<(mc_worldgen::generator::NoiseGenerator, i64)>,
+        flat: Option<crate::generation::FlatSettings>,
         data: &McData,
         synced: &SyncedIds,
         light: mc_light::Tables,
@@ -448,28 +492,51 @@ impl World {
         };
         let generation = generation.map(|pipeline| Generation {
             pipeline,
-            counts: (0..data.blocks.state_count())
-                .map(|s| {
-                    HEIGHTMAPS.iter().enumerate().fold(0u8, |bits, (i, name)| {
-                        if heightmap_counts(name, s, &data.blocks, rules) {
-                            bits | (1 << i)
-                        } else {
-                            bits
-                        }
-                    })
-                })
-                .collect(),
+            counts: heightmap_bits(data, rules),
         });
+        let flat = match flat {
+            Some(flat) => {
+                let biomes = &synced["minecraft:worldgen/biome"];
+                let layers = flat
+                    .layers
+                    .iter()
+                    .map(|(block, height)| {
+                        Ok(FlatLayer {
+                            state: state(data, block)?,
+                            thickness: *height,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let biome = biomes
+                    .get(&flat.biome)
+                    .or_else(|| biomes.get("minecraft:plains"))
+                    .copied()
+                    .context("no plains biome")? as u32;
+                Some(FlatWorld {
+                    generator: FlatGenerator {
+                        layers,
+                        biome,
+                        air: state(data, "minecraft:air")?,
+                    },
+                    counts: heightmap_bits(data, rules),
+                })
+            }
+            None => None,
+        };
+        let flat_surface = flat.as_ref().map(|f| f.generator.surface_y(dim.min_y));
         // 26.x keeps dimensions under dimensions/<namespace>/<name>/.
         let own = dir
             .join("dimensions")
             .join(kind.id().replace(':', "/"))
             .join("region");
-        let regions = if kind == mc_worldgen::generator::Dimension::Overworld {
-            [own.clone(), dir.join("region")]
-                .into_iter()
-                .find(|p| p.is_dir())
-                .with_context(|| format!("no overworld region folder in {}", dir.display()))?
+        // An overworld folder may be older (`region/` at the top) or have no
+        // chunks yet; vanilla makes the folders when it saves.
+        let older = dir.join("region");
+        let regions = if kind == mc_worldgen::generator::Dimension::Overworld
+            && !own.is_dir()
+            && older.is_dir()
+        {
+            older
         } else {
             std::fs::create_dir_all(&own).with_context(|| format!("creating {}", own.display()))?;
             own
@@ -499,6 +566,7 @@ impl World {
                 )),
                 storage: Mutex::new(RegionStorage::new(regions)),
                 generation,
+                flat,
                 biome_ids: biomes.iter().map(|(k, &v)| (k.clone(), v as u32)).collect(),
                 fallback_biome,
                 air,
@@ -528,10 +596,10 @@ impl World {
             dimension_type_id: dim.type_id,
             min_y: dim.min_y,
             height: dim.height,
-            sea_level: generator_sea_level.unwrap_or(63),
+            sea_level: flat_surface.or(generator_sea_level).unwrap_or(63),
             spawn,
             spawn_yaw,
-            is_flat: false,
+            is_flat: flat_surface.is_some(),
             description: format!("the world \"{name}\""),
         })
     }
@@ -605,6 +673,11 @@ impl World {
         local.insert((x, z), new_slot(chunk));
         let top = self.min_y + self.height as i32;
         let mut touched = light_new(&mut local, &self.light, (x, z), self.min_y, top);
+        if matches!(&self.source, Source::Anvil(a) if a.flat.is_some())
+            && let Some(chunk) = local.get_mut(&(x, z)).and_then(|s| s.chunk.as_deref_mut())
+        {
+            sky_above_top(chunk);
+        }
         touched.sort_unstable();
         touched.dedup();
         let mut chunks = self.chunks.lock().expect("chunks lock");
@@ -885,12 +958,16 @@ impl World {
                     }
                     (Some(chunk), false)
                 }
-                Ok(None) => match &anvil.generation {
-                    Some(g) => {
+                Ok(None) => match (&anvil.generation, &anvil.flat) {
+                    (Some(g), _) => {
                         self.read_entities(anvil, x, z);
                         (Some(self.generate(g, x, z, anvil, blocks)), true)
                     }
-                    None => (None, false),
+                    (None, Some(flat)) => {
+                        self.read_entities(anvil, x, z);
+                        (Some(self.generate_flat(flat, x, z)), true)
+                    }
+                    (None, None) => (None, false),
                 },
                 Err(err) => {
                     warn!("chunk {x},{z}: {err:#}; sending it empty");
@@ -898,6 +975,20 @@ impl World {
                 }
             },
         }
+    }
+
+    /// A new superflat chunk with heightmaps (lit when it is put in).
+    fn generate_flat(&self, flat: &FlatWorld, x: i32, z: i32) -> Box<Chunk> {
+        let mut chunk = flat.generator.generate(x, z, self.min_y, self.height);
+        for (i, name) in HEIGHTMAPS.iter().enumerate() {
+            let words = chunk.heightmap(|s| {
+                flat.counts
+                    .get(s as usize)
+                    .is_some_and(|b| b & (1 << i) != 0)
+            });
+            chunk.heightmaps.push(((*name).to_owned(), words));
+        }
+        Box::new(chunk)
     }
 
     /// A new chunk from the generator, lit, with heightmaps.
@@ -971,12 +1062,11 @@ impl World {
     pub fn noise_biome(&self, qx: i32, qy: i32, qz: i32) -> Option<&str> {
         let id = match &self.source {
             Source::Flat(_) => return Some("minecraft:plains"),
-            Source::Anvil(anvil) => anvil
-                .generation
-                .as_ref()?
-                .pipeline
-                .generator
-                .noise_biome(qx, qy, qz),
+            Source::Anvil(anvil) => match (&anvil.generation, &anvil.flat) {
+                (Some(g), _) => g.pipeline.generator.noise_biome(qx, qy, qz),
+                (None, Some(flat)) => flat.generator.biome,
+                (None, None) => return None,
+            },
         };
         self.biome_names.get(id as usize).map(String::as_str)
     }
@@ -2388,6 +2478,20 @@ fn set_slot_light(
         if touched.last() != Some(&key) && !touched.contains(&key) {
             touched.push(key);
         }
+    }
+}
+
+/// Vanilla also stores an array of open sky (all 15) for the section just
+/// above the highest one with a sky array; the engine leaves it out, as a
+/// missing array reads as open sky. Chunks made by the flat generator get it.
+fn sky_above_top(chunk: &mut Chunk) {
+    let Some(top) = chunk.light.iter().rposition(|l| l.sky.is_some()) else {
+        return;
+    };
+    if let Some(above) = chunk.light.get_mut(top + 1)
+        && above.sky.is_none()
+    {
+        above.sky = Some(vec![0xFF; 2048]);
     }
 }
 
