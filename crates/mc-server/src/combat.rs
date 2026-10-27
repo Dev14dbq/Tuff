@@ -440,6 +440,7 @@ pub fn hurt_player(ctx: &ServerContext, uuid: u128, hit: &Hit) -> Option<bool> {
     let t = now(ctx);
     if let Some(from) = hit.from
         && matches!(mode, 0 | 2)
+        && !crate::damage::bypasses_shield(hit.kind)
         && let Some(slot) = blocks(ctx, uuid, pose, from, t)
     {
         let at = [pose.x, pose.y, pose.z];

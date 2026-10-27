@@ -44,6 +44,8 @@ pub enum Adapt {
 pub enum Kind {
     Jigsaw {
         start_pool: String,
+        /// The jigsaw of the start piece that sits at the start position.
+        start_jigsaw: Option<String>,
         size: i32,
         start_height: HeightProvider,
         project: Option<bool>,
@@ -312,6 +314,7 @@ impl Structures {
             let kind = if ty == "jigsaw" {
                 Kind::Jigsaw {
                     start_pool: v["start_pool"].as_str().unwrap_or("").to_owned(),
+                    start_jigsaw: v["start_jigsaw_name"].as_str().map(str::to_owned),
                     size: v["size"].as_i64().unwrap_or(1) as i32,
                     start_height: HeightProvider::parse(&v["start_height"])
                         .unwrap_or(HeightProvider::Constant(crate::value::Anchor::Absolute(0))),
@@ -919,6 +922,7 @@ impl Structures {
         let (pieces, at) = match &s.kind {
             Kind::Jigsaw {
                 start_pool,
+                start_jigsaw,
                 size,
                 start_height,
                 project,
@@ -944,6 +948,7 @@ impl Structures {
                     &mut r,
                     &mut g,
                     start_pool,
+                    start_jigsaw.as_deref(),
                     if start_only { 0 } else { *size },
                     P::new(x * 16, y, z * 16),
                     *expansion_hack,

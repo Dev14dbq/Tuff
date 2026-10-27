@@ -47,6 +47,27 @@ pub fn bypasses_armor(damage_type: &str) -> bool {
     BYPASSES_ARMOR.contains(&damage_type)
 }
 
+/// Damage types a raised shield does not stop (the `bypasses_shield`
+/// tag: those that bypass armor and these).
+const BYPASSES_SHIELD: [&str; 11] = [
+    "minecraft:cactus",
+    "minecraft:campfire",
+    "minecraft:dry_out",
+    "minecraft:falling_anvil",
+    "minecraft:falling_stalactite",
+    "minecraft:hot_floor",
+    "minecraft:sulfur_cube_hot",
+    "minecraft:in_fire",
+    "minecraft:lava",
+    "minecraft:lightning_bolt",
+    "minecraft:sweet_berry_bush",
+];
+
+/// Whether a shield does nothing against this damage type.
+pub fn bypasses_shield(damage_type: &str) -> bool {
+    bypasses_armor(damage_type) || BYPASSES_SHIELD.contains(&damage_type)
+}
+
 /// Damage after armor points and toughness: each armor point takes 4%, at
 /// most 80%; toughness makes big hits count for less.
 pub fn armor_reduce(amount: f32, armor: f32, toughness: f32, damage_type: &str) -> f32 {
@@ -175,6 +196,14 @@ pub fn breathe(air: i32, underwater: bool) -> (i32, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sonic_boom_goes_through_shields() {
+        assert!(bypasses_shield("minecraft:sonic_boom"));
+        assert!(bypasses_shield("minecraft:lava"));
+        assert!(!bypasses_shield("minecraft:mob_attack"));
+        assert!(!bypasses_shield("minecraft:arrow"));
+    }
 
     #[test]
     fn difficulty_scaling() {

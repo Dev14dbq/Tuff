@@ -4,7 +4,6 @@
 //! geodes, magma, rooted azaleas, corals, piles and dripstone. Behaviour as
 //! minecraft.wiki describes each feature.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use mc_tick::Dir;
@@ -130,11 +129,7 @@ pub enum Misc {
         replaceable: BlockSet,
     },
     SpeleothemCluster(Box<Cluster>),
-    SculkPatch {
-        charges: i32,
-        amount: i32,
-        attempts: i32,
-    },
+    SculkPatch(crate::sculk::Patch),
     Template {
         templates: Vec<(String, i32)>,
         processors: Vec<Arc<crate::structure::template::Processor>>,
@@ -510,11 +505,13 @@ impl Misc {
                     min_bluntness_for_wind: float(v, "min_bluntness_for_wind", 0.6),
                 }))
             }
-            "sculk_patch" => Misc::SculkPatch {
+            "sculk_patch" => Misc::SculkPatch(crate::sculk::Patch {
                 charges: int(v, "charge_count", 10),
                 amount: int(v, "amount_per_charge", 32),
                 attempts: int(v, "spread_attempts", 64),
-            },
+                spread_rounds: int(v, "spread_rounds", 1),
+                growth_rounds: int(v, "growth_rounds", 0),
+            }),
             _ => return None,
         })
     }
@@ -826,11 +823,7 @@ impl Misc {
                 replaceable,
             } => speleothem(facts, region, r, p, *base, *pointed, replaceable),
             Misc::SpeleothemCluster(c) => cluster(facts, region, r, p, c),
-            Misc::SculkPatch {
-                charges,
-                amount,
-                attempts,
-            } => sculk_patch(facts, region, r, p, *charges, *amount, *attempts),
+            Misc::SculkPatch(c) => crate::sculk::patch(facts, region, r, p, c),
             Misc::Template {
                 templates,
                 processors,
@@ -1370,37 +1363,21 @@ fn multiface(
     }
     let mut dirs = valid.clone();
     r.shuffle(&mut dirs);
-    let place = |region: &mut dyn Region, q: P, face: Dir| {
-        let mut s = facts.default_of(block);
-        for side in ["north", "east", "south", "west", "up", "down"] {
-            s = facts.with(s, side, "false");
-        }
-        s = facts.with(s, face.name(), "true");
-        let wet = facts.is_water_source(region.block(q));
-        s = facts.with(s, "waterlogged", if wet { "true" } else { "false" });
-        region.set(q, s);
-    };
+    let spreader = crate::multiface::Spreader::new(facts, facts.default_of(block));
+    // `placeGrowthIfPossible`: on the first face that holds it, then
+    // perhaps on toward a random direction.
     let grow = |region: &mut dyn Region, r: &mut WorldgenRandom, q: P, dirs: &[Dir]| -> bool {
+        let old = region.block(q);
         for d in dirs {
             if !on.contains(facts, region.block(q.rel(*d))) {
                 continue;
             }
-            place(region, q, *d);
-            // Spreads along the same surface to a neighbouring block.
+            let Some(new) = spreader.state_for_placement(region, old, q, *d) else {
+                return false;
+            };
+            region.set(q, new);
             if r.next_float() < spread {
-                let mut around = ALL.to_vec();
-                r.shuffle(&mut around);
-                for e in around {
-                    if e == *d || e == d.opposite() {
-                        continue;
-                    }
-                    let n = q.rel(e);
-                    if air_or_water(region.block(n)) && on.contains(facts, region.block(n.rel(*d)))
-                    {
-                        place(region, n, *d);
-                        break;
-                    }
-                }
+                spreader.spread_from_face(region, r, new, q, *d);
             }
             return true;
         }
@@ -2557,57 +2534,6 @@ fn cluster_column(
             &base,
         );
     }
-}
-
-/// A patch of sculk on the cave around `p`, with veins on its edge.
-fn sculk_patch(
-    facts: &Facts,
-    region: &mut dyn Region,
-    r: &mut WorldgenRandom,
-    p: P,
-    charges: i32,
-    amount: i32,
-    attempts: i32,
-) -> bool {
-    let (Some(sculk), Some(vein)) = (
-        facts.default_state("minecraft:sculk"),
-        facts.default_state("minecraft:sculk_vein"),
-    ) else {
-        return false;
-    };
-    let replaceable = facts.tag("minecraft:sculk_replaceable");
-    let mut placed: HashSet<P> = HashSet::new();
-    for _ in 0..charges {
-        let mut q = p;
-        let mut left = amount;
-        for _ in 0..attempts {
-            if left <= 0 {
-                break;
-            }
-            let d = ALL[r.next_int_bound(6) as usize];
-            let next = q.rel(d);
-            let s = region.block(next);
-            let exposed = ALL.iter().any(|e| facts.is_air(region.block(next.rel(*e))));
-            if replaceable.is_some_and(|t| facts.in_tag(s, t)) && exposed {
-                region.set(next, sculk);
-                placed.insert(next);
-                left -= 1;
-                q = next;
-            } else if facts.is(s, "minecraft:sculk") {
-                q = next;
-            }
-        }
-    }
-    for q in placed {
-        let above = q.above(1);
-        if facts.is_air(region.block(above)) && r.next_int_bound(4) == 0 {
-            region.set(
-                above,
-                facts.with(facts.with(vein, "down", "true"), "waterlogged", "false"),
-            );
-        }
-    }
-    true
 }
 
 #[allow(clippy::too_many_arguments)]

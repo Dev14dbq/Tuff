@@ -415,6 +415,7 @@ pub fn assemble(
     r: &mut WorldgenRandom,
     ground: &mut dyn Ground,
     start_pool: &str,
+    start_jigsaw: Option<&str>,
     max_depth: i32,
     pos: P,
     expansion_hack: bool,
@@ -432,10 +433,22 @@ pub fn assemble(
     if element.is_empty() {
         return None;
     }
-    let bbox = element.bbox(s, pos, rotation);
+    // A named start jigsaw is put at the start position.
+    let local = match start_jigsaw {
+        Some(name) => {
+            element
+                .jigsaws(s, P::default(), rotation, r)
+                .into_iter()
+                .find(|j| j.name == name)?
+                .pos
+        }
+        None => P::default(),
+    };
+    let at = P::new(pos.x - local.x, pos.y - local.y, pos.z - local.z);
+    let bbox = element.bbox(s, at, rotation);
     let mut start = Piece {
         element: element.clone(),
-        pos,
+        pos: at,
         rotation,
         bbox,
         ground_delta: 1,
@@ -446,14 +459,14 @@ pub fn assemble(
     let k = if project {
         pos.y + ground.height(i, j)
     } else {
-        pos.y
+        at.y
     };
     let l = bbox.min.y + start.ground_delta;
     start.moved(k - l);
     if start.bbox.min.y < min_y || start.bbox.max.y > max_y {
         return None;
     }
-    let center = P::new(i, k, j);
+    let center = P::new(i, k + local.y, j);
     let mut pieces = vec![start];
     if max_depth <= 0 {
         return Some((pieces, center));

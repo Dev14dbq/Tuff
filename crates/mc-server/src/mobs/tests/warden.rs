@@ -44,6 +44,15 @@ fn at(p: [i32; 3]) -> mc_protocol::Position {
     mc_protocol::Position::new(p[0], p[1], p[2])
 }
 
+/// A flat world with no mobs spawning: one nearby could be heard instead of
+/// what a test does (whether one spawns hangs on the random numbers other
+/// tests draw).
+fn quiet() -> Option<std::sync::Arc<ServerContext>> {
+    let ctx = flat()?;
+    lock(&ctx.game_rules).set("spawn_mobs", crate::rules::Value::Bool(false));
+    Some(ctx)
+}
+
 fn placed(ctx: &ServerContext, p: [i32; 3], who: Source) {
     let stone = ctx.data.blocks.default_state("minecraft:stone").unwrap();
     vibrations::emit_at(ctx, "block_place", at(p), who, Some(stone));
@@ -51,7 +60,7 @@ fn placed(ctx: &ServerContext, p: [i32; 3], who: Source) {
 
 #[test]
 fn a_sensor_hears_a_block_placed_and_powers_by_distance() {
-    let Some(ctx) = flat() else {
+    let Some(ctx) = quiet() else {
         eprintln!("skipped: no game data");
         return;
     };
@@ -82,7 +91,7 @@ fn a_sensor_hears_a_block_placed_and_powers_by_distance() {
 
 #[test]
 fn wool_stops_vibrations_and_wool_makes_none() {
-    let Some(ctx) = flat() else {
+    let Some(ctx) = quiet() else {
         eprintln!("skipped: no game data");
         return;
     };
@@ -121,7 +130,7 @@ fn wool_stops_vibrations_and_wool_makes_none() {
 
 #[test]
 fn a_calibrated_sensor_hears_only_its_frequency_and_farther() {
-    let Some(ctx) = flat() else {
+    let Some(ctx) = quiet() else {
         eprintln!("skipped: no game data");
         return;
     };
@@ -154,7 +163,7 @@ fn a_calibrated_sensor_hears_only_its_frequency_and_farther() {
 
 #[test]
 fn shriekers_warn_four_times_then_a_warden_comes() {
-    let Some(ctx) = flat() else {
+    let Some(ctx) = quiet() else {
         eprintln!("skipped: no game data");
         return;
     };
@@ -206,13 +215,12 @@ fn shriekers_warn_four_times_then_a_warden_comes() {
 
 #[test]
 fn a_warden_emerges_hears_gets_angry_roars_and_fights() {
-    let Some(ctx) = flat() else {
+    let Some(ctx) = quiet() else {
         eprintln!("skipped: no game data");
         return;
     };
     ctx.difficulty
         .store(2, std::sync::atomic::Ordering::Relaxed);
-    lock(&ctx.game_rules).set("spawn_mobs", crate::rules::Value::Bool(false));
     let _ = join(&ctx, [30.5, -60.0, 30.5]);
     let mut e = new_mob(&ctx, Species::Warden, [0.5, -60.0, 0.5]);
     crate::mobs::warden::emerge(&mut e);
@@ -271,7 +279,7 @@ fn a_warden_emerges_hears_gets_angry_roars_and_fights() {
 
 #[test]
 fn a_warden_darkens_players_near_it() {
-    let Some(ctx) = flat() else {
+    let Some(ctx) = quiet() else {
         eprintln!("skipped: no game data");
         return;
     };
@@ -289,7 +297,7 @@ fn a_warden_darkens_players_near_it() {
 
 #[test]
 fn a_catalyst_takes_the_experience_of_a_kill_and_spreads_sculk() {
-    let Some(ctx) = flat() else {
+    let Some(ctx) = quiet() else {
         eprintln!("skipped: no game data");
         return;
     };
