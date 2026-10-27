@@ -1513,13 +1513,27 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
         Some(fluid) => {
             let source = ctx.shapes.default_state(fluid).unwrap_or(0);
             let state = state_at(hit);
-            let placed = if fluid == "minecraft:water"
-                && blocks.property(state, "waterlogged") == Some("false")
-            {
+            let fits = |s: u32| ctx.shapes.is_air(s) || ctx.rules.is_replaceable(s);
+            let logs = fluid == "minecraft:water"
+                && blocks.property(state, "waterlogged") == Some("false");
+            // In the Nether the water is gone at once; the bucket is empty.
+            let gone = (fluid == "minecraft:water" && mc_tick::Level::ultrawarm(&level))
+                .then(|| {
+                    if logs || fits(state) {
+                        hit
+                    } else {
+                        offset(hit, face)
+                    }
+                })
+                .filter(|&at| at == hit || fits(state_at(at)));
+            let placed = if let Some(at) = gone {
+                mc_tick::Level::sponge_dried(&mut level, crate::level::to_pos(at));
+                poured = Some(at);
+                true
+            } else if logs {
                 poured = Some(hit);
                 level.set_block(hit, crate::campfires::waterlogged(ctx, hit, state))
             } else {
-                let fits = |s: u32| ctx.shapes.is_air(s) || ctx.rules.is_replaceable(s);
                 let at = if fits(state) { hit } else { offset(hit, face) };
                 let there = state_at(at);
                 let same = blocks.block_name(there) == Some(fluid)
@@ -2055,6 +2069,47 @@ mod tests {
             mine("minecraft:oak_leaves", "shears", &[]),
             [(item("oak_leaves"), 1)]
         );
+    }
+
+    #[test]
+    fn water_poured_in_the_nether_evaporates() {
+        let Some((overworld, mut actor)) = with_flint(0) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let nether = overworld.in_dimension("minecraft:the_nether").unwrap();
+        actor.pose = Pose {
+            pitch: 90.0,
+            ..pose(0.5, 70.0, 0.5)
+        };
+        for ctx in [&overworld, &nether] {
+            let blocks = &ctx.data.blocks;
+            let mut level = WorldLevel::new(ctx);
+            level.set_block(
+                Position::new(0, 69, 0),
+                blocks.default_state("minecraft:stone").unwrap(),
+            );
+            for y in 70..73 {
+                level.set_block(Position::new(0, y, 0), ctx.shapes.air());
+            }
+            let bucket = ctx.items.id("minecraft:water_bucket").unwrap();
+            let mut hands = Hands::default();
+            hands.slots[36] = Some(ItemStack::new(bucket, 1));
+            ctx.inventories.lock().unwrap().insert(7, hands);
+            use_item(ctx, actor, 0, 0.0, 90.0);
+            let held = ctx.inventories.lock().unwrap()[&7].slots[36].clone();
+            assert_eq!(
+                held.map(|s| s.item),
+                ctx.items.id("minecraft:bucket"),
+                "{}",
+                ctx.world.dimension
+            );
+        }
+        assert_eq!(
+            crate::testkit::block(&overworld, [0, 70, 0]),
+            "minecraft:water"
+        );
+        assert_eq!(crate::testkit::block(&nether, [0, 70, 0]), "minecraft:air");
     }
 
     #[test]

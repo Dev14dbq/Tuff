@@ -1497,6 +1497,9 @@ async fn falls_hurt_and_kill_and_players_respawn() {
     respawn.put_varint(0);
     jumper.send("minecraft:client_command", respawn).await;
     jumper.recv_until("minecraft:respawn").await;
+    // The new client-side player is told its op level again (F3+F4).
+    let (_, event) = jumper.recv_until("minecraft:entity_event").await;
+    assert_eq!(event.last(), Some(&(24 + 4)));
     let (_, health) = jumper.recv_until("minecraft:set_health").await;
     assert_eq!(health_after(&health), 20.0);
     let _ = stop.send(());

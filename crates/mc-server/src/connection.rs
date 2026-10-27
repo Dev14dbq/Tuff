@@ -1027,6 +1027,9 @@ async fn play(
                                     sea_level: ctx.world.sea_level,
                                     data_kept: 0,
                                 })?;
+                                // The client makes a new player at op level 0:
+                                // without this F3+F4 is refused.
+                                send_permissions(writer, &ctx, uuid, &me.profile.name, entity_id)?;
                                 flying = game_mode == 3;
                                 update_player(&ctx, uuid, |p| p.flying = flying);
                                 writer.queue(&abilities(game_mode, flying))?;
@@ -1807,6 +1810,7 @@ async fn play(
                                 // Attributes and entity data stay, as through a portal.
                                 data_kept: if after_death { 0 } else { 3 },
                             })?;
+                            send_permissions(writer, &ctx, uuid, &me.profile.name, entity_id)?;
                             if after_death {
                                 flying = game_mode == 3;
                                 update_player(&ctx, uuid, |p| p.flying = flying);
