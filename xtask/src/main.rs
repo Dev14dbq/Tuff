@@ -20,6 +20,7 @@ mod probe;
 mod quiet;
 mod registry_diff;
 mod similarity;
+mod tickets;
 mod vanilla_locate;
 mod watch;
 mod worldgen_compare;
@@ -102,6 +103,10 @@ Tasks:
       Rank vanilla classes/methods by how many top open-source Modrinth mods
       (26.x builds, into tools/modrinth/) patch them with Mixin; writes
       cache/mixins/{methods,classes}.tsv and ranking.md
+  tickets [--only vanilla,ours] [--view <n>] [--sim <n>]
+      Which chunks tick, seen from outside: a bot stands at spawn; per chunk
+      around it and in a far force-loaded one, an item falls, a furnace
+      smelts, water flows, wheat grows (or not).
   similarity [--reference <dir>] [--fail <n>] [--top <n>] [--self-test]
       Clean-room guard: compare our Rust sources with the decompiled vanilla
       sources (reference/26.3/server-src, or $MC_REFERENCE) by winnowing
@@ -126,6 +131,7 @@ fn main() -> ExitCode {
         Some("gen-speed") => gen_speed::run(&args[1..]),
         Some("mcc") => mcc::run(&args[1..]),
         Some("mixins") => mixins::run(&args[1..]),
+        Some("tickets") => tickets::run(&args[1..]),
         Some("similarity") => similarity::run(&args[1..]),
         Some("watch") => watch::run(&args[1..]),
         Some("hash-check") => hash_check::run(&args[1..]),
