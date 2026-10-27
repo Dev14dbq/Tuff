@@ -64,4 +64,8 @@ fn generated_light_is_unchanged() {
     assert_eq!(sum, EXPECTED, "light of generated chunks changed");
 }
 
-const EXPECTED: u64 = 0x2d7d_69d0_8346_34aa;
+/// Moves when world generation changes what the 6×6 chunks hold (a feature
+/// that emits light, a structure placed differently), not only when the
+/// light engine does: find the commit that moved it and say why in its
+/// message before updating this.
+const EXPECTED: u64 = 0xbab9_46fd_6464_be83;
