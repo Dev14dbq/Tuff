@@ -171,6 +171,20 @@ pub struct PacketEntry {
 impl McData {
     /// Loads `cache/mcdata/<version>/` produced by `cargo xtask extract-data`.
     pub fn load(root: &Path) -> Result<Self> {
+        let version = Self::read_version(root)?;
+        let reports = root.join("reports");
+        Ok(Self {
+            root: root.to_owned(),
+            version,
+            packets: load_packets(&reports.join("packets.json"))?,
+            blocks: Blocks::load(&reports.join("blocks.json"))?,
+            builtin: BuiltinRegistries::load(&reports.join("registries.json"))?,
+            pack_layers: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Only `version.json`: the game version the data is for.
+    pub fn read_version(root: &Path) -> Result<Version> {
         let version_path = root.join("version.json");
         let version = read_json(&version_path)?;
         let field = |key: &str| {
@@ -184,16 +198,7 @@ impl McData {
             protocol_version: field("protocol_version")?,
             world_version: field("world_version")?,
         };
-
-        let reports = root.join("reports");
-        Ok(Self {
-            root: root.to_owned(),
-            version,
-            packets: load_packets(&reports.join("packets.json"))?,
-            blocks: Blocks::load(&reports.join("blocks.json"))?,
-            builtin: BuiltinRegistries::load(&reports.join("registries.json"))?,
-            pack_layers: Mutex::new(Vec::new()),
-        })
+        Ok(version)
     }
 
     /// Enabled world datapacks. Later calls to [`Self::data_pack`] see them.

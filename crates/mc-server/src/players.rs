@@ -207,7 +207,16 @@ impl Store {
         let mut bytes = Vec::new();
         flate2::read::GzDecoder::new(&raw[..]).read_to_end(&mut bytes)?;
         match mc_nbt::read_named(&bytes)? {
-            (_, Tag::Compound(root), _) => Ok(Some(root)),
+            (_, Tag::Compound(mut root), _) => {
+                // Saved by an older version: read it the way 26.3 writes it.
+                if let Err(why) = mc_storage::upgrade::files::upgrade_player(
+                    &mut root,
+                    mc_storage::upgrade::TARGET,
+                ) {
+                    tracing::warn!("{} was {why}; read as it is", path.display());
+                }
+                Ok(Some(root))
+            }
             _ => bail!("{}: root is not a compound", path.display()),
         }
     }

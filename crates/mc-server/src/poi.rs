@@ -298,7 +298,15 @@ impl Poi {
             return self.kept.get(&c).cloned().unwrap_or_default();
         };
         match files.read_chunk(c.0, c.1) {
-            Ok(Some(Tag::Compound(root))) => read_records(&root),
+            Ok(Some(Tag::Compound(mut root))) => {
+                let ctx = mc_storage::upgrade::Context::default();
+                let target = mc_storage::upgrade::TARGET;
+                let kind = mc_storage::upgrade::Kind::Poi;
+                if let Err(why) = mc_storage::upgrade::upgrade(&mut root, kind, &ctx, target) {
+                    warn!("points of interest of chunk {},{} were {why}", c.0, c.1);
+                }
+                read_records(&root)
+            }
             Ok(_) => Vec::new(),
             Err(err) => {
                 warn!("points of interest of chunk {},{}: {err:#}", c.0, c.1);
