@@ -102,7 +102,12 @@ fn fly(t: &mut Tick, e: &mut Entity, skull: Option<bool>) {
     ];
     e.removed = true;
     if matches!(strike, Strike::Block { .. }) {
-        crate::pots::projectile(t.ctx, from, to);
+        crate::pots::projectile(
+            t.ctx,
+            from,
+            to,
+            crate::pots::Impact::by(crate::pots::Launcher::of(None, t.shooter.is_some())),
+        );
     }
     match skull {
         Some(dangerous) => skull_hit(t, e, strike, dangerous),
@@ -181,6 +186,7 @@ fn skull_hit(t: &mut Tick, e: &Entity, strike: Strike, dangerous: bool) {
         by: Some("minecraft:wither"),
         fire: false,
         respawn: None,
+        block: false,
     });
 }
 

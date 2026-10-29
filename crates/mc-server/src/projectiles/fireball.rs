@@ -66,7 +66,12 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
         }
         Strike::Block { .. } => {
             hits::hit_block(t.ctx, &strike, e.pos, false);
-            crate::pots::projectile(t.ctx, from, to);
+            crate::pots::projectile(
+                t.ctx,
+                from,
+                to,
+                crate::pots::Impact::by(crate::pots::Launcher::of(owner, t.shooter.is_some())),
+            );
         }
     }
     if small {
@@ -93,6 +98,7 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             by: None,
             fire: t.ctx.game_rule_bool("mob_griefing"),
             respawn: None,
+            block: false,
         });
     }
 }

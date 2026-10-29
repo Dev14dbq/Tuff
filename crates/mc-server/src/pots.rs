@@ -156,18 +156,78 @@ pub fn harvest(ctx: &ServerContext, at: Position, state: u32, breaker: Breaker) 
     Harvest { drops, shown }
 }
 
-fn projectiles_break(ctx: &ServerContext) -> bool {
-    ctx.game_rule_bool("projectiles_can_break_blocks")
+/// Who sent an impact projectile (arrows, tridents, snowballs, eggs,
+/// fireballs, wither skulls, wind charges, fireworks), as far as breaking
+/// blocks goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Launcher {
+    Player(u128),
+    Mob,
+    /// A dispenser, or a projectile that lost its owner.
+    Nobody,
 }
 
-fn fragile(name: &str) -> bool {
-    name == "minecraft:chorus_flower" || name == "minecraft:pointed_dripstone"
+impl Launcher {
+    pub fn of(owner: Option<u128>, mob: bool) -> Self {
+        match owner {
+            Some(uuid) => Launcher::Player(uuid),
+            None if mob => Launcher::Mob,
+            None => Launcher::Nobody,
+        }
+    }
 }
 
-/// A projectile's path. With `projectiles_can_break_blocks`, it shatters a
-/// decorated pot and breaks a chorus flower or pointed dripstone.
-pub fn projectile(ctx: &ServerContext, from: [f64; 3], to: [f64; 3]) {
-    if !projectiles_break(ctx) {
+/// What a projectile that struck a block was.
+#[derive(Clone, Copy, Debug)]
+pub struct Impact {
+    pub by: Launcher,
+    /// A thrown trident going faster than 0.6 a tick: the only thing that
+    /// snaps pointed dripstone and sulfur spikes.
+    pub fast_trident: bool,
+}
+
+impl Impact {
+    pub fn by(by: Launcher) -> Self {
+        Impact {
+            by,
+            fast_trident: false,
+        }
+    }
+}
+
+/// Vanilla lets an impact projectile break a block when the game rule
+/// `projectiles_can_break_blocks` is on and its adventure-mode check passes:
+/// a player's only outside adventure mode, a mob's only with a `can_break`
+/// list (mob-shot ones never carry one), an ownerless one unless the world's
+/// default game mode is adventure.
+fn may_break(ctx: &ServerContext, by: Launcher) -> bool {
+    if !ctx.game_rule_bool("projectiles_can_break_blocks") {
+        return false;
+    }
+    match by {
+        Launcher::Player(uuid) => lock(&ctx.players)
+            .get(&uuid)
+            .is_none_or(|p| p.game_mode != ADVENTURE),
+        Launcher::Mob => false,
+        Launcher::Nobody => {
+            ctx.default_game_mode
+                .load(std::sync::atomic::Ordering::Relaxed)
+                != ADVENTURE
+        }
+    }
+}
+
+const ADVENTURE: i32 = 2;
+
+fn speleothem(name: &str) -> bool {
+    name == "minecraft:pointed_dripstone" || name == "minecraft:sulfur_spike"
+}
+
+/// A projectile's path ends on a block: a decorated pot shatters, a chorus
+/// flower breaks, and pointed dripstone or a sulfur spike snaps under a
+/// fast trident, when [`may_break`] allows.
+pub fn projectile(ctx: &ServerContext, from: [f64; 3], to: [f64; 3], hit: Impact) {
+    if !may_break(ctx, hit.by) {
         return;
     }
     let Some((_, cell, _)) = crate::hits::first_solid(ctx, from, to) else {
@@ -181,18 +241,17 @@ pub fn projectile(ctx: &ServerContext, from: [f64; 3], to: [f64; 3]) {
     let Some(name) = blocks.block_name(state) else {
         return;
     };
-    if name != POT {
-        if fragile(name) {
-            let mut level = WorldLevel::new(ctx);
-            burst(ctx, &mut level, at);
-            let changes = level.into_changes();
-            if !changes.is_empty() {
-                let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
-            }
+    let shown = if name == POT {
+        harvest(ctx, at, state, Breaker::Projectile)
+    } else if name == "minecraft:chorus_flower" || speleothem(name) && hit.fast_trident {
+        let props = |k: &str| blocks.property(state, k).map(str::to_owned);
+        Harvest {
+            drops: ctx.loot.get().drops(name, &props),
+            shown: state,
         }
+    } else {
         return;
-    }
-    let harvest = harvest(ctx, at, state, Breaker::Projectile);
+    };
     let left = crate::blocks::break_block(&ctx.data, &ctx.rules, at, state, &|p| {
         ctx.world.block(p, blocks)
     })[0]
@@ -203,75 +262,18 @@ pub fn projectile(ctx: &ServerContext, from: [f64; 3], to: [f64; 3]) {
     }
     let changes = level.into_changes();
     if ctx.game_rule_bool("block_drops") {
-        for drop in harvest.drops {
+        for drop in shown.drops {
             crate::tick::drop_item(ctx, at, drop);
         }
     }
     let _ = ctx.events.send(Event::BlockBroken {
         by: 0,
         position: at,
-        state: harvest.shown,
+        state: shown.shown,
     });
     if !changes.is_empty() {
         let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
     }
-}
-
-/// A wind burst reaches `at`. Same blocks a projectile breaks, on the
-/// level the burst is already editing.
-pub fn burst(ctx: &ServerContext, level: &mut WorldLevel, at: Position) {
-    if !projectiles_break(ctx) {
-        return;
-    }
-    let blocks = &ctx.data.blocks;
-    let Some(state) = ctx.world.block(at, blocks) else {
-        return;
-    };
-    let Some(name) = blocks.block_name(state) else {
-        return;
-    };
-    if name == POT {
-        let harvest = harvest(ctx, at, state, Breaker::Projectile);
-        let left = crate::blocks::break_block(&ctx.data, &ctx.rules, at, state, &|p| {
-            ctx.world.block(p, blocks)
-        })[0]
-            .1;
-        if !level.set_block(at, left) {
-            return;
-        }
-        if ctx.game_rule_bool("block_drops") {
-            for drop in harvest.drops {
-                crate::tick::drop_item(ctx, at, drop);
-            }
-        }
-        let _ = ctx.events.send(Event::BlockBroken {
-            by: 0,
-            position: at,
-            state: harvest.shown,
-        });
-        return;
-    }
-    if !fragile(name) {
-        return;
-    }
-    let left = crate::blocks::break_block(&ctx.data, &ctx.rules, at, state, &|p| {
-        ctx.world.block(p, blocks)
-    })[0]
-        .1;
-    if !level.set_block(at, left) {
-        return;
-    }
-    if ctx.game_rule_bool("block_drops") {
-        let props = |k: &str| blocks.property(state, k).map(str::to_owned);
-        for drop in ctx.loot.get().drops(name, &props) {
-            crate::tick::drop_item(ctx, at, drop);
-        }
-    }
-    let _ = ctx.events.send(Event::BlockBroken {
-        by: 0,
-        position: at,
-        state,
-    });
 }
 
 /// The one slot, rolling `LootTable` the first time it is read.
@@ -724,7 +726,12 @@ mod tests {
         };
         let at = Position::new(0, -58, 2);
         put_pot(&ctx, at, brick_sides(&ctx), None);
-        projectile(&ctx, [0.5, -57.5, 0.5], [0.5, -57.5, 4.5]);
+        projectile(
+            &ctx,
+            [0.5, -57.5, 0.5],
+            [0.5, -57.5, 4.5],
+            Impact::by(Launcher::Nobody),
+        );
         assert!(
             ctx.world
                 .block(at, &ctx.data.blocks)
@@ -739,6 +746,60 @@ mod tests {
             })
             .count();
         assert_eq!(bricks, 4);
+    }
+
+    #[test]
+    fn what_a_projectile_may_break() {
+        let Some((ctx, _)) = setup() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let at = Position::new(0, -58, 2);
+        let name = |ctx: &ServerContext| {
+            let s = ctx.world.block(at, &ctx.data.blocks).unwrap();
+            ctx.data.blocks.block_name(s).unwrap().to_owned()
+        };
+        let place = |ctx: &ServerContext, block: &str| {
+            let state = ctx.data.blocks.default_state(block).unwrap();
+            WorldLevel::new(ctx).set_block(at, state);
+        };
+        let shoot = |ctx: &ServerContext, hit: Impact| {
+            projectile(ctx, [0.5, -57.5, 0.5], [0.5, -57.5, 4.5], hit);
+        };
+        crate::testkit::join(&ctx, 1, 70, [0.5, -60.0, 0.5], 0);
+        crate::testkit::join(&ctx, 2, 71, [0.5, -60.0, 0.5], ADVENTURE);
+        let player = Impact::by(Launcher::Player(1));
+
+        // A mob's shot carries no `can_break`, so it breaks nothing.
+        place(&ctx, "minecraft:chorus_flower");
+        shoot(&ctx, Impact::by(Launcher::Mob));
+        assert_eq!(name(&ctx), "minecraft:chorus_flower");
+        // Nor does a player's in adventure mode.
+        shoot(&ctx, Impact::by(Launcher::Player(2)));
+        assert_eq!(name(&ctx), "minecraft:chorus_flower");
+        shoot(&ctx, player);
+        assert_eq!(name(&ctx), "minecraft:air");
+
+        // Pointed dripstone snaps only under a fast trident.
+        place(&ctx, "minecraft:pointed_dripstone");
+        shoot(&ctx, player);
+        assert_eq!(name(&ctx), "minecraft:pointed_dripstone");
+        shoot(
+            &ctx,
+            Impact {
+                fast_trident: true,
+                ..player
+            },
+        );
+        assert_ne!(name(&ctx), "minecraft:pointed_dripstone");
+
+        lock(&ctx.game_rules).set(
+            "projectiles_can_break_blocks",
+            crate::rules::Value::Bool(false),
+        );
+        put_pot(&ctx, at, brick_sides(&ctx), None);
+        shoot(&ctx, Impact::by(Launcher::Nobody));
+        assert_eq!(name(&ctx), POT);
     }
 
     #[test]

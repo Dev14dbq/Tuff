@@ -457,7 +457,16 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             match strike {
                 Strike::Block { .. } => {
                     hits::hit_block(ctx, &strike, e.pos, true);
-                    crate::pots::projectile(ctx, from, to);
+                    crate::pots::projectile(
+                        ctx,
+                        from,
+                        to,
+                        crate::pots::Impact {
+                            by: crate::pots::Launcher::of(owner, t.shooter.is_some()),
+                            fast_trident: a.trident
+                                && e.vel.iter().map(|v| v * v).sum::<f64>() > 0.36,
+                        },
+                    );
                     fx::sound(
                         ctx,
                         "item.trident.hit_ground",

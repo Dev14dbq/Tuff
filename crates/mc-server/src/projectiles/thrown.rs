@@ -46,7 +46,12 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             };
             if matches!(strike, Strike::Block { .. }) && matches!(shot, Shot::Snowball | Shot::Egg)
             {
-                crate::pots::projectile(ctx, from, to);
+                crate::pots::projectile(
+                    ctx,
+                    from,
+                    to,
+                    crate::pots::Impact::by(crate::pots::Launcher::of(owner, t.shooter.is_some())),
+                );
             }
             land(t, e, &shot, owner, who, &strike);
             e.removed = true;

@@ -136,7 +136,15 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             None => e.pos = to,
             Some((frac, strike)) => {
                 if matches!(strike, Strike::Block { .. }) {
-                    crate::pots::projectile(t.ctx, from, to);
+                    crate::pots::projectile(
+                        t.ctx,
+                        from,
+                        to,
+                        crate::pots::Impact::by(crate::pots::Launcher::of(
+                            owner,
+                            t.shooter.is_some(),
+                        )),
+                    );
                 }
                 e.pos = [
                     from[0] + e.vel[0] * frac,
