@@ -1,0 +1,51 @@
+# cargo deny check: licenses, advisories, bans and sources of every dependency.
+# CI runs it on each push (.github/workflows/supply-chain.yml).
+
+[graph]
+all-features = true
+
+[advisories]
+# Every vulnerability and unsound advisory fails; unmaintained ones fail when
+# we depend on the crate directly.
+unmaintained = "workspace"
+ignore = [
+    # rsa: Marvin timing side channel in PKCS#1 v1.5 decryption, no fixed
+    # release. The 26.3 login protocol requires RSA PKCS#1 v1.5 for the shared
+    # secret, so there is nothing to switch to; each key lives for one server
+    # run and decrypts one 16-byte secret per login. Revisit when rsa 0.10 is
+    # out.
+    { id = "RUSTSEC-2023-0071", reason = "protocol-mandated RSA PKCS#1 v1.5, no fixed rsa release" },
+]
+
+[licenses]
+# Licenses our dependencies use today, all compatible with GPL-3.0-or-later.
+# Add one only after checking that it is.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# Our own crates are not published; their license is the workspace's.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

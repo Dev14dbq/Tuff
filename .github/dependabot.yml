@@ -1,0 +1,12 @@
+# Pull requests that move pinned actions and base images forward. Cargo
+# dependencies are checked by cargo deny and cargo audit instead.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
