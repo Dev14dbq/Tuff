@@ -1,34 +1,25 @@
-//! Crafters (minecraft.wiki: "Crafter").
-//!
-//! Nine slots that craft like a crafting table's grid when the block is
-//! triggered by redstone (`mc_tick::hopper`): the result goes into the
-//! container it faces, or out onto the ground with world events 1049 and
-//! 2010; the leftovers (empty buckets...) follow it; each filled slot
-//! loses one item. With no recipe it plays world event 1050 instead. The
-//! block shows `crafting` for 6 ticks after a craft.
-//!
-//! Slots can be switched off from the window (`disabled_slots` in the
-//! block entity): they take nothing. Hoppers spread what they bring over
-//! the slots, each item going to the first slot that has no emptier or
-//! smaller same stack after it. A comparator reads how many slots are
-//! filled or switched off.
+//! Crafters on the server: the rules are in `mc_tick::block_entity::crafter`;
+//! this keeps the crafters showing `crafting`, and answers the window
+//! (switching slots off, the result shown) and comparators (how many slots
+//! are filled or switched off).
 
 use std::collections::HashMap;
 
 use mc_nbt::{Compound, Tag};
 use mc_protocol::Position;
 use mc_protocol::packets::play::ItemStack;
-use mc_tick::Dir;
+use mc_tick::block_entity::crafter::{self, CRAFTING_TICKS};
 
+use crate::block_entities::Host;
 use crate::containers;
-use crate::context::{Event, ServerContext};
+use crate::context::ServerContext;
+use crate::level::{WorldLevel, to_pos};
 use crate::tick::lock;
+
+pub use mc_tick::block_entity::crafter::ID;
 
 /// Crafters showing `crafting`, with the ticks left.
 pub type Active = HashMap<(i32, i32, i32), i32>;
-
-pub const ID: &str = "minecraft:crafter";
-const CRAFTING_TICKS: i32 = 6;
 
 pub fn kind() -> containers::Kind {
     containers::Kind {
@@ -49,17 +40,7 @@ fn is_crafter(ctx: &ServerContext, p: Position) -> bool {
 
 /// The switched-off slots of the crafter at `p`.
 pub fn disabled(ctx: &ServerContext, p: Position) -> [bool; 9] {
-    let mut out = [false; 9];
-    if let Some(be) = ctx.world.block_entity(p, &ctx.data.blocks)
-        && let Some(Tag::IntArray(list)) = be.data.get("disabled_slots")
-    {
-        for &i in list {
-            if let Some(o) = usize::try_from(i).ok().and_then(|i| out.get_mut(i)) {
-                *o = true;
-            }
-        }
-    }
-    out
+    crafter::disabled(&Host::new(ctx), to_pos(p))
 }
 
 /// Switches slot `slot` on or off (only an empty one goes off).
@@ -119,120 +100,31 @@ pub fn signal(ctx: &ServerContext, p: Position) -> u8 {
     (0..9).filter(|&i| slots[i].is_some() || off[i]).count() as u8
 }
 
-/// Whether a hopper may put `stack` into slot `slot` (vanilla's even
-/// spreading: not while a later slot is emptier).
-pub fn accepts(
+/// Whether a hopper may put `stack` into slot `slot`.
+#[cfg(test)]
+fn accepts(
     ctx: &ServerContext,
     p: Position,
     slots: &[Option<ItemStack>],
     slot: usize,
     stack: &ItemStack,
 ) -> bool {
-    let off = disabled(ctx, p);
-    if slot >= 9 || off[slot] {
-        return false;
-    }
-    let Some(have) = &slots[slot] else {
-        return true;
-    };
-    if !have.same_kind(stack) || have.count >= ctx.items.max_stack(have.item) {
-        return false;
-    }
-    !(slot + 1..9).any(|j| {
-        !off[j]
-            && match &slots[j] {
-                None => true,
-                Some(s) => s.count < have.count && s.same_kind(have),
-            }
-    })
-}
-
-/// The way the crafter faces (`orientation` is front then top).
-fn front(ctx: &ServerContext, state: u32) -> Dir {
-    ctx.data
-        .blocks
-        .property(state, "orientation")
-        .and_then(|o| o.split('_').next())
-        .and_then(Dir::from_name)
-        .unwrap_or(Dir::North)
+    crafter::accepts(&Host::new(ctx), to_pos(p), slots, slot, stack)
 }
 
 /// The crafter at `p` was triggered.
-pub fn craft(level: &mut crate::level::WorldLevel, p: Position) {
+pub fn craft(level: &mut WorldLevel, p: Position) {
     let ctx = level.context();
-    let blocks = &ctx.data.blocks;
-    let Some(state) = ctx.world.block(p, blocks) else {
-        return;
-    };
-    let at = [f64::from(p.x), f64::from(p.y), f64::from(p.z)];
-    let mut slots = containers::slots(ctx, p, kind());
-    let recipes = ctx.recipes.get();
-    let Some((made, recipe)) = recipes.craft_named(&slots[..9], 3) else {
-        crate::fx::level_event(ctx, 1050, at, 0);
-        return;
-    };
-    // Players about the crafter saw it made.
-    let used: Vec<ItemStack> = slots[..9].iter().flatten().cloned().collect();
-    let centre = [at[0] + 0.5, at[1] + 0.5, at[2] + 0.5];
-    for uuid in crate::criteria::players_near(ctx, centre, 17.0) {
-        crate::criteria::crafted(ctx, uuid, "minecraft:crafter_recipe_crafted", recipe, &used);
-    }
-    lock(&ctx.crafters).insert((p.x, p.y, p.z), CRAFTING_TICKS);
-    if blocks.property(state, "crafting") != Some("true") {
-        level.set_block(p, ctx.shapes.with(state, "crafting", "true"));
-    }
-    let facing = front(ctx, state);
-    let leftovers: Vec<ItemStack> = slots
-        .iter()
-        .flatten()
-        .filter_map(|s| crate::brewing::remainder(ctx, s.item))
-        .collect();
-    let mut changes = Vec::new();
-    for (i, slot) in slots.iter_mut().enumerate() {
-        if let Some(s) = slot.take() {
-            *slot = (s.count > 1).then(|| s.with_count(s.count - 1));
-            changes.push((i, slot.clone()));
-        }
-    }
-    containers::put(ctx, p, kind(), &changes);
-    out(ctx, p, facing, made);
-    for left in leftovers {
-        out(ctx, p, facing, left);
-    }
-}
-
-/// One crafted stack leaves the crafter: into the container in front, the
-/// rest onto the ground.
-fn out(ctx: &ServerContext, p: Position, facing: Dir, stack: ItemStack) {
-    let (dx, dy, dz) = facing.offset();
-    let front = Position::new(p.x + dx, p.y + dy, p.z + dz);
-    let mut left = stack.count;
-    while left > 0 && crate::hoppers::insert_at(ctx, front, facing.opposite(), &stack) {
-        left -= 1;
-    }
-    if left == 0 {
-        return;
-    }
-    let pos = [
-        f64::from(p.x) + 0.5 + f64::from(dx) * 0.7,
-        f64::from(p.y) + 0.5 + f64::from(dy) * 0.7 - if dy == 0 { 0.15625 } else { 0.125 },
-        f64::from(p.z) + 0.5 + f64::from(dz) * 0.7,
-    ];
-    crate::tick::spawn_stack_at(ctx, pos, &stack.with_count(left));
-    let at = [f64::from(p.x), f64::from(p.y), f64::from(p.z)];
-    crate::fx::level_event(ctx, 1049, at, 0);
-    crate::fx::level_event(ctx, 2010, at, dir_data(facing));
-}
-
-/// A direction's 3D data value (down, up, north, south, west, east).
-fn dir_data(d: Dir) -> i32 {
-    match d {
-        Dir::Down => 0,
-        Dir::Up => 1,
-        Dir::North => 2,
-        Dir::South => 3,
-        Dir::West => 4,
-        Dir::East => 5,
+    let logic = level.logic();
+    let crafted = crafter::craft(
+        level,
+        logic,
+        &mut Host::new(ctx),
+        &ctx.data.blocks,
+        to_pos(p),
+    );
+    if crafted {
+        lock(&ctx.crafters).insert((p.x, p.y, p.z), CRAFTING_TICKS);
     }
 }
 
@@ -253,19 +145,10 @@ pub fn tick(ctx: &ServerContext) {
         all.retain(|_, t| *t > 0);
         done
     };
+    let mut host = Host::new(ctx);
     for key in done {
-        let p = Position::new(key.0, key.1, key.2);
-        let Some(state) = ctx.world.block(p, &ctx.data.blocks) else {
-            continue;
-        };
-        if ctx.data.blocks.block_name(state) == Some(ID)
-            && ctx.data.blocks.property(state, "crafting") == Some("true")
-        {
-            let mut level = crate::level::WorldLevel::new(ctx);
-            level.set_block(p, ctx.shapes.with(state, "crafting", "false"));
-            let changes = level.into_changes();
-            let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
-        }
+        let p = mc_tick::BlockPos::new(key.0, key.1, key.2);
+        crafter::finish(&mut host, &ctx.data.blocks, p);
     }
 }
 
