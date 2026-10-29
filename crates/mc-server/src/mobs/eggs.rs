@@ -54,6 +54,32 @@ fn place(ctx: &ServerContext, species: Species, pos: [f64; 3], actor: &Actor) ->
     e
 }
 
+/// Any spawn egg used on a spawner or trial spawner while the game rule
+/// `spawner_blocks_work` is off: vanilla refuses it and tells the player
+/// why; the egg stays in the hand. Returns whether it was refused.
+pub fn refused_by_spawner(
+    ctx: &ServerContext,
+    outcome: &mut Outcome,
+    actor: Actor,
+    clicked: Position,
+) -> bool {
+    let blocks = &ctx.data.blocks;
+    let state = ctx.world.block(clicked, blocks).unwrap_or(0);
+    if !matches!(
+        blocks.block_name(state),
+        Some("minecraft:spawner" | "minecraft:trial_spawner")
+    ) || ctx.game_rule_bool("spawner_blocks_work")
+    {
+        return false;
+    }
+    outcome.events.push(Event::Message {
+        uuid: actor.uuid,
+        line: mc_protocol::text::translate("advMode.notEnabled.spawner", Vec::new()),
+        overlay: false,
+    });
+    true
+}
+
 /// A spawn egg used on a block. Returns whether the egg did something.
 pub fn use_on_block(
     ctx: &ServerContext,

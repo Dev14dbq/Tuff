@@ -658,6 +658,11 @@ fn spawn_round(
     day_time: i64,
     difficulty: i32,
 ) -> Vec<Entity> {
+    // Vanilla's phantom clock only runs while `spawn_mobs`, `spawn_monsters`
+    // and `spawn_phantoms` are all on; held still, it moves along with time.
+    if !phantoms_on(ctx) && spawner.phantoms_at > now {
+        spawner.phantoms_at += 1;
+    }
     // Chunks within range of a player that are loaded.
     if now - spawner.ranged_at >= RANGE_PERIOD || spawner.eligible.is_empty() {
         let mut chunks: HashSet<(i32, i32)> = HashSet::new();
@@ -1201,9 +1206,17 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
     }
 }
 
+/// Whether the phantom spawner runs at all.
+fn phantoms_on(ctx: &ServerContext) -> bool {
+    ctx.game_rule_bool("minecraft:spawn_mobs")
+        && ctx.game_rule_bool("minecraft:spawn_monsters")
+        && ctx.game_rule_bool("minecraft:spawn_phantoms")
+}
+
 /// Phantoms: every minute or two, each player in the open at night who has
 /// not slept for three days or more (their `time_since_rest` statistic)
-/// may draw a few from the sky.
+/// may draw a few from the sky. Creative players draw them too; only
+/// spectators are passed over.
 fn phantoms(
     ctx: &ServerContext,
     next_at: &mut i64,
@@ -1212,22 +1225,18 @@ fn phantoms(
     difficulty: i32,
     out: &mut Vec<Entity>,
 ) {
-    if now < *next_at {
+    if ctx.world.dimension != "minecraft:overworld" || !phantoms_on(ctx) || now < *next_at {
         return;
     }
     *next_at = now + 1200 + i64::from(below(1200));
     // Only under a sky that turns night.
-    if ctx.world.dimension != "minecraft:overworld"
-        || difficulty == 0
-        || spots.darken < 5
-        || !ctx.game_rule_bool("minecraft:spawn_phantoms")
-    {
+    if difficulty == 0 || spots.darken < 5 {
         return;
     }
     let day_time = super::day_time(ctx);
     let world_age = lock(&ctx.time).age;
     let regional = regional_difficulty(difficulty, world_age, day_time);
-    for t in spots.targets.iter().filter(|t| t.targetable) {
+    for t in spots.targets.iter().filter(|t| t.present) {
         let unrest = i64::from(crate::stats::get(
             ctx,
             t.uuid,
