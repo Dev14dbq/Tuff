@@ -95,7 +95,7 @@ impl Sink<'_> {
     /// Tells a player's recipe book of a recipe it gained; those told one
     /// after the other share a packet.
     fn book_added(&mut self, uuid: u128, id: i32) {
-        let Some(entry) = self.ctx.recipes.book_entry(id, true, true) else {
+        let Some(entry) = self.ctx.recipes.get().book_entry(id, true, true) else {
             return;
         };
         if let Some(Event::Direct {
@@ -595,7 +595,13 @@ pub fn seen_tab(tab: Option<String>) -> Option<mc_protocol::packets::play::Selec
 fn items_of(ctx: &ServerContext, v: &serde_json::Value) -> HashSet<i32> {
     let one = |s: &str| -> Vec<i32> {
         match s.strip_prefix('#') {
-            Some(tag) => ctx.recipes.item_tags.get(tag).cloned().unwrap_or_default(),
+            Some(tag) => ctx
+                .recipes
+                .get()
+                .item_tags
+                .get(tag)
+                .cloned()
+                .unwrap_or_default(),
             None => ctx.items.id(s).into_iter().collect(),
         }
     };
@@ -664,7 +670,7 @@ pub fn load_progress(
         recipes
             .iter()
             .map(|r| full_id(r))
-            .filter(|r| ctx.recipes.book_id(r).is_some() || book_hidden(ctx, r))
+            .filter(|r| ctx.recipes.get().book_id(r).is_some() || book_hidden(ctx, r))
             .collect(),
     );
     state
@@ -677,7 +683,7 @@ pub fn load_progress(
             .highlight
             .iter()
             .map(|r| full_id(r))
-            .filter(|r| ctx.recipes.book_id(r).is_some())
+            .filter(|r| ctx.recipes.get().book_id(r).is_some())
             .collect(),
     );
     // Everything in the inventory counts as new again.
@@ -805,8 +811,8 @@ pub fn initial_book(ctx: &ServerContext, uuid: u128) -> RecipeBookAdd {
         entries: known
             .iter()
             .filter_map(|r| {
-                let id = ctx.recipes.book_id(r)?;
-                ctx.recipes.book_entry(id, false, unseen.contains(r))
+                let id = ctx.recipes.get().book_id(r)?;
+                ctx.recipes.get().book_entry(id, false, unseen.contains(r))
             })
             .collect(),
         replace: true,
@@ -815,11 +821,11 @@ pub fn initial_book(ctx: &ServerContext, uuid: u128) -> RecipeBookAdd {
 
 /// The client showed a recipe's highlight: it is not new any more.
 pub fn recipe_seen(ctx: &ServerContext, uuid: u128, id: i32) {
-    let Some(r) = ctx.recipes.book_recipe(id) else {
+    let Some(name) = ctx.recipes.get().book_recipe(id).map(|r| r.name.clone()) else {
         return;
     };
     if let Some(h) = lock(&ctx.rare).progress.highlight.get_mut(&uuid) {
-        h.remove(&r.name);
+        h.remove(&name);
     }
 }
 
@@ -1133,7 +1139,7 @@ fn unlock_recipe(r: &mut Sink, b: &Book, p: &Target, recipe: &str) -> bool {
         .or_default()
         .insert(recipe.to_owned());
     if new {
-        if let Some(id) = r.ctx.recipes.book_id(recipe) {
+        if let Some(id) = r.ctx.recipes.get().book_id(recipe) {
             lock(&r.ctx.rare)
                 .progress
                 .highlight
@@ -1162,7 +1168,7 @@ fn forget_recipe(r: &mut Sink, p: &Target, recipe: &str) -> bool {
         h.remove(recipe);
     }
     drop(state);
-    if had && let Some(id) = r.ctx.recipes.book_id(recipe) {
+    if had && let Some(id) = r.ctx.recipes.get().book_id(recipe) {
         r.book_removed(uuid, id);
     }
     had
@@ -1558,7 +1564,7 @@ mod tests {
     #[test]
     fn recipe_give_and_take_change_the_book_and_tell_the_client() {
         let Some(ctx) = setup() else { return };
-        let stick = ctx.recipes.book_id("minecraft:stick").unwrap();
+        let stick = ctx.recipes.get().book_id("minecraft:stick").unwrap();
         let out = run(&ctx, "recipe give P52 minecraft:stick");
         let (added, removed) = changes(&out.events);
         assert!(added.contains(&stick) && removed.is_empty());
@@ -1600,7 +1606,7 @@ mod tests {
         watch(&ctx);
         assert!(knows_recipe(&ctx, ME, "minecraft:stick"));
         let (added, _) = changes(&drain(&mut rx));
-        assert!(added.contains(&ctx.recipes.book_id("minecraft:stick").unwrap()));
+        assert!(added.contains(&ctx.recipes.get().book_id("minecraft:stick").unwrap()));
         // Nothing new when nothing changed.
         watch(&ctx);
         assert!(changes(&drain(&mut rx)).0.is_empty());
@@ -1616,7 +1622,7 @@ mod tests {
     fn looking_at_a_recipe_clears_its_highlight() {
         let Some(ctx) = setup() else { return };
         run(&ctx, "recipe give P52 minecraft:stick");
-        let id = ctx.recipes.book_id("minecraft:stick").unwrap();
+        let id = ctx.recipes.get().book_id("minecraft:stick").unwrap();
         assert!(highlighted_of(&ctx).contains(&"minecraft:stick".to_owned()));
         recipe_seen(&ctx, ME, id);
         assert!(!highlighted_of(&ctx).contains(&"minecraft:stick".to_owned()));
@@ -1629,7 +1635,7 @@ mod tests {
         run(&ctx, "recipe give P52 minecraft:stick");
         run(&ctx, "recipe give P52 minecraft:furnace");
         for seen in ["minecraft:furnace", "minecraft:crafting_table"] {
-            recipe_seen(&ctx, ME, ctx.recipes.book_id(seen).unwrap());
+            recipe_seen(&ctx, ME, ctx.recipes.get().book_id(seen).unwrap());
         }
         book_settings(&ctx, ME, 0, true, false);
         book_settings(&ctx, ME, 3, false, true);
@@ -1681,7 +1687,10 @@ mod tests {
             .filter(|e| e.highlight)
             .map(|e| e.id)
             .collect();
-        assert_eq!(new, vec![ctx.recipes.book_id("minecraft:stick").unwrap()]);
+        assert_eq!(
+            new,
+            vec![ctx.recipes.get().book_id("minecraft:stick").unwrap()]
+        );
         assert!(packet.entries.iter().all(|e| !e.notification));
         let settings = settings_packet(&ctx, other);
         assert_eq!(settings.books[0], (true, false));

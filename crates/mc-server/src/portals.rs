@@ -19,15 +19,21 @@ use crate::tick::lock;
 #[cfg(test)]
 const WAIT: u32 = 80;
 /// Ticks a player must be out of every portal before one works again (also
-/// after coming through one; 300 for mobs).
+/// after coming through one). Other entities wait 15 seconds, the same
+/// length as the portal ticket on the far side.
 pub const COOLDOWN: u32 = 10;
+/// Ticks before a non-player entity can use a portal again.
+const ENTITY_COOLDOWN: u32 = 300;
 /// Where a player entering the End appears.
 pub const END_SPAWN: (f64, f64, f64) = (100.5, 49.0, 0.5);
 
-/// Players standing in portals, and how long.
+/// Players standing in portals, and how long. Other entities that just
+/// came through keep a cooldown so they do not bounce straight back.
 #[derive(Debug, Default)]
 pub struct Waiting {
     players: HashMap<u128, Wait>,
+    /// Entity id → ticks left before a portal will take it again.
+    arrived: HashMap<i32, u32>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -122,6 +128,9 @@ pub fn tick(ctx: &ServerContext) {
     }
     for (uuid, here, kind, pose) in jobs {
         if let Some((dimension, pose)) = destination(&here, uuid, kind, pose) {
+            if let Some(dest) = ctx.in_dimension(&dimension) {
+                crate::tickets::portal(&dest, pose.x, pose.z);
+            }
             let _ = ctx.events.send(Event::ChangeDimension {
                 uuid,
                 dimension,
@@ -130,6 +139,145 @@ pub fn tick(ctx: &ServerContext) {
             });
         }
     }
+    ferry_entities(ctx);
+}
+
+/// An entity that is not a player walks into a portal and comes out the
+/// other side on the same tick. A portal ticket there keeps the chunk
+/// simulating, so it keeps moving with nobody nearby. Riders go with the
+/// vehicle. The cooldown is stored on the destination.
+fn ferry_entities(ctx: &ServerContext) {
+    {
+        let mut waiting = lock(&ctx.portals);
+        waiting.arrived.retain(|_, left| {
+            *left = left.saturating_sub(1);
+            *left > 0
+        });
+    }
+    let cooling: Vec<i32> = lock(&ctx.portals).arrived.keys().copied().collect();
+    let players: Vec<i32> = lock(&ctx.players).values().map(|p| p.entity_id).collect();
+    let to_nether = lock(&ctx.game_rules).bool("allow_entering_nether_using_portals");
+    let overworld = ctx.dim == 0;
+    let mut carried = Vec::new();
+    let mut trips = Vec::new();
+    {
+        let entities = lock(&ctx.entities);
+        for e in entities.iter() {
+            carried.extend(passengers(e));
+        }
+        for e in entities.iter() {
+            if e.removed
+                || cooling.contains(&e.id)
+                || players.contains(&e.id)
+                || carried.contains(&e.id)
+            {
+                continue;
+            }
+            let pose = pose_of(e.pos);
+            let Some(kind) = portal_at(ctx, pose) else {
+                continue;
+            };
+            if kind == Kind::Nether && !to_nether && overworld {
+                continue;
+            }
+            trips.push((e.id, kind, pose));
+        }
+    }
+    for (id, kind, pose) in trips {
+        let Some((dimension, dest_pose)) = entity_destination(ctx, kind, pose) else {
+            continue;
+        };
+        let Some(dest) = ctx.in_dimension(&dimension) else {
+            continue;
+        };
+        let mut moving = take_with_riders(ctx, id);
+        if moving.is_empty() {
+            continue;
+        }
+        let origin = moving[0].pos;
+        let (dx, dy, dz) = (
+            dest_pose.x - origin[0],
+            dest_pose.y - origin[1],
+            dest_pose.z - origin[2],
+        );
+        let mut ids = Vec::new();
+        for e in &mut moving {
+            e.pos[0] += dx;
+            e.pos[1] += dy;
+            e.pos[2] += dz;
+            e.vel = [0.0; 3];
+            ids.push(e.id);
+            let _ = dest.events.send(Event::EntitySpawned(e.clone()));
+        }
+        lock(&dest.entities).extend(moving);
+        {
+            let mut waiting = lock(&dest.portals);
+            for id in &ids {
+                waiting.arrived.insert(*id, ENTITY_COOLDOWN);
+            }
+        }
+        crate::tickets::portal(&dest, dest_pose.x, dest_pose.z);
+        let _ = ctx.events.send(Event::EntitiesRemoved(ids));
+    }
+}
+
+fn pose_of(pos: [f64; 3]) -> Pose {
+    Pose {
+        x: pos[0],
+        y: pos[1],
+        z: pos[2],
+        yaw: 0.0,
+        pitch: 0.0,
+        on_ground: false,
+    }
+}
+
+fn passengers(e: &mc_entity::Entity) -> Vec<i32> {
+    match &e.kind {
+        mc_entity::Kind::Mob(m) => m.riders.clone(),
+        mc_entity::Kind::Vehicle(v) => v.riders.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// The vehicle and whoever is riding it, vehicle first.
+fn take_with_riders(ctx: &ServerContext, id: i32) -> Vec<mc_entity::Entity> {
+    let mut all = lock(&ctx.entities);
+    let Some(pos) = all.iter().position(|e| e.id == id) else {
+        return Vec::new();
+    };
+    let vehicle = all.remove(pos);
+    let riders = passengers(&vehicle);
+    let mut out = vec![vehicle];
+    all.retain(|e| {
+        if riders.contains(&e.id) {
+            out.push(e.clone());
+            false
+        } else {
+            true
+        }
+    });
+    out
+}
+
+/// Where an entity (not a player) comes out. Leaving the End uses the
+/// world spawn, not a bed.
+fn entity_destination(from: &ServerContext, kind: Kind, pose: Pose) -> Option<(String, Pose)> {
+    if kind == Kind::End && from.dim == 2 {
+        let r = lock(&from.spawn).clone();
+        return Some((
+            r.dimension,
+            Pose {
+                x: f64::from(r.pos.0) + 0.5,
+                y: f64::from(r.pos.1),
+                z: f64::from(r.pos.2) + 0.5,
+                yaw: r.yaw,
+                pitch: r.pitch,
+                on_ground: false,
+            },
+        ));
+    }
+    destination(from, 0, kind, pose)
 }
 
 /// Where a portal of `kind` in `from` leads for a player at `pose`.
@@ -746,6 +894,49 @@ mod tests {
             (back.x - 79.5).abs() < 10.0 && (back.z - 800.5).abs() < 10.0,
             "{back:?}"
         );
+    }
+
+    #[test]
+    fn an_item_steps_through_a_portal_into_the_nether() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        frame(&ctx);
+        light(&ctx, 0, -60, 0);
+        let id = ctx.next_entity_id();
+        lock(&ctx.entities).push(mc_entity::Entity {
+            id,
+            uuid: 9,
+            kind: mc_entity::Kind::FallingBlock { state: 1 },
+            pos: [0.5, -60.0, 0.5],
+            vel: [0.2, 0.0, 0.0],
+            on_ground: false,
+            age: 0,
+            removed: false,
+            tags: Vec::new(),
+        });
+        tick(&ctx);
+        assert!(lock(&ctx.entities).is_empty(), "it left the overworld");
+        let nether = ctx.dimension(1).expect("nether");
+        let there = lock(&nether.entities);
+        assert_eq!(there.len(), 1);
+        assert_eq!(there[0].id, id);
+        assert_eq!(there[0].vel, [0.0; 3]);
+        assert!(
+            there[0].pos[0].abs() < 20.0 && there[0].pos[2].abs() < 20.0,
+            "came out near the scaled spot {:?}",
+            there[0].pos
+        );
+        assert_eq!(
+            lock(&nether.portals).arrived.get(&id),
+            Some(&ENTITY_COOLDOWN)
+        );
+        drop(there);
+        // The cooldown holds: another tick does not send it back.
+        tick(&nether);
+        assert_eq!(lock(&nether.entities).len(), 1);
+        assert!(lock(&ctx.entities).is_empty());
     }
 
     #[test]

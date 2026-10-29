@@ -675,7 +675,7 @@ pub fn dig(
             enchants: crate::mobs::hurt::enchant_list(h.comps.as_ref()),
         });
         let env = crate::commands::loot::Env(ctx);
-        for drop in ctx.loot.drops_mined(&env, name, &props, tool) {
+        for drop in ctx.loot.get().drops_mined(&env, name, &props, tool) {
             outcome.drops.push((position, drop));
         }
         if !silk_touch(ctx, actor.uuid) {
@@ -1296,7 +1296,7 @@ fn wear_held(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, hand: i32
 
 /// Puts `item` (or nothing) in place of one of the held stack; a stack of
 /// several keeps the rest and `item` goes elsewhere in the inventory.
-fn replace_held(
+pub(crate) fn replace_held(
     ctx: &ServerContext,
     outcome: &mut Outcome,
     actor: Actor,

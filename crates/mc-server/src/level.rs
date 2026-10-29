@@ -147,6 +147,38 @@ impl Drop for WorldLevel<'_> {
     }
 }
 
+/// Blocks fire never burns out on, from this dimension's `infiniburn` tag.
+fn infiniburn(ctx: &ServerContext) -> std::sync::Arc<std::collections::HashSet<String>> {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, std::sync::Arc<HashSet<String>>>>> =
+        OnceLock::new();
+    let mut cache = crate::tick::lock(CACHE.get_or_init(Default::default));
+    cache
+        .entry(ctx.world.dimension.clone())
+        .or_insert_with(|| {
+            let tag = ctx
+                .data
+                .data_pack()
+                .read_entry("minecraft:dimension_type", &ctx.world.dimension)
+                .ok()
+                .and_then(|json| {
+                    json["infiniburn"]
+                        .as_str()
+                        .map(|s| s.trim_start_matches('#').to_owned())
+                })
+                .unwrap_or_else(|| "minecraft:infiniburn_overworld".to_owned());
+            std::sync::Arc::new(
+                ctx.commands
+                    .env
+                    .tag("minecraft:block", &tag)
+                    .into_iter()
+                    .collect::<HashSet<_>>(),
+            )
+        })
+        .clone()
+}
+
 impl Level for WorldLevel<'_> {
     fn allows_nether_portal(&self) -> bool {
         self.ctx.dim < 2
@@ -338,7 +370,7 @@ impl Level for WorldLevel<'_> {
             && ctx.game_rule_bool("block_drops")
         {
             let props = |k: &str| blocks.property(state, k).map(str::to_owned);
-            for drop in ctx.loot.drops(name, &props) {
+            for drop in ctx.loot.get().drops(name, &props) {
                 crate::tick::drop_item(ctx, at, drop);
             }
         }
@@ -548,6 +580,20 @@ impl Level for WorldLevel<'_> {
 
     fn ultrawarm(&self) -> bool {
         crate::environment::flag(self.ctx, None, crate::environment::WATER_EVAPORATES, false)
+    }
+
+    fn burns_forever(&self, below: &str) -> bool {
+        let name = format!("minecraft:{}", below.trim_start_matches("minecraft:"));
+        infiniburn(self.ctx).contains(&name)
+    }
+
+    fn burns_out_faster(&self, p: BlockPos) -> bool {
+        crate::environment::flag(
+            self.ctx,
+            Some([p.x, p.y, p.z]),
+            "minecraft:gameplay/increased_fire_burnout",
+            false,
+        )
     }
 
     fn sponge_dried(&mut self, p: BlockPos) {

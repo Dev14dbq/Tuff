@@ -3,7 +3,7 @@
 //! lies), and decorating a chunk.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -71,28 +71,26 @@ impl std::fmt::Debug for Features {
 }
 
 impl Features {
-    /// `worldgen` is the data pack's `data/minecraft/worldgen` folder;
-    /// `biome_order` the dimension's biomes in the biome source's order;
-    /// `biome_ids` the biome registry.
+    /// `data_root` is the vanilla `data` folder. `layers` are enabled
+    /// datapack `data` folders, lowest priority first: a later file replaces
+    /// the same `namespace:path` under `worldgen`. `biome_order` is the
+    /// dimension's biomes in the biome source's order; `biome_ids` the
+    /// biome registry. Biomes that only a datapack defines are appended.
     pub fn load(
-        worldgen: &Path,
+        data_root: &Path,
+        layers: &[PathBuf],
         facts: Facts,
         biome_order: &[String],
         biome_ids: &HashMap<String, u32>,
         heights: Heights,
     ) -> Self {
         let facts = Arc::new(facts);
-        let loader = Loader::new(&facts, worldgen.to_owned());
-        // Each biome's lists, in the biome source's order.
+        let roots = crate::pack::roots(data_root, layers);
+        let loader = Loader::new(&facts, roots.clone());
+        // Each biome's lists, in the biome source's order, then datapack biomes.
         let mut lists: Vec<(String, Vec<Vec<String>>, Value)> = Vec::new();
-        for name in biome_order {
-            let short = name.trim_start_matches("minecraft:");
-            let Ok(text) =
-                std::fs::read_to_string(worldgen.join("biome").join(format!("{short}.json")))
-            else {
-                continue;
-            };
-            let Ok(v) = serde_json::from_str::<Value>(&text) else {
+        for name in biome_names(biome_order, layers) {
+            let Some(v) = crate::pack::read_id(&roots, "biome", &name) else {
                 continue;
             };
             let steps: Vec<Vec<String>> = v["features"]
@@ -103,15 +101,11 @@ impl Features {
                     step.as_array()
                         .into_iter()
                         .flatten()
-                        .filter_map(|f| {
-                            f.as_str().map(|s| {
-                                format!("minecraft:{}", s.trim_start_matches("minecraft:"))
-                            })
-                        })
+                        .filter_map(|f| f.as_str().map(crate::pack::full_id))
                         .collect()
                 })
                 .collect();
-            lists.push((name.clone(), steps, v));
+            lists.push((name, steps, v));
         }
         let order = sort(&lists.iter().map(|(_, s, _)| s.clone()).collect::<Vec<_>>());
         let steps: Vec<Vec<Arc<Placed>>> = order
@@ -154,10 +148,17 @@ impl Features {
             biomes.insert(id, b);
         }
         let structures =
-            crate::structure::Structures::load(worldgen, facts.clone(), &loader, biome_ids);
+            crate::structure::Structures::load(&roots, facts.clone(), &loader, biome_ids);
         // The trees saplings grow into, whether or not a biome plants them.
         for id in SAPLING_TREES {
             loader.configured(&Value::String((*id).to_owned()));
+        }
+        // Configured features a datapack adds or replaces, even when no
+        // biome in this dimension lists them.
+        for layer in layers {
+            for id in crate::pack::read_kind(std::slice::from_ref(layer), "feature").into_keys() {
+                loader.configured(&Value::String(id));
+            }
         }
         let configured = loader.configured_by_id();
         let mut unsupported: Vec<(String, usize)> = loader
@@ -309,6 +310,20 @@ impl Features {
     }
 }
 
+/// Biome ids to load: the dimension's order, then ids only a datapack has.
+fn biome_names(biome_order: &[String], layers: &[PathBuf]) -> Vec<String> {
+    let mut names = biome_order.to_vec();
+    let mut seen: HashSet<String> = names.iter().cloned().collect();
+    for layer in layers {
+        for id in crate::pack::read_kind(std::slice::from_ref(layer), "biome").into_keys() {
+            if seen.insert(id.clone()) {
+                names.push(id);
+            }
+        }
+    }
+    names
+}
+
 /// One order of every feature per step that keeps each biome's order:
 /// features numbered by first appearance, then a depth-first topological
 /// sort, as the game's feature sorter.
@@ -381,4 +396,132 @@ fn sort(biomes: &[Vec<Vec<String>>]) -> Vec<Vec<String>> {
                 .collect()
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    use super::*;
+    use crate::feature::Feature;
+
+    fn facts() -> Option<crate::blocks::Facts> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        if !root.is_dir() {
+            return None;
+        }
+        let data = mc_data::McData::load(&root).ok()?;
+        let shapes = mc_tick::Shapes::new(&data, None, None);
+        let rules = mc_tick::BlockRules::new(&data).ok()?;
+        crate::blocks::Facts::new(&data, shapes, rules).ok()
+    }
+
+    /// A datapack layer replaces a vanilla biome's feature list and adds a
+    /// configured feature, a placed feature, a biome, and a structure.
+    #[test]
+    fn datapack_worldgen_replaces_vanilla_files() {
+        let Some(facts) = facts() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let data_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3/data");
+        let tmp = std::env::temp_dir().join(format!("mc-worldgen-overlay-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let layer = tmp.join("data");
+        std::fs::create_dir_all(layer.join("minecraft/worldgen/biome")).unwrap();
+        std::fs::create_dir_all(layer.join("pack/worldgen/feature")).unwrap();
+        std::fs::create_dir_all(layer.join("pack/worldgen/placed_feature")).unwrap();
+        std::fs::create_dir_all(layer.join("pack/worldgen/biome")).unwrap();
+        std::fs::create_dir_all(layer.join("pack/worldgen/structure")).unwrap();
+        std::fs::write(
+            layer.join("minecraft/worldgen/biome/plains.json"),
+            r#"{"temperature":0.05,"has_precipitation":false,"features":[["pack:only_marker"]]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            layer.join("pack/worldgen/feature/marker_block.json"),
+            r#"{"type":"minecraft:no_op"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            layer.join("pack/worldgen/feature/spare.json"),
+            r#"{"type":"minecraft:no_op"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            layer.join("pack/worldgen/placed_feature/only_marker.json"),
+            r#"{"feature":"pack:marker_block","placement":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            layer.join("pack/worldgen/biome/highlands.json"),
+            r#"{"temperature":0.2,"has_precipitation":true,"features":[["pack:only_marker"]]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            layer.join("pack/worldgen/structure/camp.json"),
+            r#"{"type":"minecraft:jigsaw","biomes":"minecraft:plains","step":"surface_structures","start_pool":"minecraft:empty","size":1,"start_height":{"absolute":0},"max_distance_from_center":80,"use_expansion_hack":false}"#,
+        )
+        .unwrap();
+
+        let mut biome_ids = HashMap::new();
+        biome_ids.insert("minecraft:plains".to_owned(), 0);
+        biome_ids.insert("pack:highlands".to_owned(), 1);
+        let heights = Heights {
+            min_y: -64,
+            height: 384,
+            sea_level: 63,
+        };
+        let features = Features::load(
+            &data_root,
+            &[layer],
+            facts,
+            &["minecraft:plains".to_owned()],
+            &biome_ids,
+            heights,
+        );
+
+        assert!(
+            features.biome_has(0, "pack:only_marker"),
+            "plains should use the datapack feature list"
+        );
+        assert!(
+            !features.biome_has(0, "minecraft:ore_dirt"),
+            "the vanilla plains feature list should be replaced"
+        );
+        let plains = features.temperature(0, crate::P::new(0, 64, 0));
+        assert!(
+            (plains - 0.05).abs() < 0.001,
+            "plains temperature {plains} should come from the datapack"
+        );
+        assert!(!features.has_precipitation(0));
+        assert!(features.biome_has(1, "pack:only_marker"));
+        let highlands = features.temperature(1, crate::P::new(0, 64, 0));
+        assert!((highlands - 0.2).abs() < 0.001, "{highlands}");
+        assert!(matches!(
+            features.configured("pack:marker_block").map(|f| f.as_ref()),
+            Some(Feature::NoOp)
+        ));
+        assert!(matches!(
+            features.configured("pack:spare").map(|f| f.as_ref()),
+            Some(Feature::NoOp)
+        ));
+        assert!(features.structures.has("pack:camp"));
+        assert!(features.structures.has("minecraft:stronghold"));
+        assert!(
+            features
+                .structures
+                .has_pool("minecraft:village/plains/town_centers")
+        );
+        assert!(features.configured("minecraft:oak").is_some());
+        assert!(
+            features
+                .structures
+                .template("minecraft:end_city/ship")
+                .is_some()
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }

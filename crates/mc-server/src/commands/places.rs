@@ -590,11 +590,11 @@ fn forceload_change(r: &mut Run, add: bool) -> Result<i32> {
                 }
             }
         }
-        if changed > 0 {
-            forced.save();
-        }
         (changed, first)
     };
+    if changed > 0 {
+        crate::tickets::save(r.ctx);
+    }
     let verb = if add { "added" } else { "removed" };
     let Some(first) = first else {
         return Err(err(
@@ -626,8 +626,8 @@ fn forceload_remove_all(r: &mut Run) -> Result<i32> {
     {
         let mut forced = crate::tick::lock(&r.ctx.forced);
         forced.clear();
-        forced.save();
     }
+    crate::tickets::save(r.ctx);
     r.success(
         translate("commands.forceload.removed.all", vec![Tag::from(OVERWORLD)]),
         true,

@@ -27,10 +27,31 @@ const LIT_FURNACE: u32 = 4096;
 const BED: u32 = 8192;
 /// The head of a bed nobody lies in.
 const BED_FREE: u32 = 32768;
-/// A full cube that suffocates (not glass, not leaves).
+/// A full cube that suffocates (not glass, not leaves, not a door).
 const SMOTHER: u32 = 16384;
+
+/// Whether standing inside this block state suffocates. The same rule mobs
+/// use for `SMOTHER`.
+pub(crate) fn suffocates(ctx: &ServerContext, state: u32) -> bool {
+    use mc_tick::support::{BOTTOM_FULL, TOP_FULL};
+    let blocks = &ctx.data.blocks;
+    let name = blocks.block_name(state).unwrap_or("");
+    let name = name.trim_start_matches("minecraft:");
+    let full = ctx.shapes.support(state) & (TOP_FULL | BOTTOM_FULL) == TOP_FULL | BOTTOM_FULL;
+    ctx.rules.blocks_motion(state)
+        && full
+        && !name.contains("glass")
+        && !name.ends_with("_leaves")
+        && !name.ends_with("_door")
+}
 /// A block silverfish hide in.
 const INFESTABLE: u32 = 65536;
+/// Magma underfoot.
+const MAGMA: u32 = 1 << 17;
+/// A cactus, which pricks whatever stands in it.
+const CACTUS: u32 = 1 << 18;
+/// A sweet berry bush old enough to hurt.
+const BERRY: u32 = 1 << 19;
 
 /// What each block state is to a mob, worked out once from the block tables.
 fn flags(ctx: &ServerContext) -> &'static [u32] {
@@ -67,6 +88,15 @@ fn flags(ctx: &ServerContext) -> &'static [u32] {
                 ) || name.ends_with("campfire") && blocks.property(state, "lit") == Some("true")
                 {
                     f |= HAZARD;
+                }
+                if name == "magma_block" {
+                    f |= MAGMA;
+                }
+                if name == "cactus" {
+                    f |= CACTUS;
+                }
+                if name == "sweet_berry_bush" && blocks.property(state, "age") != Some("0") {
+                    f |= BERRY;
                 }
                 if matches!(
                     name,
@@ -111,15 +141,7 @@ fn flags(ctx: &ServerContext) -> &'static [u32] {
                 if super::infest::is_host(name) {
                     f |= INFESTABLE;
                 }
-                use mc_tick::support::{BOTTOM_FULL, TOP_FULL};
-                let full =
-                    ctx.shapes.support(state) & (TOP_FULL | BOTTOM_FULL) == TOP_FULL | BOTTOM_FULL;
-                if f & SOLID != 0
-                    && full
-                    && !name.contains("glass")
-                    && !name.ends_with("_leaves")
-                    && !name.ends_with("_door")
-                {
+                if suffocates(ctx, state) {
                     f |= SMOTHER;
                 }
                 f
@@ -266,6 +288,28 @@ impl Collide for Ground<'_> {
         self.at(x, y, z) & SOLID != 0
     }
 
+    fn boxes(&self, x: i32, y: i32, z: i32, out: &mut Vec<mc_entity::Aabb>) {
+        if !self.loaded(x, z) {
+            out.push(mc_entity::Aabb {
+                min: [f64::from(x), f64::from(y), f64::from(z)],
+                max: [f64::from(x) + 1.0, f64::from(y) + 1.0, f64::from(z) + 1.0],
+            });
+            return;
+        }
+        let blocks = &self.ctx.data.blocks;
+        let Some(state) = self.ctx.world.block(Position::new(x, y, z), blocks) else {
+            return;
+        };
+        let name = blocks.block_name(state).unwrap_or("");
+        super::hitbox::push(
+            name,
+            &|k| blocks.property(state, k),
+            [x, y, z],
+            self.span(x, y, z),
+            out,
+        );
+    }
+
     fn span(&self, x: i32, y: i32, z: i32) -> Option<(f64, f64)> {
         if !self.solid(x, y, z) {
             return None;
@@ -303,6 +347,21 @@ impl Terrain for Ground<'_> {
 
     fn hazard(&self, x: i32, y: i32, z: i32) -> bool {
         self.at(x, y, z) & HAZARD != 0
+    }
+
+    fn burns_feet(&self, x: i32, y: i32, z: i32) -> bool {
+        self.at(x, y, z) & MAGMA != 0
+    }
+
+    fn pricks(&self, x: i32, y: i32, z: i32) -> Option<&'static str> {
+        let f = self.at(x, y, z);
+        if f & CACTUS != 0 {
+            Some("minecraft:cactus")
+        } else if f & BERRY != 0 {
+            Some("minecraft:sweet_berry_bush")
+        } else {
+            None
+        }
     }
 
     fn sky_light(&self, x: i32, y: i32, z: i32) -> u8 {

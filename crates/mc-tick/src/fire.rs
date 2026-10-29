@@ -222,7 +222,7 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
         return;
     }
     let below = level.block(p.offset(Dir::Down));
-    let infinite = matches!(name(ctx, below), "netherrack" | "magma_block");
+    let infinite = level.burns_forever(name(ctx, below));
     let old_age = age(ctx, state);
     if !infinite && near_rain(level, p) && rng.unit() < 0.2 + f64::from(old_age) * 0.03 {
         set_block(level, ctx, p, ctx.shapes.air(), Flags::ALL);
@@ -245,6 +245,7 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
             return;
         }
     }
+    let humid = level.burns_out_faster(p);
     for (d, chance) in [
         (Dir::East, 300),
         (Dir::West, 300),
@@ -253,6 +254,7 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
         (Dir::North, 300),
         (Dir::South, 300),
     ] {
+        let chance = if humid { chance - 50 } else { chance };
         burn_out(level, ctx, p.offset(d), chance, age, &mut rng);
     }
     // Normal difficulty.

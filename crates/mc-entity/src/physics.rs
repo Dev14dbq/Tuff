@@ -6,9 +6,20 @@ pub trait Collide {
     fn solid(&self, x: i32, y: i32, z: i32) -> bool;
     /// The bottom and top of the block's collision box within its cell, in
     /// blocks (a bottom slab `(0, 0.5)`, a fence `(0, 1.5)`); `None` when
-    /// nothing stops entities there. Collision boxes fill the cell sideways.
+    /// nothing stops entities there. The default box fills the cell sideways.
     fn span(&self, x: i32, y: i32, z: i32) -> Option<(f64, f64)> {
         self.solid(x, y, z).then_some((0.0, 1.0))
+    }
+    /// Every collision box of the block. The default is one full-width
+    /// column from [`span`](Collide::span). Stairs, panes and fence posts
+    /// replace it with the pieces that actually occupy the cell.
+    fn boxes(&self, x: i32, y: i32, z: i32, out: &mut Vec<Aabb>) {
+        if let Some((bottom, top)) = self.span(x, y, z) {
+            out.push(Aabb {
+                min: [f64::from(x), f64::from(y) + bottom, f64::from(z)],
+                max: [f64::from(x) + 1.0, f64::from(y) + top, f64::from(z) + 1.0],
+            });
+        }
     }
 }
 
@@ -40,15 +51,13 @@ fn boxes_near(b: Aabb, axis: usize, want: f64, world: &dyn Collide) -> Vec<Aabb>
         lo[axis] += want;
     }
     let mut out = Vec::new();
+    let mut cell = Vec::new();
     for x in (lo[0] - EPSILON).floor() as i32..=(hi[0] + EPSILON).floor() as i32 {
         for z in (lo[2] - EPSILON).floor() as i32..=(hi[2] + EPSILON).floor() as i32 {
             for y in (lo[1] - EPSILON).floor() as i32 - 1..=(hi[1] + EPSILON).floor() as i32 {
-                if let Some((bottom, top)) = world.span(x, y, z) {
-                    out.push(Aabb {
-                        min: [f64::from(x), f64::from(y) + bottom, f64::from(z)],
-                        max: [f64::from(x + 1), f64::from(y) + top, f64::from(z + 1)],
-                    });
-                }
+                cell.clear();
+                world.boxes(x, y, z, &mut cell);
+                out.append(&mut cell);
             }
         }
     }
@@ -203,5 +212,67 @@ mod tests {
         };
         let (moved, _) = move_entity(b, [1.0, 0.0, 0.0], &Wall);
         assert!((moved[0] - 0.5).abs() < 1e-9, "{moved:?}");
+    }
+
+    #[test]
+    fn a_fence_post_leaves_the_corner_open_and_a_stair_can_be_walked_up() {
+        struct Post;
+        impl Collide for Post {
+            fn solid(&self, x: i32, y: i32, z: i32) -> bool {
+                x == 0 && y == 0 && z == 0
+            }
+            fn boxes(&self, x: i32, y: i32, z: i32, out: &mut Vec<Aabb>) {
+                if self.solid(x, y, z) {
+                    out.push(Aabb {
+                        min: [6.0 / 16.0, 0.0, 6.0 / 16.0],
+                        max: [10.0 / 16.0, 1.5, 10.0 / 16.0],
+                    });
+                }
+            }
+        }
+        let corner = Aabb {
+            min: [0.01, 0.0, -0.4],
+            max: [0.2, 0.9, 0.0],
+        };
+        let (moved, _) = move_entity(corner, [0.0, 0.0, 0.8], &Post);
+        assert!(
+            (moved[2] - 0.8).abs() < 1e-6,
+            "the corner is empty, {moved:?}"
+        );
+
+        // The high half sits on the west of the cell. Coming from the east
+        // meets the slab and steps onto it; the high half is the next step.
+        struct Stair;
+        impl Collide for Stair {
+            fn solid(&self, x: i32, y: i32, _z: i32) -> bool {
+                y < 0 || x == 2 && y == 0
+            }
+            fn boxes(&self, x: i32, y: i32, z: i32, out: &mut Vec<Aabb>) {
+                if y < 0 {
+                    out.push(Aabb {
+                        min: [f64::from(x), f64::from(y), f64::from(z)],
+                        max: [f64::from(x + 1), f64::from(y + 1), f64::from(z + 1)],
+                    });
+                } else if x == 2 && y == 0 {
+                    out.push(Aabb {
+                        min: [2.0, 0.0, 0.0],
+                        max: [3.0, 0.5, 1.0],
+                    });
+                    out.push(Aabb {
+                        min: [2.0, 0.5, 0.0],
+                        max: [2.5, 1.0, 1.0],
+                    });
+                }
+            }
+        }
+        let walker = Aabb {
+            min: [3.05, 0.0, 0.1],
+            max: [3.85, 0.9, 0.8],
+        };
+        let (moved, ground) = move_stepping(walker, [-0.5, -0.08, 0.0], &Stair, 0.6, true);
+        assert!(
+            ground && moved[1] > 0.4 && moved[0] < -0.05,
+            "walks up the low side, {moved:?} {ground}"
+        );
     }
 }

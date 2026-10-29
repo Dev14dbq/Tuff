@@ -66,10 +66,43 @@ fn uuid_of(v: &Value) -> Option<u128> {
     v["uuid"].as_str().and_then(parse_uuid)
 }
 
-fn ban_of(v: &Value, key: &str) -> Ban {
+/// A list entry's name: a JSON string (a legacy name list) or an object's
+/// `key` field.
+fn entry_name(v: &Value, key: &str) -> String {
+    match v {
+        Value::String(name) => name.clone(),
+        other => s(other, key),
+    }
+}
+
+/// Uuid from the entry, or from `usercache.json` when the entry is a bare
+/// name or an object with no uuid. Unknown names stay name-only.
+fn resolve_uuid(v: &Value, name: &str, cache: &[(Named, String)]) -> Option<u128> {
+    if let Some(uuid) = uuid_of(v) {
+        return Some(uuid);
+    }
+    if name.is_empty() {
+        return None;
+    }
+    cache.iter().find_map(|(n, _)| {
+        if n.name.eq_ignore_ascii_case(name) {
+            n.uuid
+        } else {
+            None
+        }
+    })
+}
+
+fn ban_of(v: &Value, key: &str, cache: &[(Named, String)]) -> Ban {
+    let name = entry_name(v, key);
+    let uuid = if key == "name" {
+        resolve_uuid(v, &name, cache)
+    } else {
+        uuid_of(v)
+    };
     Ban {
-        uuid: uuid_of(v),
-        name: s(v, key),
+        uuid,
+        name,
         created: s(v, "created"),
         source: s(v, "source"),
         expires: s(v, "expires"),
@@ -84,31 +117,7 @@ impl Lists {
             dir: Some(dir.to_owned()),
             ..Lists::default()
         };
-        l.ops = read(&dir.join("ops.json"))
-            .iter()
-            .map(|v| Op {
-                uuid: uuid_of(v),
-                name: s(v, "name"),
-                level: v["level"].as_i64().unwrap_or(4) as i32,
-                bypasses_player_limit: v["bypassesPlayerLimit"].as_bool().unwrap_or(false),
-            })
-            .collect();
-        l.whitelist = read(&dir.join("whitelist.json"))
-            .iter()
-            .map(|v| Named {
-                uuid: uuid_of(v),
-                name: s(v, "name"),
-            })
-            .collect();
-        l.banned_players = read(&dir.join("banned-players.json"))
-            .iter()
-            .map(|v| ban_of(v, "name"))
-            .collect();
-        l.banned_ips = read(&dir.join("banned-ips.json"))
-            .iter()
-            .map(|v| ban_of(v, "ip"))
-            .collect();
-        l.usercache = read(&dir.join("usercache.json"))
+        let usercache: Vec<(Named, String)> = read(&dir.join("usercache.json"))
             .iter()
             .map(|v| {
                 (
@@ -120,6 +129,37 @@ impl Lists {
                 )
             })
             .collect();
+        l.ops = read(&dir.join("ops.json"))
+            .iter()
+            .map(|v| {
+                let name = entry_name(v, "name");
+                Op {
+                    uuid: resolve_uuid(v, &name, &usercache),
+                    name,
+                    level: v["level"].as_i64().unwrap_or(4) as i32,
+                    bypasses_player_limit: v["bypassesPlayerLimit"].as_bool().unwrap_or(false),
+                }
+            })
+            .collect();
+        l.whitelist = read(&dir.join("whitelist.json"))
+            .iter()
+            .map(|v| {
+                let name = entry_name(v, "name");
+                Named {
+                    uuid: resolve_uuid(v, &name, &usercache),
+                    name,
+                }
+            })
+            .collect();
+        l.banned_players = read(&dir.join("banned-players.json"))
+            .iter()
+            .map(|v| ban_of(v, "name", &usercache))
+            .collect();
+        l.banned_ips = read(&dir.join("banned-ips.json"))
+            .iter()
+            .map(|v| ban_of(v, "ip", &usercache))
+            .collect();
+        l.usercache = usercache;
         l.save_all();
         l
     }
@@ -310,6 +350,45 @@ impl Lists {
             bypasses_player_limit: false,
         });
         self.save_ops();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_whitelist_names_resolve_through_usercache() {
+        let dir = std::env::temp_dir().join(format!("mc-lists-legacy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let uuid = parse_uuid("853c80ef-3c37-49fd-aa49-938b674adae6").unwrap();
+        std::fs::write(
+            dir.join("usercache.json"),
+            serde_json::json!([{
+                "name": "Steve",
+                "uuid": uuid_string(uuid),
+                "expiresOn": "2027-01-01 00:00:00 +0000"
+            }])
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("whitelist.json"), r#"["Steve", "Alex"]"#).unwrap();
+        let lists = Lists::load(&dir);
+        let steve = lists
+            .whitelist
+            .iter()
+            .find(|n| n.name == "Steve")
+            .expect("cached name is kept");
+        assert_eq!(steve.uuid, Some(uuid));
+        let alex = lists
+            .whitelist
+            .iter()
+            .find(|n| n.name == "Alex")
+            .expect("unknown name is kept");
+        assert_eq!(alex.uuid, None);
+        assert!(lists.whitelisted(0, "Alex"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

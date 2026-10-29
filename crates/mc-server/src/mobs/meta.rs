@@ -346,6 +346,10 @@ pub fn metadata_of(ctx: &ServerContext, m: &Mob, now: i64) -> Vec<(u8, MetadataV
         }
         SulfurCube => {
             v.push((17, MetadataValue::Boolean(m.quirks.air.locked)));
+            // Cube mobs: the client scales the model by this. 1 is small,
+            // 2 is the large cube vanilla spawns. Left unset, it stays 1,
+            // and an adult is drawn at half size.
+            v.push((18, MetadataValue::VarInt(m.size)));
             v.push((
                 19,
                 MetadataValue::VarInt(if m.quirks.air.fuse >= 0 {

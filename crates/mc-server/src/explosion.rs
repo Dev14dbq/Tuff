@@ -1081,6 +1081,7 @@ fn explode_one(
             crate::mobs::infest::emerge(ctx, p, state);
             drops.extend(
                 ctx.loot
+                    .get()
                     .drops_exploded(name, &props, decay.then_some(blast.power))
                     .into_iter()
                     .map(|d| (p, d)),
@@ -1486,10 +1487,20 @@ mod tests {
         let none = |_: &str| None;
         // Without decay everything drops; with it, about 1 in 4 at power 4.
         let all = (0..400)
-            .filter(|_| !ctx.loot.drops_exploded(&stone, &none, None).is_empty())
+            .filter(|_| {
+                !ctx.loot
+                    .get()
+                    .drops_exploded(&stone, &none, None)
+                    .is_empty()
+            })
             .count();
         let some = (0..400)
-            .filter(|_| !ctx.loot.drops_exploded(&stone, &none, Some(4.0)).is_empty())
+            .filter(|_| {
+                !ctx.loot
+                    .get()
+                    .drops_exploded(&stone, &none, Some(4.0))
+                    .is_empty()
+            })
             .count();
         assert_eq!(all, 400);
         assert!((60..140).contains(&some), "{some}");

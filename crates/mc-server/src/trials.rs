@@ -322,14 +322,15 @@ fn mob_alive(entities: &[Entity], uuid: u128) -> bool {
 }
 
 fn roll_table(ctx: &ServerContext, name: &str, origin: [f64; 3]) -> Vec<Drop> {
-    let Some(table) = ctx.loot.table(name) else {
+    let loot = ctx.loot.get();
+    let Some(table) = loot.table(name) else {
         return Vec::new();
     };
     let cx = LootCtx {
         origin: Some(origin),
         ..Default::default()
     };
-    ctx.loot.roll(&Env(ctx), table, &cx)
+    loot.roll(&Env(ctx), table, &cx)
 }
 
 fn equip(ctx: &ServerContext, pot: &Potential, origin: [f64; 3]) -> Compound {

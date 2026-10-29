@@ -202,7 +202,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         }
     }
     crystal::tick_all(ctx, level, &mut entities);
-    if ctx.world.dimension == "minecraft:the_end" {
+    if ctx.world.dimension == "minecraft:the_end" && !crate::tickets::asleep(ctx) {
         fight::tick(ctx, level, &mut entities, &mut fresh, now);
     }
     let removed: Vec<i32> = entities

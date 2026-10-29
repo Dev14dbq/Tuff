@@ -358,8 +358,13 @@ fn behavior(
                 "minecraft:water"
             };
             let free = ctx.shapes.is_air(state) || ctx.rules.is_replaceable(state);
-            // In the Nether the water is gone at once; the bucket is empty.
-            if fluid == "minecraft:water" && free && mc_tick::Level::ultrawarm(level) {
+            let logs = blocks.property(state, "waterlogged") == Some("false");
+            // In the Nether the water is gone at once, including into a
+            // waterloggable block; the bucket is empty.
+            if fluid == "minecraft:water" && mc_tick::Level::ultrawarm(level) && (free || logs) {
+                if free && !ctx.shapes.is_air(state) {
+                    level.set_block(front, ctx.shapes.air());
+                }
                 mc_tick::Level::sponge_dried(level, crate::level::to_pos(front));
                 return done(item("minecraft:bucket"));
             }
@@ -891,8 +896,12 @@ pub fn tick(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     for key in all {
         let p = Position::new(key.0, key.1, key.2);
         // Hoppers in unloaded chunks wait; loading the chunk wakes them again.
+        // Outside the block-ticking square they wait without being forgotten.
         if !ctx.world.is_loaded(p) {
             lock(&ctx.hoppers).remove(&key);
+            continue;
+        }
+        if !crate::tickets::blocks_run(ctx, key.0 >> 4, key.2 >> 4) {
             continue;
         }
         let is_hopper = ctx
@@ -973,6 +982,51 @@ mod tests {
         assert_eq!(
             slot0(&ctx, p).map(|s| s.item),
             ctx.items.id("minecraft:water_bucket")
+        );
+    }
+
+    #[test]
+    fn a_dispenser_cannot_waterlog_a_block_in_the_nether() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let nether = ctx.dimension(1).expect("the nether");
+        let p = Position::new(0, 70, 0);
+        let front = Position::new(1, 70, 0);
+        let _ = nether.world.block(p, &nether.data.blocks);
+        let slab = nether
+            .data
+            .blocks
+            .default_state("minecraft:oak_slab")
+            .unwrap();
+        assert!(WorldLevel::new(&nether).set_block(front, slab));
+        let disp = nether
+            .data
+            .blocks
+            .state_id("minecraft:dispenser", &[("facing", "east")])
+            .unwrap();
+        assert!(WorldLevel::new(&nether).set_block(p, disp));
+        let item = nether.items.id("minecraft:water_bucket").unwrap();
+        containers::put(
+            &nether,
+            p,
+            containers::kind_of("minecraft:dispenser").unwrap(),
+            &[(0, Some(ItemStack::new(item, 1)))],
+        );
+        fire(&nether, p);
+        let state = nether.world.block(front, &nether.data.blocks).unwrap();
+        assert_eq!(
+            nether.data.blocks.block_name(state),
+            Some("minecraft:oak_slab")
+        );
+        assert_eq!(
+            nether.data.blocks.property(state, "waterlogged"),
+            Some("false")
+        );
+        assert_eq!(
+            slot0(&nether, p).map(|s| s.item),
+            nether.items.id("minecraft:bucket")
         );
     }
 

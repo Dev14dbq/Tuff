@@ -310,6 +310,7 @@ pub fn act(ctx: &ServerContext, actor: &crate::interact::Actor, act: crate::vehi
                 pitch: 0.0,
                 head_yaw: yaw,
                 on_ground,
+                motion: None,
             };
             let _ = ctx.events.send(Event::MobsMoved(vec![moved]));
             if let Some(fell) = landed {

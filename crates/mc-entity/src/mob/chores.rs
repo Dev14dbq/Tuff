@@ -194,7 +194,11 @@ pub(super) fn brightness(light: u8) -> f64 {
 
 /// An enderman out in daylight teleports away now and then.
 pub(super) fn daylight_teleport(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent>) {
-    if !s.day || m.target.is_some() && m.age < m.target_since + 600 {
+    // Stood still under a stare: the sun does not whisk it away mid-look.
+    if !s.day
+        || m.stared && m.target.is_none()
+        || m.target.is_some() && m.age < m.target_since + 600
+    {
         return;
     }
     let c = cell_of(b.pos);

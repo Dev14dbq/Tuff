@@ -260,7 +260,7 @@ pub fn collect_xp(ctx: &ServerContext, p: Position) -> i32 {
     let mut points = 0;
     for (recipe, n) in used.iter() {
         let Tag::Int(n) = n else { continue };
-        if let Some(r) = ctx.recipes.cooking.iter().find(|r| r.name == *recipe) {
+        if let Some(r) = ctx.recipes.get().cooking.iter().find(|r| r.name == *recipe) {
             points += crate::xp::roll_fraction(r.xp * *n as f32);
         }
     }
@@ -304,6 +304,10 @@ pub fn tick(ctx: &ServerContext) {
         lock(&ctx.furnaces).iter().map(|(&k, &v)| (k, v)).collect();
     for (key, before) in active {
         let p = Position::new(key.0, key.1, key.2);
+        // A furnace outside the block-ticking square waits, progress and all.
+        if !crate::tickets::blocks_run(ctx, key.0 >> 4, key.2 >> 4) {
+            continue;
+        }
         let keep = tick_one(ctx, p, before);
         let mut all = lock(&ctx.furnaces);
         match keep {
@@ -333,11 +337,13 @@ fn tick_one(ctx: &ServerContext, p: Position, before: Progress) -> Option<Progre
         progress.lit -= 1;
     }
     let input = slots[0].clone();
+    let recipes = ctx.recipes.get();
     let recipe = input.as_ref().and_then(|stack| {
-        ctx.recipes
+        recipes
             .cooking
             .iter()
             .find(|r| r.kind == kind_name && r.input.contains(&stack.item))
+            .cloned()
     });
     let room = |r: &crate::crafting::Cooking, out: &Option<ItemStack>| match out {
         None => true,
@@ -345,7 +351,7 @@ fn tick_one(ctx: &ServerContext, p: Position, before: Progress) -> Option<Progre
             s.item == r.result.item && s.count + r.result.count <= ctx.items.max_stack(s.item)
         }
     };
-    let can_cook = recipe.is_some_and(|r| room(r, &slots[2]));
+    let can_cook = recipe.as_ref().is_some_and(|r| room(r, &slots[2]));
     let input_item = input.as_ref().map_or(-1, |s| s.item);
     if input_item != progress.input {
         progress.cook = 0;
@@ -445,8 +451,8 @@ mod tests {
             eprintln!("skipped: no game data");
             return;
         };
-        let recipe = ctx
-            .recipes
+        let recipes = ctx.recipes.get();
+        let recipe = recipes
             .cooking
             .iter()
             .find(|r| r.kind == "minecraft:smelting" && r.xp >= 1.0)

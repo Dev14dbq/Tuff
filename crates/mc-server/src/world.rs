@@ -41,6 +41,8 @@ pub struct World {
     pub description: String,
     source: Source,
     chunks: Mutex<HashMap<(i32, i32), Slot, mc_worldgen::density::Fast>>,
+    /// Chunks a ticket still wants in memory (level 33 or lower).
+    pinned: Mutex<HashSet<(i32, i32)>>,
     /// Sent where a world folder has no finished chunk: air with full daylight.
     empty: Chunk,
     biome_count: u32,
@@ -306,6 +308,60 @@ fn block_entity_types(data: &McData) -> Result<HashMap<String, i32>> {
         .clone())
 }
 
+/// Where a dimension's region files are. 26.3 keeps them under
+/// `dimensions/<namespace>/<name>/region`. Older vanilla worlds use
+/// `region/`, `DIM-1/region` and `DIM1/region`. Paper keeps the Nether and
+/// the End in sibling folders (`<name>_nether`, `<name>_the_end`). A folder
+/// that already has region files wins; a new world gets the 26.3 path.
+pub(crate) fn region_folder(
+    dir: &Path,
+    kind: mc_worldgen::generator::Dimension,
+) -> Result<PathBuf> {
+    use mc_worldgen::generator::Dimension::{End, Nether, Overworld};
+    let modern = dir
+        .join("dimensions")
+        .join(kind.id().replace(':', "/"))
+        .join("region");
+    let mut candidates = vec![modern.clone()];
+    match kind {
+        Overworld => candidates.push(dir.join("region")),
+        Nether => {
+            candidates.push(dir.join("DIM-1").join("region"));
+            if let Some(sib) = sibling_world(dir, "_nether") {
+                candidates.push(sib.join("DIM-1").join("region"));
+                candidates.push(sib.join("dimensions/minecraft/the_nether/region"));
+            }
+        }
+        End => {
+            candidates.push(dir.join("DIM1").join("region"));
+            if let Some(sib) = sibling_world(dir, "_the_end") {
+                candidates.push(sib.join("DIM1").join("region"));
+                candidates.push(sib.join("dimensions/minecraft/the_end/region"));
+            }
+        }
+    }
+    if let Some(found) = candidates.iter().find(|p| has_regions(p)) {
+        return Ok(found.clone());
+    }
+    if let Some(found) = candidates.iter().find(|p| p.is_dir()) {
+        return Ok(found.clone());
+    }
+    std::fs::create_dir_all(&modern).with_context(|| format!("creating {}", modern.display()))?;
+    Ok(modern)
+}
+
+fn sibling_world(dir: &Path, suffix: &str) -> Option<PathBuf> {
+    let name = dir.file_name()?.to_str()?;
+    Some(dir.parent()?.join(format!("{name}{suffix}")))
+}
+
+fn has_regions(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|rd| {
+        rd.flatten()
+            .any(|e| e.path().extension().is_some_and(|x| x == "mca"))
+    })
+}
+
 impl World {
     /// The world folder (`None` for the flat test world).
     pub fn folder(&self) -> Option<&Path> {
@@ -362,6 +418,7 @@ impl World {
             empty: Chunk::new(0, 0, dim.min_y, dim.height, generator.air, generator.biome),
             source: Source::Flat(Box::new(chunk)),
             chunks: Mutex::new(HashMap::default()),
+            pinned: Mutex::new(HashSet::new()),
             biome_count: biomes.len() as u32,
             biome_names: biome_names(synced),
             data_version: data.version.world_version,
@@ -480,10 +537,15 @@ impl World {
                 let air = state(data, "minecraft:air")?;
                 let plains = biome_ids.get("minecraft:plains").copied().unwrap_or(0);
                 let fast_lava = crate::generation::fast_lava(data, kind);
-                let pipeline = Arc::new(
+                let mut pipeline =
                     crate::pipeline::Pipeline::new(generator, features, seed, air, plains)
-                        .with_fast_lava(fast_lava),
-                );
+                        .with_fast_lava(fast_lava);
+                // The End's noise fills 128 of the dimension's 256. Cities
+                // and the ship keep going up through the air above it.
+                if kind == mc_worldgen::generator::Dimension::End {
+                    pipeline = pipeline.with_span(dim.min_y, dim.height as i32);
+                }
+                let pipeline = Arc::new(pipeline);
                 let early = Arc::clone(&pipeline);
                 std::thread::spawn(move || early.prepare());
                 Some(pipeline)
@@ -524,23 +586,7 @@ impl World {
             None => None,
         };
         let flat_surface = flat.as_ref().map(|f| f.generator.surface_y(dim.min_y));
-        // 26.x keeps dimensions under dimensions/<namespace>/<name>/.
-        let own = dir
-            .join("dimensions")
-            .join(kind.id().replace(':', "/"))
-            .join("region");
-        // An overworld folder may be older (`region/` at the top) or have no
-        // chunks yet; vanilla makes the folders when it saves.
-        let older = dir.join("region");
-        let regions = if kind == mc_worldgen::generator::Dimension::Overworld
-            && !own.is_dir()
-            && older.is_dir()
-        {
-            older
-        } else {
-            std::fs::create_dir_all(&own).with_context(|| format!("creating {}", own.display()))?;
-            own
-        };
+        let regions = region_folder(dir, kind)?;
         let (spawn, spawn_yaw) = read_spawn(&dir.join("level.dat"))
             .with_context(|| format!("reading {}", dir.join("level.dat").display()))?;
         let spawn = match kind {
@@ -573,6 +619,7 @@ impl World {
                 unresolved_reported: AtomicU32::new(0),
             })),
             chunks: Mutex::new(HashMap::default()),
+            pinned: Mutex::new(HashSet::new()),
             empty: Chunk::new(0, 0, dim.min_y, dim.height, air, fallback_biome),
             biome_count: biomes.len() as u32,
             biome_names: biome_names(synced),
@@ -1141,6 +1188,24 @@ impl World {
         bytes
     }
 
+    /// Whether this chunk already exists, in memory or on disk. Nothing is
+    /// generated to answer. A flat world is its template everywhere.
+    pub fn present(&self, x: i32, z: i32) -> bool {
+        let loaded = self
+            .chunks
+            .lock()
+            .expect("chunks lock")
+            .get(&(x, z))
+            .is_some_and(|s| s.chunk.is_some());
+        if loaded {
+            return true;
+        }
+        match &self.source {
+            Source::Flat(_) => true,
+            Source::Anvil(anvil) => anvil.has_full(x, z),
+        }
+    }
+
     /// A player's client no longer has the chunk.
     pub fn unwatch(&self, x: i32, z: i32) {
         if let Some(slot) = self.chunks.lock().expect("chunks lock").get_mut(&(x, z)) {
@@ -1148,13 +1213,19 @@ impl World {
         }
     }
 
-    /// Drops chunks no player has and that have nothing to save. Returns
-    /// the dropped ones.
+    /// Remembers which chunks tickets still need. Replaces the previous set.
+    pub fn set_pinned(&self, chunks: HashSet<(i32, i32)>) {
+        *self.pinned.lock().expect("pinned") = chunks;
+    }
+
+    /// Drops chunks no player has, that no ticket wants, and that have
+    /// nothing to save. Returns the dropped ones.
     pub fn unload_unused(&self) -> Vec<(i32, i32)> {
+        let pinned = self.pinned.lock().expect("pinned").clone();
         let mut chunks = self.chunks.lock().expect("chunks lock");
         let mut dropped = Vec::new();
         chunks.retain(|&key, slot| {
-            let keep = slot.viewers > 0 || slot.dirty;
+            let keep = slot.viewers > 0 || slot.dirty || pinned.contains(&key);
             if !keep {
                 dropped.push(key);
             }
@@ -2589,6 +2660,51 @@ fn read_spawn(path: &Path) -> Result<((f64, f64, f64), f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_and_paper_dimensions_keep_their_chunks() {
+        use mc_worldgen::generator::Dimension;
+        let tmp = std::env::temp_dir().join(format!("mc-regions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let world = tmp.join("world");
+        std::fs::create_dir_all(world.join("region")).unwrap();
+        std::fs::write(world.join("region/r.0.0.mca"), []).unwrap();
+        std::fs::create_dir_all(world.join("DIM-1/region")).unwrap();
+        std::fs::write(world.join("DIM-1/region/r.0.0.mca"), []).unwrap();
+        std::fs::create_dir_all(world.join("DIM1/region")).unwrap();
+        std::fs::write(world.join("DIM1/region/r.0.0.mca"), []).unwrap();
+        let nether = tmp.join("world_nether");
+        std::fs::create_dir_all(nether.join("DIM-1/region")).unwrap();
+        std::fs::write(nether.join("DIM-1/region/r.0.0.mca"), []).unwrap();
+
+        assert_eq!(
+            region_folder(&world, Dimension::Overworld).unwrap(),
+            world.join("region")
+        );
+        assert_eq!(
+            region_folder(&world, Dimension::Nether).unwrap(),
+            world.join("DIM-1/region")
+        );
+        assert_eq!(
+            region_folder(&world, Dimension::End).unwrap(),
+            world.join("DIM1/region")
+        );
+        std::fs::remove_dir_all(world.join("DIM-1")).unwrap();
+        assert_eq!(
+            region_folder(&world, Dimension::Nether).unwrap(),
+            nether.join("DIM-1/region")
+        );
+        let modern = world.join("dimensions/minecraft/overworld/region");
+        std::fs::create_dir_all(&modern).unwrap();
+        std::fs::write(modern.join("r.0.0.mca"), []).unwrap();
+        assert_eq!(region_folder(&world, Dimension::Overworld).unwrap(), modern);
+        let fresh = tmp.join("fresh");
+        assert_eq!(
+            region_folder(&fresh, Dimension::Nether).unwrap(),
+            fresh.join("dimensions/minecraft/the_nether/region")
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     /// Lighting a new chunk on flat arrays gives the same light, stored
     /// arrays and changed chunks as lighting it through [`LightView`].

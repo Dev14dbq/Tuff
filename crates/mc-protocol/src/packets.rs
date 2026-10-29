@@ -85,6 +85,39 @@ fn read_known_packs(r: &mut Reader) -> Result<Vec<KnownPack>> {
     Ok(packs)
 }
 
+/// One entry of clientbound `minecraft:server_links`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServerLink {
+    pub label: ServerLinkLabel,
+    pub url: String,
+}
+
+/// Built-in ids are 0 bug_report, 1 community_guidelines, 2 support,
+/// 3 status, 4 feedback, 5 community, 6 website, 7 forums, 8 news,
+/// 9 announcements. A custom link is an NBT text component.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ServerLinkLabel {
+    BuiltIn(i32),
+    Custom(Tag),
+}
+
+fn put_server_links(out: &mut Vec<u8>, links: &[ServerLink]) {
+    out.put_len(links.len());
+    for link in links {
+        match &link.label {
+            ServerLinkLabel::BuiltIn(id) => {
+                out.put_bool(true);
+                out.put_varint(*id);
+            }
+            ServerLinkLabel::Custom(text) => {
+                out.put_bool(false);
+                put_nbt(out, text);
+            }
+        }
+        out.put_string(&link.url);
+    }
+}
+
 macro_rules! packet {
     ($ty:ty, $state:ident, $name:literal) => {
         impl Packet for $ty {
@@ -118,7 +151,10 @@ pub mod handshake {
             Ok(match name {
                 "minecraft:intention" => Serverbound::Intention(Intention {
                     protocol_version: r.varint()?,
-                    server_address: r.string(255)?,
+                    // 255 is the vanilla host. BungeeCord appends the
+                    // player's address, uuid and profile after a NUL, which
+                    // does not fit in 255.
+                    server_address: r.string(32767)?,
                     server_port: r.u16()?,
                     intent: r.varint()?,
                 }),
@@ -190,6 +226,12 @@ pub mod login {
             verify_token: Vec<u8>,
         },
         LoginAcknowledged,
+        /// Login Plugin Response (`minecraft:custom_query_answer`).
+        /// `data` is set when the client says the query succeeded.
+        CustomQueryAnswer {
+            id: i32,
+            data: Option<Vec<u8>>,
+        },
         Other(String),
     }
 
@@ -205,6 +247,15 @@ pub mod login {
                     verify_token: r.byte_array(256)?.to_vec(),
                 },
                 "minecraft:login_acknowledged" => Serverbound::LoginAcknowledged,
+                "minecraft:custom_query_answer" => {
+                    let id = r.varint()?;
+                    let data = if r.bool()? {
+                        Some(r.rest().to_vec())
+                    } else {
+                        None
+                    };
+                    Serverbound::CustomQueryAnswer { id, data }
+                }
                 other => Serverbound::Other(other.to_owned()),
             })
         }
@@ -267,6 +318,23 @@ pub mod login {
             out.put_string(&self.reason_json);
         }
     }
+
+    /// Login Plugin Request. `data` is the rest of the packet, not a
+    /// length-prefixed byte array.
+    #[derive(Clone, Debug)]
+    pub struct CustomQuery {
+        pub transaction_id: i32,
+        pub channel: String,
+        pub data: Vec<u8>,
+    }
+    packet!(CustomQuery, Login, "minecraft:custom_query");
+    impl Encode for CustomQuery {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.transaction_id);
+            out.put_string(&self.channel);
+            out.extend_from_slice(&self.data);
+        }
+    }
 }
 
 // ===========================================================================
@@ -291,6 +359,8 @@ pub mod configuration {
             id: u128,
             result: i32,
         },
+        /// The player accepted `minecraft:code_of_conduct`. No fields.
+        AcceptCodeOfConduct,
         Other(String),
     }
 
@@ -370,6 +440,7 @@ pub mod configuration {
                     id: r.uuid()?,
                     result: r.varint()?,
                 },
+                "minecraft:accept_code_of_conduct" => Serverbound::AcceptCodeOfConduct,
                 other => Serverbound::Other(other.to_owned()),
             })
         }
@@ -512,6 +583,30 @@ pub mod configuration {
     impl Encode for FinishConfiguration {
         fn encode(&self, _out: &mut Vec<u8>) {}
     }
+
+    /// Code of Conduct: one string, at most 32767 characters.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct CodeOfConduct {
+        pub text: String,
+    }
+    packet!(CodeOfConduct, Configuration, "minecraft:code_of_conduct");
+    impl Encode for CodeOfConduct {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.text);
+        }
+    }
+
+    /// Server Links, configuration phase.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ServerLinks {
+        pub links: Vec<ServerLink>,
+    }
+    packet!(ServerLinks, Configuration, "minecraft:server_links");
+    impl Encode for ServerLinks {
+        fn encode(&self, out: &mut Vec<u8>) {
+            super::put_server_links(out, &self.links);
+        }
+    }
 }
 
 // ===========================================================================
@@ -559,10 +654,9 @@ pub mod play {
         ChunkBatchReceived {
             chunks_per_tick: f32,
         },
-        /// Only the message text; signing fields are ignored for now.
-        Chat {
-            message: String,
-        },
+        /// A chat line. The signature is kept so secure-profile servers can
+        /// see that it was present; it is not checked.
+        Chat(ChatMessage),
         /// A command; also the signed kind, its signatures ignored.
         ChatCommand {
             command: String,
@@ -863,6 +957,64 @@ pub mod play {
 
     pub use crate::components::{HashedStack, ItemStack, int_component_hash};
 
+    /// Serverbound `minecraft:chat`.
+    ///
+    /// After the message: timestamp, salt, an optional 256-byte signature
+    /// (present flag, then exactly 256 bytes), message count, a 20-bit
+    /// acknowledged set (3 bytes), and a checksum byte.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ChatMessage {
+        pub message: String,
+        pub timestamp: i64,
+        pub salt: i64,
+        pub signature: Option<Vec<u8>>,
+        pub message_count: i32,
+        pub acknowledged: [u8; 3],
+        pub checksum: u8,
+    }
+
+    impl ChatMessage {
+        pub fn encode(&self, out: &mut Vec<u8>) {
+            out.put_string(&self.message);
+            out.put_i64(self.timestamp);
+            out.put_i64(self.salt);
+            match &self.signature {
+                Some(sig) => {
+                    out.put_bool(true);
+                    out.put_slice(sig);
+                }
+                None => out.put_bool(false),
+            }
+            out.put_varint(self.message_count);
+            out.put_slice(&self.acknowledged);
+            out.put_u8(self.checksum);
+        }
+
+        pub fn decode(r: &mut Reader) -> Result<Self> {
+            let message = r.string(256)?;
+            let timestamp = r.i64()?;
+            let salt = r.i64()?;
+            let signature = if r.bool()? {
+                Some(r.bytes(256)?.to_vec())
+            } else {
+                None
+            };
+            let message_count = r.varint()?;
+            let mut acknowledged = [0u8; 3];
+            acknowledged.copy_from_slice(r.bytes(3)?);
+            let checksum = r.u8()?;
+            Ok(Self {
+                message,
+                timestamp,
+                salt,
+                signature,
+                message_count,
+                acknowledged,
+                checksum,
+            })
+        }
+    }
+
     impl Serverbound {
         pub fn decode(name: &str, r: &mut Reader) -> Result<Self> {
             Ok(match name {
@@ -905,9 +1057,7 @@ pub mod play {
                 "minecraft:chunk_batch_received" => Serverbound::ChunkBatchReceived {
                     chunks_per_tick: r.f32()?,
                 },
-                "minecraft:chat" => Serverbound::Chat {
-                    message: r.string(256)?,
-                },
+                "minecraft:chat" => Serverbound::Chat(ChatMessage::decode(r)?),
                 "minecraft:chat_command" | "minecraft:chat_command_signed" => {
                     let command = r.string(32767)?;
                     // Timestamp, salt, argument signatures, acknowledged
@@ -3372,6 +3522,46 @@ pub mod play {
         pub global: bool,
     }
     packet!(LevelEvent, Play, "minecraft:level_event");
+
+    /// Locator bar (public protocol, "Waypoint"): track, update or drop a
+    /// player. The id is a UUID (`1` then 16 bytes), the icon is a style
+    /// name and an optional RGB colour, and the place is either empty (`0`)
+    /// or a block (`1` and three varints).
+    #[derive(Clone, Debug)]
+    pub struct Waypoint {
+        /// 0 track, 1 untrack, 2 update.
+        pub operation: i32,
+        pub uuid: u128,
+        pub style: String,
+        /// None keeps the style's own colour.
+        pub color: Option<[u8; 3]>,
+        /// None is the empty mark used when dropping the dot.
+        pub pos: Option<[i32; 3]>,
+    }
+    packet!(Waypoint, Play, "minecraft:waypoint");
+    impl Encode for Waypoint {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.put_varint(self.operation);
+            out.put_varint(1);
+            out.put_uuid(self.uuid);
+            out.put_string(&self.style);
+            out.put_bool(self.color.is_some());
+            if let Some([r, g, b]) = self.color {
+                out.put_u8(r);
+                out.put_u8(g);
+                out.put_u8(b);
+            }
+            match self.pos {
+                Some([x, y, z]) => {
+                    out.put_varint(1);
+                    out.put_varint(x);
+                    out.put_varint(y);
+                    out.put_varint(z);
+                }
+                None => out.put_varint(0),
+            }
+        }
+    }
     impl Encode for LevelEvent {
         fn encode(&self, out: &mut Vec<u8>) {
             out.put_i32(self.event);
@@ -3828,6 +4018,18 @@ pub mod play {
     impl Encode for Disconnect {
         fn encode(&self, out: &mut Vec<u8>) {
             put_nbt(out, &self.reason);
+        }
+    }
+
+    /// Server Links during play (same body as in configuration).
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ServerLinks {
+        pub links: Vec<ServerLink>,
+    }
+    packet!(ServerLinks, Play, "minecraft:server_links");
+    impl Encode for ServerLinks {
+        fn encode(&self, out: &mut Vec<u8>) {
+            super::put_server_links(out, &self.links);
         }
     }
 }
@@ -4422,6 +4624,79 @@ mod recipe_book_tests {
             },
         };
         assert_eq!(bytes(&ghost), [2, 3, 4, 1, 0, 1]);
+    }
+}
+
+#[cfg(test)]
+mod chat_and_links_tests {
+    use super::*;
+
+    #[test]
+    fn chat_roundtrip_with_and_without_a_signature() {
+        let unsigned = play::ChatMessage {
+            message: "hello world".into(),
+            timestamp: 1_700_000_000_000,
+            salt: 99,
+            signature: None,
+            message_count: 4,
+            acknowledged: [0x01, 0x00, 0x10],
+            checksum: 7,
+        };
+        let mut signed = unsigned.clone();
+        let mut sig = vec![0u8; 256];
+        sig[0] = 0xab;
+        sig[255] = 0xcd;
+        signed.signature = Some(sig);
+
+        let mut bare = Vec::new();
+        unsigned.encode(&mut bare);
+        let mut full = Vec::new();
+        signed.encode(&mut full);
+        // The present flag is followed by the 256 bytes themselves. A length
+        // prefix would make the signed body longer by more than 256.
+        assert_eq!(full.len(), bare.len() + 256);
+
+        for message in [unsigned, signed] {
+            let mut body = Vec::new();
+            message.encode(&mut body);
+            let mut r = Reader::new(&body);
+            let decoded = play::Serverbound::decode("minecraft:chat", &mut r).unwrap();
+            assert_eq!(r.remaining(), 0);
+            assert_eq!(decoded, play::Serverbound::Chat(message));
+        }
+    }
+
+    #[test]
+    fn server_links_encode_one_builtin_and_one_custom() {
+        let custom = crate::text::plain("Custom");
+        let links = vec![
+            ServerLink {
+                label: ServerLinkLabel::BuiltIn(6),
+                url: "https://example.com".into(),
+            },
+            ServerLink {
+                label: ServerLinkLabel::Custom(custom.clone()),
+                url: "https://example.com/custom".into(),
+            },
+        ];
+        let mut out = Vec::new();
+        configuration::ServerLinks {
+            links: links.clone(),
+        }
+        .encode(&mut out);
+        let mut expected = Vec::new();
+        expected.put_varint(2);
+        expected.put_bool(true);
+        expected.put_varint(6);
+        expected.put_string("https://example.com");
+        expected.put_bool(false);
+        put_nbt(&mut expected, &custom);
+        expected.put_string("https://example.com/custom");
+        assert_eq!(out, expected);
+
+        let mut during_play = Vec::new();
+        play::ServerLinks { links }.encode(&mut during_play);
+        assert_eq!(during_play, expected);
     }
 }
 

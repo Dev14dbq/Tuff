@@ -69,7 +69,7 @@ pub fn icon(path: &Path) -> Option<String> {
 /// The server list answer.
 pub fn status(ctx: &ServerContext) -> serde_json::Value {
     let mut players = serde_json::json!({
-        "max": ctx.config.max_players,
+        "max": ctx.player_limit.load(std::sync::atomic::Ordering::Relaxed),
         "online": ctx.online_count(),
     });
     if !ctx.config.hide_online_players {
@@ -91,8 +91,8 @@ pub fn status(ctx: &ServerContext) -> serde_json::Value {
     let mut json = serde_json::json!({
         "version": {"name": ctx.data.version.name, "protocol": mc_protocol::PROTOCOL_VERSION},
         "players": players,
-        "description": {"text": ctx.config.motd},
-        "enforcesSecureChat": false,
+        "description": {"text": ctx.shown_motd.lock().expect("motd lock").clone()},
+        "enforcesSecureChat": ctx.config.enforce_secure_profile,
     });
     if let Some(icon) = &ctx.config.icon {
         json["favicon"] = serde_json::Value::String(icon.clone());
@@ -110,6 +110,178 @@ pub struct ResourcePack {
     /// Declining it (or failing to load it) is a kick.
     pub required: bool,
     pub prompt: Option<Tag>,
+}
+
+/// Built-in server link ids, in protocol order.
+const BUILTIN_LINKS: &[&str] = &[
+    "bug_report",
+    "community_guidelines",
+    "support",
+    "status",
+    "feedback",
+    "community",
+    "website",
+    "forums",
+    "news",
+    "announcements",
+];
+
+fn builtin_id(name: &str) -> Option<i32> {
+    BUILTIN_LINKS
+        .iter()
+        .position(|n| *n == name)
+        .map(|i| i as i32)
+}
+
+/// `server-links.json` next to `server.properties`, plus `bug-report-link`
+/// when that property is set and the file does not already name `bug_report`.
+/// A missing or empty file sends nothing unless the property has a URL.
+/// Each object is either `{"builtin":"website","url":"https://..."}` or
+/// `{"label":"Custom","url":"https://..."}`.
+pub fn server_links(server_dir: Option<&Path>) -> Option<Vec<mc_protocol::packets::ServerLink>> {
+    use mc_protocol::packets::{ServerLink, ServerLinkLabel};
+
+    let dir = server_dir?;
+    let mut links = Vec::new();
+    let path = dir.join("server-links.json");
+    match std::fs::read_to_string(&path) {
+        Ok(text) if text.trim().is_empty() => {}
+        Ok(text) => links.extend(parse_link_file(&path, &text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!("Couldn't read {}: {e}", path.display()),
+    }
+    let bug = property_line(&dir.join("server.properties"), "bug-report-link");
+    let has_bug = links
+        .iter()
+        .any(|link| matches!(link.label, ServerLinkLabel::BuiltIn(0)));
+    if !bug.is_empty() && !has_bug {
+        links.insert(
+            0,
+            ServerLink {
+                label: ServerLinkLabel::BuiltIn(0),
+                url: bug,
+            },
+        );
+    }
+    if links.is_empty() { None } else { Some(links) }
+}
+
+fn parse_link_file(path: &Path, text: &str) -> Vec<mc_protocol::packets::ServerLink> {
+    use mc_protocol::packets::{ServerLink, ServerLinkLabel};
+
+    let value: serde_json::Value = match serde_json::from_str(text) {
+        Ok(value) => value,
+        Err(e) => {
+            tracing::warn!("Couldn't parse {}: {e}", path.display());
+            return Vec::new();
+        }
+    };
+    let Some(entries) = value.as_array() else {
+        tracing::warn!("{} must be a JSON array", path.display());
+        return Vec::new();
+    };
+    let mut links = Vec::new();
+    for (i, entry) in entries.iter().enumerate() {
+        let Some(url) = entry.get("url").and_then(|u| u.as_str()) else {
+            tracing::warn!("{} entry {i} has no url", path.display());
+            continue;
+        };
+        let url = url.to_owned();
+        if let Some(name) = entry.get("builtin").and_then(|v| v.as_str()) {
+            match builtin_id(name) {
+                Some(id) => links.push(ServerLink {
+                    label: ServerLinkLabel::BuiltIn(id),
+                    url,
+                }),
+                None => tracing::warn!("{} entry {i} has unknown builtin {name:?}", path.display()),
+            }
+        } else if let Some(label) = entry.get("label").and_then(|v| v.as_str()) {
+            links.push(ServerLink {
+                label: ServerLinkLabel::Custom(mc_protocol::text::plain(label)),
+                url,
+            });
+        } else {
+            tracing::warn!("{} entry {i} needs a builtin id or a label", path.display());
+        }
+    }
+    links
+}
+
+fn property_line(path: &Path, key: &str) -> String {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    for line in text.lines() {
+        let line = line.trim_start();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+            continue;
+        }
+        if let Some((name, value)) = line.split_once('=')
+            && name.trim() == key
+        {
+            return value.trim().to_owned();
+        }
+    }
+    String::new()
+}
+
+/// The code of conduct to show, or nothing. The flag off never sends it,
+/// even when `codeofconduct.txt` is there. The flag on with a missing or
+/// empty file logs a warning and continues without the packet.
+pub fn code_of_conduct(enabled: bool, server_dir: Option<&Path>) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    let Some(dir) = server_dir else {
+        tracing::warn!(
+            "enable-code-of-conduct is true, but there is no server folder for codeofconduct.txt"
+        );
+        return None;
+    };
+    let path = dir.join("codeofconduct.txt");
+    match std::fs::read_to_string(&path) {
+        Ok(text) if !text.is_empty() => Some(cap_text(text, 32767)),
+        Ok(_) => {
+            tracing::warn!(
+                "enable-code-of-conduct is true, but {} is empty",
+                path.display()
+            );
+            None
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::warn!(
+                "enable-code-of-conduct is true, but {} is missing",
+                path.display()
+            );
+            None
+        }
+        Err(e) => {
+            tracing::warn!(
+                "enable-code-of-conduct is true, but {} could not be read: {e}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Protocol strings count UTF-16 code units.
+fn cap_text(text: String, max_utf16: usize) -> String {
+    if text.encode_utf16().count() <= max_utf16 {
+        return text;
+    }
+    tracing::warn!("codeofconduct.txt is longer than {max_utf16} characters; the rest is left out");
+    let mut units = 0;
+    let mut end = text.len();
+    for (i, ch) in text.char_indices() {
+        let n = ch.len_utf16();
+        if units + n > max_utf16 {
+            end = i;
+            break;
+        }
+        units += n;
+    }
+    text[..end].to_owned()
 }
 
 /// A name-based (version 3) UUID of some bytes, as vanilla makes a pack's
@@ -248,6 +420,19 @@ mod tests {
     }
 
     #[test]
+    fn code_of_conduct_is_not_sent_when_the_flag_is_false() {
+        let dir = std::env::temp_dir().join(format!("mc-conduct-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("codeofconduct.txt"), "Be kind.").unwrap();
+        assert!(code_of_conduct(false, Some(&dir)).is_none());
+        assert_eq!(
+            code_of_conduct(true, Some(&dir)).as_deref(),
+            Some("Be kind.")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_refused_or_failed_pack_is_done_and_a_refusal() {
         assert_eq!(pack_outcome(0), (true, false));
         assert_eq!(pack_outcome(3), (false, false));
@@ -255,5 +440,25 @@ mod tests {
         for r in [1, 2, 5, 6, 7] {
             assert_eq!(pack_outcome(r), (true, true));
         }
+    }
+
+    #[test]
+    fn bug_report_link_is_sent_when_the_json_file_is_absent() {
+        let dir = std::env::temp_dir().join(format!("mc-bug-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("server.properties"),
+            "bug-report-link=https://example.com/bugs\n",
+        )
+        .unwrap();
+        let links = server_links(Some(&dir)).unwrap();
+        assert_eq!(links.len(), 1);
+        assert!(matches!(
+            links[0].label,
+            mc_protocol::packets::ServerLinkLabel::BuiltIn(0)
+        ));
+        assert_eq!(links[0].url, "https://example.com/bugs");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

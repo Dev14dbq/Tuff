@@ -221,19 +221,7 @@ pub fn tick(
                 fire: false,
                 respawn: None,
             });
-            fx::emit(
-                ctx,
-                fx::Fx::Level(mc_protocol::packets::play::LevelEvent {
-                    event: 1023,
-                    position: Position::new(
-                        me.pos[0].floor() as i32,
-                        me.pos[1].floor() as i32,
-                        me.pos[2].floor() as i32,
-                    ),
-                    data: 0,
-                    global: true,
-                }),
-            );
+            fx::heard(ctx, 1023, me.pos);
         }
         w.invulnerable = left;
         m.dirty = true;
@@ -428,7 +416,7 @@ fn break_around(ctx: &ServerContext, level: &mut WorldLevel, pos: [f64; 3]) {
                 }
                 if ctx.game_rule_bool("minecraft:block_drops") {
                     let props = |k: &str| blocks.property(s, k).map(str::to_owned);
-                    for d in ctx.loot.drops(name, &props) {
+                    for d in ctx.loot.get().drops(name, &props) {
                         drops.push((p, d.stack()));
                     }
                 }

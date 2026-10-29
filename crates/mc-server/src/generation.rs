@@ -70,6 +70,15 @@ fn biome_source(data: &McData, dimension: Dimension) -> Result<BiomeSource> {
     let Some(preset) = dimension.preset() else {
         return Ok(BiomeSource::TheEnd);
     };
+    // Vanilla's parameter-list file only names the built-in preset. A datapack
+    // file at the same path wins when it actually lists biomes.
+    if let Ok(list) = data.data_pack().read_entry(
+        "minecraft:worldgen/multi_noise_biome_source_parameter_list",
+        &format!("minecraft:{preset}"),
+    ) && list.get("biomes").is_some()
+    {
+        return Ok(BiomeSource::MultiNoise(list));
+    }
     let parameters: Value = serde_json::from_str(
         &std::fs::read_to_string(
             data.root
@@ -413,7 +422,7 @@ pub fn create(
     level.insert("Version", Tag::Compound(version_tag));
     level.insert("version_history", Tag::List(vec![Tag::Int(version)]));
     level.insert("DataPacks", Tag::Compound(packs));
-    level.insert("ServerBrands", Tag::List(vec![s("minecraft-rewrite")]));
+    level.insert("ServerBrands", Tag::List(vec![s(crate::BRAND)]));
     level.insert("WasModded", Tag::Byte(1));
     level.insert("LastPlayed", Tag::Long(0));
     let mut root = Compound::new();
@@ -510,13 +519,9 @@ pub fn features_with(
     let facts = mc_features::Facts::new(data, shapes, rules).map_err(anyhow::Error::msg)?;
     let order = biome_order(data, dimension)?;
     let started = std::time::Instant::now();
-    let features = mc_features::Features::load(
-        &data.data_pack().root.join("minecraft/worldgen"),
-        facts,
-        &order,
-        biomes,
-        heights,
-    );
+    let pack = data.data_pack();
+    let features =
+        mc_features::Features::load(&pack.root, &pack.layers, facts, &order, biomes, heights);
     tracing::debug!(
         "features loaded in {} ms; not generated yet: {}",
         started.elapsed().as_millis(),
@@ -670,8 +675,18 @@ mod dimension_world {
             super::dimension_features(&data, shapes, &biomes, &generator, dimension).unwrap();
         println!("not generated: {:?}", features.unsupported);
         let air = data.blocks.default_state("minecraft:air").unwrap();
-        let pipeline = crate::pipeline::Pipeline::new(generator, features, seed, air, 0)
+        let mut pipeline = crate::pipeline::Pipeline::new(generator, features, seed, air, 0)
             .with_fast_lava(super::fast_lava(&data, dimension));
+        if dimension == Dimension::End {
+            let kind =
+                std::fs::read_to_string(root.join("data/minecraft/dimension_type/the_end.json"))
+                    .unwrap();
+            let kind: serde_json::Value = serde_json::from_str(&kind).unwrap();
+            pipeline = pipeline.with_span(
+                kind["min_y"].as_i64().unwrap() as i32,
+                kind["height"].as_i64().unwrap() as i32,
+            );
+        }
         pipeline.prepare();
         let region = out
             .join("dimensions")

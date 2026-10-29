@@ -220,7 +220,7 @@ pub fn open_water(ctx: &ServerContext, at: [f64; 3]) -> bool {
 
 /// Rolls the fishing table and throws the result at the player.
 fn catch(ctx: &ServerContext, actor: Actor, at: [f64; 3], luck: i32, open_water: bool) {
-    let Some(table) = ctx.loot.table("minecraft:gameplay/fishing").cloned() else {
+    let Some(table) = ctx.loot.get().table("minecraft:gameplay/fishing").cloned() else {
         return;
     };
     let cx = crate::loot::LootCtx {
@@ -234,7 +234,7 @@ fn catch(ctx: &ServerContext, actor: Actor, at: [f64; 3], luck: i32, open_water:
         ..crate::loot::LootCtx::default()
     };
     let env = crate::commands::loot::Env(ctx);
-    let drops = ctx.loot.roll(&env, &table, &cx);
+    let drops = ctx.loot.get().roll(&env, &table, &cx);
     if !drops.is_empty() {
         crate::stats::custom(ctx, actor.uuid, "fish_caught", 1);
         let caught: Vec<_> = drops.iter().map(crate::loot::Drop::stack).collect();

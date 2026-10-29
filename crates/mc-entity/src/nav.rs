@@ -59,6 +59,15 @@ pub trait Terrain: Collide {
     fn liquid(&self, x: i32, y: i32, z: i32) -> Liquid;
     /// Fire, cactus, magma and the like: never walked into.
     fn hazard(&self, x: i32, y: i32, z: i32) -> bool;
+    /// Magma: one point of hot-floor damage each time a mob stands on it.
+    fn burns_feet(&self, _x: i32, _y: i32, _z: i32) -> bool {
+        false
+    }
+    /// A block that pricks whatever is in the cell (`minecraft:cactus`,
+    /// `minecraft:sweet_berry_bush`).
+    fn pricks(&self, _x: i32, _y: i32, _z: i32) -> Option<&'static str> {
+        None
+    }
     /// Sky light (15 under open sky).
     fn sky_light(&self, x: i32, y: i32, z: i32) -> u8;
     /// Block or sky light, whichever is brighter.
@@ -123,9 +132,18 @@ pub enum Feature {
     Sand,
 }
 
+/// How a path moves: on the ground, through water, or through the air.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Travel {
+    Walk,
+    Swim,
+    Fly,
+}
+
 /// What a walker is like.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PathParams {
+    pub travel: Travel,
     /// Blocks of headroom its body needs (1 for a chicken, 2 for a zombie).
     pub height: i32,
     /// Blocks it may drop in one step.
@@ -146,6 +164,7 @@ pub struct PathParams {
 impl PathParams {
     pub fn walker(height: i32) -> Self {
         Self {
+            travel: Travel::Walk,
             height,
             max_fall: 3,
             max_nodes: 600,
@@ -153,6 +172,25 @@ impl PathParams {
             reach_sq: 0,
             doors: false,
             lava: false,
+        }
+    }
+
+    /// Through water, including straight up a shaft. Air is only the surface.
+    pub fn swimmer(height: i32) -> Self {
+        Self {
+            travel: Travel::Swim,
+            water_cost: 0.0,
+            max_fall: 1,
+            ..Self::walker(height)
+        }
+    }
+
+    /// Through open air, up and over walls.
+    pub fn flyer(height: i32) -> Self {
+        Self {
+            travel: Travel::Fly,
+            max_fall: 0,
+            ..Self::walker(height)
         }
     }
 }
@@ -215,6 +253,11 @@ fn step_cost(w: &dyn Terrain, to: Cell, p: &PathParams, base: f32) -> f32 {
 /// The cells a mob can step to from `from`, with the cost of each step.
 fn neighbors(w: &dyn Terrain, from: Cell, p: &PathParams, out: &mut Vec<(Cell, f32)>) {
     out.clear();
+    match p.travel {
+        Travel::Swim => return swim_neighbors(w, from, p, out),
+        Travel::Fly => return fly_neighbors(w, from, p, out),
+        Travel::Walk => {}
+    }
     const SIDES: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
     const DIAGONALS: [(i32, i32); 4] = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
     let [x, y, z] = from;
@@ -254,6 +297,75 @@ fn neighbors(w: &dyn Terrain, from: Cell, p: &PathParams, out: &mut Vec<(Cell, f
         let to = [x + dx, y, z + dz];
         if standable(w, to, p) && clear(w, [x + dx, y, z], p) && clear(w, [x, y, z + dz], p) {
             out.push((to, step_cost(w, to, p, 1.414)));
+        }
+    }
+}
+
+fn swim_cell(w: &dyn Terrain, c: Cell, p: &PathParams) -> bool {
+    if !clear(w, c, p) {
+        return false;
+    }
+    let here = w.liquid(c[0], c[1], c[2]);
+    here == Liquid::Water || here == Liquid::None && w.liquid(c[0], c[1] - 1, c[2]) == Liquid::Water
+}
+
+fn swim_neighbors(w: &dyn Terrain, from: Cell, p: &PathParams, out: &mut Vec<(Cell, f32)>) {
+    const AXIS: [(i32, i32, i32); 6] = [
+        (1, 0, 0),
+        (-1, 0, 0),
+        (0, 0, 1),
+        (0, 0, -1),
+        (0, 1, 0),
+        (0, -1, 0),
+    ];
+    let [x, y, z] = from;
+    for (dx, dy, dz) in AXIS {
+        let to = [x + dx, y + dy, z + dz];
+        if swim_cell(w, to, p) {
+            let air = w.liquid(to[0], to[1], to[2]) != Liquid::Water;
+            out.push((to, if air { 2.0 } else { 1.0 }));
+        }
+    }
+    for (dx, dz) in [(1, 1), (1, -1), (-1, 1), (-1, -1)] {
+        let to = [x + dx, y, z + dz];
+        if swim_cell(w, to, p) && swim_cell(w, [x + dx, y, z], p) && swim_cell(w, [x, y, z + dz], p)
+        {
+            out.push((to, 1.414));
+        }
+    }
+}
+
+fn fly_cell(w: &dyn Terrain, c: Cell, p: &PathParams) -> bool {
+    clear(w, c, p) && (w.liquid(c[0], c[1], c[2]) != Liquid::Lava || p.lava)
+}
+
+fn fly_neighbors(w: &dyn Terrain, from: Cell, p: &PathParams, out: &mut Vec<(Cell, f32)>) {
+    const AXIS: [(i32, i32, i32); 6] = [
+        (1, 0, 0),
+        (-1, 0, 0),
+        (0, 0, 1),
+        (0, 0, -1),
+        (0, 1, 0),
+        (0, -1, 0),
+    ];
+    let [x, y, z] = from;
+    let cost = |to: Cell, base: f32| {
+        if w.liquid(to[0], to[1], to[2]) == Liquid::Water {
+            base + p.water_cost
+        } else {
+            base
+        }
+    };
+    for (dx, dy, dz) in AXIS {
+        let to = [x + dx, y + dy, z + dz];
+        if fly_cell(w, to, p) {
+            out.push((to, cost(to, 1.0)));
+        }
+    }
+    for (dx, dz) in [(1, 1), (1, -1), (-1, 1), (-1, -1)] {
+        let to = [x + dx, y, z + dz];
+        if fly_cell(w, to, p) && fly_cell(w, [x + dx, y, z], p) && fly_cell(w, [x, y, z + dz], p) {
+            out.push((to, cost(to, 1.414)));
         }
     }
 }
@@ -399,8 +511,12 @@ impl Nav {
             return;
         }
         if now.wrapping_sub(self.checked.1) >= 20 {
-            let (dx, dz) = (pos[0] - self.checked.0[0], pos[2] - self.checked.0[2]);
-            if dx * dx + dz * dz < 0.09 {
+            let (dx, dy, dz) = (
+                pos[0] - self.checked.0[0],
+                pos[1] - self.checked.0[1],
+                pos[2] - self.checked.0[2],
+            );
+            if dx * dx + dy * dy + dz * dz < 0.09 {
                 self.stuck += 1;
                 self.path.clear();
                 self.index = 0;
@@ -546,5 +662,34 @@ mod tests {
         assert_eq!(nav.waypoint([2.5, 0.0, 0.5], 0.4), Some([3, 0, 0]));
         assert_eq!(nav.waypoint([3.5, 0.0, 0.5], 0.4), None);
         assert!(nav.is_done());
+    }
+
+    #[test]
+    fn a_swimmer_climbs_a_shaft_and_a_flyer_goes_over_a_wall() {
+        let mut shaft = open();
+        for y in 0..5 {
+            shaft.water.push([0, y, 0]);
+            for x in -1..=1 {
+                for z in -1..=1 {
+                    if (x, z) != (0, 0) {
+                        shaft.walls.push([x, y, z]);
+                    }
+                }
+            }
+        }
+        let up = find_path(&shaft, [0, 0, 0], [0, 4, 0], &PathParams::swimmer(2)).unwrap();
+        assert!(up.iter().any(|c| c[1] >= 3), "{up:?}");
+        let walked = find_path(&shaft, [0, 0, 0], [0, 4, 0], &PathParams::walker(2));
+        assert!(walked.is_none_or(|p| p.iter().all(|c| c[1] == 0)));
+
+        let mut wall = open();
+        for z in -20..=20 {
+            for y in 0..3 {
+                wall.walls.push([1, y, z]);
+            }
+        }
+        let over = find_path(&wall, [0, 0, 0], [2, 0, 0], &PathParams::flyer(1)).unwrap();
+        assert!(over.iter().any(|c| c[0] >= 2), "{over:?}");
+        assert!(over.iter().any(|c| c[1] >= 3), "{over:?}");
     }
 }

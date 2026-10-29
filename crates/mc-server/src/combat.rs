@@ -170,13 +170,20 @@ pub fn swing(ctx: &ServerContext, uuid: u128, pose: Pose) -> Blow {
 /// [`swing`] with the base damage set (a riptide spin hits for 8 instead
 /// of the attack damage).
 pub fn swing_with(ctx: &ServerContext, uuid: u128, pose: Pose, base: Option<f32>) -> Blow {
-    swing_inner(ctx, uuid, pose, base, false)
+    swing_inner(ctx, uuid, pose, base, false, None)
+}
+
+/// [`swing`] using the fall distance from when the attack packet arrived.
+/// The landing often lands on the connection thread before the blow runs,
+/// and that clears [`crate::vitals::Vitals::fall_distance`].
+pub fn swing_at(ctx: &ServerContext, uuid: u128, pose: Pose, fall: f64) -> Blow {
+    swing_inner(ctx, uuid, pose, None, false, Some(fall))
 }
 
 /// A spear's jab (minecraft.wiki, "Spear"): a blow that is never critical
 /// and gets no sprint knockback, of `minecraft:spear` damage.
 pub fn jab(ctx: &ServerContext, uuid: u128, pose: Pose) -> Blow {
-    swing_inner(ctx, uuid, pose, None, true)
+    swing_inner(ctx, uuid, pose, None, true, None)
 }
 
 fn swing_inner(
@@ -185,6 +192,7 @@ fn swing_inner(
     pose: Pose,
     base: Option<f32>,
     spear: bool,
+    fall_at: Option<f64>,
 ) -> Blow {
     let held = crate::held::held(ctx, uuid, 0);
     let info = held.as_ref().and_then(|h| ctx.items.get(h.stack.item));
@@ -212,7 +220,8 @@ fn swing_inner(
     });
     let (fall, in_water, gliding) = {
         let v = lock(&ctx.vitals);
-        let fall = v.get(&uuid).map_or(0.0, |v| v.fall_distance);
+        let stored = v.get(&uuid).map_or(0.0, |v| v.fall_distance);
+        let fall = fall_at.unwrap_or(stored);
         let gliding = v.get(&uuid).is_some_and(|v| v.gliding);
         let wet = crate::hits::in_water(ctx, [pose.x, pose.y, pose.z]);
         (fall, wet, gliding)
@@ -725,14 +734,20 @@ fn thorns(ctx: &ServerContext, victim: u128, attacker: i32, mode: i32) {
     }
 }
 
-/// A player hits another player in melee.
+/// A player hits another player in melee. `fall` is the distance at the
+/// attack packet, when a later landing would already have cleared it.
 pub fn player_hits_player(
     ctx: &ServerContext,
     attacker: &crate::interact::Actor,
     name: &str,
     victim: u128,
+    fall: Option<f64>,
 ) {
-    player_hits_player_with(ctx, attacker, name, victim, None);
+    let blow = match fall {
+        Some(fall) => swing_at(ctx, attacker.uuid, attacker.pose, fall),
+        None => swing_with(ctx, attacker.uuid, attacker.pose, None),
+    };
+    blow_hits_player(ctx, attacker, name, victim, blow, true);
 }
 
 /// [`player_hits_player`] with the blow's base damage set (riptide).
@@ -896,5 +911,51 @@ mod tests {
         }
         let up = up.expect("a wind burst");
         assert!((up[1] - 1.2).abs() < 1e-6 && up[0].abs() < 1e-9, "{up:?}");
+    }
+
+    #[test]
+    fn a_mace_smash_keeps_the_fall_a_landing_would_clear() {
+        use crate::context::Pose;
+        use crate::testkit::{flat, join, place, stack, wear};
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let pose = |y, on_ground| Pose {
+            x: 0.5,
+            y,
+            z: 0.5,
+            yaw: 0.0,
+            pitch: 0.0,
+            on_ground,
+        };
+        let u = 0xa003;
+        join(&ctx, u, 9303, [0.5, -50.0, 0.5], 1);
+        wear(&ctx, u, 36, stack(&ctx, "mace", &[]));
+        lock(&ctx.time).age = 5000;
+        // Creative, not flying: the fall still counts.
+        crate::vitals::moved(&ctx, u, pose(-40.0, false), pose(-50.0, false), false);
+        let fall = lock(&ctx.vitals).get(&u).unwrap().fall_distance;
+        assert!((fall - 10.0).abs() < 1e-9, "{fall}");
+        lock(&ctx.players).get_mut(&u).unwrap().game_mode = 0;
+        place(&ctx, u, [0.5, -50.0, 0.5], true);
+        // The landing is handled before the blow, and clears the fall.
+        crate::vitals::moved(&ctx, u, pose(-50.0, false), pose(-50.0, true), false);
+        assert_eq!(lock(&ctx.vitals).get(&u).unwrap().fall_distance, 0.0);
+        let blow = swing_at(&ctx, u, pose(-50.0, true), fall);
+        assert_eq!(blow.smash, Some(fall));
+        assert!(blow.damage > 20.0, "{}", blow.damage);
+        after_blow(&ctx, u, &blow, -1, [0.5, -50.0, 0.5], true, &mut []);
+        crate::vitals::apply_pending_falls(&ctx);
+        assert_eq!(lock(&ctx.vitals).get(&u).unwrap().health, 20.0);
+
+        let w = 0xa004;
+        join(&ctx, w, 9304, [8.5, -50.0, 0.5], 0);
+        crate::vitals::moved(&ctx, w, pose(-40.0, false), pose(-50.0, false), false);
+        place(&ctx, w, [8.5, -50.0, 0.5], true);
+        crate::vitals::moved(&ctx, w, pose(-50.0, false), pose(-50.0, true), false);
+        crate::vitals::apply_pending_falls(&ctx);
+        let health = lock(&ctx.vitals).get(&w).unwrap().health;
+        assert!(health < 20.0, "{health}");
     }
 }

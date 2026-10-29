@@ -73,6 +73,9 @@ fn profiler(r: &mut Run, name: &str, start: bool) -> Result<i32> {
         }
         *slot = Some((Instant::now(), age));
         drop(d);
+        if name == "perf" {
+            crate::profile::begin();
+        }
         plain(r, &format!("commands.{name}.started"), Vec::new());
         return Ok(1);
     }
@@ -93,12 +96,9 @@ fn profiler(r: &mut Run, name: &str, start: bool) -> Result<i32> {
         ],
     );
     if name == "perf" {
-        let file = chrono::Local::now().format("%Y-%m-%d_%H_%M_%S-world-26_3.zip");
-        plain(
-            r,
-            "commands.perf.reportSaved",
-            vec![str_tag(&file.to_string())],
-        );
+        let report = crate::profile::finish();
+        let file = crate::profile::save(r.ctx, &report);
+        plain(r, "commands.perf.reportSaved", vec![str_tag(&file)]);
     }
     Ok(ticks as i32)
 }

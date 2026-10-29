@@ -592,6 +592,9 @@ fn every_kind_of_entity_comes_back_after_a_restart() {
     drop(entities);
     let count = lock(&ctx.entities).len();
     crate::save(&ctx);
+    // The ender pearl in this chunk is a ticket, so the save keeps the chunk
+    // loaded. This check is that entities leave when the chunk does unload.
+    ctx.world.set_pinned(std::collections::HashSet::new());
     let dropped = ctx.world.unload_unused();
     unloaded(&ctx, &dropped);
     assert!(lock(&ctx.entities).is_empty(), "all left with their chunk");

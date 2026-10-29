@@ -134,6 +134,10 @@ pub enum Event {
         entity_id: i32,
         pose: Pose,
     },
+    /// The locator bar should be sent again (a colour, a style, the rule).
+    LocatorRefresh,
+    /// Recipes were loaded again: clients get `UpdateRecipes`.
+    ContentRefresh,
     SkinParts {
         uuid: u128,
         entity_id: i32,
@@ -378,7 +382,7 @@ pub struct Shared {
     /// The dimensions that exist so far, in [`DIMENSIONS`] order (the others
     /// are made when first used).
     pub dims: [Mutex<Option<Arc<ServerContext>>>; 3],
-    synced_ids: HashMap<String, HashMap<String, i32>>,
+    pub(crate) synced_ids: HashMap<String, HashMap<String, i32>>,
     light_tables: mc_light::Tables,
     /// Event channels of every dimension.
     pub hub: Events,
@@ -405,12 +409,12 @@ pub struct Shared {
     pub inventories: Mutex<HashMap<u128, crate::interact::Hands>>,
     /// Filled maps (`data/minecraft/maps`), shared by every dimension.
     pub maps: Mutex<crate::maps::Store>,
-    /// What broken blocks drop.
-    pub loot: crate::loot::BlockLoot,
-    /// Crafting recipes.
-    pub recipes: crate::crafting::Recipes,
-    /// Enchantment definitions.
-    pub enchantments: crate::enchants::Enchantments,
+    /// What broken blocks drop. Replaced whole by `/reload`.
+    pub loot: crate::util::Publish<crate::loot::BlockLoot>,
+    /// Crafting recipes. Replaced whole by `/reload`.
+    pub recipes: crate::util::Publish<crate::crafting::Recipes>,
+    /// Enchantment definitions. Replaced whole by `/reload`.
+    pub enchantments: crate::util::Publish<crate::enchants::Enchantments>,
     /// What villagers and wandering traders sell.
     pub trades: crate::trading::Trades,
     /// Health and food of players in play.
@@ -437,6 +441,17 @@ pub struct Shared {
     pub lists: Mutex<crate::lists::Lists>,
     /// Whether only listed players may join (`white-list`).
     pub white_list: std::sync::atomic::AtomicBool,
+    /// The server-list message. Starts as `config.motd` and follows
+    /// `minecraft:serversettings/motd/set`.
+    pub shown_motd: Mutex<String>,
+    /// How many players may be online. Starts as `config.max_players`.
+    pub player_limit: std::sync::atomic::AtomicUsize,
+    /// Chunk radius sent to a client. Starts as `config.view_distance`.
+    pub view_distance: std::sync::atomic::AtomicU8,
+    /// Management-protocol notifications for authenticated clients.
+    pub management_bus: crate::notify::Bus,
+    /// The `/pregen` job, shared by every dimension.
+    pub pregen: Mutex<crate::pregen::Schedule>,
     /// `minecraft:entity_type` ids of the entities we have.
     pub entity_types: EntityTypes,
     /// `minecraft:particle_type` and `minecraft:sound_event` ids of a big
@@ -549,6 +564,8 @@ pub struct ServerContext {
     pub border: Mutex<crate::border::Border>,
     /// Force-loaded chunks (`/forceload`).
     pub forced: Mutex<crate::forced::Forced>,
+    /// Chunk tickets: who keeps a chunk loaded, and at what level it ticks.
+    pub tickets: Mutex<crate::tickets::Map>,
     /// The dragon fight (in the End) and the bosses' bars.
     pub bosses: Mutex<crate::bosses::State>,
     /// The points of interest (beds, workstations, bells) of this dimension.
@@ -583,6 +600,20 @@ pub fn dimension_index(name: &str) -> Option<usize> {
     ["overworld", "the_nether", "the_end"]
         .iter()
         .position(|d| *d == name)
+}
+
+fn load_pregen(config: &crate::Config) -> crate::pregen::Schedule {
+    let Some(dir) = &config.server_dir else {
+        return crate::pregen::Schedule::new();
+    };
+    match std::fs::read_to_string(dir.join("pregen.json")) {
+        Ok(text) => crate::pregen::Schedule::load(&text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => crate::pregen::Schedule::new(),
+        Err(err) => {
+            warn!("reading pregen.json: {err}");
+            crate::pregen::Schedule::new()
+        }
+    }
 }
 
 /// The channels events go through: one per dimension for what happens at a
@@ -701,6 +732,27 @@ impl std::fmt::Debug for ServerContext {
 }
 
 impl ServerContext {
+    /// Reads the enabled data packs again: recipes, loot and enchantments
+    /// swap in for the next use, and the advancement book is dropped so the
+    /// next lookup rebuilds it. Clients get the new recipe list.
+    pub fn reload_content(&self) {
+        let roots = self.packs.lock().expect("packs").layer_roots();
+        self.data.set_pack_layers(roots);
+        self.rare.lock().expect("rare").book = None;
+        let recipes = crate::crafting::Recipes::load(&self.data);
+        let tags = recipes.item_tags.clone();
+        let ids = self
+            .synced_ids
+            .get("minecraft:enchantment")
+            .cloned()
+            .unwrap_or_default();
+        self.enchantments
+            .set(crate::enchants::Enchantments::load(&self.data, &ids, &tags));
+        self.loot.set(crate::loot::BlockLoot::load(&self.data));
+        self.recipes.set(recipes);
+        let _ = self.events.send(Event::ContentRefresh);
+    }
+
     /// The dimension at `index` in [`DIMENSIONS`], made when first needed.
     /// `None` if it cannot be made.
     pub fn dimension(&self, index: usize) -> Option<Arc<ServerContext>> {
@@ -838,6 +890,7 @@ impl ServerContext {
                 name,
                 version,
             )),
+            tickets: Mutex::new(crate::tickets::Map::default()),
             events: self.shared.hub.for_dim(index),
             bosses: Mutex::default(),
             poi,
@@ -862,6 +915,9 @@ impl ServerContext {
             }
         }
 
+        let commands = crate::commands::Commands::load(&config.data_dir);
+        let packs = crate::packs::Packs::load(config.level_dir.as_deref(), &commands);
+        data.set_pack_layers(packs.layer_roots());
         let pack = data.data_pack();
         // Network ids of data-driven registry entries are their position in our list.
         let mut synced_ids: HashMap<String, HashMap<String, i32>> = HashMap::new();
@@ -1017,7 +1073,10 @@ impl ServerContext {
             lists.add_op_name(name);
         }
         let white_list = config.white_list;
-        let config_data_dir = config.data_dir.clone();
+        let shown_motd = config.motd.clone();
+        let player_limit = config.max_players;
+        let view_distance = config.view_distance;
+        let pregen = load_pregen(&config);
         let game_rules = crate::rules::GameRules::load(
             &config.data_dir,
             world.folder(),
@@ -1026,8 +1085,6 @@ impl ServerContext {
         let weather = crate::weather::Weather::load(world.folder(), data.version.world_version);
         let border = crate::border::Border::load(world.folder(), data.version.world_version);
         let forced = crate::forced::Forced::load(world.folder(), data.version.world_version);
-        let commands = crate::commands::Commands::load(&config_data_dir);
-        let packs = crate::packs::Packs::load(config.level_dir.as_deref(), &commands);
         let storage = crate::storage::Storage::load(world.folder(), data.version.world_version);
         let scoreboard =
             crate::scoreboard::Scoreboard::load(world.folder(), data.version.world_version);
@@ -1060,15 +1117,15 @@ impl ServerContext {
             mobs: Default::default(),
             inventories: Mutex::new(HashMap::new()),
             maps: Mutex::new(crate::maps::Store::default()),
-            loot: crate::loot::BlockLoot::load(&data),
-            enchantments: crate::enchants::Enchantments::load(
+            loot: crate::util::Publish::new(crate::loot::BlockLoot::load(&data)),
+            enchantments: crate::util::Publish::new(crate::enchants::Enchantments::load(
                 &data,
                 synced_ids
                     .get("minecraft:enchantment")
                     .unwrap_or(&HashMap::new()),
                 &recipes.item_tags,
-            ),
-            recipes,
+            )),
+            recipes: crate::util::Publish::new(recipes),
             trades: crate::trading::Trades::load(
                 &data,
                 &items,
@@ -1087,6 +1144,11 @@ impl ServerContext {
             default_game_mode: AtomicI32::new(default_game_mode),
             lists: Mutex::new(lists),
             white_list: std::sync::atomic::AtomicBool::new(white_list),
+            shown_motd: Mutex::new(shown_motd),
+            player_limit: std::sync::atomic::AtomicUsize::new(player_limit),
+            view_distance: std::sync::atomic::AtomicU8::new(view_distance),
+            management_bus: crate::notify::Bus::new(),
+            pregen: Mutex::new(pregen),
             explosion_particle: data
                 .builtin
                 .id("minecraft:particle_type", "minecraft:explosion_emitter")
@@ -1169,6 +1231,7 @@ impl ServerContext {
             weather: Mutex::new(weather),
             border: Mutex::new(border),
             forced: Mutex::new(forced),
+            tickets: Mutex::new(crate::tickets::Map::default()),
             bosses: Mutex::default(),
             poi,
             raids: Mutex::new(crate::raids::Raids::default()),

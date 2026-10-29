@@ -1,0 +1,132 @@
+# Lines for `cargo xtask observe-commands --area rare2 --packets swing_animation,post_effects,show_dialog,clear_dialog,waypoint,transfer`
+gamemode survival @s
+tp @s 0 -60 0
+swing
+swing @s
+swing @s mainhand
+swing @s offhand
+swing @s mainhand whack
+swing @s mainhand stab
+swing @s mainhand none
+swing @s mainhand stab 20
+swing @s mainhand stab 0
+swing @s offhand stab 5
+swing @e[type=minecraft:cow]
+swing @a
+summon minecraft:armor_stand 3 -60 3
+swing @e[type=minecraft:armor_stand]
+random reset *
+random reset * 5
+random reset * 5 false
+random reset * 5 true true
+random reset minecraft:foo
+random reset minecraft:foo 7
+random reset minecraft:foo 7 false false
+random reset minecraft:gameplay/fishing 1
+random value 1..6 minecraft:foo
+random roll 1..6 minecraft:foo
+random value 1..6 minecraft:foo
+random reset minecraft:foo 7
+random value 1..100 minecraft:foo
+random value 1..100 minecraft:foo
+random reset minecraft:foo 7
+random value 1..100 minecraft:foo
+random value 1..100 minecraft:foo
+random reset minecraft:foo 7 false
+random value 1..100 minecraft:foo
+random reset minecraft:foo 7 false false
+random value 1..100 minecraft:foo
+random reset minecraft:foo 7 true false
+random value 1..100 minecraft:foo
+teammsg hello
+tm hello
+team add red
+teammsg hello
+team join red @s
+teammsg hello there
+tm yo
+team leave @s
+team remove red
+compute default float cooking/speed_default
+compute default float cooking/speed_default 2
+compute default integer cooking/time_coal_block
+compute default integer brewing/uses_default
+compute default integer cooking/nosuch
+compute default float minecraft:cooking/speed_default 0.5
+compute default integer 5
+compute default integer {type:"minecraft:constant",value:7}
+compute default float 2.5
+compute default float 2.5 10
+compute default integer {type:"minecraft:uniform",min:1,max:1}
+compute block 0 -61 0 integer cooking/time_coal_block
+compute block 0 -61 0 float cooking/normal_speed_multiplier
+compute block 0 500 0 float cooking/normal_speed_multiplier
+compute block 1000000 0 0 float cooking/normal_speed_multiplier
+compute entity @s float cooking/speed_default
+compute entity @s integer cooking/time_coal_block
+compute entity @e[type=minecraft:armor_stand] integer cooking/time_coal_block
+compute entity @a float cooking/speed_default 3
+setblock 0 -60 0 minecraft:furnace
+compute block 0 -60 0 integer cooking/time_coal_block
+compute block 0 -60 0 float cooking/speed_default
+waypoint list
+waypoint modify @s color red
+waypoint modify @s color hex ff0000
+waypoint modify @s color hex fff
+waypoint modify @s color reset
+waypoint modify @s style set minecraft:default
+waypoint modify @s style set minecraft:bowtie
+waypoint modify @s style set minecraft:nosuch
+waypoint modify @s style reset
+waypoint modify @e[type=minecraft:armor_stand] color blue
+waypoint modify @e[type=minecraft:armor_stand,limit=1] style set minecraft:bowtie
+waypoint modify @e[type=minecraft:armor_stand,limit=1] color green
+waypoint list
+waypoint modify @e[type=minecraft:armor_stand,limit=1] color reset
+waypoint modify @e[type=minecraft:armor_stand,limit=1] style reset
+waypoint modify @e[type=minecraft:armor_stand,limit=1] color hex 00ff00
+waypoint list
+waypoint modify @s color hex 00ff00
+waypoint modify @s style set minecraft:bowtie
+waypoint list
+waypoint modify @s color blue
+waypoint list
+posteffect list @s
+posteffect add @s minecraft:blur
+posteffect add @s minecraft:blur
+posteffect add @s minecraft:nosuch
+posteffect list @s
+posteffect add @s minecraft:green
+posteffect list @s
+posteffect remove @s minecraft:blur
+posteffect remove @s minecraft:blur
+posteffect clear @s
+posteffect clear @s
+posteffect list @s
+posteffect add @e[type=minecraft:armor_stand] minecraft:blur
+dialog show @s minecraft:server_links
+dialog show @s minecraft:nosuch
+dialog show @s {type:"minecraft:notice",title:"Hi"}
+dialog show @s {type:"minecraft:notice"}
+dialog show @e[type=minecraft:armor_stand] minecraft:quick_actions
+dialog clear @s
+dialog clear @e[type=minecraft:armor_stand]
+dialog show @s minecraft:custom_options
+fetchprofile name Notch
+fetchprofile name Mojang
+fetchprofile name ThisIsNotARealPlayerNameXYZ123
+fetchprofile id 069a79f4-44e9-4726-a5be-fca90e38aaf5
+fetchprofile id 00000000-0000-0000-0000-000000000000
+fetchprofile entity @s
+fetchprofile entity @e[type=minecraft:armor_stand,limit=1]
+place jigsaw minecraft:village/plains/town_centers 0 -60 0 minecraft:center 1
+place jigsaw minecraft:village/plains/town_centers minecraft:center 1
+place jigsaw minecraft:village/plains/town_centers minecraft:center 0
+place jigsaw minecraft:village/plains/town_centers minecraft:center 7 10 -60 10
+place jigsaw minecraft:village/plains/town_centers minecraft:center 20
+place jigsaw minecraft:nosuch minecraft:center 1
+place jigsaw minecraft:village/plains/town_centers minecraft:nosuch 1
+place jigsaw minecraft:empty minecraft:center 1
+transfer example.com
+transfer example.com 25565 @e[type=minecraft:armor_stand]
+transfer example.com 25565 @s

@@ -1,7 +1,9 @@
 //! Lightning bolts (minecraft.wiki, "Lightning"), here those Channeling
 //! calls: thunder and the impact sound, fire where it strikes (on normal
 //! and hard), 5 damage and fire to everything within 3 blocks while it
-//! flashes, one to three flashes.
+//! flashes, one to three flashes. A pig becomes a zombified piglin, a
+//! villager a witch, a creeper charges and a mooshroom changes colour
+//! ([`crate::mobs::hurt::thunder`]).
 
 use mc_entity::extra::Shot;
 use mc_entity::{Entity, Kind};
@@ -357,5 +359,53 @@ mod tests {
             .map(|e| e.pos)
             .collect();
         assert_eq!(bolts, vec![[60.5, -59.0, 5.5]]);
+    }
+
+    #[test]
+    fn a_bolt_turns_a_pig_into_a_zombified_piglin_and_charges_a_creeper() {
+        let Some(ctx) = super::super::tests::flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let pig = crate::mobs::new_mob(&ctx, mc_entity::Species::Pig, [0.5, -60.0, 0.5]);
+        let pig_id = pig.id;
+        let creeper = crate::mobs::new_mob(&ctx, mc_entity::Species::Creeper, [3.0, -60.0, 0.5]);
+        let creeper_id = creeper.id;
+        let moosh = crate::mobs::new_mob(&ctx, mc_entity::Species::Mooshroom, [5.0, -60.0, 0.5]);
+        let moosh_id = moosh.id;
+        let villager =
+            crate::trading::new_merchant(&ctx, "minecraft:villager", [7.0, -60.0, 0.5]).unwrap();
+        let villager_id = villager.id;
+        let mut entities = vec![pig, creeper, moosh, villager];
+        let mut removed = Vec::new();
+        let mut gone = Vec::new();
+        let strike = |id| crate::hits::Hit {
+            target: id,
+            amount: 5.0,
+            by: None,
+            with: None,
+            kind: "minecraft:lightning_bolt",
+        };
+        for id in [pig_id, creeper_id, moosh_id, villager_id] {
+            crate::hits::apply(&ctx, &mut entities, &mut removed, &mut gone, strike(id));
+        }
+        assert!(removed.contains(&pig_id));
+        assert!(removed.contains(&villager_id));
+        let stored = lock(&ctx.entities);
+        assert!(stored.iter().any(|e| {
+            matches!(&e.kind, Kind::Mob(m) if m.species == mc_entity::Species::ZombifiedPiglin && m.persistent)
+        }));
+        assert!(stored.iter().any(|e| {
+            matches!(&e.kind, Kind::Mob(m) if m.species == mc_entity::Species::Witch && m.persistent)
+        }));
+        drop(stored);
+        let Kind::Mob(m) = &entities.iter().find(|e| e.id == creeper_id).unwrap().kind else {
+            panic!("creeper");
+        };
+        assert!(m.powered);
+        let Kind::Mob(m) = &entities.iter().find(|e| e.id == moosh_id).unwrap().kind else {
+            panic!("mooshroom");
+        };
+        assert_eq!(m.variant, 1);
     }
 }

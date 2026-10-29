@@ -7,6 +7,19 @@ use mc_entity::{Entity, Kind};
 
 use crate::hits::{self, Hit, Strike, Tick};
 
+/// A blow destroys the bullet: the hurt sound and a burst of crits.
+pub fn shot_down(ctx: &crate::context::ServerContext, at: [f64; 3]) {
+    crate::fx::sound(
+        ctx,
+        "entity.shulker_bullet.hurt",
+        crate::fx::category::HOSTILE,
+        at,
+        1.0,
+        1.0,
+    );
+    crate::fx::particles(ctx, "minecraft:crit", at, 0.2, 0.0, 15);
+}
+
 /// Blocks per tick.
 const SPEED: f64 = 0.15;
 /// Ticks before it burns out.
@@ -100,5 +113,63 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
             });
         }
         Strike::Block { .. } => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::Pose;
+    use crate::interact::Actor;
+    use crate::projectiles::tests::flat;
+    use crate::tick::lock;
+    use mc_entity::extra::Shot;
+
+    fn steve(mode: i32) -> Actor {
+        Actor {
+            uuid: 1,
+            entity_id: 9,
+            game_mode: mode,
+            pose: Pose {
+                x: 0.5,
+                y: -59.0,
+                z: 2.5,
+                yaw: 0.0,
+                pitch: 0.0,
+                on_ground: true,
+            },
+            sneaking: false,
+        }
+    }
+
+    #[test]
+    fn a_blow_pops_a_shulker_bullet() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let id = crate::projectiles::spawn(
+            &ctx,
+            Shot::ShulkerBullet { target: 9 },
+            None,
+            [0.5, -58.0, 0.5],
+            [0.0, 0.0, 0.0],
+        );
+        let out = hits::use_entity(&ctx, steve(0), id, 0, true, None, None);
+        assert!(matches!(
+            out.events.as_slice(),
+            [crate::context::Event::EntitiesRemoved(ids)] if ids == &vec![id]
+        ));
+        assert!(lock(&ctx.entities).iter().all(|e| e.id != id || e.removed));
+        let id = crate::projectiles::spawn(
+            &ctx,
+            Shot::ShulkerBullet { target: 9 },
+            None,
+            [0.5, -58.0, 0.5],
+            [0.0, 0.0, 0.0],
+        );
+        let out = hits::use_entity(&ctx, steve(3), id, 0, true, None, None);
+        assert!(out.events.is_empty());
+        assert!(lock(&ctx.entities).iter().any(|e| e.id == id && !e.removed));
     }
 }

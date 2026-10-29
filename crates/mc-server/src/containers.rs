@@ -427,7 +427,7 @@ fn unpack_loot(ctx: &ServerContext, p: Position, size: usize) -> Option<String> 
     };
     data.remove("LootTableSeed");
     let mut slots = read_items(ctx, &data, size);
-    if let Some(table) = ctx.loot.table(&table).cloned() {
+    if let Some(table) = ctx.loot.get().table(&table).cloned() {
         // (An entity's key is no place; its tables name no origin.)
         let cx = crate::loot::LootCtx {
             origin: entity_of(p).is_none().then(|| {
@@ -442,6 +442,7 @@ fn unpack_loot(ctx: &ServerContext, p: Position, size: usize) -> Option<String> 
         let env = crate::commands::loot::Env(ctx);
         let rolled: Vec<ItemStack> = ctx
             .loot
+            .get()
             .roll(&env, &table, &cx)
             .iter()
             .map(crate::loot::Drop::stack)

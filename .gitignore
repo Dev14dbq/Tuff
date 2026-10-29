@@ -8,3 +8,5 @@
 /target/
 .DS_Store
 /run/
+# Local agent state and worktrees
+.claude/

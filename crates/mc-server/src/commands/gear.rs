@@ -330,6 +330,21 @@ pub fn value(ctx: &ServerContext, uuid: u128, name: &str) -> f64 {
     snapshot(ctx, uuid, short).map_or(0.0, |s| compute(s.base, &s.modifiers, max, min))
 }
 
+/// The attribute as the player has it now (base, then modifiers).
+pub(crate) fn number(ctx: &crate::context::ServerContext, uuid: u128, name: &str) -> f64 {
+    let Some(&(_, default, max, min)) = ATTRIBUTES.iter().find(|a| a.0 == name) else {
+        return 0.0;
+    };
+    let base = lock(&ctx.rare)
+        .attributes
+        .get(&uuid)
+        .and_then(|a| a.get(name))
+        .and_then(|s| s.base)
+        .unwrap_or(default);
+    let mode = lock(&ctx.players).get(&uuid).map_or(0, |p| p.game_mode);
+    compute(base, &all_modifiers(ctx, uuid, name, mode), max, min)
+}
+
 fn compute(base: f64, mods: &[AttributeModifier], max: f64, min: f64) -> f64 {
     let v: f64 = base
         + mods

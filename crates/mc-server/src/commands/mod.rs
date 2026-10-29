@@ -61,10 +61,13 @@ pub struct Commands {
 
 impl Commands {
     pub fn load(data: &std::path::Path) -> Self {
-        let tree = Tree::load(data).unwrap_or_else(|e| {
+        let mut tree = Tree::load(data).unwrap_or_else(|e| {
             warn!("no command tree ({e}); run cargo xtask observe-commands");
             Tree::default()
         });
+        tree.add_literal("backup", 4);
+        tree.add_literal("pregen", 2);
+        tree.add_literal("chase", 2);
         let packets = if tree.nodes.is_empty() {
             Vec::new()
         } else {
@@ -358,6 +361,13 @@ fn admin_line(name: &str, message: Tag) -> Tag {
 pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, line: &str) -> Output {
     let line = line.trim_end();
     let line = line.strip_prefix('/').unwrap_or(line);
+    let word = line.split_whitespace().next().unwrap_or("");
+    if word.eq_ignore_ascii_case("pregen") || word.eq_ignore_ascii_case("minecraft:pregen") {
+        return pregen_command(ctx, source, line);
+    }
+    if word.eq_ignore_ascii_case("chase") || word.eq_ignore_ascii_case("minecraft:chase") {
+        return chase_command(ctx, source, line);
+    }
     let commands = &ctx.commands;
     let src = Src::of(ctx, source);
     let mut out = Output::default();
@@ -402,6 +412,69 @@ pub fn execute(ctx: &ServerContext, tick: &mut TickControl, source: &Source, lin
             info!("{}", commands.lang.render(l));
         }
         out.lines.clear();
+    }
+    out
+}
+
+fn chase_command(ctx: &ServerContext, source: &Source, line: &str) -> Output {
+    let src = Src::of(ctx, source);
+    let mut out = Output::default();
+    let player = match source {
+        Source::Player { uuid, .. } => Some(*uuid),
+        Source::Console | Source::Rcon | Source::Block { .. } | Source::Cart { .. } => None,
+    };
+    match crate::chase::command(player, src.level, line) {
+        Ok(Some(text)) => match source {
+            Source::Console => info!("{text}"),
+            _ => out.lines.push(mc_protocol::text::plain(&text)),
+        },
+        Ok(None) => {}
+        Err(text) => match source {
+            Source::Console => warn!("{text}"),
+            _ => out.lines.push(mc_protocol::text::plain(&text)),
+        },
+    }
+    out
+}
+
+fn pregen_command(ctx: &ServerContext, source: &Source, line: &str) -> Output {
+    let src = Src::of(ctx, source);
+    let mut out = Output::default();
+    if src.level < 2 {
+        let text = "You do not have permission to use this command.";
+        match source {
+            Source::Console => warn!("{text}"),
+            _ => out.lines.push(mc_protocol::text::plain(text)),
+        }
+        return out;
+    }
+    let here = crate::context::DIMENSIONS
+        .get(src.dim)
+        .copied()
+        .unwrap_or("minecraft:overworld");
+    let starting = line
+        .split_whitespace()
+        .any(|word| word.eq_ignore_ascii_case("start"));
+    let result = {
+        let mut schedule = ctx.pregen.lock().expect("pregen");
+        let result = crate::pregen::apply(&mut schedule, line, here);
+        if result.is_ok() && starting {
+            schedule.set_starter(&src.name);
+        }
+        result
+    };
+    match result {
+        Ok(text) => {
+            crate::pregen::persist(ctx);
+            match source {
+                Source::Console => info!("{text}"),
+                _ => out.lines.push(mc_protocol::text::plain(&text)),
+            }
+        }
+        Err(text) => match source {
+            Source::Console => warn!("{text}"),
+            _ => out.lines.push(mc_protocol::text::plain(&text)),
+        },
     }
     out
 }

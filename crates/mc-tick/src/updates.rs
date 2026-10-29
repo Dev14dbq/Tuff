@@ -66,7 +66,11 @@ fn set_with_limit(
         return false;
     }
     // The new block reacts to being placed before its neighbours hear of it.
-    fluids::on_place(level, ctx, p, state);
+    // Water that cannot exist here is already gone; nothing else should
+    // react to a block the world no longer has.
+    if fluids::on_place(level, ctx, p, state) {
+        return true;
+    }
     crate::fire::on_place(level, ctx, p, old, state);
     redstone::on_place(level, ctx, p, old, state);
     crate::sponge::on_place(level, ctx, p, old, state);
@@ -147,6 +151,7 @@ pub fn update_neighbor_shapes(
             _ => {}
         }
         new = crate::dripstone::update_shape(level, ctx, np, new, dir.opposite());
+        new = crate::support::chorus_connections(level, ctx, np, new);
         new = crate::fire::update_shape(level, ctx, np, new);
         new = crate::portal::update_shape(level, ctx, np, new, dir.opposite(), state);
         crate::leaves::shape_updated(level, ctx, np, new);
@@ -256,6 +261,7 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
 /// connections and shapes from its neighbours.
 pub fn placement_state(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> u32 {
     let state = ctx.shapes.placement_shape(level, p, state);
+    let state = crate::support::chorus_connections(level, ctx, p, state);
     match redstone::part(ctx, state) {
         redstone::Part::Wire => redstone::wire_shape(level, ctx, p, state),
         redstone::Part::NoteBlock => redstone::note_instrument(level, ctx, p, state),

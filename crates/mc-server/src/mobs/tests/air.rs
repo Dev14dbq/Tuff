@@ -205,6 +205,22 @@ fn a_creaking_stands_still_while_looked_at() {
 }
 
 #[test]
+fn a_sulfur_cube_tells_the_client_its_vanilla_size() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let big = Mob::new(Species::SulfurCube, 1);
+    let meta = crate::mobs::meta::metadata_of(&ctx, &big, 0);
+    assert!(meta.contains(&(18, mc_protocol::packets::play::MetadataValue::VarInt(2))));
+    let mut small = Mob::new(Species::SulfurCube, 1);
+    small.set_baby(true);
+    let meta = crate::mobs::meta::metadata_of(&ctx, &small, 0);
+    assert!(meta.contains(&(18, mc_protocol::packets::play::MetadataValue::VarInt(1))));
+    assert!(meta.contains(&(16, mc_protocol::packets::play::MetadataValue::Boolean(true))));
+}
+
+#[test]
 fn a_big_sulfur_cube_splits_in_two_when_it_dies() {
     let Some(ctx) = flat() else {
         eprintln!("skipped: no game data");

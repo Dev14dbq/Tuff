@@ -43,8 +43,10 @@ Tasks:
       report what it sent, checking our packet layouts against it. --dump writes
       the raw play packets to <dir>.
   bots [--addr <host:port>] [--count <n>] [--seconds <s>] [--view-distance <n>] [--version <id>]
+      [--follow] [--name <player>]
       Load test: n bots (default 100) log in, get their chunks and walk around
       for s seconds (default 30). The server must run with --offline.
+      --follow logs in one bot that sprints, jumps and stays with another player.
   bench [--only vanilla,modded,ours] [--scenarios a,b] [--rounds <n>] [--cores <n>]
         [--background <cores>] [--noisy] [--jfr] [--bots <n>] [--entities <n>] [--seconds <s>]
         | --summarize <file.jfr>

@@ -1736,4 +1736,93 @@ mod tests {
             None
         ));
     }
+
+    /// Every trigger the 26.3 advancement set uses. `impossible` is in the
+    /// set and is never granted: that is what it means.
+    const TRIGGERS_26_3: &[&str] = &[
+        "minecraft:allay_drop_item_on_block",
+        "minecraft:avoid_vibration",
+        "minecraft:bee_nest_destroyed",
+        "minecraft:bred_animals",
+        "minecraft:brewed_potion",
+        "minecraft:changed_dimension",
+        "minecraft:channeled_lightning",
+        "minecraft:construct_beacon",
+        "minecraft:consume_item",
+        "minecraft:crafter_recipe_crafted",
+        "minecraft:cured_zombie_villager",
+        "minecraft:effects_changed",
+        "minecraft:enchanted_item",
+        "minecraft:enter_block",
+        "minecraft:entity_hurt_player",
+        "minecraft:entity_killed_player",
+        "minecraft:fall_after_explosion",
+        "minecraft:fall_from_height",
+        "minecraft:filled_bucket",
+        "minecraft:fishing_rod_hooked",
+        "minecraft:hero_of_the_village",
+        "minecraft:impossible",
+        "minecraft:inventory_changed",
+        "minecraft:item_durability_changed",
+        "minecraft:item_used_on_block",
+        "minecraft:kill_mob_near_sculk_catalyst",
+        "minecraft:killed_by_arrow",
+        "minecraft:levitation",
+        "minecraft:lightning_strike",
+        "minecraft:location",
+        "minecraft:nether_travel",
+        "minecraft:placed_block",
+        "minecraft:player_generates_container_loot",
+        "minecraft:player_hurt_entity",
+        "minecraft:player_interacted_with_entity",
+        "minecraft:player_killed_entity",
+        "minecraft:player_sheared_equipment",
+        "minecraft:recipe_crafted",
+        "minecraft:recipe_unlocked",
+        "minecraft:ride_entity_in_lava",
+        "minecraft:shot_crossbow",
+        "minecraft:slept_in_bed",
+        "minecraft:slide_down_block",
+        "minecraft:spear_mobs",
+        "minecraft:started_riding",
+        "minecraft:summoned_entity",
+        "minecraft:tame_animal",
+        "minecraft:target_hit",
+        "minecraft:thrown_item_picked_up_by_entity",
+        "minecraft:thrown_item_picked_up_by_player",
+        "minecraft:tick",
+        "minecraft:used_totem",
+        "minecraft:using_item",
+        "minecraft:villager_trade",
+    ];
+
+    #[test]
+    fn every_advancement_trigger_in_26_3_is_one_the_game_knows() {
+        let Some(ctx) = testkit::flat() else {
+            return;
+        };
+        let pack = ctx.data.data_pack();
+        let mut used = std::collections::BTreeSet::new();
+        for id in pack
+            .registry_entries("minecraft:advancement")
+            .unwrap_or_default()
+        {
+            let Ok(v) = pack.read_entry("minecraft:advancement", &id) else {
+                continue;
+            };
+            for c in v["criteria"].as_object().into_iter().flatten() {
+                if let Some(t) = c.1["trigger"].as_str() {
+                    used.insert(t.to_owned());
+                }
+            }
+        }
+        let known: std::collections::BTreeSet<_> =
+            TRIGGERS_26_3.iter().map(|s| (*s).to_owned()).collect();
+        let missing: Vec<_> = used.difference(&known).cloned().collect();
+        let extra: Vec<_> = known.difference(&used).cloned().collect();
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "missing {missing:?}\nextra {extra:?}"
+        );
+    }
 }

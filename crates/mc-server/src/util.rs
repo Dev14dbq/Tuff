@@ -1,6 +1,7 @@
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use md5::{Digest, Md5};
@@ -150,6 +151,29 @@ impl Claims {
         }
         held.extend(area.iter().copied());
         Claim { claims: self, area }
+    }
+}
+
+/// A value readers share, replaced as a whole. `get` clones the `Arc`,
+/// so a reload does not wait on whoever is still using the previous one.
+#[derive(Debug)]
+pub struct Publish<T> {
+    inner: Mutex<Arc<T>>,
+}
+
+impl<T> Publish<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            inner: Mutex::new(Arc::new(value)),
+        }
+    }
+
+    pub fn get(&self) -> Arc<T> {
+        Arc::clone(&self.inner.lock().expect("publish"))
+    }
+
+    pub fn set(&self, value: T) {
+        *self.inner.lock().expect("publish") = Arc::new(value);
     }
 }
 

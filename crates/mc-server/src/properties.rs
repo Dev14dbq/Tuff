@@ -14,9 +14,12 @@ use anyhow::{Context as _, Result};
 pub const DEFAULTS: &[(&str, &str)] = &[
     ("accepts-transfers", "false"),
     ("allow-flight", "false"),
+    ("backup-interval", "0"),
+    ("backup-keep", "5"),
     ("broadcast-console-to-ops", "true"),
     ("broadcast-rcon-to-ops", "true"),
     ("bug-report-link", ""),
+    ("bungee-tokens", ""),
     ("chat-spam-threshold-seconds", "10"),
     ("command-spam-threshold-seconds", "10"),
     ("difficulty", "easy"),
@@ -60,6 +63,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("pause-when-empty-seconds", "60"),
     ("player-idle-timeout", "0"),
     ("prevent-proxy-connections", "false"),
+    ("proxy", "none"),
     ("query.port", "25565"),
     ("rate-limit", "0"),
     ("rcon.password", ""),
@@ -79,6 +83,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("text-filtering-config", ""),
     ("text-filtering-version", "0"),
     ("use-native-transport", "true"),
+    ("velocity-secret", ""),
     ("view-distance", "10"),
     ("white-list", "true"),
 ];

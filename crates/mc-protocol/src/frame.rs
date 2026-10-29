@@ -113,6 +113,7 @@ pub fn decode_frame_body(frame: &[u8], compression: Option<usize>) -> Result<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::Write;
 
     #[test]
     fn frames_split_across_reads() {
@@ -133,6 +134,19 @@ mod tests {
     fn oversized_length_is_rejected() {
         assert!(split_frame(&[0x80, 0x80, 0x80, 0x01]).is_err());
         assert!(split_frame(&[0x00]).is_err());
+    }
+
+    #[test]
+    fn hostile_bytes_do_not_panic() {
+        for b in 0..=255u8 {
+            let _ = split_frame(&[b, b, b, b, b]);
+            let _ = decode_frame_body(&[b; 32], None);
+            let _ = decode_frame_body(&[b; 32], Some(1));
+        }
+        let mut claimed = Vec::new();
+        claimed.put_len(MAX_UNCOMPRESSED_LEN.saturating_add(1));
+        claimed.extend_from_slice(&[0x78, 0x9c, 0x01, 0x00, 0x00]);
+        assert!(decode_frame_body(&claimed, Some(1)).is_err());
     }
 
     #[test]

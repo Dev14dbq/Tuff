@@ -250,7 +250,7 @@ pub fn crush(ctx: &ServerContext, level: &mut WorldLevel, e: &Entity) {
                 }
                 if ctx.game_rule_bool("minecraft:block_drops") {
                     let props = |k: &str| blocks.property(s, k).map(str::to_owned);
-                    for d in ctx.loot.drops(name, &props) {
+                    for d in ctx.loot.get().drops(name, &props) {
                         crate::tick::spawn_stack_at(
                             ctx,
                             [f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5],

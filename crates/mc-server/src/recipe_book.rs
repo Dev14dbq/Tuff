@@ -149,7 +149,8 @@ pub fn craft(
     grid: &[Option<ItemStack>],
     size: usize,
 ) -> Option<ItemStack> {
-    let (made, name) = ctx.recipes.craft_named(grid, size)?;
+    let recipes = ctx.recipes.get();
+    let (made, name) = recipes.craft_named(grid, size)?;
     if ctx.game_rule_bool("limited_crafting") && !crate::commands::knows_recipe(ctx, uuid, name) {
         return None;
     }
@@ -159,7 +160,8 @@ pub fn craft(
 /// A player took the result out of a crafting grid that held `grid`: the
 /// recipe it made is added to their book.
 pub fn used(ctx: &ServerContext, uuid: u128, grid: &[Option<ItemStack>], size: usize) {
-    if let Some((_, name)) = ctx.recipes.craft_named(grid, size) {
+    let recipes = ctx.recipes.get();
+    if let Some((_, name)) = recipes.craft_named(grid, size) {
         crate::commands::unlock(ctx, uuid, name);
         let used: Vec<ItemStack> = grid.iter().flatten().cloned().collect();
         crate::criteria::crafted(ctx, uuid, "minecraft:recipe_crafted", name, &used);
@@ -296,15 +298,15 @@ mod tests {
     fn real_recipes_are_placed_from_the_book_ids() {
         let Some(ctx) = testkit::flat() else { return };
         let planks = id(&ctx, "minecraft:oak_planks");
-        let r = ctx
-            .recipes
-            .book_recipe(ctx.recipes.book_id("minecraft:crafting_table").unwrap())
+        let recipes = ctx.recipes.get();
+        let r = recipes
+            .book_recipe(recipes.book_id("minecraft:crafting_table").unwrap())
             .unwrap();
         let mut hands = hands_with(&[(20, planks, 9)]);
         let mut grid = vec![None; 4];
         let done = place(&mut hands, &mut grid, (2, 2), r, true, MAX).unwrap();
         assert!(!done.missing);
-        let (made, name) = ctx.recipes.craft_named(&grid, 2).unwrap();
+        let (made, name) = recipes.craft_named(&grid, 2).unwrap();
         assert_eq!(
             (made.item, name),
             (
@@ -319,10 +321,10 @@ mod tests {
     fn the_furnace_book_places_one_input() {
         let Some(ctx) = testkit::flat() else { return };
         let iron = id(&ctx, "minecraft:raw_iron");
-        let r = ctx
-            .recipes
+        let recipes = ctx.recipes.get();
+        let r = recipes
             .book_recipe(
-                ctx.recipes
+                recipes
                     .book_id("minecraft:iron_ingot_from_smelting_raw_iron")
                     .unwrap(),
             )
@@ -343,7 +345,13 @@ mod tests {
         crate::commands::load_progress(&ctx, ME, &[], &crate::players::BookState::default());
         let planks = id(&ctx, "minecraft:oak_planks");
         let grid = vec![Some(ItemStack::new(planks, 1)), None, None, None];
-        let name = ctx.recipes.craft_named(&grid, 2).unwrap().1.to_owned();
+        let name = ctx
+            .recipes
+            .get()
+            .craft_named(&grid, 2)
+            .unwrap()
+            .1
+            .to_owned();
         assert!(craft(&ctx, ME, &grid, 2).is_some());
         crate::tick::lock(&ctx.game_rules).set("limited_crafting", crate::rules::Value::Bool(true));
         assert!(!knows_recipe(&ctx, ME, &name));

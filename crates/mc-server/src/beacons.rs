@@ -215,6 +215,9 @@ pub fn tick(ctx: &ServerContext, count: i64) {
         return;
     }
     for be in ctx.world.block_entities_of("minecraft:beacon") {
+        if !crate::tickets::blocks_run(ctx, be.x >> 4, be.z >> 4) {
+            continue;
+        }
         let p = Position::new(be.x, be.y, be.z);
         let still_beacon = ctx
             .world

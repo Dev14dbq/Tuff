@@ -54,6 +54,19 @@ pub trait Level {
         false
     }
 
+    /// Fire on this block never burns out. The overworld and the Nether
+    /// keep it on netherrack and magma; the End adds bedrock. A world
+    /// replaces this with its dimension's infiniburn tag.
+    fn burns_forever(&self, below: &str) -> bool {
+        matches!(below, "netherrack" | "magma_block")
+    }
+
+    /// Fire eats neighbouring blocks sooner here (a humid biome's
+    /// `gameplay/increased_fire_burnout`: jungle, swamp, peaks).
+    fn burns_out_faster(&self, _p: BlockPos) -> bool {
+        false
+    }
+
     /// A wet sponge dried at `p`: it hisses and steams.
     fn sponge_dried(&mut self, _p: BlockPos) {}
 

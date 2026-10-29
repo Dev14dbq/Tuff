@@ -570,6 +570,8 @@ fn a_zombie_breaks_a_door_in_the_world() {
     };
     ctx.difficulty
         .store(3, std::sync::atomic::Ordering::Relaxed);
+    // Daylight sets a zombie on fire before it can finish the door.
+    set_day(&ctx, 13000);
     let _ = join(&ctx, [8.5, -60.0, 0.5]);
     for z in -8..=8 {
         for y in -60..=-58 {
@@ -578,7 +580,14 @@ fn a_zombie_breaks_a_door_in_the_world() {
             }
         }
     }
+    // The wall runs north–south, so the door has to face along it. A
+    // north-facing door is a plate on the north edge and leaves a gap.
     let lower = ctx.data.blocks.default_state("minecraft:oak_door").unwrap();
+    let lower = ctx
+        .data
+        .blocks
+        .with_property(lower, "facing", "east")
+        .unwrap();
     let upper = ctx
         .data
         .blocks
@@ -892,10 +901,10 @@ fn a_chest_goes_on_a_tame_donkey_and_its_window_mirrors_the_saddle() {
     hold(&ctx, "minecraft:chest", 2);
     let mut actor = actor_at([0.5, -60.0, 0.5]);
     // A wild one takes no chest.
-    let out = crate::hits::use_entity(&ctx, actor, wild, 0, false, None);
+    let out = crate::hits::use_entity(&ctx, actor, wild, 0, false, None, None);
     assert!(out.open_mount.is_none());
     assert!(!with_mob(&ctx, wild, |m| m.chested));
-    crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    crate::hits::use_entity(&ctx, actor, id, 0, false, None, None);
     assert!(with_mob(&ctx, id, |m| m.chested));
     assert_eq!(
         lock(&ctx.inventories)[&STEVE].slots[36]
@@ -905,7 +914,7 @@ fn a_chest_goes_on_a_tame_donkey_and_its_window_mirrors_the_saddle() {
     );
     // Sneaking opens the window: 2 + 15 slots.
     actor.sneaking = true;
-    let out = crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    let out = crate::hits::use_entity(&ctx, actor, id, 0, false, None, None);
     assert_eq!(out.open_mount, Some((id, 5)));
     let key = crate::containers::entity_key(id);
     let kind = crate::containers::Kind {
@@ -1078,7 +1087,7 @@ fn llamas_are_tamed_with_hay_and_carry_a_chest_and_a_carpet() {
     let mut actor = actor_at([0.5, -60.0, 0.5]);
     // A chest does not go on a wild one.
     hold(&ctx, "minecraft:chest", 1);
-    crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    crate::hits::use_entity(&ctx, actor, id, 0, false, None, None);
     assert!(!with_mob(&ctx, id, |m| m.chested));
     // Hay bales tame it in the end (temper reaches 30 after five).
     hold(&ctx, "minecraft:hay_block", 8);
@@ -1091,7 +1100,7 @@ fn llamas_are_tamed_with_hay_and_carry_a_chest_and_a_carpet() {
     }
     assert_eq!(with_mob(&ctx, id, |m| m.owner), Some(STEVE));
     hold(&ctx, "minecraft:chest", 1);
-    crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    crate::hits::use_entity(&ctx, actor, id, 0, false, None, None);
     assert!(with_mob(&ctx, id, |m| m.chested));
     hold(&ctx, "minecraft:red_carpet", 1);
     ctx.mobs.use_on(ctx.dim, id, steve([0.5, -60.0, 0.5]), 0);
@@ -1100,7 +1109,7 @@ fn llamas_are_tamed_with_hay_and_carry_a_chest_and_a_carpet() {
     // Its window has a column of three chest slots for each point of
     // strength.
     actor.sneaking = true;
-    let out = crate::hits::use_entity(&ctx, actor, id, 0, false, None);
+    let out = crate::hits::use_entity(&ctx, actor, id, 0, false, None, None);
     assert_eq!(out.open_mount, Some((id, strength)));
 }
 

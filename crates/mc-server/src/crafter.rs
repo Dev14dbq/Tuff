@@ -108,6 +108,7 @@ pub fn values(ctx: &ServerContext, p: Position) -> Vec<i16> {
 /// What the grid makes now (the window's result slot).
 pub fn result(ctx: &ServerContext, p: Position) -> Option<ItemStack> {
     ctx.recipes
+        .get()
         .craft(&containers::slots(ctx, p, kind())[..9], 3)
 }
 
@@ -165,7 +166,8 @@ pub fn craft(level: &mut crate::level::WorldLevel, p: Position) {
     };
     let at = [f64::from(p.x), f64::from(p.y), f64::from(p.z)];
     let mut slots = containers::slots(ctx, p, kind());
-    let Some((made, recipe)) = ctx.recipes.craft_named(&slots[..9], 3) else {
+    let recipes = ctx.recipes.get();
+    let Some((made, recipe)) = recipes.craft_named(&slots[..9], 3) else {
         crate::fx::level_event(ctx, 1050, at, 0);
         return;
     };
@@ -238,7 +240,11 @@ fn dir_data(d: Dir) -> i32 {
 pub fn tick(ctx: &ServerContext) {
     let done: Vec<(i32, i32, i32)> = {
         let mut all = lock(&ctx.crafters);
-        all.values_mut().for_each(|t| *t -= 1);
+        for (key, t) in all.iter_mut() {
+            if crate::tickets::blocks_run(ctx, key.0 >> 4, key.2 >> 4) {
+                *t -= 1;
+            }
+        }
         let done = all
             .iter()
             .filter(|(_, t)| **t <= 0)

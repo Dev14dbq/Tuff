@@ -59,8 +59,15 @@ pub fn resolve(ctx: &ServerContext, uuid: u128, stack: &mut ItemStack) -> bool {
     true
 }
 
+/// A book and quill holds at most this many pages, and each page this many
+/// characters. A signed title is at most 32 characters.
+const MAX_PAGES: usize = 100;
+const MAX_PAGE_CHARS: usize = 1024;
+const MAX_TITLE_CHARS: usize = 32;
+
 /// Writes `pages` into a book and quill, or signs it as a written book
-/// when `title` is given (by `author`). Whether the stack changed.
+/// when `title` is given (by `author`). Whether the stack changed. A book
+/// past the page, length or title limits is left as it was.
 pub fn edit(
     ctx: &ServerContext,
     stack: &mut ItemStack,
@@ -69,6 +76,15 @@ pub fn edit(
     title: Option<String>,
 ) -> bool {
     if ctx.items.name(stack.item) != Some("minecraft:writable_book") {
+        return false;
+    }
+    if pages.len() > MAX_PAGES || pages.iter().any(|p| p.chars().count() > MAX_PAGE_CHARS) {
+        return false;
+    }
+    if title.as_ref().is_some_and(|t| {
+        let n = t.trim().chars().count();
+        n == 0 || n > MAX_TITLE_CHARS
+    }) {
         return false;
     }
     let pages: Vec<Tag> = pages.iter().map(|p| raw(p)).collect();
@@ -113,6 +129,47 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
         let data = mc_data::McData::load(&dir).ok()?;
         ServerContext::new(crate::Config::new(dir), data).ok()
+    }
+
+    #[test]
+    fn a_book_past_the_limits_is_left_alone() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let book = ctx.items.id("minecraft:writable_book").unwrap();
+        let mut stack = ItemStack {
+            count: 1,
+            item: book,
+            damage: 0,
+            components: Default::default(),
+        };
+        let page = "a".repeat(MAX_PAGE_CHARS + 1);
+        assert!(!edit(&ctx, &mut stack, "Steve", vec![page], None));
+        assert!(stack.components.get("writable_book_content").is_none());
+        assert!(!edit(
+            &ctx,
+            &mut stack,
+            "Steve",
+            vec!["ok".into(); MAX_PAGES + 1],
+            None
+        ));
+        assert!(!edit(
+            &ctx,
+            &mut stack,
+            "Steve",
+            vec!["hi".into()],
+            Some("t".repeat(MAX_TITLE_CHARS + 1)),
+        ));
+        assert_eq!(stack.item, book);
+        assert!(edit(
+            &ctx,
+            &mut stack,
+            "Steve",
+            vec!["hi".into()],
+            Some("Diary".into()),
+        ));
+        assert_eq!(ctx.items.name(stack.item), Some("minecraft:written_book"));
     }
 
     #[test]

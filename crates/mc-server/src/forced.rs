@@ -2,8 +2,9 @@
 //! of type `minecraft:forced` in the dimension's
 //! `data/minecraft/chunk_tickets.dat`. Other tickets in the file are kept.
 //!
-//! The chunks are remembered and saved; keeping them loaded and ticking
-//! with nobody near waits for the server to tick chunks on their own.
+//! The chunks are remembered and saved. [`crate::tickets`] keeps them
+//! loaded and ticking with nobody near, and writes portal tickets into
+//! the same file.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -94,11 +95,45 @@ impl Forced {
         self.chunks.clear();
     }
 
+    /// Portal tickets the file was keeping, taken out so [`crate::tickets`]
+    /// owns their remaining time. Other ticket types stay.
+    pub fn take_portals(&mut self) -> Vec<Tag> {
+        let mut out = Vec::new();
+        self.others.retain(|t| {
+            if is_portal(t) {
+                out.push(t.clone());
+                false
+            } else {
+                true
+            }
+        });
+        out
+    }
+
     pub fn save(&self) {
+        let kept: Vec<Tag> = self
+            .others
+            .iter()
+            .filter(|t| is_portal(t))
+            .cloned()
+            .collect();
+        self.save_with(&kept);
+    }
+
+    /// Writes forceload tickets plus `portals` (the live portal tickets).
+    /// Portal entries still in `others` are dropped, so a save after
+    /// [`Self::take_portals`] does not write them twice.
+    pub fn save_with(&self, portals: &[Tag]) {
         let Some(file) = &self.file else {
             return;
         };
-        let mut tickets = self.others.clone();
+        let mut tickets: Vec<Tag> = self
+            .others
+            .iter()
+            .filter(|t| !is_portal(t))
+            .cloned()
+            .collect();
+        tickets.extend(portals.iter().cloned());
         for &(z, x) in &self.chunks {
             let mut t = Compound::new();
             t.insert("chunk_pos", Tag::IntArray(vec![x, z]));
@@ -117,5 +152,14 @@ impl Forced {
         if let Err(e) = crate::world::write_nbt_gz(file, &root) {
             tracing::warn!("saving force-loaded chunks: {e:#}");
         }
+    }
+}
+
+fn is_portal(tag: &Tag) -> bool {
+    match tag {
+        Tag::Compound(c) => {
+            matches!(c.get("type"), Some(Tag::String(ty)) if ty == "minecraft:portal")
+        }
+        _ => false,
     }
 }

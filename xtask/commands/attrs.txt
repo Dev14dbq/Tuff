@@ -1,0 +1,161 @@
+# attribute and enchant
+gamemode survival @s
+clear @s
+attribute @s minecraft:air_drag_modifier get
+attribute @s minecraft:armor get
+attribute @s minecraft:armor_toughness get
+attribute @s minecraft:attack_damage get
+attribute @s minecraft:attack_knockback get
+attribute @s minecraft:attack_speed get
+attribute @s minecraft:below_name_distance get
+attribute @s minecraft:block_break_speed get
+attribute @s minecraft:block_interaction_range get
+attribute @s minecraft:bounciness get
+attribute @s minecraft:burning_time get
+attribute @s minecraft:camera_distance get
+attribute @s minecraft:entity_interaction_range get
+attribute @s minecraft:explosion_knockback_resistance get
+attribute @s minecraft:fall_damage_multiplier get
+attribute @s minecraft:flying_speed get
+attribute @s minecraft:follow_range get
+attribute @s minecraft:friction_modifier get
+attribute @s minecraft:gravity get
+attribute @s minecraft:jump_strength get
+attribute @s minecraft:knockback_resistance get
+attribute @s minecraft:luck get
+attribute @s minecraft:max_absorption get
+attribute @s minecraft:max_health get
+attribute @s minecraft:mining_efficiency get
+attribute @s minecraft:movement_efficiency get
+attribute @s minecraft:movement_speed get
+attribute @s minecraft:name_tag_distance get
+attribute @s minecraft:oxygen_bonus get
+attribute @s minecraft:safe_fall_distance get
+attribute @s minecraft:scale get
+attribute @s minecraft:sneaking_speed get
+attribute @s minecraft:spawn_reinforcements get
+attribute @s minecraft:step_height get
+attribute @s minecraft:submerged_mining_speed get
+attribute @s minecraft:sweeping_damage_ratio get
+attribute @s minecraft:tempt_range get
+attribute @s minecraft:water_movement_efficiency get
+attribute @s minecraft:waypoint_receive_range get
+attribute @s minecraft:waypoint_transmit_range get
+attribute @s minecraft:air_drag_modifier base get
+attribute @s minecraft:armor base get
+attribute @s minecraft:armor_toughness base get
+attribute @s minecraft:attack_damage base get
+attribute @s minecraft:attack_knockback base get
+attribute @s minecraft:attack_speed base get
+attribute @s minecraft:below_name_distance base get
+attribute @s minecraft:block_break_speed base get
+attribute @s minecraft:block_interaction_range base get
+attribute @s minecraft:bounciness base get
+attribute @s minecraft:burning_time base get
+attribute @s minecraft:camera_distance base get
+attribute @s minecraft:entity_interaction_range base get
+attribute @s minecraft:explosion_knockback_resistance base get
+attribute @s minecraft:fall_damage_multiplier base get
+attribute @s minecraft:flying_speed base get
+attribute @s minecraft:follow_range base get
+attribute @s minecraft:friction_modifier base get
+attribute @s minecraft:gravity base get
+attribute @s minecraft:jump_strength base get
+attribute @s minecraft:knockback_resistance base get
+attribute @s minecraft:luck base get
+attribute @s minecraft:max_absorption base get
+attribute @s minecraft:max_health base get
+attribute @s minecraft:mining_efficiency base get
+attribute @s minecraft:movement_efficiency base get
+attribute @s minecraft:movement_speed base get
+attribute @s minecraft:name_tag_distance base get
+attribute @s minecraft:oxygen_bonus base get
+attribute @s minecraft:safe_fall_distance base get
+attribute @s minecraft:scale base get
+attribute @s minecraft:sneaking_speed base get
+attribute @s minecraft:spawn_reinforcements base get
+attribute @s minecraft:step_height base get
+attribute @s minecraft:submerged_mining_speed base get
+attribute @s minecraft:sweeping_damage_ratio base get
+attribute @s minecraft:tempt_range base get
+attribute @s minecraft:water_movement_efficiency base get
+attribute @s minecraft:waypoint_receive_range base get
+attribute @s minecraft:waypoint_transmit_range base get
+attribute @s minecraft:max_health base set 40
+attribute @s minecraft:max_health base set nan
+attribute @s minecraft:max_health base set 1e400
+attribute @s minecraft:max_health base set 0
+attribute @s minecraft:max_health base reset
+attribute @s minecraft:max_health get 0.5
+attribute @s minecraft:max_health get 0
+attribute @s minecraft:max_health modifier add test:a 2 add_value
+attribute @s minecraft:max_health modifier add test:a 2 add_value
+attribute @s minecraft:max_health modifier add Test:b 2 add_value
+attribute @s minecraft:max_health modifier add b 2 add_value
+attribute @s minecraft:max_health modifier add b 1 bogus
+attribute @s minecraft:max_health modifier remove b
+attribute @s minecraft:max_health modifier remove test:a
+attribute @s minecraft:armor modifier add test:c 100 add_value
+attribute @s minecraft:armor get
+attribute @s minecraft:armor modifier value get test:c
+attribute @s minecraft:armor modifier remove test:c
+gamemode creative @s
+attribute @s minecraft:block_interaction_range get
+attribute @s minecraft:block_interaction_range modifier value get minecraft:creative_mode_block_range
+attribute @s minecraft:entity_interaction_range modifier value get minecraft:creative_mode_entity_range
+gamemode survival @s
+attribute @s minecraft:block_interaction_range get
+item replace entity @s weapon.mainhand with minecraft:diamond_sword
+attribute @s minecraft:attack_damage get
+attribute @s minecraft:attack_speed get
+attribute @s minecraft:attack_damage modifier value get minecraft:base_attack_damage
+item replace entity @s armor.chest with minecraft:diamond_chestplate
+attribute @s minecraft:armor get
+attribute @s minecraft:armor_toughness get
+attribute @s minecraft:armor modifier value get minecraft:armor.chestplate
+item replace entity @s weapon.mainhand with minecraft:air
+attribute @s minecraft:attack_damage get
+effect give @s minecraft:strength 100 1
+attribute @s minecraft:attack_damage get
+effect clear @s
+attribute @s minecraft:scale base set 2
+attribute @s minecraft:scale get
+attribute @s minecraft:scale base set 0.01
+attribute @s minecraft:scale get
+attribute @s minecraft:scale base reset
+attribute @s minecraft:max_health base set 30
+attribute @s minecraft:max_health get
+data get entity @s attributes
+attribute @s minecraft:max_health base reset
+attribute @s minecraft:luck modifier add test:l 2.5 add_multiplied_base
+attribute @s minecraft:luck modifier add test:l2 1 add_multiplied_total
+data get entity @s attributes[{id:"minecraft:luck"}]
+attribute @s minecraft:luck modifier remove test:l
+attribute @s minecraft:luck modifier remove test:l2
+enchant @s minecraft:sharpness
+item replace entity @s weapon.mainhand with minecraft:diamond_sword
+enchant @s minecraft:sharpness
+data get entity @s SelectedItem
+enchant @s minecraft:sharpness 3
+data get entity @s SelectedItem
+enchant @s minecraft:sharpness 1
+data get entity @s SelectedItem.components
+enchant @s minecraft:looting 2
+enchant @s minecraft:sweeping_edge 2
+data get entity @s SelectedItem.components
+enchant @s minecraft:unbreaking 4
+enchant @s minecraft:mending 2
+enchant @s minecraft:fire_aspect 3
+enchant @s minecraft:fire_aspect 2
+data get entity @s SelectedItem.components
+item replace entity @s weapon.mainhand with minecraft:enchanted_book
+enchant @s minecraft:sharpness
+enchant @s minecraft:silk_touch
+data get entity @s SelectedItem
+item replace entity @s weapon.mainhand with minecraft:book
+enchant @s minecraft:sharpness
+data get entity @s SelectedItem
+enchant @a minecraft:sharpness 2
+enchant @a minecraft:sharpness 2 2
+enchant @s #minecraft:curse
+enchant @s minecraft:bogus 1

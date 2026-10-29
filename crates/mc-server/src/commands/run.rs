@@ -466,8 +466,19 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         ["version"] => version(r),
         ["stop"] => {
             r.success(translate("commands.stop.stopping", Vec::new()), true);
+            r.ctx
+                .management_bus
+                .publish(&crate::notify::Note::ServerStopping);
             r.ctx.shutdown.notify_one();
             Ok(1)
+        }
+        ["backup"] => {
+            if crate::backup::request(r.ctx) {
+                r.success(mc_protocol::text::plain("Backing up the world"), true);
+                Ok(1)
+            } else {
+                Err(err("command.failed", Vec::new()))
+            }
         }
         ["save-all"] | ["save-all", "flush"] => {
             r.success(translate("commands.save.saving", Vec::new()), false);
@@ -625,7 +636,11 @@ fn list(r: &mut Run, uuids: bool) -> Result<i32> {
             "commands.list.players",
             vec![
                 Tag::Int(count),
-                Tag::Int(r.ctx.config.max_players as i32),
+                Tag::Int(
+                    r.ctx
+                        .player_limit
+                        .load(std::sync::atomic::Ordering::Relaxed) as i32,
+                ),
                 joined,
             ],
         ),
@@ -1181,6 +1196,17 @@ fn whitelist(r: &mut Run, sub: &[&str]) -> Result<i32> {
                 }
                 lists.save_whitelist();
                 drop(lists);
+                r.ctx.management_bus.publish(&if add {
+                    crate::notify::Note::AllowlistAdded(crate::notify::Player {
+                        id: Some(crate::util::uuid_string(uuid)),
+                        name: Some(name.clone()),
+                    })
+                } else {
+                    crate::notify::Note::AllowlistRemoved(crate::notify::Player {
+                        id: Some(crate::util::uuid_string(uuid)),
+                        name: Some(name.clone()),
+                    })
+                });
                 changed += 1;
                 let key = if add {
                     "commands.whitelist.add.success"
@@ -1522,6 +1548,21 @@ fn gamerule_set(r: &mut Run, name: &str) -> Result<i32> {
         ));
     }
     r.ctx.game_rules.lock().expect("rules").set(name, value);
+    r.ctx.management_bus.publish(&match value {
+        rules::Value::Bool(boolean) => crate::notify::Note::GameruleUpdated {
+            key: name.to_owned(),
+            boolean: Some(boolean),
+            integer: None,
+        },
+        rules::Value::Int(integer) => crate::notify::Note::GameruleUpdated {
+            key: name.to_owned(),
+            boolean: None,
+            integer: Some(integer),
+        },
+    });
+    if name == "locator_bar" {
+        r.out.events.push(Event::LocatorRefresh);
+    }
     if name == "advance_time" {
         let running = value == rules::Value::Bool(true);
         let mut time = lock(&r.ctx.time);
@@ -2256,6 +2297,34 @@ fn kill(r: &mut Run) -> Result<i32> {
             }
             Target::Entity { id, uuid, .. } => {
                 let mut entities = lock(&r.ctx.entities);
+                // The dragon dies its own way: ten seconds of rising, then
+                // the portal, the egg and the experience. Deleting it here
+                // leaves the fight unbeaten.
+                let dragon = entities
+                    .iter_mut()
+                    .find(|e| e.uuid == *uuid)
+                    .is_some_and(|e| {
+                        matches!(
+                            &e.kind,
+                            mc_entity::Kind::Mob(m)
+                                if m.species == mc_entity::Species::EnderDragon
+                        )
+                    });
+                if dragon {
+                    if let Some(e) = entities.iter_mut().find(|e| e.uuid == *uuid)
+                        && let mc_entity::Kind::Mob(m) = &mut e.kind
+                    {
+                        m.health = 0.0;
+                        if let Some(d) = m.dragon_mut()
+                            && d.phase != mc_entity::boss::Phase::Dying
+                        {
+                            d.phase = mc_entity::boss::Phase::Dying;
+                        }
+                        m.dirty = true;
+                    }
+                    drop(entities);
+                    continue;
+                }
                 if let Some(e) = entities.iter_mut().find(|e| e.uuid == *uuid) {
                     e.removed = true;
                 }

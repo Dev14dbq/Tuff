@@ -96,6 +96,10 @@ impl Collide for Ground<'_> {
     fn solid(&self, x: i32, y: i32, z: i32) -> bool {
         hits::stops(self.0, [x, y, z])
     }
+
+    fn boxes(&self, x: i32, y: i32, z: i32, out: &mut Vec<mc_entity::Aabb>) {
+        super::boat::shape_at(self.0, x, y, z, out);
+    }
 }
 
 pub fn tick(t: &mut Tick, e: &mut Entity) {

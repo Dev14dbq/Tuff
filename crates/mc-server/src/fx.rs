@@ -139,6 +139,25 @@ pub fn particles(
     );
 }
 
+/// Wither spawn (1023) and the dragon's death (1028). With
+/// `global_sound_events` every client plays them; otherwise only those
+/// close enough to `at`.
+pub fn heard(ctx: &ServerContext, event: i32, at: [f64; 3]) {
+    emit(
+        ctx,
+        Fx::Level(play::LevelEvent {
+            event,
+            position: mc_protocol::Position::new(
+                at[0].floor() as i32,
+                at[1].floor() as i32,
+                at[2].floor() as i32,
+            ),
+            data: 0,
+            global: ctx.game_rule_bool("global_sound_events"),
+        }),
+    );
+}
+
 /// A world event (2002 potion shatter: data is the colour).
 pub fn level_event(ctx: &ServerContext, event: i32, at: [f64; 3], data: i32) {
     emit(

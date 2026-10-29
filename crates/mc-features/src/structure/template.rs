@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::Read as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mc_nbt::{Compound, Tag};
 use mc_worldgen::random::{RandomSource, position_seed};
@@ -1333,13 +1333,18 @@ pub struct Templates {
 }
 
 impl Templates {
-    pub fn get(&self, root: &Path, facts: &Facts, id: &str) -> Option<std::sync::Arc<Template>> {
+    pub fn get(
+        &self,
+        roots: &[PathBuf],
+        facts: &Facts,
+        id: &str,
+    ) -> Option<std::sync::Arc<Template>> {
         let mut cache = self.cache.lock().expect("templates lock");
         if let Some(t) = cache.get(id) {
             return t.clone();
         }
-        let path = root.join(format!("{}.nbt", id.trim_start_matches("minecraft:")));
-        let t = Template::load(&path, facts).map(std::sync::Arc::new);
+        let t = crate::pack::template_file(roots, id)
+            .and_then(|path| Template::load(&path, facts).map(std::sync::Arc::new));
         cache.insert(id.to_owned(), t.clone());
         t
     }

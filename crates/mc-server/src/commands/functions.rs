@@ -42,6 +42,7 @@ pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
         ["datapack", "create", "id", "description"] => datapack_create(r),
         ["reload"] => {
             lock(&r.ctx.packs).reload(&r.ctx.commands);
+            refresh_pack_layers(r.ctx);
             r.success(translate("commands.reload.success", Vec::new()), true);
             Ok(0)
         }
@@ -598,6 +599,12 @@ fn datapack_list(r: &mut Run, which: Option<&str>) -> Result<i32> {
     Ok(count)
 }
 
+/// Later reads of the data pack see the enabled packs. Advancements are
+/// cached, so the next lookup reads them again.
+fn refresh_pack_layers(ctx: &crate::context::ServerContext) {
+    ctx.reload_content();
+}
+
 /// The pack named `name`, or vanilla's error.
 fn known_pack(r: &Run, name: &str) -> Result<Pack> {
     let packs = lock(&r.ctx.packs);
@@ -640,6 +647,7 @@ fn datapack_enable(r: &mut Run, rest: &[&str]) -> Result<i32> {
         packs.enabled.insert(at, name);
         packs.reload(&r.ctx.commands);
     }
+    refresh_pack_layers(r.ctx);
     r.success(
         translate("commands.datapack.modify.enable", vec![pack_text(&pack)]),
         true,
@@ -662,6 +670,7 @@ fn datapack_disable(r: &mut Run) -> Result<i32> {
         packs.enabled.remove(i);
         packs.reload(&r.ctx.commands);
     }
+    refresh_pack_layers(r.ctx);
     r.success(
         translate("commands.datapack.modify.disable", vec![pack_text(&pack)]),
         true,

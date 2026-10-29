@@ -1,5 +1,6 @@
 //! Dropped items (minecraft.wiki, "Item (entity)"): how they fall, float,
 //! slide, burn, merge, despawn and get picked up, and when clients are told.
+//! A nether star never despawns. An `Age` of -32768 never ages and never merges.
 //!
 //! Clients move dropped items themselves with the same physics, so the
 //! server sends the velocity with the spawn and then position and velocity
@@ -90,6 +91,7 @@ pub fn tick(
         }
     }
     let ageless = matches!(entity.kind, Kind::Item { ageless: true, .. });
+    let star = ctx.items.name(item) == Some("minecraft:nether_star");
     if !ageless {
         entity.age += 1;
     }
@@ -102,7 +104,7 @@ pub fn tick(
     {
         *pickup_delay -= 1;
     }
-    if !ageless && entity.age >= LIFETIME {
+    if !ageless && !star && entity.age >= LIFETIME {
         entity.removed = true;
         return;
     }
@@ -397,7 +399,7 @@ fn mergeable(ctx: &ServerContext, e: &Entity) -> bool {
             !e.removed
                 && pickup_delay != NEVER
                 && !ageless
-                && e.age < LIFETIME
+                && (e.age < LIFETIME || ctx.items.name(item) == Some("minecraft:nether_star"))
                 && count < ctx.items.max_stack(item)
         }
         _ => false,
@@ -789,6 +791,21 @@ mod tests {
         assert!(!e.removed);
         run(&ctx, &mut e, 1);
         assert!(e.removed);
+
+        let mut star = item(&ctx, "minecraft:nether_star", 1, [2.5, -60.0, 0.5]);
+        star.age = LIFETIME - 1;
+        run(&ctx, &mut star, 3);
+        assert!(!star.removed, "a nether star stays");
+        assert!(star.age > LIFETIME);
+
+        let mut pair = vec![
+            item(&ctx, "minecraft:nether_star", 1, [4.5, -60.0, 0.5]),
+            item(&ctx, "minecraft:nether_star", 1, [4.7, -60.0, 0.5]),
+        ];
+        pair[0].age = LIFETIME;
+        pair[1].age = LIFETIME;
+        let (gone, grown) = merge(&ctx, &mut pair, &[]);
+        assert_eq!((gone, grown), (vec![1], vec![0]));
     }
 
     #[test]

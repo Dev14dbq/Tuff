@@ -295,6 +295,9 @@ pub fn tick(ctx: &ServerContext) {
         lock(&ctx.brewers).iter().map(|(&k, &v)| (k, v)).collect();
     for (key, before) in active {
         let p = Position::new(key.0, key.1, key.2);
+        if !crate::tickets::blocks_run(ctx, key.0 >> 4, key.2 >> 4) {
+            continue;
+        }
         let keep = tick_one(ctx, p, before);
         let mut all = lock(&ctx.brewers);
         match keep {

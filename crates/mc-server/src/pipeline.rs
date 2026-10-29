@@ -157,6 +157,16 @@ impl Pipeline {
         }
     }
 
+    /// The dimension is taller than the noise that fills it. The End's
+    /// terrain is 128 blocks and the world is 256: cities, ships and the
+    /// empty sections above the islands use the taller span.
+    pub fn with_span(mut self, min_y: i32, height: i32) -> Self {
+        if min_y == self.heights.min_y && height > self.heights.height && height % 16 == 0 {
+            self.heights.height = height;
+        }
+        self
+    }
+
     /// Entities features made since the last call.
     pub fn take_entities(&self) -> Vec<mc_nbt::Compound> {
         std::mem::take(&mut *self.entities.lock().expect("generated entities lock"))
@@ -318,6 +328,8 @@ impl Pipeline {
                 .generate_with(x, z, &|bx, by, bz| beard.compute(bx, by, bz))
         };
         let h = self.heights;
+        let noise_h = self.generator.height;
+        let noise_sections = (noise_h / 16) as usize;
         let mut chunk = Chunk::new(
             x,
             z,
@@ -326,18 +338,35 @@ impl Pipeline {
             self.air,
             self.biome_fallback,
         );
-        for (i, section) in chunk.sections.iter_mut().enumerate() {
-            *section = Section::from_parts(
+        for i in 0..noise_sections {
+            chunk.sections[i] = Section::from_parts(
                 made.blocks[i * 4096..(i + 1) * 4096].to_vec(),
                 made.biomes[i * 64..(i + 1) * 64].to_vec(),
             );
+        }
+        // Above the noise the sections stay air. Their biomes still follow
+        // the dimension, so a city up there is in the highlands it grew in.
+        for s in noise_sections..chunk.sections.len() {
+            let mut biomes = Vec::with_capacity(64);
+            for qy in 0..4 {
+                for qz in 0..4 {
+                    for qx in 0..4 {
+                        biomes.push(self.generator.noise_biome(
+                            x * 4 + qx,
+                            h.min_y / 4 + s as i32 * 4 + qy,
+                            z * 4 + qz,
+                        ));
+                    }
+                }
+            }
+            chunk.sections[s] = Section::from_parts(vec![self.air; 4096], biomes);
         }
         let facts = self.facts();
         let mut heights = vec![[h.min_y; 256]; Heightmap::ALL.len()];
         for (m, map) in Heightmap::ALL.iter().enumerate() {
             for lz in 0..16 {
                 for lx in 0..16 {
-                    let mut y = h.min_y + h.height - 1;
+                    let mut y = h.min_y + noise_h - 1;
                     let top = loop {
                         if y < h.min_y {
                             break h.min_y;

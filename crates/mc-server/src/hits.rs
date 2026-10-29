@@ -36,6 +36,32 @@ impl Who {
     }
 }
 
+/// Whether `box` overlaps a block named `name` (a wither rose the body
+/// walks into). The top and far edges are open, so standing on a block
+/// does not count as being inside it.
+pub fn overlaps_block(ctx: &ServerContext, min: [f64; 3], max: [f64; 3], name: &str) -> bool {
+    let x0 = min[0].floor() as i32;
+    let y0 = min[1].floor() as i32;
+    let z0 = min[2].floor() as i32;
+    let x1 = (max[0] - 1.0e-6).floor() as i32;
+    let y1 = (max[1] - 1.0e-6).floor() as i32;
+    let z1 = (max[2] - 1.0e-6).floor() as i32;
+    let blocks = &ctx.data.blocks;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            for z in z0..=z1 {
+                let Some(state) = ctx.world.block(Position::new(x, y, z), blocks) else {
+                    continue;
+                };
+                if blocks.block_name(state) == Some(name) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Another entity a projectile can hit (frames, stands, boats...).
 #[derive(Clone, Copy, Debug)]
 pub struct Target {
@@ -359,6 +385,18 @@ pub fn apply(
         crate::bosses::crystal::strike(c, hit.by, hit.kind);
         return;
     }
+    // A bolt replaces a pig or a villager before the damage lands.
+    if hit.kind == "minecraft:lightning_bolt"
+        && let Some(born) = crate::mobs::hurt::thunder(ctx, e)
+    {
+        removed.push(e.id);
+        gone.push(e.uuid);
+        let _ = ctx
+            .events
+            .send(crate::context::Event::EntitySpawned(born.clone()));
+        crate::tick::lock(&ctx.entities).push(born);
+        return;
+    }
     if let Some((_, part)) = part {
         crate::bosses::dragon::aim_at(e, part);
     }
@@ -410,6 +448,8 @@ pub fn use_entity(
     hand: i32,
     attack: bool,
     at: Option<[f64; 3]>,
+    // Fall distance when an attack packet arrived.
+    fall: Option<f64>,
 ) -> crate::interact::Outcome {
     let mut outcome = crate::interact::Outcome::default();
     let mut fresh = Vec::new();
@@ -443,6 +483,9 @@ pub fn use_entity(
         }
         let handled = matches!(e.kind, Kind::Mob(_))
             && crate::mobs::chest::use_on(ctx, &actor, e, hand, attack, &mut outcome);
+        if !attack && !handled {
+            crate::bosses::projectile::bottle(ctx, &actor, e, hand, &mut outcome);
+        }
         match &e.kind {
             Kind::Hung(_) => {
                 crate::decor::interact(
@@ -466,10 +509,12 @@ pub fn use_entity(
                     &mut fresh,
                 );
             }
-            Kind::Mob(_) if !handled => crate::mobs::clicked(ctx, &actor, entity_id, hand, attack),
+            Kind::Mob(_) if !handled => {
+                crate::mobs::clicked(ctx, &actor, entity_id, hand, attack, fall)
+            }
             // Villagers and wandering traders trade on a click; a blow hurts.
             Kind::Merchant(_) if attack => {
-                crate::mobs::clicked(ctx, &actor, entity_id, hand, attack)
+                crate::mobs::clicked(ctx, &actor, entity_id, hand, attack, fall)
             }
             _ => {}
         }
@@ -478,6 +523,22 @@ pub fn use_entity(
             && actor.game_mode != 3
         {
             crate::bosses::crystal::strike(c, Some(actor.uuid), "minecraft:player_attack");
+        }
+        // A shulker's bullet pops when struck. A spectator's swing does not.
+        let bullet = attack
+            && actor.game_mode != 3
+            && matches!(
+                &e.kind,
+                Kind::Projectile(p)
+                    if matches!(p.shot, mc_entity::extra::Shot::ShulkerBullet { .. })
+            );
+        if bullet {
+            let (id, pos) = (e.id, e.pos);
+            e.removed = true;
+            crate::projectiles::bullet::shot_down(ctx, pos);
+            outcome
+                .events
+                .push(crate::context::Event::EntitiesRemoved(vec![id]));
         }
     }
     crate::decor::spawn_all(ctx, fresh);

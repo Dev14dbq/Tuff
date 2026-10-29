@@ -1,0 +1,21 @@
+# Mob falls: health after landing, and the fall attributes
+gamemode spectator @s
+summon minecraft:cow ~ -55.5 ~ {Tags:["a"],NoAI:1b,Health:10f}
+summon minecraft:cow ~3 -54 ~ {Tags:["b"],NoAI:1b,Health:10f}
+summon minecraft:horse ~6 -49.5 ~ {Tags:["c"],NoAI:1b,Health:15f,attributes:[{id:"minecraft:max_health",base:30.0d}]}
+summon minecraft:horse ~9 -47 ~ {Tags:["d"],NoAI:1b,Health:15f,attributes:[{id:"minecraft:max_health",base:30.0d}]}
+summon minecraft:cow ~12 -55.5 ~ {Tags:["e"],NoAI:1b,Health:10f}
+setblock ~12 -61 ~ minecraft:hay_block
+setblock ~12 -60 ~ minecraft:air
+summon minecraft:cow ~15 -45 ~ {Tags:["f"],NoAI:1b,Health:10f}
+setblock ~15 -61 ~ minecraft:hay_block
+@wait 4000
+data get entity @e[tag=a,limit=1] Health
+data get entity @e[tag=b,limit=1] Health
+data get entity @e[tag=c,limit=1] Health
+data get entity @e[tag=d,limit=1] Health
+data get entity @e[tag=e,limit=1] Health
+data get entity @e[tag=f,limit=1] Health
+attribute @e[tag=c,limit=1] minecraft:safe_fall_distance get
+attribute @e[tag=c,limit=1] minecraft:fall_damage_multiplier get
+attribute @e[tag=a,limit=1] minecraft:safe_fall_distance get

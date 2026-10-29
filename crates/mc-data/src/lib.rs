@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde_json::Value;
 
@@ -145,6 +146,8 @@ pub struct McData {
     pub packets: Vec<PacketEntry>,
     pub blocks: Blocks,
     pub builtin: BuiltinRegistries,
+    /// `data` folders of enabled world datapacks, lowest priority first.
+    pack_layers: Mutex<Vec<PathBuf>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,12 +192,19 @@ impl McData {
             packets: load_packets(&reports.join("packets.json"))?,
             blocks: Blocks::load(&reports.join("blocks.json"))?,
             builtin: BuiltinRegistries::load(&reports.join("registries.json"))?,
+            pack_layers: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Enabled world datapacks. Later calls to [`Self::data_pack`] see them.
+    pub fn set_pack_layers(&self, layers: Vec<PathBuf>) {
+        *self.pack_layers.lock().expect("pack layers") = layers;
     }
 
     pub fn data_pack(&self) -> DataPack {
         DataPack {
             root: self.root.join("data"),
+            layers: self.pack_layers.lock().expect("pack layers").clone(),
         }
     }
 }
@@ -548,10 +558,16 @@ impl McData {
 
 // ---------------------------------------------------------------------------
 
-/// The vanilla data pack (`data/<namespace>/...`).
+/// The vanilla data pack (`data/<namespace>/...`), plus higher-priority
+/// roots from the world's datapacks. A later root replaces the same file;
+/// tag files merge unless they say `"replace": true`. New registry ids are
+/// appended, so the ids vanilla already has do not move.
 #[derive(Clone, Debug)]
 pub struct DataPack {
+    /// Lowest priority: the vanilla `data` folder.
     pub root: PathBuf,
+    /// World datapacks, lowest priority first. Each is a `data` folder.
+    pub layers: Vec<PathBuf>,
 }
 
 /// One value of a tag file.
@@ -562,41 +578,42 @@ pub enum TagValue {
 }
 
 impl DataPack {
-    fn namespaces(&self) -> Result<Vec<String>> {
-        let mut namespaces = Vec::new();
-        let entries =
-            fs::read_dir(&self.root).map_err(|e| DataError::new(&self.root, e.to_string()))?;
-        for entry in entries.flatten() {
-            if entry.path().is_dir() {
-                namespaces.push(entry.file_name().to_string_lossy().into_owned());
-            }
-        }
-        namespaces.sort();
-        Ok(namespaces)
+    fn roots(&self) -> impl Iterator<Item = &Path> {
+        std::iter::once(self.root.as_path()).chain(self.layers.iter().map(PathBuf::as_path))
     }
 
     /// Entries of a data-driven registry: one per JSON file under
-    /// `data/<namespace>/<registry path>/`, sorted by id.
+    /// `data/<namespace>/<registry path>/`. Vanilla's order stays; ids that
+    /// only a datapack has are appended.
     pub fn registry_entries(&self, registry: &str) -> Result<Vec<String>> {
-        let path = registry_path(registry);
-        let mut entries = Vec::new();
-        for namespace in self.namespaces()? {
-            let dir = self.root.join(&namespace).join(path);
-            for file in json_files(&dir)? {
-                entries.push(format!("{namespace}:{file}"));
+        let mut entries = ids_in(&self.root, registry)?;
+        let mut seen: HashSet<String> = entries.iter().cloned().collect();
+        let mut extra = BTreeMap::new();
+        for layer in &self.layers {
+            for id in ids_in(layer, registry)? {
+                if seen.insert(id.clone()) {
+                    extra.insert(id.clone(), ());
+                }
             }
         }
-        entries.sort();
+        entries.extend(extra.into_keys());
         Ok(entries)
     }
 
-    /// Path of one registry entry's JSON file.
+    /// Path of one registry entry's JSON file. A datapack file wins.
     pub fn entry_path(&self, registry: &str, entry: &str) -> PathBuf {
         let (namespace, path) = entry.split_once(':').unwrap_or(("minecraft", entry));
-        self.root
-            .join(namespace)
+        let rel = PathBuf::from(namespace)
             .join(registry_path(registry))
-            .join(format!("{path}.json"))
+            .join(format!("{path}.json"));
+        let roots: Vec<&Path> = self.roots().collect();
+        for root in roots.iter().rev() {
+            let full = root.join(&rel);
+            if full.is_file() {
+                return full;
+            }
+        }
+        roots.last().map(|r| r.join(&rel)).unwrap_or(rel)
     }
 
     pub fn read_entry(&self, registry: &str, entry: &str) -> Result<Value> {
@@ -606,18 +623,20 @@ impl DataPack {
     /// Registry paths that have a `tags/` directory, e.g. `block`, `worldgen/biome`.
     pub fn tag_registries(&self) -> Result<Vec<String>> {
         let mut registries = HashSet::new();
-        for namespace in self.namespaces()? {
-            let tags = self.root.join(namespace).join("tags");
-            for file in json_files(&tags)? {
-                // file = "<registry path>/<tag path>"; registry paths have at most
-                // one level of nesting ("worldgen/biome").
-                let mut parts = file.splitn(3, '/');
-                let first = parts.next().unwrap_or_default();
-                let candidate = match (parts.next(), first) {
-                    (Some(second), "worldgen") => format!("worldgen/{second}"),
-                    _ => first.to_owned(),
-                };
-                registries.insert(candidate);
+        for root in self.roots() {
+            for namespace in namespaces_of(root)? {
+                let tags = root.join(namespace).join("tags");
+                for file in json_files(&tags)? {
+                    // file = "<registry path>/<tag path>"; registry paths have at most
+                    // one level of nesting ("worldgen/biome").
+                    let mut parts = file.splitn(3, '/');
+                    let first = parts.next().unwrap_or_default();
+                    let candidate = match (parts.next(), first) {
+                        (Some(second), "worldgen") => format!("worldgen/{second}"),
+                        _ => first.to_owned(),
+                    };
+                    registries.insert(candidate);
+                }
             }
         }
         let mut registries: Vec<String> = registries.into_iter().collect();
@@ -625,28 +644,65 @@ impl DataPack {
         Ok(registries)
     }
 
-    /// Raw tag definitions of one registry, keyed by tag id.
+    /// Raw tag definitions of one registry, keyed by tag id. Higher packs
+    /// append, or replace the list when the file says so.
     pub fn tags(&self, registry: &str) -> Result<BTreeMap<String, Vec<TagValue>>> {
         let path = registry_path(registry);
-        let mut tags = BTreeMap::new();
-        for namespace in self.namespaces()? {
-            let dir = self.root.join(&namespace).join("tags").join(path);
-            for file in json_files(&dir)? {
-                let full = dir.join(format!("{file}.json"));
-                let json = read_json(&full)?;
-                let values = json["values"]
-                    .as_array()
-                    .ok_or_else(|| DataError::new(&full, "tag without values"))?
-                    .iter()
-                    .map(|value| {
-                        parse_tag_value(value).ok_or_else(|| DataError::new(&full, "bad tag value"))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                tags.insert(format!("{namespace}:{file}"), values);
+        let mut tags: BTreeMap<String, Vec<TagValue>> = BTreeMap::new();
+        for root in self.roots() {
+            for namespace in namespaces_of(root)? {
+                let dir = root.join(&namespace).join("tags").join(path);
+                for file in json_files(&dir)? {
+                    let full = dir.join(format!("{file}.json"));
+                    let json = read_json(&full)?;
+                    let values = json["values"]
+                        .as_array()
+                        .ok_or_else(|| DataError::new(&full, "tag without values"))?
+                        .iter()
+                        .map(|value| {
+                            parse_tag_value(value)
+                                .ok_or_else(|| DataError::new(&full, "bad tag value"))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let slot = tags.entry(format!("{namespace}:{file}")).or_default();
+                    if json["replace"].as_bool() == Some(true) {
+                        slot.clear();
+                    }
+                    slot.extend(values);
+                }
             }
         }
         Ok(tags)
     }
+}
+
+fn namespaces_of(root: &Path) -> Result<Vec<String>> {
+    let mut namespaces = Vec::new();
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(namespaces),
+        Err(err) => return Err(DataError::new(root, err.to_string())),
+    };
+    for entry in entries.flatten() {
+        if entry.path().is_dir() {
+            namespaces.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    namespaces.sort();
+    Ok(namespaces)
+}
+
+fn ids_in(root: &Path, registry: &str) -> Result<Vec<String>> {
+    let path = registry_path(registry);
+    let mut entries = Vec::new();
+    for namespace in namespaces_of(root)? {
+        let dir = root.join(&namespace).join(path);
+        for file in json_files(&dir)? {
+            entries.push(format!("{namespace}:{file}"));
+        }
+    }
+    entries.sort();
+    Ok(entries)
 }
 
 /// `minecraft:worldgen/biome` -> `worldgen/biome`.
@@ -847,6 +903,78 @@ mod tests {
         tags.insert("minecraft:b".to_owned(), vec![entry("minecraft:nope")]);
         let (_, problems) = resolve_tags(&tags, |_| None);
         assert_eq!(problems.len(), 3, "{problems:?}"); // cycle, unknown tag via cycle, unknown entry
+    }
+
+    #[test]
+    fn a_higher_pack_overrides_a_file_and_merges_tags() {
+        let tmp = std::env::temp_dir().join(format!("mc-data-packs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let vanilla = tmp.join("vanilla");
+        let pack = tmp.join("pack");
+        fs::create_dir_all(vanilla.join("minecraft/recipe")).unwrap();
+        fs::create_dir_all(vanilla.join("minecraft/tags/item")).unwrap();
+        fs::write(
+            vanilla.join("minecraft/recipe/stick.json"),
+            r#"{"type":"minecraft:crafting_shaped","vanilla":true}"#,
+        )
+        .unwrap();
+        fs::write(
+            vanilla.join("minecraft/tags/item/planks.json"),
+            r#"{"values":["minecraft:oak_planks"]}"#,
+        )
+        .unwrap();
+        fs::write(
+            vanilla.join("minecraft/tags/item/logs.json"),
+            r#"{"values":["minecraft:oak_log"]}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(pack.join("minecraft/recipe")).unwrap();
+        fs::create_dir_all(pack.join("minecraft/tags/item")).unwrap();
+        fs::create_dir_all(pack.join("extra/recipe")).unwrap();
+        fs::write(
+            pack.join("minecraft/recipe/stick.json"),
+            r#"{"type":"minecraft:crafting_shaped","vanilla":false}"#,
+        )
+        .unwrap();
+        fs::write(
+            pack.join("minecraft/tags/item/planks.json"),
+            r#"{"values":["minecraft:birch_planks"]}"#,
+        )
+        .unwrap();
+        fs::write(
+            pack.join("minecraft/tags/item/logs.json"),
+            r#"{"replace":true,"values":["minecraft:birch_log"]}"#,
+        )
+        .unwrap();
+        fs::write(
+            pack.join("extra/recipe/board.json"),
+            r#"{"type":"minecraft:crafting_shapeless"}"#,
+        )
+        .unwrap();
+        let data = DataPack {
+            root: vanilla,
+            layers: vec![pack],
+        };
+        let stick = data
+            .read_entry("minecraft:recipe", "minecraft:stick")
+            .unwrap();
+        assert_eq!(stick["vanilla"], false);
+        let ids = data.registry_entries("minecraft:recipe").unwrap();
+        // A new id is appended after vanilla's, so vanilla network ids stay.
+        assert_eq!(
+            ids,
+            vec!["minecraft:stick".to_owned(), "extra:board".to_owned()]
+        );
+        let tags = data.tags("minecraft:item").unwrap();
+        assert_eq!(
+            tags["minecraft:planks"],
+            vec![
+                entry("minecraft:oak_planks"),
+                entry("minecraft:birch_planks")
+            ]
+        );
+        assert_eq!(tags["minecraft:logs"], vec![entry("minecraft:birch_log")]);
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     /// Runs against real extracted data when it exists (`cargo xtask extract-data`).

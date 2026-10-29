@@ -15,6 +15,31 @@ impl Collide for Ground<'_> {
     fn solid(&self, x: i32, y: i32, z: i32) -> bool {
         hits::stops(self.0, [x, y, z])
     }
+
+    fn boxes(&self, x: i32, y: i32, z: i32, out: &mut Vec<mc_entity::Aabb>) {
+        shape_at(self.0, x, y, z, out);
+    }
+}
+
+pub(crate) fn shape_at(
+    ctx: &ServerContext,
+    x: i32,
+    y: i32,
+    z: i32,
+    out: &mut Vec<mc_entity::Aabb>,
+) {
+    let Some(state) = hits::block_at(ctx, [x, y, z]) else {
+        return;
+    };
+    let blocks = &ctx.data.blocks;
+    let name = blocks.block_name(state).unwrap_or("");
+    crate::mobs::hitbox::push(
+        name,
+        &|k| blocks.property(state, k),
+        [x, y, z],
+        hits::stops(ctx, [x, y, z]).then_some((0.0, 1.0)),
+        out,
+    );
 }
 
 /// How many can sit in a boat.

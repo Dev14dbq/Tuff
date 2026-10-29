@@ -24,6 +24,8 @@ struct Extra {
     dispensed: Vec<(BlockPos, Dir, bool)>,
     warm: bool,
     dried: u32,
+    /// A humid biome: fire burns neighbours away sooner.
+    humid: bool,
 }
 
 impl Level for World {
@@ -97,6 +99,9 @@ impl Level for World {
     }
     fn ultrawarm(&self) -> bool {
         self.extra.warm
+    }
+    fn burns_out_faster(&self, _p: BlockPos) -> bool {
+        self.extra.humid
     }
     fn sponge_dried(&mut self, _p: BlockPos) {
         self.extra.dried += 1;
@@ -178,6 +183,205 @@ fn falling_lava_on_water_spreads_after_making_stone() {
         );
     }
     assert!(name(&world, BlockPos::new(1, -58, 0)).starts_with("minecraft:lava"));
+}
+
+/// A falling stream below is a drop. A pool of the same fluid on solid
+/// ground is not, so water poured above a pond still spreads both ways.
+#[test]
+fn a_pool_below_is_not_a_cliff_but_a_fall_is() {
+    let Some((data, shapes, rules)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |name: &str| data.blocks.default_state(name).unwrap();
+    let water_at = |world: &World, x: i32, y: i32| {
+        data.blocks.block_name(world.block(BlockPos::new(x, y, 0))) == Some("minecraft:water")
+    };
+    let pour = |below: u32| {
+        let mut world = World {
+            blocks: HashMap::new(),
+            air: state("minecraft:air"),
+            time: 0,
+            ticks: ScheduledTicks::default(),
+            extra: Extra::default(),
+        };
+        for x in -4..=4 {
+            for z in -4..=4 {
+                world
+                    .blocks
+                    .insert(BlockPos::new(x, -59, z), state("minecraft:stone"));
+            }
+        }
+        world.blocks.insert(BlockPos::new(1, -59, 0), below);
+        mc_tick::set_block(
+            &mut world,
+            ctx,
+            BlockPos::new(0, -58, 0),
+            state("minecraft:water"),
+            Flags::ALL,
+        );
+        run_ticks(&mut world, ctx, 8);
+        (water_at(&world, 1, -58), water_at(&world, -1, -58))
+    };
+    let falling = shapes.state("minecraft:water", &[("level", "8")]).unwrap();
+    let pool = shapes.state("minecraft:water", &[("level", "4")]).unwrap();
+    let (toward_fall, _) = pour(falling);
+    assert!(toward_fall, "water aims at a stream falling below");
+    let (toward_pool, away_from_pool) = pour(pool);
+    assert!(toward_pool, "water still reaches a pool beside it");
+    assert!(
+        away_from_pool,
+        "a pool on the ground does not take the whole flow"
+    );
+}
+
+#[test]
+fn water_boils_away_where_the_dimension_is_ultrawarm() {
+    let Some((data, shapes, rules)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |name: &str| data.blocks.default_state(name).unwrap();
+    let mut world = World {
+        blocks: HashMap::new(),
+        air: state("minecraft:air"),
+        time: 0,
+        ticks: ScheduledTicks::default(),
+        extra: Extra {
+            warm: true,
+            ..Extra::default()
+        },
+    };
+    mc_tick::set_block(
+        &mut world,
+        ctx,
+        BlockPos::new(0, -58, 0),
+        state("minecraft:water"),
+        Flags::ALL,
+    );
+    let wet = shapes.with(state("minecraft:oak_slab"), "waterlogged", "true");
+    mc_tick::set_block(&mut world, ctx, BlockPos::new(1, -58, 0), wet, Flags::ALL);
+    assert_eq!(
+        world.block(BlockPos::new(0, -58, 0)),
+        state("minecraft:air")
+    );
+    let left = world.block(BlockPos::new(1, -58, 0));
+    assert_eq!(shapes.property(left, "waterlogged"), Some("false"));
+    assert!(shapes.block_name(left) == Some("minecraft:oak_slab"));
+    world
+        .blocks
+        .insert(BlockPos::new(2, -58, 0), state("minecraft:water"));
+    mc_tick::fluids::tick(&mut world, ctx, BlockPos::new(2, -58, 0), 0);
+    assert_eq!(
+        world.block(BlockPos::new(2, -58, 0)),
+        state("minecraft:air")
+    );
+    assert!(world.extra.dried >= 3);
+}
+
+/// The last step of `fluids2.txt`: water poured onto lava that has just
+/// hardened, beside an older pond. Levels are what vanilla has after 20 ticks.
+#[test]
+fn water_on_hardened_lava_beside_a_pond_matches_vanilla() {
+    let Some((data, shapes, rules)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |name: &str| data.blocks.default_state(name).unwrap();
+    let mut world = World {
+        blocks: HashMap::new(),
+        air: state("minecraft:air"),
+        time: 0,
+        ticks: ScheduledTicks::default(),
+        extra: Extra::default(),
+    };
+    for x in -12..=28 {
+        for z in -12..=28 {
+            world
+                .blocks
+                .insert(BlockPos::new(x, -60, z), state("minecraft:stone"));
+        }
+    }
+    mc_tick::set_block(
+        &mut world,
+        ctx,
+        BlockPos::new(20, -59, 20),
+        state("minecraft:water"),
+        Flags::ALL,
+    );
+    mc_tick::set_block(
+        &mut world,
+        ctx,
+        BlockPos::new(22, -57, 20),
+        state("minecraft:lava"),
+        Flags::ALL,
+    );
+    run_ticks(&mut world, ctx, 180);
+    mc_tick::set_block(
+        &mut world,
+        ctx,
+        BlockPos::new(20, -59, 24),
+        state("minecraft:lava"),
+        Flags::ALL,
+    );
+    mc_tick::set_block(
+        &mut world,
+        ctx,
+        BlockPos::new(20, -57, 24),
+        state("minecraft:water"),
+        Flags::ALL,
+    );
+    run_ticks(&mut world, ctx, 20);
+    let describe = |x: i32, y: i32, z: i32| {
+        let s = world.block(BlockPos::new(x, y, z));
+        match data.blocks.block_name(s) {
+            Some("minecraft:water") => format!(
+                "water[level={}]",
+                data.blocks.property(s, "level").unwrap_or("?")
+            ),
+            Some(name) => name.trim_start_matches("minecraft:").to_owned(),
+            None => "air".into(),
+        }
+    };
+    let expect = [
+        (19, -59, 21, "water[level=6]"),
+        (20, -59, 21, "water[level=5]"),
+        (18, -59, 22, "water[level=6]"),
+        (17, -59, 23, "water[level=6]"),
+        (18, -59, 23, "water[level=5]"),
+        (22, -59, 23, "water[level=5]"),
+        (23, -59, 23, "water[level=6]"),
+        (18, -59, 25, "water[level=7]"),
+        (22, -59, 25, "water[level=7]"),
+        (18, -59, 26, "air"),
+        (22, -59, 26, "air"),
+        (20, -58, 25, "water[level=8]"),
+        (20, -57, 25, "water[level=1]"),
+        (19, -59, 22, "water[level=2]"),
+        (21, -59, 22, "water[level=2]"),
+        (18, -59, 24, "water[level=1]"),
+        (22, -59, 24, "water[level=1]"),
+    ];
+    let mut misses = Vec::new();
+    for (x, y, z, want) in expect {
+        let got = describe(x, y, z);
+        if got != want {
+            misses.push(format!("{x} {y} {z}: {got} want {want}"));
+        }
+    }
+    assert!(misses.is_empty(), "{}", misses.join("\n"));
 }
 
 #[test]
@@ -442,6 +646,45 @@ fn fire_burns_planks_and_dies_on_stone() {
         world.air,
         "fire on stone went out"
     );
+}
+
+/// Humid biomes take 50 off each burn chance, so the same roll can eat a
+/// block there and leave it alone in a dry biome.
+#[test]
+fn humid_fire_eats_a_neighbour_a_dry_one_spares() {
+    let Some((data, shapes, rules)) = setup() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |name: &str| data.blocks.default_state(name).unwrap();
+    let burnt = |humid: bool, x: i32| {
+        let mut world = World {
+            blocks: HashMap::new(),
+            air: state("minecraft:air"),
+            time: 1,
+            ticks: ScheduledTicks::default(),
+            extra: Extra {
+                humid,
+                ..Extra::default()
+            },
+        };
+        let fire_at = BlockPos::new(x, 1, 0);
+        let plank = BlockPos::new(x + 1, 1, 0);
+        world
+            .blocks
+            .insert(BlockPos::new(x, 0, 0), state("minecraft:stone"));
+        world.blocks.insert(plank, state("minecraft:oak_planks"));
+        let fire = mc_tick::fire::can_light(&world, ctx, fire_at).unwrap();
+        world.blocks.insert(fire_at, fire);
+        mc_tick::fire::block_tick(&mut world, ctx, fire_at, shapes.block_index(fire));
+        world.block(plank) != state("minecraft:oak_planks")
+    };
+    let found = (0..80).any(|x| burnt(true, x) && !burnt(false, x));
+    assert!(found, "humidity never changed whether the plank burned");
 }
 
 #[test]
@@ -888,4 +1131,49 @@ fn wet_sponge_dries_in_the_nether_and_dry_sponge_waits_for_water() {
     let water = shapes.state("minecraft:water", &[("level", "0")]).unwrap();
     mc_tick::set_block(&mut w, ctx, dry.offset(Dir::East), water, Flags::ALL);
     assert_eq!(name_at(&data, &w, dry), "minecraft:wet_sponge[]");
+}
+
+#[test]
+fn chorus_breaks_apart_when_its_support_goes() {
+    let Some((data, shapes, rules)) = new_world() else {
+        return;
+    };
+    let ctx = Ctx {
+        shapes: &shapes,
+        facts: &rules,
+    };
+    let state = |n: &str| data.blocks.default_state(n).unwrap();
+    let mut w = empty_world(&data);
+    let at = |x, y, z| BlockPos::new(x, y, z);
+    let put = |w: &mut World, p, name: &str| {
+        mc_tick::set_block(w, ctx, p, state(name), Flags::ALL);
+    };
+    put(&mut w, at(0, 0, 0), "minecraft:end_stone");
+    put(&mut w, at(0, 1, 0), "minecraft:chorus_plant");
+    put(&mut w, at(0, 2, 0), "minecraft:chorus_plant");
+    put(&mut w, at(0, 3, 0), "minecraft:chorus_flower");
+    run_block_ticks(&mut w, ctx, 3);
+    let kind = |w: &World, p| shapes.block_name(w.block(p));
+    assert_eq!(kind(&w, at(0, 1, 0)), Some("minecraft:chorus_plant"));
+    assert_eq!(shapes.property(w.block(at(0, 1, 0)), "down"), Some("true"));
+    assert_eq!(shapes.property(w.block(at(0, 1, 0)), "up"), Some("true"));
+    // The flower on top goes; the stem under it stays and stops pointing up.
+    put(&mut w, at(0, 3, 0), "minecraft:air");
+    run_block_ticks(&mut w, ctx, 3);
+    assert_eq!(kind(&w, at(0, 2, 0)), Some("minecraft:chorus_plant"));
+    assert_eq!(shapes.property(w.block(at(0, 2, 0)), "up"), Some("false"));
+    // A side branch off the open top stays. A flower above that same block
+    // would make the junction illegal, so the branch comes after the flower.
+    put(&mut w, at(1, 2, 0), "minecraft:chorus_plant");
+    put(&mut w, at(2, 2, 0), "minecraft:chorus_flower");
+    run_block_ticks(&mut w, ctx, 3);
+    assert_eq!(kind(&w, at(1, 2, 0)), Some("minecraft:chorus_plant"));
+    assert_eq!(kind(&w, at(2, 2, 0)), Some("minecraft:chorus_flower"));
+    // The base goes, and the stem, the side branch and its flower follow.
+    put(&mut w, at(0, 1, 0), "minecraft:air");
+    run_block_ticks(&mut w, ctx, 8);
+    assert_eq!(kind(&w, at(0, 0, 0)), Some("minecraft:end_stone"));
+    for p in [at(0, 1, 0), at(0, 2, 0), at(1, 2, 0), at(2, 2, 0)] {
+        assert!(shapes.is_air(w.block(p)), "{p:?} still standing");
+    }
 }

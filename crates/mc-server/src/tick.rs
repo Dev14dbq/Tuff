@@ -218,6 +218,9 @@ pub enum Action {
         attack: bool,
         /// Where on the entity the click landed.
         at: Option<[f64; 3]>,
+        /// Fall distance when the attack packet arrived, before a landing
+        /// in the same breath clears it. A mace smash reads this.
+        fall: Option<f64>,
     },
     /// A command block's window was done (`mode`: 0 chain, 1 repeating, 2
     /// impulse; `flags`: 1 track output, 2 conditional, 4 always active).
@@ -334,6 +337,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             lock(&ctx.time).advance();
             crate::commands::run_functions(&ctx, &mut control);
             for d in &dimensions {
+                crate::tickets::begin(d);
                 run_scheduled_ticks_with(d, Some(&mut control));
                 crate::precipitation::tick(d);
                 crate::random_ticks::tick(d);
@@ -400,12 +404,15 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             }
             let _ = request.reply.send(outcome);
         }
+        // After the attacks above, so a mace smash can cancel the fall.
+        crate::vitals::apply_pending_falls(&ctx);
         for d in &dimensions {
             containers_changed(d);
         }
 
         if count.is_multiple_of(UNLOAD_EVERY) {
             for d in &dimensions {
+                crate::tickets::rebuild(d);
                 let dropped = d.world.unload_unused();
                 crate::persist::unloaded(d, &dropped);
                 if !dropped.is_empty() {
@@ -420,6 +427,12 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
         }
         if count.is_multiple_of(autosave) && ctx.world.autosaving() {
             crate::save(&ctx);
+        }
+        crate::pregen::step(&ctx);
+        crate::chase::tick(&ctx);
+        let backup_every = u64::from(ctx.config.backup_minutes) * 60 * 20;
+        if backup_every > 0 && count.is_multiple_of(backup_every) {
+            crate::backup::request(&ctx);
         }
         *lock(&ctx.ticking) = mc_protocol::packets::play::TickingState {
             tick_rate: control.rate,
@@ -438,6 +451,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
             };
         }
         let nanos = took.as_nanos() as u64;
+        crate::profile::add_tick(nanos);
         control.times[(count % 100) as usize] = nanos;
         control.smoothed_ms = control.smoothed_ms * 0.8 + nanos as f32 / 1.0e6 * 0.2;
         if took > interval {
@@ -525,8 +539,47 @@ fn queue_saved_ticks(ctx: &ServerContext, ticks: &mut mc_tick::ScheduledTicks, n
     }
 }
 
+type Due = Vec<(mc_tick::BlockPos, u32)>;
+
+fn hold_back(ctx: &ServerContext, due: (Due, Due), now: i64) -> (Due, Due) {
+    let mut blocks = Vec::new();
+    let mut fluids = Vec::new();
+    let mut later_blocks = Vec::new();
+    let mut later_fluids = Vec::new();
+    for (pos, kind) in due.0 {
+        let fire = ctx
+            .world
+            .block_if_loaded(crate::level::to_position(pos))
+            .and_then(|s| ctx.data.blocks.block_name(s))
+            .is_some_and(|n| n == "minecraft:fire" || n == "minecraft:soul_fire");
+        if crate::tickets::scheduled_waits(ctx, pos.x >> 4, pos.z >> 4, false, fire) {
+            later_blocks.push((pos, kind));
+        } else {
+            blocks.push((pos, kind));
+        }
+    }
+    for (pos, kind) in due.1 {
+        if crate::tickets::scheduled_waits(ctx, pos.x >> 4, pos.z >> 4, true, false) {
+            later_fluids.push((pos, kind));
+        } else {
+            fluids.push((pos, kind));
+        }
+    }
+    if !later_blocks.is_empty() || !later_fluids.is_empty() {
+        let mut ticks = lock(&ctx.ticks);
+        for (pos, kind) in later_blocks {
+            ticks.blocks.schedule(pos, kind, now, 0);
+        }
+        for (pos, kind) in later_fluids {
+            ticks.fluids.schedule(pos, kind, now, 0);
+        }
+    }
+    (blocks, fluids)
+}
+
 /// Due block ticks, then due fluid ticks, then entities; what they change
-/// goes to everyone.
+/// goes to everyone. Ticks in a chunk that is not block-ticking, and water,
+/// lava and fire on the lazy edge, go back on the queue.
 #[cfg(test)]
 pub(crate) fn run_scheduled_ticks(ctx: &ServerContext) {
     run_scheduled_ticks_with(ctx, None);
@@ -572,11 +625,13 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
         let fluids = ticks.fluids.take_due(now);
         (blocks, fluids)
     };
+    let due = hold_back(ctx, due, now);
     let mut level = crate::level::WorldLevel::new(ctx);
     level.control = control;
     let logic = level.logic();
     // Detector rails look for minecarts in their ticks.
     level.minecarts = minecart_boxes(&lock(&ctx.entities));
+    let blocks_at = crate::profile::mark();
     for (pos, block) in due.0 {
         mc_tick::block_tick(&mut level, logic, pos, block);
     }
@@ -584,16 +639,23 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
         mc_tick::fluids::tick(&mut level, logic, pos, fluid);
     }
     run_block_events(ctx, &mut level);
+    crate::profile::add(crate::profile::blocks(), blocks_at);
+    let entities_at = crate::profile::mark();
     tick_entities(ctx, &mut level);
     crate::trading::tick_spawner(ctx, lock(&ctx.time).age);
     crate::mobs::tick(ctx, &mut level);
+    crate::profile::add(crate::profile::entities(), entities_at);
     crate::raids::tick(ctx);
     crate::vibrations::tick(ctx);
     crate::catalysts::tick(ctx);
     crate::bosses::tick(ctx, &mut level);
     press_plates(ctx, &mut level);
+    let redstone_at = crate::profile::mark();
     mc_tick::pistons::tick(&mut level, logic);
+    crate::profile::add(crate::profile::redstone(), redstone_at);
+    let hoppers_at = crate::profile::mark();
     crate::hoppers::tick(ctx, &mut level);
+    crate::profile::add(crate::profile::block_entities(), hoppers_at);
     crate::hoppers::tick_carts(ctx);
     let (changes, spawned) = level.finish();
     if !changes.is_empty() {
@@ -735,6 +797,20 @@ impl mc_entity::Collide for Solid<'_, '_> {
         use mc_tick::Level as _;
         let state = self.0.block(mc_tick::BlockPos::new(x, y, z));
         !mc_tick::gravity::free(self.0.logic(), state)
+    }
+
+    fn boxes(&self, x: i32, y: i32, z: i32, out: &mut Vec<mc_entity::Aabb>) {
+        use mc_tick::Level as _;
+        let state = self.0.block(mc_tick::BlockPos::new(x, y, z));
+        let logic = self.0.logic();
+        let name = logic.shapes.block_name(state).unwrap_or("");
+        crate::mobs::hitbox::push(
+            name,
+            &|k| logic.shapes.property(state, k),
+            [x, y, z],
+            self.solid(x, y, z).then_some((0.0, 1.0)),
+            out,
+        );
     }
 }
 
@@ -1015,6 +1091,15 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
     // Plates see entities where they are at that moment of the tick.
     level.entity_boxes = Some(entities.iter().map(|e| e.aabb()).collect());
     for (i, entity) in entities.iter_mut().enumerate() {
+        let (cx, cz) = (
+            (entity.pos[0].floor() as i32) >> 4,
+            (entity.pos[2].floor() as i32) >> 4,
+        );
+        // Outside the simulation square an entity stays where it is,
+        // including one a ticket has not reached.
+        if !crate::tickets::entities_run(ctx, cx, cz) {
+            continue;
+        }
         let before = (entity.pos, entity.on_ground);
         let block_before = entity.block_pos();
         let before_vel = entity.vel;
@@ -1077,9 +1162,10 @@ fn tick_entities(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
                 }
             }
             mc_entity::Kind::Tnt { fuse, owner } => {
-                // Far from every player it does not tick, so it never goes
-                // off (entities tick only within the simulation distance).
-                if !simulated_at(ctx, &players, entity.pos) {
+                // Far from every ticking chunk it does not tick, so it never
+                // goes off. With tickets that is the entity-ticking square
+                // (already applied); without them, the old player square.
+                if !crate::tickets::limiting(ctx) && !simulated_at(ctx, &players, entity.pos) {
                     continue;
                 }
                 mc_entity::fall(entity, &crate::mobs::Ground::new(ctx));
@@ -1351,7 +1437,8 @@ fn handle(ctx: &ServerContext, control: &mut TickControl, actor: Actor, action: 
             hand,
             attack,
             at,
-        } => crate::hits::use_entity(ctx, actor, entity_id, hand, attack, at),
+            fall,
+        } => crate::hits::use_entity(ctx, actor, entity_id, hand, attack, at, fall),
         Action::CommandBlock {
             position,
             command,

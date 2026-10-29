@@ -102,6 +102,9 @@ pub struct Packs {
     /// `#minecraft:load` still has to run.
     pub load_pending: bool,
     folder: Option<PathBuf>,
+    /// Feature flags this world has on: `minecraft:vanilla`, plus any
+    /// stored with the world. Empty until [`Packs::load`].
+    world_flags: Vec<String>,
 }
 
 fn vanilla() -> Pack {
@@ -117,6 +120,7 @@ impl Packs {
     pub fn load(world: Option<&Path>, commands: &Commands) -> Self {
         let mut p = Packs {
             folder: world.map(|w| w.join("datapacks")),
+            world_flags: world_flags(world),
             ..Packs::default()
         };
         p.scan();
@@ -168,6 +172,7 @@ impl Packs {
     /// Reads functions and tags from the enabled packs again.
     pub fn reload(&mut self, commands: &Commands) {
         self.scan();
+        self.refuse_missing_flags();
         self.enabled
             .retain(|id| self.all.iter().any(|p| &p.id == id));
         let mut sources: HashMap<String, String> = HashMap::new();
@@ -263,6 +268,172 @@ impl Packs {
     pub fn folder(&self) -> Option<&Path> {
         self.folder.as_deref()
     }
+
+    /// A pack whose `pack.mcmeta` asks for a flag this world does not have
+    /// stays out of the enabled set. Optional packs are skipped; a pack
+    /// marked required (or one of vanilla's feature packs, which are
+    /// already present but disabled) is left disabled as well, so startup
+    /// continues.
+    fn refuse_missing_flags(&mut self) {
+        if self.world_flags.is_empty() {
+            return;
+        }
+        let world_flags = self.world_flags.clone();
+        let enabled = self.enabled.clone();
+        let mut deny = Vec::new();
+        for id in &enabled {
+            let Some(pack) = self.pack(id) else {
+                continue;
+            };
+            let Some(reason) = flag_refusal(pack, &world_flags) else {
+                continue;
+            };
+            warn!("{reason}");
+            deny.push(id.clone());
+        }
+        self.enabled.retain(|id| !deny.iter().any(|d| d == id));
+    }
+
+    /// `data` folders of the enabled packs, lowest priority first.
+    pub fn layer_roots(&self) -> Vec<PathBuf> {
+        self.enabled
+            .iter()
+            .filter_map(|id| {
+                let dir = self.pack(id)?.dir.as_ref()?.join("data");
+                dir.is_dir().then_some(dir)
+            })
+            .collect()
+    }
+}
+
+/// `minecraft:vanilla`, plus flags recorded on the world.
+fn world_flags(world: Option<&Path>) -> Vec<String> {
+    let mut flags = vec!["minecraft:vanilla".to_owned()];
+    let Some(world) = world else {
+        return flags;
+    };
+    let Ok(root) = crate::world::read_nbt_gz(&world.join("level.dat")) else {
+        return flags;
+    };
+    let Some(Tag::Compound(data)) = root.get("Data") else {
+        return flags;
+    };
+    if let Some(Tag::List(list)) = data.get("enabled_features") {
+        for tag in list {
+            if let Tag::String(s) = tag {
+                push_flag(&mut flags, s);
+            }
+        }
+    }
+    if let Some(Tag::Compound(packs)) = data.get("DataPacks")
+        && let Some(Tag::List(enabled)) = packs.get("Enabled")
+    {
+        for tag in enabled {
+            let Tag::String(id) = tag else {
+                continue;
+            };
+            let name = id.rsplit(['/', ':']).next().unwrap_or(id.as_str());
+            if name == "vanilla" || FEATURE_PACKS.contains(&name) {
+                push_flag(&mut flags, name);
+            }
+        }
+    }
+    flags
+}
+
+fn flag_id(raw: &str) -> String {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return String::new();
+    }
+    if raw.contains(':') {
+        raw.to_owned()
+    } else {
+        format!("minecraft:{raw}")
+    }
+}
+
+fn push_flag(out: &mut Vec<String>, raw: &str) {
+    let id = flag_id(raw);
+    if !id.is_empty() && !out.iter().any(|f| f == &id) {
+        out.push(id);
+    }
+}
+
+/// Flags a pack requires: `features.enabled`, `features.required`, and
+/// `filter.features`. An object with `"required": false` is not required.
+fn required_flags(meta: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let features = &meta["features"];
+    if features.is_array() || features.is_string() {
+        collect_flags(features, &mut out);
+    } else {
+        collect_flags(&features["enabled"], &mut out);
+        collect_flags(&features["required"], &mut out);
+    }
+    collect_flags(&meta["filter"]["features"], &mut out);
+    out
+}
+
+fn collect_flags(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => push_flag(out, s),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                match item {
+                    serde_json::Value::String(s) => push_flag(out, s),
+                    serde_json::Value::Object(_) => {
+                        if item["required"].as_bool() == Some(false) {
+                            continue;
+                        }
+                        let id = item["id"]
+                            .as_str()
+                            .or(item["flag"].as_str())
+                            .or(item["feature"].as_str())
+                            .unwrap_or("");
+                        if !id.is_empty() {
+                            push_flag(out, id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `None` when the pack may be enabled. Otherwise the log line: the pack
+/// is not enabled, and a required pack (or a vanilla feature pack) is left
+/// disabled instead of failing startup.
+fn flag_refusal(pack: &Pack, world_flags: &[String]) -> Option<String> {
+    let dir = pack.dir.as_ref()?;
+    let text = std::fs::read_to_string(dir.join("pack.mcmeta")).ok()?;
+    let meta: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let missing: Vec<String> = required_flags(&meta)
+        .into_iter()
+        .filter(|f| !world_flags.iter().any(|w| w == f))
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    let flags = missing.join(", ");
+    let hard = meta["required"].as_bool() == Some(true)
+        || meta["pack"]["required"].as_bool() == Some(true)
+        || meta["features"]["required"].is_array()
+        || meta["filter"]["features"].is_array()
+        || FEATURE_PACKS.contains(&pack.title.as_str());
+    Some(if hard {
+        format!(
+            "Data pack {} requires feature flag(s) {flags} that this world does not have; leaving it disabled",
+            pack.id
+        )
+    } else {
+        format!(
+            "Not enabling data pack {}: it requires feature flag(s) {flags} that this world does not have",
+            pack.id
+        )
+    })
 }
 
 /// Files under `dir` with extension `ext`, with their path relative to
@@ -377,6 +548,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn enabled_packs_become_layers_in_order() {
+        let tmp = std::env::temp_dir().join(format!("mc-pack-layers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let a = tmp.join("a/data");
+        let b = tmp.join("b/data");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let packs = Packs {
+            all: vec![
+                Pack {
+                    id: "file/a".into(),
+                    title: "a".into(),
+                    description: Tag::String(String::new()),
+                    dir: Some(tmp.join("a")),
+                },
+                Pack {
+                    id: "file/b".into(),
+                    title: "b".into(),
+                    description: Tag::String(String::new()),
+                    dir: Some(tmp.join("b")),
+                },
+            ],
+            enabled: vec!["file/b".into(), "file/a".into()],
+            ..Packs::default()
+        };
+        assert_eq!(packs.layer_roots(), vec![b, a]);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn lines_join_and_skip_comments() {
         let l = source_lines("# c\n\ntellraw @s \\\n  \"x\"\n  say hi \n");
         assert_eq!(l, vec!["tellraw @s \"x\"", "say hi"]);
@@ -387,5 +588,38 @@ mod tests {
         let p = macro_parts("tellraw @s \"$(a) and $(b)\"");
         assert_eq!(p.len(), 5);
         assert!(matches!(&p[1], Part::Var(v) if v == "a"));
+    }
+
+    #[test]
+    fn pack_requiring_trade_rebalance_is_not_enabled() {
+        let tmp = std::env::temp_dir().join(format!("mc-pack-flags-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pack = tmp.join("datapacks/rebalance");
+        let plain = tmp.join("datapacks/plain");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(
+            pack.join("pack.mcmeta"),
+            r#"{"pack":{"description":"rebalance","min_format":1,"max_format":100},"features":{"enabled":["minecraft:trade_rebalance"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            plain.join("pack.mcmeta"),
+            r#"{"pack":{"description":"plain","min_format":1,"max_format":100}}"#,
+        )
+        .unwrap();
+        let commands = crate::commands::Commands::load(&tmp.join("no-data"));
+        let packs = Packs::load(Some(&tmp), &commands);
+        assert!(
+            packs.all.iter().any(|p| p.id == "file/rebalance"),
+            "the pack is found"
+        );
+        assert!(
+            !packs.enabled.iter().any(|id| id == "file/rebalance"),
+            "a world with only minecraft:vanilla does not enable it"
+        );
+        assert!(packs.enabled.iter().any(|id| id == "file/plain"));
+        assert!(packs.enabled.iter().any(|id| id == "vanilla"));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

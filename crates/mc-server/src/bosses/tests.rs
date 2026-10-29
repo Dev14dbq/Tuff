@@ -678,6 +678,54 @@ fn a_gateway_links_to_the_outer_islands_and_back() {
     assert_eq!(back.data.get("ExactTeleport"), Some(&Tag::Byte(1)));
 }
 
+#[test]
+fn a_pearl_thrown_into_a_gateway_sends_its_thrower() {
+    let Some(ctx) = end() else {
+        return;
+    };
+    let g = fight::gateway_pos(1);
+    for cx in (g[0] >> 4) - 1..=(g[0] >> 4) + 1 {
+        for cz in (g[2] >> 4) - 1..=(g[2] >> 4) + 1 {
+            let _ = ctx
+                .world
+                .block(Position::new(cx * 16, 0, cz * 16), &ctx.data.blocks);
+        }
+    }
+    {
+        let mut level = WorldLevel::new(&ctx);
+        fight::build_gateway(&ctx, &mut level, g, None, false);
+    }
+    join(&ctx, [0.5, 80.0, 0.5]);
+    let mut events = ctx.events.subscribe();
+    crate::projectiles::spawn(
+        &ctx,
+        mc_entity::extra::Shot::Pearl,
+        Some(STEVE),
+        [
+            f64::from(g[0]) + 0.5,
+            f64::from(g[1]) + 0.5,
+            f64::from(g[2]) + 1.2,
+        ],
+        [0.0, 0.0, -1.0],
+    );
+    run(&ctx, 1);
+    let mut to = None;
+    while let Some(ev) = events.try_changed() {
+        if let Event::Teleport { uuid, pose } = ev {
+            assert_eq!(uuid, STEVE);
+            to = Some(pose);
+        }
+    }
+    let to = to.expect("the pearl sends its thrower through");
+    assert!(to.x.hypot(to.z) > 700.0, "out to the islands: {to:?}");
+    assert!(
+        !lock(&ctx.entities)
+            .iter()
+            .any(|e| matches!(&e.kind, Kind::Projectile(p) if matches!(p.shot, mc_entity::extra::Shot::Pearl)))
+    );
+    assert_eq!(lock(&ctx.vitals).get(&STEVE).unwrap().health, 20.0);
+}
+
 /// Builds the wither's T at x 0..2, y -60..-58 (stem foot at 1, -60, 0) but
 /// the last skull.
 fn wither_t(ctx: &ServerContext) {
@@ -958,6 +1006,59 @@ fn a_dragon_fireball_leaves_breath() {
 }
 
 #[test]
+fn a_bottle_scoops_dragon_breath_and_the_cloud_shrinks() {
+    let Some(ctx) = overworld() else {
+        return;
+    };
+    join(&ctx, [0.5, -60.0, 0.5]);
+    give(&ctx, "minecraft:glass_bottle", 1);
+    let cloud = projectile::breath(&ctx, 99, [0.5, -60.0, 0.5], 3.0, 0.0, 600, 0);
+    let id = cloud.id;
+    lock(&ctx.entities).push(cloud);
+    let out = crate::hits::use_entity(&ctx, actor([0.5, -60.0, 0.5]), id, 0, false, None, None);
+    assert!(
+        out.events
+            .iter()
+            .any(|e| matches!(e, Event::InventorySlot { .. })),
+        "the bottle is replaced"
+    );
+    let held = lock(&ctx.inventories)[&STEVE].slots[36].clone();
+    let item = held.map(|s| ctx.items.name(s.item).unwrap_or("").to_owned());
+    assert_eq!(item.as_deref(), Some("minecraft:dragon_breath"));
+    let entities = lock(&ctx.entities);
+    let e = entities.iter().find(|e| e.id == id).unwrap();
+    let Kind::Projectile(p) = &e.kind else {
+        unreachable!()
+    };
+    let mc_entity::extra::Shot::Breath { radius, .. } = &p.shot else {
+        unreachable!()
+    };
+    assert!((*radius - 2.5).abs() < 1e-4, "half a block less, {radius}");
+}
+
+#[test]
+fn the_dragon_egg_falls_when_nothing_is_under_it() {
+    let Some(ctx) = overworld() else {
+        return;
+    };
+    let under = [0, -60, 0];
+    let at = [0, -59, 0];
+    put(&ctx, under, "minecraft:end_stone");
+    put(&ctx, at, "minecraft:dragon_egg");
+    put(&ctx, under, "minecraft:air");
+    lock(&ctx.time).age += 2;
+    run(&ctx, 1);
+    assert_eq!(name(&ctx, at), "minecraft:air");
+    let falling = lock(&ctx.entities).iter().any(|e| {
+        matches!(
+            &e.kind,
+            Kind::FallingBlock { state } if ctx.data.blocks.block_name(*state) == Some("minecraft:dragon_egg")
+        )
+    });
+    assert!(falling, "the egg becomes a falling block");
+}
+
+#[test]
 fn breath_hurts_who_stands_in_it() {
     let Some(ctx) = overworld() else {
         return;
@@ -1027,6 +1128,41 @@ fn it_lands_roars_and_breathes_on_a_player_near_the_portal() {
             Phase::SittingFlaming
         ],
     );
+}
+
+#[test]
+fn perched_it_does_not_shove_someone_standing_under_it() {
+    let Some((ctx, _)) = fight_with_dragon() else {
+        return;
+    };
+    let top = fight::surface(&ctx, 0, 0);
+    let feet = [0.5, f64::from(top), 0.5];
+    lock(&ctx.players).get_mut(&STEVE).unwrap().pose = Some(pose(feet));
+    with_dragon(&ctx, |d| {
+        d.pos = feet;
+        let Kind::Mob(m) = &mut d.kind else {
+            unreachable!()
+        };
+        let dragon = m.dragon_mut().unwrap();
+        dragon.phase = Phase::SittingScanning;
+        dragon.since_hurt = 100;
+    });
+    let mut events = ctx.events.subscribe();
+    let before = lock(&ctx.vitals)[&STEVE].health;
+    run(&ctx, 5);
+    let mut shoved = false;
+    while let Some(ev) = events.try_changed() {
+        if let Event::Direct {
+            packet: crate::context::Direct::Motion(m),
+            ..
+        } = ev
+            && (m.velocity[0].abs() > 0.5 || m.velocity[2].abs() > 0.5)
+        {
+            shoved = true;
+        }
+    }
+    assert!(!shoved, "the fountain under a perched dragon stays open");
+    assert_eq!(lock(&ctx.vitals)[&STEVE].health, before);
 }
 
 #[test]

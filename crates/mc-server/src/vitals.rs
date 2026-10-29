@@ -63,9 +63,17 @@ pub struct Vitals {
     pub fire: i32,
     /// Gliding with an elytra.
     pub gliding: bool,
+    /// Horizontal speed of the last glide step, in blocks. A wall takes
+    /// the greater of this and the step that hits it.
+    pub(crate) glide_speed: f64,
+    /// The last glide step already ended against a wall.
+    pub(crate) struck_wall: bool,
     /// Where a push (a wind burst, a mace smash) launched the player: a
     /// fall counts only below it.
     pub impulse_y: Option<f64>,
+    /// A landing whose damage waits until this tick's attacks have run,
+    /// so a mace smash can cancel the fall it ends.
+    pub pending_fall: Option<f64>,
     /// What the enchantments of the gear do over time.
     pub worn: crate::worn::Worn,
 }
@@ -147,7 +155,10 @@ impl Default for Vitals {
             last_attacker: None,
             fire: -20,
             gliding: false,
+            glide_speed: 0.0,
+            struck_wall: false,
             impulse_y: None,
+            pending_fall: None,
             worn: crate::worn::Worn::default(),
         }
     }
@@ -595,6 +606,12 @@ pub fn try_hurt_by_entity(
         direct,
     });
     if died {
+        let at = lock(&ctx.players)
+            .get(&uuid)
+            .and_then(|p| p.pose)
+            .map(|p| [p.x, p.y, p.z])
+            .unwrap_or([0.0; 3]);
+        crate::mobs::anger::note_death(ctx, entity_id, at);
         crate::stats::died(ctx, uuid, attacker);
         let _ = ctx.events.send(Event::Died {
             uuid,
@@ -652,18 +669,41 @@ pub fn moved(ctx: &ServerContext, uuid: u128, before: Pose, after: Pose, in_wate
         after.on_ground,
         in_water,
     );
-    // Flying, in creative or as a spectator nothing is a fall: a player
-    // who stops flying or turns to survival in the air falls from there.
+    // Actually flying, or a spectator: nothing is a fall. A creative
+    // player who is not flying still falls, so a mace can smash; the
+    // damage itself is refused later. Stopping the flight starts the
+    // fall from there.
     let flies = lock(&ctx.players)
         .get(&uuid)
-        .is_some_and(|p| p.flying || matches!(p.game_mode, 1 | 3));
+        .is_some_and(|p| p.flying || p.game_mode == 3);
+    let mut wall_hit = None;
     let landed_from = {
         let mut all = lock(&ctx.vitals);
         let Some(v) = all.get_mut(&uuid) else {
             return;
         };
-        if in_water || flies {
+        if in_water || flies || v.gliding {
+            // Deployed elytra erase the fall. A landing does not hurt;
+            // running into a wall at speed does, once, from the speed.
             v.fall_distance = 0.0;
+            if v.gliding {
+                let (dx, dz) = (after.x - before.x, after.z - before.z);
+                let horiz = dx.hypot(dz);
+                let against = !after.on_ground && into_wall(ctx, after, dx, dz);
+                let fresh = against && !v.struck_wall;
+                let speed = horiz.max(v.glide_speed);
+                v.glide_speed = horiz;
+                v.struck_wall = against;
+                if fresh {
+                    let hit = speed * 10.0 - 3.0;
+                    if hit > 0.0 {
+                        wall_hit = Some(hit as f32);
+                    }
+                }
+            } else {
+                v.glide_speed = 0.0;
+                v.struck_wall = false;
+            }
             None
         } else if after.on_ground {
             // The move that lands is part of the fall.
@@ -680,20 +720,17 @@ pub fn moved(ctx: &ServerContext, uuid: u128, before: Pose, after: Pose, in_wate
             None
         }
     };
+    if let Some(hit) = wall_hit {
+        hurt(
+            ctx,
+            uuid,
+            hit,
+            "minecraft:fly_into_wall",
+            "death.attack.flyIntoWall",
+        );
+    }
     if let Some(fell) = landed_from {
         crate::stats::fell(ctx, uuid, fell);
-        let (safe, floating, assist) = {
-            let all = lock(&ctx.vitals);
-            all.get(&uuid).map_or((3.0, false, None), |v| {
-                (
-                    v.effects.value(crate::effects::Attr::SafeFallDistance),
-                    v.effects.has("slow_falling") || v.effects.has("levitation"),
-                    (v.since_attacked < ASSIST_TICKS)
-                        .then(|| v.last_attacker.clone())
-                        .flatten(),
-                )
-            })
-        };
         // Farmland gives way under a fall, the higher the likelier
         // (wiki, "Farmland" → "Trampling").
         let below = mc_protocol::Position::new(
@@ -710,29 +747,102 @@ pub fn moved(ctx: &ServerContext, uuid: u128, before: Pose, after: Pose, in_wate
                 let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
             }
         }
-        // Whole blocks past the safe distance (minecraft.wiki, "Damage" →
-        // "Fall damage"): a jump off two blocks, 3.25 from its top, is safe.
-        let damage = (fell - safe).floor();
-        if damage > 0.0 && !floating {
-            let below = mc_protocol::Position::new(
-                after.x.floor() as i32,
-                (after.y - 0.2).floor() as i32,
-                after.z.floor() as i32,
-            );
-            let block = ctx
-                .world
-                .block(below, &ctx.data.blocks)
-                .and_then(|s| ctx.data.blocks.block_name(s));
-            let key = crate::damage::fall_key(block, assist.is_some());
-            hurt_by(
-                ctx,
-                uuid,
-                damage as f32,
-                "minecraft:fall",
-                key,
-                assist.as_deref(),
-            );
+        // The hurt waits: a smash queued before this landing may still
+        // cancel what was fallen above the blow. A flat step has nothing
+        // to cancel and must not clear a smash's mark.
+        if fell > 0.0
+            && let Some(v) = lock(&ctx.vitals).get_mut(&uuid)
+        {
+            v.pending_fall = Some(fell);
         }
+    }
+}
+
+/// Fall damage for landings recorded since the last tick, after attacks.
+/// A mace smash sets [`Vitals::impulse_y`] so only the drop below the blow
+/// counts.
+pub fn apply_pending_falls(ctx: &ServerContext) {
+    let due: Vec<(u128, f64, Option<f64>)> = {
+        let mut all = lock(&ctx.vitals);
+        all.iter_mut()
+            .filter_map(|(&uuid, v)| {
+                let fell = v.pending_fall.take()?;
+                Some((uuid, fell, v.impulse_y.take()))
+            })
+            .collect()
+    };
+    for (uuid, mut fell, impulse) in due {
+        if let Some(y) = impulse {
+            let ground = lock(&ctx.players)
+                .get(&uuid)
+                .and_then(|p| p.pose)
+                .map(|p| p.y)
+                .unwrap_or(y);
+            fell = fell.min((y - ground).max(0.0));
+        }
+        hurt_for_fall(ctx, uuid, fell);
+    }
+}
+
+/// A glide step ends in a solid block ahead of it. The box is the elytra's
+/// (0.6 wide, 0.6 tall); the probe sits just past its leading face.
+fn into_wall(ctx: &ServerContext, pose: Pose, dx: f64, dz: f64) -> bool {
+    let solid = |x: f64, y: f64, z: f64| {
+        let at = mc_protocol::Position::new(x.floor() as i32, y.floor() as i32, z.floor() as i32);
+        ctx.world
+            .block(at, &ctx.data.blocks)
+            .is_some_and(|s| ctx.rules.blocks_motion(s))
+    };
+    let ys = [pose.y + 0.1, pose.y + 0.4];
+    let face = |along: f64, at: f64| along.signum() * 0.35 + at;
+    let mut hit = false;
+    if dx.abs() >= 0.05 {
+        let x = face(dx, pose.x);
+        hit |= ys.iter().any(|&y| solid(x, y, pose.z));
+    }
+    if dz.abs() >= 0.05 {
+        let z = face(dz, pose.z);
+        hit |= ys.iter().any(|&y| solid(pose.x, y, z));
+    }
+    hit
+}
+
+/// Whole blocks past the safe distance (minecraft.wiki, "Damage" →
+/// "Fall damage"): a jump off two blocks, 3.25 from its top, is safe.
+fn hurt_for_fall(ctx: &ServerContext, uuid: u128, fell: f64) {
+    let (safe, floating, assist) = {
+        let all = lock(&ctx.vitals);
+        all.get(&uuid).map_or((3.0, false, None), |v| {
+            (
+                v.effects.value(crate::effects::Attr::SafeFallDistance),
+                v.effects.has("slow_falling") || v.effects.has("levitation"),
+                (v.since_attacked < ASSIST_TICKS)
+                    .then(|| v.last_attacker.clone())
+                    .flatten(),
+            )
+        })
+    };
+    let damage = (fell - safe).floor();
+    if damage > 0.0 && !floating {
+        let below = lock(&ctx.players).get(&uuid).and_then(|p| p.pose).map(|p| {
+            mc_protocol::Position::new(
+                p.x.floor() as i32,
+                (p.y - 0.2).floor() as i32,
+                p.z.floor() as i32,
+            )
+        });
+        let block = below
+            .and_then(|at| ctx.world.block(at, &ctx.data.blocks))
+            .and_then(|s| ctx.data.blocks.block_name(s));
+        let key = crate::damage::fall_key(block, assist.is_some());
+        hurt_by(
+            ctx,
+            uuid,
+            damage as f32,
+            "minecraft:fall",
+            key,
+            assist.as_deref(),
+        );
     }
 }
 
@@ -819,6 +929,25 @@ pub fn tick(ctx: &ServerContext) {
         {
             hurt_by = Some((amount, "minecraft:campfire", "death.attack.inFire"));
         }
+        if hurt_by.is_none()
+            && let Some(hit) = stepped_on(ctx, uuid, &pose)
+        {
+            hurt_by = Some(hit);
+        }
+        if hurt_by.is_none() && smothered(ctx, uuid, &pose) {
+            hurt_by = Some((1.0, "minecraft:in_wall", "death.attack.inWall"));
+        }
+        // A wither rose the body overlaps gives Wither for two seconds,
+        // refreshed while they stay in it.
+        if crate::hits::overlaps_block(
+            ctx,
+            [pose.x - 0.3, pose.y, pose.z - 0.3],
+            [pose.x + 0.3, pose.y + 1.8, pose.z + 0.3],
+            "minecraft:wither_rose",
+        ) && let Some(kind) = crate::effects::kind_of("wither")
+        {
+            crate::effects::give(ctx, uuid, kind, crate::effects::Instance::new(0, 40, true));
+        }
         // Breathing: the head under water runs the air down.
         let eye = mc_protocol::Position::new(
             pose.x.floor() as i32,
@@ -885,6 +1014,156 @@ pub fn tick(ctx: &ServerContext) {
             hurt(ctx, uuid, amount, kind, key);
         }
     }
+}
+
+/// Eyes inside a full block. The eye height is the pose that fits: standing,
+/// sneaking, or crawling in a one-block gap. Crawling keeps the eyes in the
+/// air cell, so a ceiling does not suffocate.
+fn smothered(ctx: &ServerContext, uuid: u128, pose: &crate::context::Pose) -> bool {
+    let eye = pose.y + eye_height(ctx, uuid, pose);
+    let half = 0.24;
+    let y = eye.floor() as i32;
+    let xs = [
+        (pose.x - half).floor() as i32,
+        (pose.x + half).floor() as i32,
+    ];
+    let zs = [
+        (pose.z - half).floor() as i32,
+        (pose.z + half).floor() as i32,
+    ];
+    xs.iter().any(|&x| {
+        zs.iter().any(|&z| {
+            ctx.world
+                .block(mc_protocol::Position::new(x, y, z), &ctx.data.blocks)
+                .is_some_and(|state| crate::mobs::suffocates(ctx, state))
+        })
+    })
+}
+
+/// Standing 1.62, sneaking 1.27, swimming and crawling 0.4, asleep 0.2.
+fn eye_height(ctx: &ServerContext, uuid: u128, pose: &crate::context::Pose) -> f64 {
+    if lock(&ctx.sleepers).contains_key(&uuid) {
+        return 0.2;
+    }
+    let gliding = lock(&ctx.vitals).get(&uuid).is_some_and(|v| v.gliding);
+    let swimming = crate::stats::is_sprinting(ctx, uuid)
+        && ctx
+            .world
+            .block(
+                mc_protocol::Position::new(
+                    pose.x.floor() as i32,
+                    (pose.y + 0.4).floor() as i32,
+                    pose.z.floor() as i32,
+                ),
+                &ctx.data.blocks,
+            )
+            .and_then(|s| ctx.data.blocks.block_name(s))
+            == Some("minecraft:water");
+    let sneaking = crate::stats::sneaking(ctx, uuid);
+    let (height, eye) = if gliding || swimming {
+        (0.6, 0.4)
+    } else if sneaking {
+        (1.5, 1.27)
+    } else {
+        (1.8, 1.62)
+    };
+    if fits(ctx, pose, height) {
+        return eye;
+    }
+    if height > 1.5 && fits(ctx, pose, 1.5) {
+        return 1.27;
+    }
+    0.4
+}
+
+/// Whether a 0.6-wide box of `height` at the feet misses every block.
+fn fits(ctx: &ServerContext, pose: &crate::context::Pose, height: f64) -> bool {
+    const EPS: f64 = 1.0e-6;
+    let min = [pose.x - 0.3 + EPS, pose.y + EPS, pose.z - 0.3 + EPS];
+    let max = [
+        pose.x + 0.3 - EPS,
+        pose.y + height - EPS,
+        pose.z + 0.3 - EPS,
+    ];
+    let x0 = min[0].floor() as i32;
+    let y0 = min[1].floor() as i32;
+    let z0 = min[2].floor() as i32;
+    let x1 = max[0].floor() as i32;
+    let y1 = max[1].floor() as i32;
+    let z1 = max[2].floor() as i32;
+    let mut boxes = Vec::new();
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            for z in z0..=z1 {
+                boxes.clear();
+                crate::vehicles::boat::shape_at(ctx, x, y, z, &mut boxes);
+                if boxes.iter().any(|b| {
+                    min[0] < b.max[0]
+                        && max[0] > b.min[0]
+                        && min[1] < b.max[1]
+                        && max[1] > b.min[1]
+                        && min[2] < b.max[2]
+                        && max[2] > b.min[2]
+                }) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Magma under the feet, and a cactus or a grown sweet berry bush the
+/// body overlaps. Sneaking keeps magma from hurting; the plants do not care.
+fn stepped_on(
+    ctx: &ServerContext,
+    uuid: u128,
+    pose: &crate::context::Pose,
+) -> Option<(f32, &'static str, &'static str)> {
+    let blocks = &ctx.data.blocks;
+    let named = |x: i32, y: i32, z: i32| {
+        let state = ctx
+            .world
+            .block(mc_protocol::Position::new(x, y, z), blocks)?;
+        let name = blocks.block_name(state)?;
+        Some((state, name))
+    };
+    if pose.on_ground && !crate::stats::sneaking(ctx, uuid) {
+        let under = (pose.y - 0.2).floor() as i32;
+        if named(pose.x.floor() as i32, under, pose.z.floor() as i32)
+            .is_some_and(|(_, n)| n == "minecraft:magma_block")
+        {
+            return Some((1.0, "minecraft:hot_floor", "death.attack.hotFloor"));
+        }
+    }
+    let x0 = (pose.x - 0.3).floor() as i32;
+    let x1 = (pose.x + 0.3).floor() as i32;
+    let z0 = (pose.z - 0.3).floor() as i32;
+    let z1 = (pose.z + 0.3).floor() as i32;
+    let y0 = pose.y.floor() as i32;
+    let y1 = (pose.y + 1.8 - 1.0e-6).floor() as i32;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            for z in z0..=z1 {
+                let Some((state, name)) = named(x, y, z) else {
+                    continue;
+                };
+                if name == "minecraft:cactus" {
+                    return Some((1.0, "minecraft:cactus", "death.attack.cactus"));
+                }
+                if name == "minecraft:sweet_berry_bush"
+                    && blocks.property(state, "age").is_some_and(|a| a != "0")
+                {
+                    return Some((
+                        1.0,
+                        "minecraft:sweet_berry_bush",
+                        "death.attack.sweetBerryBush",
+                    ));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Frost walker boots keep off the damage of stepping on hot blocks
@@ -1101,10 +1380,12 @@ mod totem_tests {
         };
         let health = || lock(&ctx.vitals)[&5].health;
         fall(-50.0, -53.25);
+        apply_pending_falls(&ctx);
         assert_eq!(health(), 20.0);
         fall(-53.25, -58.25);
+        apply_pending_falls(&ctx);
         assert_eq!(health(), 18.0);
-        // Flown high in creative, then a step down in survival: no harm.
+        // A drop started in creative still counts when they land in survival.
         lock(&ctx.players).get_mut(&5).unwrap().game_mode = 1;
         let mut y = -58.25;
         while y < -30.0 {
@@ -1114,7 +1395,93 @@ mod totem_tests {
         moved(&ctx, 5, at(y, false), at(y - 20.0, false), false);
         lock(&ctx.players).get_mut(&5).unwrap().game_mode = 0;
         fall(y - 20.0, y - 21.0);
-        assert_eq!(health(), 18.0);
+        apply_pending_falls(&ctx);
+        assert!(health() < 18.0, "the creative drop was not forgiven");
+    }
+
+    fn air(x: f64, y: f64, on_ground: bool) -> crate::context::Pose {
+        crate::context::Pose {
+            x,
+            y,
+            z: 0.5,
+            yaw: 0.0,
+            pitch: 0.0,
+            on_ground,
+        }
+    }
+
+    #[test]
+    fn elytra_land_safely_and_a_fast_wall_hurts_once() {
+        let Some(ctx) = flat() else {
+            return;
+        };
+        join(&ctx, 8, 8, [0.5, -60.0, 0.5], 0);
+        lock(&ctx.vitals).get_mut(&8).unwrap().gliding = true;
+        let mut y = -40.0;
+        while y > -59.5 {
+            moved(&ctx, 8, air(0.5, y, false), air(0.5, y - 0.5, false), false);
+            y -= 0.5;
+        }
+        moved(&ctx, 8, air(0.5, y, false), air(0.5, -60.0, true), false);
+        apply_pending_falls(&ctx);
+        assert_eq!(lock(&ctx.vitals)[&8].health, 20.0, "a glide lands softly");
+
+        lock(&ctx.vitals).get_mut(&8).unwrap().gliding = true;
+        crate::testkit::set(&ctx, [2, -59, 0], "minecraft:stone");
+        moved(
+            &ctx,
+            8,
+            air(0.5, -59.0, false),
+            air(1.7, -59.0, false),
+            false,
+        );
+        assert_eq!(lock(&ctx.vitals)[&8].health, 11.0, "speed into a wall");
+        moved(
+            &ctx,
+            8,
+            air(1.7, -59.0, false),
+            air(1.72, -59.0, false),
+            false,
+        );
+        assert_eq!(
+            lock(&ctx.vitals)[&8].health,
+            11.0,
+            "scraping is not another hit"
+        );
+
+        if let Some(v) = lock(&ctx.vitals).get_mut(&8) {
+            v.gliding = true;
+            v.struck_wall = false;
+            v.glide_speed = 0.0;
+            v.health = 20.0;
+            v.immune = 0;
+        }
+        moved(
+            &ctx,
+            8,
+            air(1.5, -59.0, false),
+            air(1.7, -59.0, false),
+            false,
+        );
+        assert_eq!(lock(&ctx.vitals)[&8].health, 20.0, "a slow touch");
+    }
+
+    #[test]
+    fn taking_the_elytra_off_in_flight_folds_the_wings() {
+        let Some(ctx) = flat() else {
+            return;
+        };
+        join(&ctx, 9, 9, [0.5, -40.0, 0.5], 0);
+        crate::testkit::place(&ctx, 9, [0.5, -40.0, 0.5], false);
+        wear(&ctx, 9, 6, stack(&ctx, "elytra", &[]));
+        crate::worn::start_gliding(&ctx, 9);
+        assert!(lock(&ctx.vitals)[&9].gliding);
+        lock(&ctx.vitals).get_mut(&9).unwrap().fall_distance = 40.0;
+        lock(&ctx.inventories).get_mut(&9).unwrap().slots[6] = None;
+        crate::worn::settle_gliding(&ctx, 9);
+        let v = &lock(&ctx.vitals)[&9];
+        assert!(!v.gliding);
+        assert_eq!(v.fall_distance, 0.0);
     }
 
     #[test]
@@ -1138,5 +1505,92 @@ mod totem_tests {
             v.fire,
             v.health
         );
+    }
+
+    fn put(ctx: &ServerContext, at: [i32; 3], name: &str, props: &[(&str, &str)]) {
+        let id = format!("minecraft:{name}");
+        let state = if props.is_empty() {
+            ctx.data.blocks.default_state(&id).unwrap()
+        } else {
+            ctx.data.blocks.state_id(&id, props).unwrap()
+        };
+        ctx.world.set_block(
+            mc_protocol::Position::new(at[0], at[1], at[2]),
+            state,
+            &ctx.data.blocks,
+            &ctx.rules,
+        );
+    }
+
+    fn health(ctx: &ServerContext, uuid: u128) -> f32 {
+        lock(&ctx.vitals).get(&uuid).unwrap().health
+    }
+
+    #[test]
+    fn magma_cactus_and_berry_bushes_hurt_and_sneaking_spares_magma() {
+        let Some(ctx) = flat() else {
+            return;
+        };
+        join(&ctx, 11, 11, [0.5, -60.0, 0.5], 0);
+        put(&ctx, [0, -61, 0], "magma_block", &[]);
+        tick(&ctx);
+        assert_eq!(health(&ctx, 11), 19.0);
+        crate::stats::load(&ctx, 11);
+        crate::stats::set_sneaking(&ctx, 11, true);
+        if let Some(v) = lock(&ctx.vitals).get_mut(&11) {
+            v.immune = 0;
+            v.health = 20.0;
+        }
+        tick(&ctx);
+        assert_eq!(health(&ctx, 11), 20.0);
+
+        join(&ctx, 12, 12, [4.5, -60.0, 0.5], 0);
+        put(&ctx, [4, -60, 0], "cactus", &[]);
+        tick(&ctx);
+        assert_eq!(health(&ctx, 12), 19.0);
+
+        join(&ctx, 13, 13, [8.5, -60.0, 0.5], 0);
+        put(&ctx, [8, -60, 0], "sweet_berry_bush", &[("age", "0")]);
+        tick(&ctx);
+        assert_eq!(health(&ctx, 13), 20.0);
+        put(&ctx, [8, -60, 0], "sweet_berry_bush", &[("age", "2")]);
+        tick(&ctx);
+        assert_eq!(health(&ctx, 13), 19.0);
+
+        join(&ctx, 15, 15, [16.5, -60.0, 0.5], 0);
+        put(&ctx, [16, -60, 0], "wither_rose", &[]);
+        tick(&ctx);
+        assert!(
+            lock(&ctx.vitals)[&15].effects.has("wither"),
+            "a wither rose gives wither"
+        );
+
+        join(&ctx, 14, 14, [12.5, -60.0, 0.5], 0);
+        put(&ctx, [12, -61, 0], "magma_block", &[]);
+        wear(
+            &ctx,
+            14,
+            8,
+            stack(&ctx, "iron_boots", &[("frost_walker", 2)]),
+        );
+        tick(&ctx);
+        assert_eq!(health(&ctx, 14), 20.0);
+
+        join(&ctx, 16, 16, [20.5, -60.0, 0.5], 0);
+        put(&ctx, [20, -60, 0], "stone", &[]);
+        put(&ctx, [20, -59, 0], "stone", &[]);
+        tick(&ctx);
+        assert_eq!(health(&ctx, 16), 19.0, "stone around the body suffocates");
+
+        join(&ctx, 17, 17, [24.5, -60.0, 0.5], 0);
+        put(&ctx, [24, -59, 0], "stone", &[]);
+        tick(&ctx);
+        assert_eq!(health(&ctx, 17), 20.0, "a one-block gap is a crawl");
+
+        join(&ctx, 18, 18, [28.5, -60.0, 0.5], 0);
+        put(&ctx, [28, -60, 0], "glass", &[]);
+        put(&ctx, [28, -59, 0], "glass", &[]);
+        tick(&ctx);
+        assert_eq!(health(&ctx, 18), 20.0, "glass does not suffocate");
     }
 }

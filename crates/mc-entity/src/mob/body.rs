@@ -72,6 +72,10 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
         }
         if m.baby_age == 0 {
             m.dirty = true;
+            // A small sulfur cube grows into the large one.
+            if m.species == Species::SulfurCube {
+                m.set_size(2);
+            }
             // Aquatic (Claude): a turtle that grows up drops a scute.
             if m.species == Species::Turtle {
                 out.push(MobEvent::Lay {
@@ -144,6 +148,17 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
             amount: 4.0,
             kind: "minecraft:lava",
         });
+    }
+    // Magma underfoot, a cactus and a grown sweet berry bush. Fire-immune
+    // mobs walk magma; nothing shrugs off the plants.
+    if b.on_ground && !m.species.fire_immune() && s.world.burns_feet(c[0], c[1] - 1, c[2]) {
+        out.push(MobEvent::Hurt {
+            amount: 1.0,
+            kind: "minecraft:hot_floor",
+        });
+    }
+    if let Some(kind) = s.world.pricks(c[0], c[1], c[2]) {
+        out.push(MobEvent::Hurt { amount: 1.0, kind });
     }
     if m.species == Species::Enderman {
         super::chores::daylight_teleport(m, b, s, out);
@@ -403,9 +418,40 @@ pub(super) fn drive(m: &mut Mob, b: &mut Body, s: &Senses) -> Option<Input> {
     if m.quirks.aqua.dead_play > 0 {
         return None;
     }
-    // Fliers and swimmers head straight for the point.
+    // Fliers and swimmers head for the point, around whatever is in the way.
     let swims = (m.species == Species::Drowned || m.species.swims()) && in_water(b, s);
     if m.species.flies() || swims {
+        let from = cell_of(b.pos);
+        let goal = cell_of(point);
+        if from != goal && !super::line_clear(s.world, b.pos, point) {
+            let mut p = params(m);
+            p.travel = if m.species.flies() {
+                crate::nav::Travel::Fly
+            } else {
+                crate::nav::Travel::Swim
+            };
+            m.nav.go_to(s.world, from, goal, &p);
+            let reached = (m.size().0 / 2.0 + 0.2).max(0.4);
+            if let Some(c) = m.nav.waypoint(b.pos, reached) {
+                let target = [
+                    f64::from(c[0]) + 0.5,
+                    f64::from(c[1]) + 0.5,
+                    f64::from(c[2]) + 0.5,
+                ];
+                let d = [
+                    target[0] - b.pos[0],
+                    target[1] - b.pos[1],
+                    target[2] - b.pos[2],
+                ];
+                let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                if len >= 0.1 {
+                    return Some(Input {
+                        dir: [d[0] / len, d[1] / len, d[2] / len],
+                        speed,
+                    });
+                }
+            }
+        }
         let d = [
             point[0] - b.pos[0],
             point[1] - b.pos[1],

@@ -1,6 +1,6 @@
 //! One client connection: handshake → status, or login → configuration → play.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -85,6 +85,11 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
             }
             crate::containers::player_left(&ctx, uuid);
             ctx.players.lock().expect("players lock").remove(&uuid);
+            ctx.management_bus
+                .publish(&crate::notify::Note::PlayerLeft(crate::notify::Player {
+                    id: Some(crate::util::uuid_string(uuid)),
+                    name: Some(name.clone()),
+                }));
             ctx.inventories
                 .lock()
                 .expect("inventories lock")
@@ -141,6 +146,9 @@ struct Session {
     view_distance: i32,
     /// Displayed skin parts from Client Information (cape, jacket, sleeves, ...).
     skin_parts: u8,
+    /// Client Information `text_filtering`. Kept for the client; chat is not
+    /// passed to an external filter.
+    text_filtering: bool,
     /// Where the client connects from.
     peer: SocketAddr,
 }
@@ -166,7 +174,7 @@ async fn login(
     reader: &mut PacketReader,
     writer: &mut PacketWriter,
     intention: &handshake::Intention,
-    peer: SocketAddr,
+    mut peer: SocketAddr,
 ) -> Result<Option<Session>> {
     let ctx = writer.ctx.clone();
     let name = match reader.next(State::Login).await? {
@@ -192,23 +200,62 @@ async fn login(
         return Ok(None);
     }
 
-    let profile = match &ctx.key {
-        Some(key) => match authenticate(reader, writer, key, &name).await? {
-            Some(profile) => profile,
-            None => {
-                let reason =
-                    serde_json::json!({"translate": "multiplayer.disconnect.unverified_username"});
-                writer.send(&refusal(reason)).await?;
-                return Ok(None);
+    let profile = match &ctx.config.proxy {
+        crate::proxy::Mode::Velocity { secret } => {
+            match velocity_forwarding(reader, writer, secret).await? {
+                Some(fwd) => {
+                    peer = crate::proxy::player_socket(&fwd.address, peer);
+                    fwd.profile
+                }
+                None => {
+                    let reason = serde_json::json!({
+                        "text": "This server requires Velocity modern forwarding."
+                    });
+                    writer.send(&refusal(reason)).await?;
+                    return Ok(None);
+                }
             }
-        },
-        // Offline mode: the UUID is derived from the name, as vanilla does.
-        None => GameProfile {
-            uuid: offline_uuid(&name),
-            name,
-            properties: Vec::new(),
+        }
+        crate::proxy::Mode::Bungee { tokens } => {
+            match crate::proxy::verify_bungee(&intention.server_address, &name, tokens) {
+                Ok(fwd) => {
+                    peer = crate::proxy::player_socket(&fwd.address, peer);
+                    fwd.profile
+                }
+                Err(reason) => {
+                    writer
+                        .send(&refusal(serde_json::json!({ "text": reason })))
+                        .await?;
+                    return Ok(None);
+                }
+            }
+        }
+        crate::proxy::Mode::Off => match &ctx.key {
+            Some(key) => match authenticate(reader, writer, key, &name).await? {
+                Some(profile) => profile,
+                None => {
+                    let reason = serde_json::json!(
+                        {"translate": "multiplayer.disconnect.unverified_username"}
+                    );
+                    writer.send(&refusal(reason)).await?;
+                    return Ok(None);
+                }
+            },
+            // Offline mode: the UUID is derived from the name, as vanilla does.
+            None => GameProfile {
+                uuid: offline_uuid(&name),
+                name,
+                properties: Vec::new(),
+            },
         },
     };
+    if !valid_player_name(&profile.name) {
+        let reason = format!("Invalid player name {:?}", profile.name);
+        writer
+            .send(&refusal(serde_json::json!({ "text": reason })))
+            .await?;
+        return Ok(None);
+    }
 
     let saved = match &ctx.player_files {
         Some(store) => store.load(profile.uuid).unwrap_or_else(|err| {
@@ -293,7 +340,7 @@ async fn login(
         let mut players = ctx.players.lock().expect("players lock");
         if players.contains_key(&uuid) {
             Some("multiplayer.disconnect.duplicate_login")
-        } else if players.len() >= ctx.config.max_players
+        } else if players.len() >= ctx.player_limit.load(std::sync::atomic::Ordering::Relaxed)
             && !ctx
                 .lists
                 .lock()
@@ -317,8 +364,9 @@ async fn login(
     let mut session = Session {
         player,
         saved,
-        view_distance: i32::from(ctx.config.view_distance),
+        view_distance: i32::from(ctx.view_distance.load(std::sync::atomic::Ordering::Relaxed)),
         skin_parts: 0,
+        text_filtering: false,
         peer,
     };
     // From here on the player is registered; remove them if login fails.
@@ -328,6 +376,39 @@ async fn login(
         Ok(false) | Err(_) => {
             ctx.players.lock().expect("players lock").remove(&uuid);
             result.map(|_| None)
+        }
+    }
+}
+
+/// Velocity answers `velocity:player_info` with an HMAC'd profile instead
+/// of an encryption response. `None` means the connection is not the proxy.
+async fn velocity_forwarding(
+    reader: &mut PacketReader,
+    writer: &mut PacketWriter,
+    secret: &str,
+) -> Result<Option<crate::proxy::Forwarded>> {
+    writer
+        .send(&login::CustomQuery {
+            transaction_id: 0,
+            channel: "velocity:player_info".into(),
+            data: crate::proxy::velocity_query(),
+        })
+        .await?;
+    let data = match reader.next(State::Login).await? {
+        Packet::Login(login::Serverbound::CustomQueryAnswer {
+            id: 0,
+            data: Some(data),
+        }) => data,
+        other => {
+            warn!("velocity forwarding expected a plugin response, got {other:?}");
+            return Ok(None);
+        }
+    };
+    match crate::proxy::verify_velocity(secret, &data) {
+        Ok(fwd) => Ok(Some(fwd)),
+        Err(reason) => {
+            warn!("velocity forwarding rejected: {reason}");
+            Ok(None)
         }
     }
 }
@@ -374,6 +455,12 @@ async fn authenticate(
     Ok(profile)
 }
 
+fn note_client_info(session: &mut Session, info: &configuration::ClientInformation, max_view: i32) {
+    session.view_distance = i32::from(info.view_distance).clamp(2, max_view);
+    session.skin_parts = info.skin_parts;
+    session.text_filtering = info.text_filtering;
+}
+
 /// Returns `Ok(false)` if the client was refused during configuration.
 async fn configure(
     reader: &mut PacketReader,
@@ -404,7 +491,7 @@ async fn configure(
 
     // Configuration.
     let mut brand = Vec::new();
-    brand.put_string("minecraft-rewrite");
+    brand.put_string(crate::BRAND);
     writer.queue(&configuration::CustomPayload {
         channel: "minecraft:brand".into(),
         data: brand,
@@ -417,17 +504,14 @@ async fn configure(
     })?;
     writer.flush().await?;
 
-    let view_distance = |info: &configuration::ClientInformation| {
-        i32::from(info.view_distance).clamp(2, i32::from(ctx.config.view_distance))
-    };
+    let max_view = i32::from(ctx.view_distance.load(std::sync::atomic::Ordering::Relaxed));
     let client_knows_core = loop {
         match reader.next(State::Configuration).await? {
             Packet::Configuration(configuration::Serverbound::SelectKnownPacks(packs)) => {
                 break packs.contains(&ctx.core_pack);
             }
             Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
-                session.view_distance = view_distance(&info);
-                session.skin_parts = info.skin_parts;
+                note_client_info(session, &info, max_view);
             }
             other => trace!("configuration: {other:?}"),
         }
@@ -444,6 +528,9 @@ async fn configure(
         writer.queue(registry)?;
     }
     writer.queue(&ctx.tags)?;
+    if let Some(links) = crate::serverlist::server_links(ctx.config.server_dir.as_deref()) {
+        writer.queue(&configuration::ServerLinks { links })?;
+    }
     if let Some(pack) = &ctx.config.resource_pack {
         writer.queue(&configuration::ResourcePackPush {
             id: pack.id,
@@ -481,8 +568,25 @@ async fn configure(
                     }
                 }
                 Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
-                    session.view_distance = view_distance(&info);
-                    session.skin_parts = info.skin_parts;
+                    note_client_info(session, &info, max_view);
+                }
+                other => trace!("configuration: {other:?}"),
+            }
+        }
+    }
+    if let Some(text) = crate::serverlist::code_of_conduct(
+        ctx.config.enable_code_of_conduct,
+        ctx.config.server_dir.as_deref(),
+    ) {
+        writer.send(&configuration::CodeOfConduct { text }).await?;
+        loop {
+            match reader.next(State::Configuration).await? {
+                Packet::Configuration(configuration::Serverbound::AcceptCodeOfConduct) => break,
+                Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
+                    note_client_info(session, &info, max_view);
+                }
+                Packet::Configuration(configuration::Serverbound::KeepAlive(id)) => {
+                    writer.send(&configuration::KeepAlive { id }).await?;
                 }
                 other => trace!("configuration: {other:?}"),
             }
@@ -497,8 +601,7 @@ async fn configure(
                 return Ok(true);
             }
             Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
-                session.view_distance = view_distance(&info);
-                session.skin_parts = info.skin_parts;
+                note_client_info(session, &info, max_view);
             }
             other => trace!("configuration: {other:?}"),
         }
@@ -534,8 +637,8 @@ async fn play(
             .iter()
             .map(|d| (*d).to_owned())
             .collect(),
-        max_players: ctx.config.max_players as i32,
-        view_distance: i32::from(ctx.config.view_distance),
+        max_players: ctx.player_limit.load(std::sync::atomic::Ordering::Relaxed) as i32,
+        view_distance: i32::from(ctx.view_distance.load(std::sync::atomic::Ordering::Relaxed)),
         simulation_distance: i32::from(ctx.config.simulation_distance),
         reduced_debug_info: ctx.game_rule_bool("reduced_debug_info"),
         enable_respawn_screen: !ctx.game_rule_bool("immediate_respawn"),
@@ -551,12 +654,12 @@ async fn play(
         portal_cooldown: 0,
         sea_level: ctx.world.sea_level,
         online_mode: ctx.config.online_mode,
-        enforces_secure_chat: false,
+        enforces_secure_chat: ctx.config.enforce_secure_profile,
     })?;
     let mut flying = me.flying || me.game_mode == 3;
     writer.queue(&abilities(me.game_mode, flying))?;
     send_permissions(writer, &ctx, uuid, &me.profile.name, entity_id)?;
-    writer.queue(&ctx.recipes.update_packet())?;
+    writer.queue(&ctx.recipes.get().update_packet())?;
     writer.queue(&crate::commands::settings_packet(&ctx, uuid))?;
     writer.queue(&crate::commands::initial_book(&ctx, uuid))?;
     writer.queue(&crate::commands::initial_advancements(&ctx, uuid))?;
@@ -587,10 +690,16 @@ async fn play(
         players: everyone.iter().map(OnlinePlayer::info_entry).collect(),
     })?;
     let _ = ctx.events.send(Event::PlayerJoined(me.clone()));
+    ctx.management_bus
+        .publish(&crate::notify::Note::PlayerJoined(crate::notify::Player {
+            id: Some(crate::util::uuid_string(me.profile.uuid)),
+            name: Some(me.profile.name.clone()),
+        }));
     // A rejoin should see the whole map again, not a rectangle of what
     // changed while the previous session still had it.
     crate::maps::forget(&ctx, uuid);
     let mut visible: HashSet<u128> = HashSet::new();
+    let mut dots: HashMap<u128, [i32; 3]> = HashMap::new();
     for other in everyone
         .iter()
         .filter(|p| p.profile.uuid != uuid && p.dimension == ctx.world.dimension)
@@ -629,11 +738,18 @@ async fn play(
     // Out before the chunks, which take a while.
     writer.flush().await?;
     let mut view = ChunkView::new(session.view_distance, ctx.clone());
-    view.move_to(writer, chunk_of(x), chunk_of(z)).await?;
+    view.move_to(
+        writer,
+        chunk_of(x),
+        chunk_of(z),
+        loads_new_chunks(&ctx, me.game_mode),
+    )
+    .await?;
     writer.queue(&play::SystemChat {
         content: text::colored(
             &format!(
-                "Welcome to minecraft-rewrite! You are in {}.",
+                "Welcome to {}! You are in {}.",
+                crate::BRAND,
                 ctx.world.description
             ),
             "gold",
@@ -647,6 +763,7 @@ async fn play(
         p.pose = Some(pose);
         p.skin_parts = session.skin_parts;
     });
+    send_bars(writer, &ctx, uuid, &mut dots, false)?;
     let _ = ctx.events.send(Event::PlayerMoved {
         uuid,
         entity_id,
@@ -729,6 +846,7 @@ async fn play(
     for p in &scores {
         send_scoreboard(writer, p)?;
     }
+    let mut text_filtering = session.text_filtering;
     let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
     // Non-player entities this client has been told about.
     let mut seen_entities: HashSet<i32> = HashSet::new();
@@ -773,7 +891,7 @@ async fn play(
                         writer.send(&play::Disconnect { reason }).await?;
                         bail!("{} exceeded the packet rate limit", me.profile.name);
                     }
-                    let chatting = matches!(packet, play::Serverbound::Chat { .. } | play::Serverbound::ChatCommand { .. });
+                    let chatting = matches!(packet, play::Serverbound::Chat(_) | play::Serverbound::ChatCommand { .. });
                     if chatting && spam.said(Instant::now()) && crate::tick::lock(&ctx.lists).op(uuid, &me.profile.name).is_none() {
                         let reason = text::translate("disconnect.spam", vec![]);
                         writer.send(&play::Disconnect { reason }).await?;
@@ -815,10 +933,19 @@ async fn play(
                                 pending_keep_alive = None;
                             }
                         }
-                        play::Serverbound::Chat { message } => {
-                            info!("<{}> {}", me.profile.name, message);
-                            let line = text::translate("chat.type.text", vec![text::plain(&me.profile.name), text::plain(&message)]);
-                            let _ = ctx.events.send(Event::Chat(line));
+                        play::Serverbound::Chat(chat) => {
+                            if ctx.config.enforce_secure_profile && chat.signature.is_none() {
+                                info!("{} tried to chat without a signature", me.profile.name);
+                                let line = text::translate("multiplayer.disconnect.unsigned_chat", vec![]);
+                                let _ = ctx.events.send(Event::Message { uuid, line, overlay: false });
+                            } else {
+                                // `text_filtering` asks for a profanity pass. There is
+                                // no external filter; the line is delivered as written.
+                                trace!(text_filtering, "chat delivered as written");
+                                info!("<{}> {}", me.profile.name, chat.message);
+                                let line = text::translate("chat.type.text", vec![text::plain(&me.profile.name), text::plain(&chat.message)]);
+                                let _ = ctx.events.send(Event::Chat(line));
+                            }
                         }
                         play::Serverbound::ChatCommand { command } => {
                             info!("{} issued server command: /{command}", me.profile.name);
@@ -847,6 +974,9 @@ async fn play(
                                         *s = item;
                                     }
                                 });
+                                if slot == 6 {
+                                    crate::worn::settle_gliding(&ctx, uuid);
+                                }
                             }
                         }
                         play::Serverbound::SetCarriedItem { slot } => {
@@ -923,9 +1053,14 @@ async fn play(
                         play::Serverbound::ContainerClose { window } => {
                             windows.close(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window)?;
                         }
-                        play::Serverbound::PlayerAction { status: 5, .. } => {
+                        play::Serverbound::PlayerAction { status: 5, position, face, sequence } => {
                             crate::vitals::stop_using(&ctx, uuid);
                             crate::combat::shield(&ctx, uuid, false);
+                            // Letting go of use: a drawn bow, trident or crossbow
+                            // shoots on the tick thread (where the draw was stored).
+                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
+                            let action = Action::Dig { status: 5, position, face, sequence };
+                            let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
                         play::Serverbound::PlayerCommand { action: 5, .. } => {
                             // The inventory key while riding: a boat's chest, or a mount's.
@@ -1004,6 +1139,9 @@ async fn play(
                             if dead {
                                 let health = crate::vitals::respawn(&ctx, uuid);
                                 let (dimension, target) = respawn_target(&ctx, uuid);
+                                if let Some(there) = ctx.in_dimension(&dimension) {
+                                    crate::tickets::player_spawn(&there, target.x, target.z);
+                                }
                                 if dimension != ctx.world.dimension {
                                     // Another dimension: the switch sends it all.
                                     let _ = ctx.events.send(Event::ChangeDimension {
@@ -1057,7 +1195,7 @@ async fn play(
                                 // The client starts a fresh world: everything again.
                                 view = ChunkView::new(session.view_distance, ctx.clone());
                                 seen_entities.clear();
-                                view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                                view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z), loads_new_chunks(&ctx, game_mode)).await?;
                                 let hands = ctx.inventories.lock().expect("inventories lock").get(&uuid).cloned().unwrap_or_default();
                                 windows.state_id += 1;
                                 writer.queue(&play::ContainerSetContent {
@@ -1069,6 +1207,8 @@ async fn play(
                                 writer.queue(&skin_parts_metadata(entity_id, session.skin_parts))?;
                                 update_player(&ctx, uuid, |p| p.pose = Some(pose));
                                 let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
+                                dots.clear();
+                                send_bars(writer, &ctx, uuid, &mut dots, false)?;
                             }
                         }
                         play::Serverbound::PlayerInput { flags } => {
@@ -1089,7 +1229,7 @@ async fn play(
                             if [x, y, z].iter().all(|c| c.is_finite()) {
                                 pose = Pose { x, y, z, yaw, pitch, on_ground: false };
                                 update_player(&ctx, uuid, |p| p.pose = Some(pose));
-                                view.move_to(writer, chunk_of(x), chunk_of(z)).await?;
+                                view.move_to(writer, chunk_of(x), chunk_of(z), loads_new_chunks(&ctx, game_mode)).await?;
                                 let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
                                 let action = Action::Vehicle(crate::vehicles::Act::Move { pos: [x, y, z], yaw, on_ground });
                                 let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
@@ -1100,6 +1240,9 @@ async fn play(
                             update_player(&ctx, uuid, |p| p.flying = flying);
                         }
                         play::Serverbound::Attack { entity_id: target } if game_mode != 3 => {
+                            // Taken now: the landing packet often follows in the
+                            // same breath and clears the fall before the blow runs.
+                            let fall = crate::tick::lock(&ctx.vitals).get(&uuid).map(|v| v.fall_distance);
                             let victim = ctx.players.lock().expect("players lock").values()
                                 .find(|p| p.entity_id == target && p.dimension == ctx.world.dimension)
                                 .and_then(|p| p.pose.map(|at| (p.profile.uuid, at)));
@@ -1108,17 +1251,17 @@ async fn play(
                                 // Reach 3 from the docs, with some room for lag.
                                 if dx * dx + dy * dy + dz * dz <= 36.0 {
                                     let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                                    crate::combat::player_hits_player(&ctx, &actor, &me.profile.name, victim);
+                                    crate::combat::player_hits_player(&ctx, &actor, &me.profile.name, victim, fall);
                                 }
                             } else {
                                 let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                                let action = Action::UseEntity { entity_id: target, hand: 0, attack: true, at: None };
+                                let action = Action::UseEntity { entity_id: target, hand: 0, attack: true, at: None, fall };
                                 let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                             }
                         }
                         play::Serverbound::Interact { entity_id: target, hand, location } if game_mode != 3 => {
                             let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                            let action = Action::UseEntity { entity_id: target, hand, attack: false, at: location };
+                            let action = Action::UseEntity { entity_id: target, hand, attack: false, at: location, fall: None };
                             let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
                         play::Serverbound::Punch => {
@@ -1314,6 +1457,7 @@ async fn play(
                             }
                         }
                         play::Serverbound::ClientInformation(info) => {
+                            text_filtering = info.text_filtering;
                             writer.queue(&skin_parts_metadata(entity_id, info.skin_parts))?;
                             update_player(&ctx, uuid, |p| p.skin_parts = info.skin_parts);
                             let _ = ctx.events.send(Event::SkinParts {
@@ -1368,7 +1512,7 @@ async fn play(
                             .block(feet, &ctx.data.blocks)
                             .is_some_and(|s| ctx.data.blocks.is_fluid(s));
                         crate::vitals::moved(&ctx, uuid, before, pose, in_water);
-                        view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                        view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z), loads_new_chunks(&ctx, game_mode)).await?;
                         sync_entities(writer, &ctx, &view, &mut seen_entities)?;
                         update_player(&ctx, uuid, |p| p.pose = Some(pose));
                         let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
@@ -1443,6 +1587,12 @@ async fn play(
                                         pitch: m.pitch,
                                         on_ground: m.on_ground,
                                     })?;
+                                    if let Some(velocity) = m.motion {
+                                        writer.queue(&play::SetEntityMotion {
+                                            entity_id: m.id,
+                                            velocity,
+                                        })?;
+                                    }
                                     writer.queue(&play::RotateHead { entity_id: m.id, head_yaw: m.head_yaw })?;
                                 } else if in_view {
                                     // A mob walked into view.
@@ -1467,7 +1617,7 @@ async fn play(
                                 if riding == Some(r.id) && (pose.x, pose.y, pose.z) != (r.pos[0], r.pos[1], r.pos[2]) {
                                     pose = Pose { x: r.pos[0], y: r.pos[1], z: r.pos[2], ..pose };
                                     update_player(&ctx, uuid, |p| p.pose = Some(pose));
-                                    view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                                    view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z), loads_new_chunks(&ctx, game_mode)).await?;
                                 }
                                 if seen_entities.contains(&r.id) {
                                     writer.queue(&play::EntityPositionSync {
@@ -1614,8 +1764,13 @@ async fn play(
                                     crate::vitals::announce_death(&ctx, uuid, message);
                                 }
                                 crate::vitals::drop_pearls(&ctx, uuid);
-                            } else if visible.remove(&who) {
-                                writer.queue(&play::RemoveEntities { entity_ids: vec![dead] })?;
+                            } else {
+                                if let Some(packet) = crate::locator::forget(who, &mut dots) {
+                                    writer.queue(&packet)?;
+                                }
+                                if visible.remove(&who) {
+                                    writer.queue(&play::RemoveEntities { entity_ids: vec![dead] })?;
+                                }
                             }
                         }
                         Ok(Event::GameMode { uuid: who, mode }) => {
@@ -1636,6 +1791,13 @@ async fn play(
                                 writer.queue(&abilities(mode, flying))?;
                             }
                             let known = ctx.players.lock().expect("players lock").get(&who).cloned();
+                            if who != uuid
+                                && let Some(player) = known.clone()
+                                && let Some(at) = player.pose
+                                && let Some(packet) = crate::locator::offer(&ctx, uuid, who, at, &mut dots, true)
+                            {
+                                writer.queue(&packet)?;
+                            }
                             if let Some(player) = known {
                                 writer.queue(&play::PlayerInfoUpdate {
                                     actions: play::player_info::UPDATE_GAME_MODE,
@@ -1767,11 +1929,14 @@ async fn play(
                                 pitch: pose.pitch,
                                 flags: 0,
                             })?;
-                            view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                            view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z), loads_new_chunks(&ctx, game_mode)).await?;
                             update_player(&ctx, uuid, |p| p.pose = Some(pose));
                             let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
                         }
                         Ok(Event::PlayerGone { uuid: other, entity_id: other_entity }) if other != uuid => {
+                            if let Some(packet) = crate::locator::forget(other, &mut dots) {
+                                writer.queue(&packet)?;
+                            }
                             if visible.remove(&other) {
                                 writer.queue(&play::RemoveEntities { entity_ids: vec![other_entity] })?;
                             }
@@ -1786,6 +1951,7 @@ async fn play(
                             ctx = next;
                             events = ctx.events.subscribe();
                             visible.clear();
+                            dots.clear();
                             seen_entities.clear();
                             pose = Pose { on_ground: false, ..to };
                             update_player(&ctx, uuid, |p| {
@@ -1850,7 +2016,7 @@ async fn play(
                             writer.queue(&skin_parts_metadata(entity_id, session.skin_parts))?;
                             writer.flush().await?;
                             view = ChunkView::new(session.view_distance, ctx.clone());
-                            view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z)).await?;
+                            view.move_to(writer, chunk_of(pose.x), chunk_of(pose.z), loads_new_chunks(&ctx, game_mode)).await?;
                             // What the client forgot with the old dimension.
                             let state = ctx.vitals.lock().expect("vitals lock").get(&uuid).cloned().unwrap_or_default();
                             writer.queue(&state.packet())?;
@@ -1885,6 +2051,7 @@ async fn play(
                                     visible.insert(other.profile.uuid);
                                 }
                             }
+                            send_bars(writer, &ctx, uuid, &mut dots, false)?;
                             // Back on what they rode when they left.
         if let Some(vehicle) = &me.extra.root_vehicle {
             crate::persist::ride_again(&ctx, entity_id, vehicle);
@@ -1928,6 +2095,9 @@ async fn play(
                                     spawn_player(writer, &ctx, &player, other_pose)?;
                                     visible.insert(other);
                                 }
+                            }
+                            if let Some(packet) = crate::locator::offer(&ctx, uuid, other, other_pose, &mut dots, false) {
+                                writer.queue(&packet)?;
                             }
                         }
                         Ok(Event::SkinParts { uuid: other, entity_id: other_entity, parts })
@@ -1989,10 +2159,19 @@ async fn play(
                             })?;
                         }
                         Ok(Event::PlayerLeft { uuid: other, entity_id: other_entity }) if other != uuid => {
+                            if let Some(packet) = crate::locator::forget(other, &mut dots) {
+                                writer.queue(&packet)?;
+                            }
                             if visible.remove(&other) {
                                 writer.queue(&play::RemoveEntities { entity_ids: vec![other_entity] })?;
                             }
                             writer.queue(&play::PlayerInfoRemove { uuids: vec![other] })?;
+                        }
+                        Ok(Event::LocatorRefresh) => {
+                            send_bars(writer, &ctx, uuid, &mut dots, true)?;
+                        }
+                        Ok(Event::ContentRefresh) => {
+                            writer.queue(&ctx.recipes.get().update_packet())?;
                         }
                         Ok(_) => {}
                         Err(broadcast::error::RecvError::Lagged(missed)) => {
@@ -2425,6 +2604,11 @@ fn view_chunks(radius: i32, cx: i32, cz: i32) -> Vec<(i32, i32)> {
     chunks
 }
 
+/// A spectator loads new chunks only while `spectators_generate_chunks` is on.
+fn loads_new_chunks(ctx: &ServerContext, game_mode: i32) -> bool {
+    game_mode != 3 || ctx.game_rule_bool("spectators_generate_chunks")
+}
+
 /// Chunks the client has, kept to the rounded area of `radius` around its
 /// chunk (see [`in_view`]). The world counts this client as a viewer of
 /// each of them.
@@ -2463,7 +2647,13 @@ impl ChunkView {
         self.loaded.contains(&(p.x >> 4, p.z >> 4))
     }
 
-    async fn move_to(&mut self, writer: &mut PacketWriter, cx: i32, cz: i32) -> Result<()> {
+    async fn move_to(
+        &mut self,
+        writer: &mut PacketWriter,
+        cx: i32,
+        cz: i32,
+        generate: bool,
+    ) -> Result<()> {
         if self.center == Some((cx, cz)) {
             return Ok(());
         }
@@ -2486,6 +2676,9 @@ impl ChunkView {
         // Nearest first.
         let mut missing = view_chunks(r, cx, cz);
         missing.retain(|c| !self.loaded.contains(c));
+        if !generate {
+            missing.retain(|&(x, z)| self.ctx.world.present(x, z));
+        }
 
         writer.queue(&play::SetChunkCacheCenter { x: cx, z: cz })?;
         // All of them are worked on at once, nearest first; each batch sent
@@ -2699,6 +2892,42 @@ impl PacketWriter {
         self.queue(packet)?;
         self.flush().await
     }
+}
+
+/// Dots for everyone else in this dimension. `force` resends a colour or
+/// style that did not move.
+fn send_bars(
+    writer: &mut PacketWriter,
+    ctx: &ServerContext,
+    viewer: u128,
+    bars: &mut HashMap<u128, [i32; 3]>,
+    force: bool,
+) -> Result<()> {
+    let here: Vec<(u128, Pose)> = {
+        let players = ctx.players.lock().expect("players lock");
+        players
+            .values()
+            .filter(|p| p.profile.uuid != viewer && p.dimension == ctx.world.dimension)
+            .filter_map(|p| p.pose.map(|pose| (p.profile.uuid, pose)))
+            .collect()
+    };
+    let live: HashSet<u128> = here.iter().map(|(id, _)| *id).collect();
+    let stale: Vec<u128> = bars
+        .keys()
+        .copied()
+        .filter(|id| !live.contains(id))
+        .collect();
+    for id in stale {
+        if let Some(packet) = crate::locator::forget(id, bars) {
+            writer.queue(&packet)?;
+        }
+    }
+    for (id, pose) in here {
+        if let Some(packet) = crate::locator::offer(ctx, viewer, id, pose, bars, force) {
+            writer.queue(&packet)?;
+        }
+    }
+    Ok(())
 }
 
 /// Where new players appear: the middle of the world spawn's block, or,

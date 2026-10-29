@@ -77,6 +77,8 @@ const SUPPORT_TAGS: &[&str] = &[
     "minecraft:supports_sugar_cane",
     "minecraft:supports_sugar_cane_adjacently",
     "minecraft:supports_bamboo",
+    "minecraft:supports_chorus_plant",
+    "minecraft:supports_chorus_flower",
     "minecraft:supports_lily_pad",
     "minecraft:supports_nether_wart",
     "minecraft:supports_wither_rose",

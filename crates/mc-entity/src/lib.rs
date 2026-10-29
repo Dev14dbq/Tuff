@@ -151,7 +151,10 @@ impl Entity {
             Kind::Crystal(_) => (2.0, 2.0),
             Kind::Projectile(p) => match &p.shot {
                 extra::Shot::Arrow(_) => (0.5, 0.5),
-                extra::Shot::Cloud { radius, .. } => (f64::from(*radius) * 2.0, 0.5),
+                extra::Shot::ShulkerBullet { .. } => (0.3125, 0.3125),
+                extra::Shot::Cloud { radius, .. } | extra::Shot::Breath { radius, .. } => {
+                    (f64::from(*radius) * 2.0, 0.5)
+                }
                 _ => (0.25, 0.25),
             },
             Kind::Hung(h) => match &h.decor {

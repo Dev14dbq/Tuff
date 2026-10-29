@@ -3,7 +3,6 @@
 //! skipping by palette every section with nothing that random-ticks; only
 //! the picked blocks that care go through block logic.
 
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::context::{Event, ServerContext};
@@ -13,29 +12,11 @@ use crate::tick::lock;
 /// Vanilla's level-wide random tick generator state.
 static LCG: AtomicI32 = AtomicI32::new(0x2A5F_1C3B);
 
-/// The chunks that tick: within simulation distance of a player
-/// (`simulation-distance`, never more than what players are sent), and
-/// force-loaded ones.
+/// The chunks that receive random ticks: entity-ticking chunks, forceload,
+/// and one chunk further when simulation distance exceeds the view.
 pub(crate) fn ticking_chunks(ctx: &ServerContext) -> Vec<(i32, i32)> {
-    let radius = i32::from(ctx.config.simulation_distance.min(ctx.config.view_distance));
-    let centres: HashSet<(i32, i32)> = lock(&ctx.players)
-        .values()
-        .filter(|p| p.dimension == ctx.world.dimension)
-        .filter_map(|p| p.pose)
-        .map(|pose| ((pose.x.floor() as i32) >> 4, (pose.z.floor() as i32) >> 4))
-        .collect();
-    let mut chunks: HashSet<(i32, i32)> = HashSet::new();
-    for (cx, cz) in centres {
-        for dx in -radius..=radius {
-            for dz in -radius..=radius {
-                chunks.insert((cx + dx, cz + dz));
-            }
-        }
-    }
-    chunks.extend(lock(&ctx.forced).list());
-    let mut chunks: Vec<_> = chunks.into_iter().collect();
-    chunks.sort_unstable();
-    chunks
+    crate::tickets::rebuild(ctx);
+    crate::tickets::random_chunks(ctx)
 }
 
 /// One game tick of random ticks.

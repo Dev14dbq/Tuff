@@ -362,7 +362,7 @@ impl Windows {
             entity_id,
             pose,
         } = who;
-        let Some(recipe) = ctx.recipes.book_recipe(recipe).cloned() else {
+        let Some(recipe) = ctx.recipes.get().book_recipe(recipe).cloned() else {
             return Ok(());
         };
         if !crate::commands::knows_recipe(ctx, uuid, &recipe.name) {
@@ -565,6 +565,8 @@ impl Windows {
                     result = Some(made);
                 }
             });
+            // Swapping the elytra off in flight drops the wings at once.
+            crate::worn::settle_gliding(ctx, uuid);
             if let Some(made) = quick {
                 thrown = made.settle(ctx, uuid, 2);
             }

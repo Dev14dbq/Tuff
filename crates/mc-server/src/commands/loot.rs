@@ -35,10 +35,17 @@ impl LootEnv for Env<'_> {
     fn smelt(&self, item: i32) -> Option<i32> {
         self.0
             .recipes
+            .get()
             .cooking
             .iter()
             .find(|c| c.kind == "minecraft:smelting" && c.input.contains(&item))
             .map(|c| c.result.item)
+    }
+    fn enchantments(&self) -> Option<std::sync::Arc<crate::enchants::Enchantments>> {
+        Some(self.0.enchantments.get())
+    }
+    fn enchantable(&self, item: i32) -> i32 {
+        self.0.items.enchantable(item)
     }
 }
 
@@ -133,6 +140,7 @@ fn roll(r: &mut Run, source: &[&str]) -> Result<Rolled> {
                 Some(Arg::Id(name) | Arg::Raw(name) | Arg::Str(name)) => r
                     .ctx
                     .loot
+                    .get()
                     .table(&mc_command::args::full_id(name))
                     .cloned()
                     .ok_or_else(|| err("command.failed", Vec::new()))?,
@@ -143,7 +151,7 @@ fn roll(r: &mut Run, source: &[&str]) -> Result<Rolled> {
                 cx.tool = tool_arg(r, source);
             }
             Ok(Rolled {
-                drops: r.ctx.loot.roll(&env, &table, &cx),
+                drops: r.ctx.loot.get().roll(&env, &table, &cx),
                 table: None,
             })
         }
@@ -159,7 +167,7 @@ fn roll(r: &mut Run, source: &[&str]) -> Result<Rolled> {
                 .unwrap_or("minecraft:air")
                 .to_owned();
             let id = format!("minecraft:blocks/{}", name.trim_start_matches("minecraft:"));
-            let Some(table) = r.ctx.loot.table(&id).cloned() else {
+            let Some(table) = r.ctx.loot.get().table(&id).cloned() else {
                 let key = format!("block.{}", name.replacen(':', ".", 1));
                 return Err(err(
                     "commands.drop.no_loot_table.block",
@@ -178,7 +186,7 @@ fn roll(r: &mut Run, source: &[&str]) -> Result<Rolled> {
             cx.block = Some((name, props));
             cx.tool = tool_arg(r, source);
             Ok(Rolled {
-                drops: r.ctx.loot.roll(&env, &table, &cx),
+                drops: r.ctx.loot.get().roll(&env, &table, &cx),
                 table: Some(id),
             })
         }
@@ -194,8 +202,8 @@ fn roll(r: &mut Run, source: &[&str]) -> Result<Rolled> {
                 kind: t.kind().to_owned(),
                 ..Ent::default()
             });
-            let drops = match r.ctx.loot.table(&id).cloned() {
-                Some(table) => r.ctx.loot.roll(&env, &table, &cx),
+            let drops = match r.ctx.loot.get().table(&id).cloned() {
+                Some(table) => r.ctx.loot.get().roll(&env, &table, &cx),
                 None => Vec::new(),
             };
             Ok(Rolled {

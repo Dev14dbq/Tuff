@@ -134,6 +134,22 @@ fn land(
             Strike::Block { .. } => {}
         },
         Shot::Pearl => {
+            // A pearl that strikes an end gateway spends itself on the
+            // gateway: the thrower goes to the outer islands (or back),
+            // and the landing does not hurt them.
+            if let Strike::Block { cell, .. } = strike
+                && hits::block_at(ctx, *cell)
+                    .is_some_and(|s| ctx.data.blocks.block_name(s) == Some("minecraft:end_gateway"))
+            {
+                let Some(o) = owner else { return };
+                let Some(me) = t.players.iter().find(|w| w.uuid == o) else {
+                    return;
+                };
+                let mut level = crate::level::WorldLevel::new(ctx);
+                let now = crate::tick::lock(&ctx.time).age;
+                crate::bosses::fight::through_gateway(ctx, &mut level, o, me.pose, *cell, now);
+                return;
+            }
             fx::particles(ctx, "minecraft:portal", e.pos, 0.3, 0.1, 32);
             let Some(o) = owner else { return };
             let Some(me) = t.players.iter().find(|w| w.uuid == o) else {

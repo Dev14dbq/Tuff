@@ -232,6 +232,7 @@ pub fn find(ctx: &ServerContext, r: &Respawn) -> Option<(String, Pose)> {
     };
     let there = there.as_deref().unwrap_or(ctx);
     let at = Position::new(r.pos.0, r.pos.1, r.pos.2);
+    crate::tickets::spawn_search(there, at.x, at.z);
     let blocks = &there.data.blocks;
     let state = there.world.block(at, blocks)?;
     let pose = if blocks.block_name(state)? == "minecraft:respawn_anchor" {

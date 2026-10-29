@@ -56,36 +56,29 @@ pub enum Feature {
 #[derive(Debug)]
 pub struct Loader<'a> {
     pub facts: &'a Facts,
-    root: PathBuf,
+    /// Data folders, vanilla first. A later folder replaces the same file.
+    roots: Vec<PathBuf>,
     named: Named,
     configured: RefCell<HashMap<String, Arc<Feature>>>,
     placed: RefCell<HashMap<String, Arc<Placed>>>,
     pub unsupported: RefCell<HashMap<String, usize>>,
 }
 
-fn short(id: &str) -> &str {
-    id.strip_prefix("minecraft:").unwrap_or(id)
-}
-
 impl<'a> Loader<'a> {
-    /// `root` is the data pack's `data/minecraft/worldgen` folder.
-    pub fn new(facts: &'a Facts, root: PathBuf) -> Self {
+    /// `roots` are `data` folders, vanilla first, then datapack layers.
+    pub fn new(facts: &'a Facts, roots: Vec<PathBuf>) -> Self {
         let mut named = Named::new();
-        if let Ok(dir) = std::fs::read_dir(root.join("block_state_provider")) {
-            for e in dir.flatten() {
-                let path = e.path();
-                if let (Some(stem), Ok(text)) = (
-                    path.file_stem().and_then(|s| s.to_str()),
-                    std::fs::read_to_string(&path),
-                ) && let Ok(v) = serde_json::from_str(&text)
-                {
-                    named.insert(stem.to_owned(), v);
-                }
-            }
-        }
+        crate::pack::for_each(&roots, "block_state_provider", |ns, rel, value| {
+            let key = if ns == "minecraft" {
+                rel.to_owned()
+            } else {
+                format!("{ns}:{rel}")
+            };
+            named.insert(key, value);
+        });
         Self {
             facts,
-            root,
+            roots,
             named,
             configured: RefCell::new(HashMap::new()),
             placed: RefCell::new(HashMap::new()),
@@ -94,8 +87,7 @@ impl<'a> Loader<'a> {
     }
 
     fn read(&self, kind: &str, id: &str) -> Option<Value> {
-        let path = self.root.join(kind).join(format!("{}.json", short(id)));
-        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+        crate::pack::read_id(&self.roots, kind, id)
     }
 
     /// Processors: a `processor_list` id or `{"processors": [...]}`.
@@ -128,7 +120,7 @@ impl<'a> Loader<'a> {
     /// A placed feature: an id in `placed_feature`, or `{feature, placement}`.
     pub fn placed(&self, v: &Value) -> Arc<Placed> {
         if let Value::String(id) = v {
-            let key = format!("minecraft:{}", short(id));
+            let key = crate::pack::full_id(id);
             if let Some(p) = self.placed.borrow().get(&key) {
                 return p.clone();
             }
@@ -177,7 +169,7 @@ impl<'a> Loader<'a> {
     /// A configured feature: an id in `feature`, or an inline definition.
     pub fn configured(&self, v: &Value) -> Arc<Feature> {
         if let Value::String(id) = v {
-            let key = format!("minecraft:{}", short(id));
+            let key = crate::pack::full_id(id);
             if let Some(f) = self.configured.borrow().get(&key) {
                 return f.clone();
             }

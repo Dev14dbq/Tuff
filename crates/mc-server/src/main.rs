@@ -14,7 +14,7 @@ use mc_server::{Config, Server, find_data_dir};
 use tracing::info;
 
 const USAGE: &str = "\
-Usage: mc-server [options]
+Usage: tuff [options]
 
 Run it in the server's folder (or point --universe at it). Settings come
 from server.properties there, created with vanilla's defaults on the first
@@ -24,8 +24,10 @@ Vanilla options:
   --universe <dir>       the server's folder (default: the current folder)
   --world <name>         world folder name (overrides level-name)
   --port <port>          overrides server-port
+  --bind <address>       overrides server-ip for this run
   --initSettings         write server.properties and stop
   --nogui                accepted (there is no window)
+  --forceUpgrade         rewrite stored chunks before the server starts
 
 Other options:
   --data <dir>           extracted game data (default: cache/mcdata/<version> found upwards)
@@ -34,7 +36,7 @@ Other options:
   --offline              online-mode=false for this run
   --no-console           do not read commands from standard input
 
-Logging: RUST_LOG=debug mc-server
+Logging: RUST_LOG=debug tuff
 ";
 
 fn game_mode(name: &str) -> i32 {
@@ -99,8 +101,10 @@ async fn run() -> Result<()> {
     let mut universe: Option<PathBuf> = None;
     let mut world_name: Option<String> = None;
     let mut port: Option<u16> = None;
+    let mut bind: Option<IpAddr> = None;
     let mut seed_arg: Option<String> = None;
     let mut init_only = false;
+    let mut force_upgrade = false;
     let mut offline = false;
     let mut console = true;
     let mut ops = Vec::new();
@@ -112,12 +116,13 @@ async fn run() -> Result<()> {
                 print!("{USAGE}");
                 return Ok(());
             }
-            "--nogui" | "nogui" | "--bonusChest" | "--forceUpgrade" | "--eraseCache"
-            | "--safeMode" => {}
+            "--nogui" | "nogui" | "--bonusChest" | "--eraseCache" | "--safeMode" => {}
+            "--forceUpgrade" => force_upgrade = true,
             "--initSettings" => init_only = true,
             "--universe" => universe = Some(value()?.into()),
             "--world" => world_name = Some(value()?),
             "--port" => port = Some(value()?.parse().context("--port")?),
+            "--bind" => bind = Some(value()?.parse().context("--bind")?),
             "--data" => data = Some(value()?.into()),
             "--seed" => seed_arg = Some(value()?),
             "--op" => ops.push(value()?),
@@ -132,10 +137,7 @@ async fn run() -> Result<()> {
     };
     std::fs::create_dir_all(&server_dir)?;
     mc_server::logs::init(Some(&server_dir));
-    info!(
-        "Starting minecraft server version {}",
-        mc_protocol::VERSION_NAME
-    );
+    info!("Starting tuff for Minecraft {}", mc_protocol::VERSION_NAME);
     info!("Loading properties");
     let mut props = Properties::load(&server_dir.join("server.properties"))?;
     if init_only {
@@ -152,7 +154,9 @@ async fn run() -> Result<()> {
     let mut config = Config::new(data_dir(data, &server_dir)?);
     config.server_dir = Some(server_dir.clone());
     let ip = props.get("server-ip").trim().to_owned();
-    config.bind = if ip.is_empty() {
+    config.bind = if let Some(addr) = bind {
+        addr
+    } else if ip.is_empty() {
         IpAddr::V4(Ipv4Addr::UNSPECIFIED)
     } else {
         ip.parse().with_context(|| format!("server-ip {ip}"))?
@@ -171,6 +175,13 @@ async fn run() -> Result<()> {
         None => Some(256),
     };
     config.online_mode = props.bool("online-mode") && !offline;
+    config.enforce_secure_profile = props.bool("enforce-secure-profile");
+    config.enable_code_of_conduct = props.bool("enable-code-of-conduct");
+    if !props.get("text-filtering-config").trim().is_empty() {
+        tracing::warn!(
+            "text-filtering-config is set; chat is delivered as written, with no external filter"
+        );
+    }
     config.white_list = props.bool("white-list");
     config.op_permission_level = props.int("op-permission-level").unwrap_or(4).clamp(0, 4) as i32;
     config.new_world_game_mode = game_mode(props.get("gamemode"));
@@ -200,6 +211,28 @@ async fn run() -> Result<()> {
         .int("max-tick-time")
         .filter(|&ms| ms > 0)
         .map(|ms| std::time::Duration::from_millis(ms as u64));
+    config.backup_minutes = props.int("backup-interval").unwrap_or(0).max(0) as u32;
+    config.backup_keep = props.int("backup-keep").unwrap_or(5).max(1) as usize;
+    config.set_proxy(
+        props.get("proxy"),
+        props.get("velocity-secret"),
+        props.get("bungee-tokens"),
+    );
+    let management_host = props.get("management-server-host").trim();
+    config.management = mc_server::management::ManagementConfig {
+        enabled: props.bool("management-server-enabled"),
+        host: if management_host.is_empty() {
+            "localhost".to_owned()
+        } else {
+            management_host.to_owned()
+        },
+        port: props
+            .int("management-server-port")
+            .unwrap_or(0)
+            .clamp(0, 65535) as u16,
+        secret: props.get("management-server-secret").to_owned(),
+        tls: props.bool("management-server-tls-enabled"),
+    };
     let level_name = props.get("level-name").to_owned();
     let flat = props.get("level-type").contains("flat");
     config.level_dir = Some(server_dir.join(&level_name));
@@ -212,6 +245,17 @@ async fn run() -> Result<()> {
         ["SURVIVAL", "CREATIVE", "ADVENTURE", "SPECTATOR"][config.new_world_game_mode as usize]
     );
     info!("Preparing level \"{level_name}\"");
+    if force_upgrade {
+        let world = server_dir.join(&level_name);
+        if world.is_dir() {
+            info!("Forcing world upgrade");
+            let report = mc_server::upgrade_world(&world)?;
+            info!(
+                "Upgraded {} chunks in {} region files, {} left as stored",
+                report.chunks_rewritten, report.regions, report.chunks_left
+            );
+        }
+    }
 
     let server = Server::bind(config).await?;
     // The Nether and the End load their generators now, not when the first

@@ -22,7 +22,7 @@ use anyhow::{Context as _, Result, bail};
 
 const GAME_VERSIONS: [&str; 5] = ["26.3", "26.2", "26.1.2", "26.1.1", "26.1"];
 const LOADERS: [&str; 3] = ["fabric", "neoforge", "quilt"];
-const USER_AGENT: &str = "minecraft-rewrite xtask mixins";
+const USER_AGENT: &str = "tuff xtask mixins";
 
 pub fn run(args: &[String]) -> Result<()> {
     let mut top = 500usize;

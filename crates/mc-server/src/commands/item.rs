@@ -252,6 +252,7 @@ pub(super) fn modified(
     let mut drops = vec![to_drop(held)];
     let cx = LootCtx::default();
     ctx.loot
+        .get()
         .modify(&super::loot::Env(ctx), &cx, modifier, &mut drops);
     drops.iter().find_map(from_drop)
 }

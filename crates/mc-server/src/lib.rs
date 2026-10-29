@@ -1,12 +1,13 @@
-//! Minecraft Java Edition 26.3 compatible server.
+//! Dedicated server for Minecraft Java Edition 26.3.
 //!
-//! Current scope (ROADMAP Ф1): server list status, online- and offline-mode
-//! login, configuration with the vanilla data pack as a known pack, the player
-//! list, and a superflat world players can walk and chat in. One tokio task per connection;
-//! the tick thread from ARCHITECTURE.md §4 arrives with world simulation.
+//! The crate is `mc-server`. The program it builds is `tuff`.
+
+/// Name the client sees, new worlds record, and crash reports print.
+pub const BRAND: &str = "tuff";
 
 mod archaeology;
 mod auth;
+mod backup;
 mod beacons;
 mod blocks;
 mod blockuse;
@@ -17,6 +18,7 @@ mod bosses;
 mod brewing;
 mod campfires;
 mod catalysts;
+mod chase;
 mod collision;
 mod combat;
 mod command_blocks;
@@ -58,12 +60,15 @@ mod items;
 mod jukeboxes;
 mod level;
 mod lists;
+mod locator;
 pub mod logs;
 mod loot;
+pub mod management;
 mod maps;
 mod menus;
 mod mob_effects;
 mod mobs;
+mod notify;
 mod packs;
 mod persist;
 mod pipeline;
@@ -72,8 +77,11 @@ mod poi;
 mod portals;
 mod pots;
 mod precipitation;
+mod pregen;
+mod profile;
 mod projectiles;
 pub mod properties;
+mod proxy;
 pub mod query;
 mod raids;
 mod random_ticks;
@@ -92,8 +100,10 @@ mod test_blocks;
 #[cfg(test)]
 mod testkit;
 mod tick;
+mod tickets;
 mod trading;
 mod trials;
+mod upgrade;
 mod useblocks;
 mod util;
 mod vehicles;
@@ -103,6 +113,8 @@ mod weather;
 mod world;
 mod worn;
 mod xp;
+
+pub use upgrade::{Report, upgrade_world};
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -132,6 +144,11 @@ pub struct Config {
     pub compression_threshold: Option<usize>,
     /// Verify accounts with the session server and encrypt connections.
     pub online_mode: bool,
+    /// Refuse unsigned chat (`enforce-secure-profile`). Off in [`Config::new`]
+    /// so tests keep today's chat; `server.properties` still defaults to true.
+    pub enforce_secure_profile: bool,
+    /// Show `codeofconduct.txt` during configuration (`enable-code-of-conduct`).
+    pub enable_code_of_conduct: bool,
     /// Base URL of the session server (Mojang's by default).
     pub session_server: String,
     /// A world folder saved by vanilla 26.3; `None` for a superflat test world.
@@ -182,6 +199,15 @@ pub struct Config {
     /// A tick taking longer than this stops the server with a crash report
     /// (`max-tick-time`; `None` for -1).
     pub max_tick_time: Option<std::time::Duration>,
+    /// How often a world copy is taken, in minutes. 0 leaves it to `/backup`.
+    pub backup_minutes: u32,
+    /// How many world copies to keep.
+    pub backup_keep: usize,
+    /// Velocity modern forwarding, or BungeeCord with an optional
+    /// BungeeGuard token. Off leaves login as it is.
+    pub proxy: proxy::Mode,
+    /// JSON-RPC management listener. Off, or an empty secret, binds nothing.
+    pub management: management::ManagementConfig,
 }
 
 impl Config {
@@ -191,12 +217,14 @@ impl Config {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 25565,
             data_dir,
-            motd: "minecraft-rewrite".to_owned(),
+            motd: BRAND.to_owned(),
             max_players: 20,
             view_distance: 10,
             simulation_distance: 10,
             compression_threshold: Some(256),
             online_mode: true,
+            enforce_secure_profile: false,
+            enable_code_of_conduct: false,
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
             world: None,
             level_dir: None,
@@ -220,7 +248,25 @@ impl Config {
             allow_flight: false,
             rate_limit: 0,
             max_tick_time: None,
+            backup_minutes: 0,
+            backup_keep: 5,
+            proxy: proxy::Mode::Off,
+            management: management::ManagementConfig {
+                enabled: false,
+                host: "localhost".to_owned(),
+                port: 0,
+                secret: String::new(),
+                tls: true,
+            },
         }
+    }
+
+    /// `proxy` is `none`, `velocity` or `bungee`. `tokens` is a comma
+    /// separated BungeeGuard list. An empty Velocity secret is kept, and
+    /// login then refuses the connection.
+    pub fn set_proxy(&mut self, mode: &str, secret: &str, tokens: &str) {
+        self.proxy = proxy::Mode::from_settings(mode, secret, tokens);
+        self.proxy.log();
     }
 }
 
@@ -365,6 +411,31 @@ impl Server {
                 }
             });
         }
+        {
+            let names = self.ctx.clone();
+            let count = self.ctx.clone();
+            management::start(
+                self.ctx.config.management.clone(),
+                management::ManagementHooks::new(
+                    move || {
+                        names
+                            .players
+                            .lock()
+                            .expect("players lock")
+                            .values()
+                            .map(|player| player.profile.name.clone())
+                            .collect()
+                    },
+                    move || count.players.lock().expect("players lock").len(),
+                )
+                .with_actions(management::LiveActions::new(self.ctx.clone()))
+                .with_notes(self.ctx.management_bus.clone()),
+            )
+            .await;
+            self.ctx
+                .management_bus
+                .publish(&crate::notify::Note::ServerStarted);
+        }
         loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
@@ -442,6 +513,8 @@ fn save(ctx: &ServerContext) {
     if !ctx.world.is_saved() {
         return;
     }
+    ctx.management_bus
+        .publish(&crate::notify::Note::ServerSaving);
     tracing::debug!("Saving players");
     let started = std::time::Instant::now();
     let time = ctx.time.lock().expect("time lock").clone();
@@ -466,6 +539,9 @@ fn save(ctx: &ServerContext) {
         save_player(ctx, uuid);
     }
     tracing::debug!("Saving worlds");
+    for d in ctx.open_dimensions() {
+        crate::tickets::save(&d);
+    }
     ctx.world.set_ticks_to_save(tick::ticks_by_chunk(ctx));
     persist::save(ctx);
     let mut saved = ctx.world.save(&ctx.data.blocks);
@@ -489,6 +565,8 @@ fn save(ctx: &ServerContext) {
             }
         );
     }
+    ctx.management_bus
+        .publish(&crate::notify::Note::ServerSaved);
 }
 
 /// An online player's state as it would be saved.

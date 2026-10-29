@@ -3188,8 +3188,8 @@ async fn the_stonecutter_offers_recipes_and_uses_up_its_input() {
     let (_, shown) = mason.recv_until("minecraft:container_set_slot").await;
     let (_, slot, made, count) = slot_packet(&shown);
     assert_eq!(slot, 1, "the result slot");
-    let first = ctx
-        .recipes
+    let recipes = ctx.recipes.get();
+    let first = recipes
         .stonecutting
         .iter()
         .find(|c| c.input.contains(&stone))
@@ -3798,7 +3798,7 @@ async fn clicking_a_recipe_in_the_book_fills_the_grid_or_shows_a_ghost() {
     // A recipe given arrives as an addition to the book.
     let (_, seen) = chat_command(&mut cook, "recipe give Cook minecraft:stick").await;
     packet(&mut cook, &seen, "minecraft:recipe_book_add").await;
-    let stick = ctx.recipes.book_id("minecraft:stick").unwrap();
+    let stick = ctx.recipes.get().book_id("minecraft:stick").unwrap();
     let place = |all: bool| {
         let mut body = Vec::new();
         body.put_varint(0);
@@ -4052,6 +4052,44 @@ async fn a_thrown_block_is_gone_from_the_hand_for_the_server_too() {
         "a block was placed from an empty hand"
     );
     let _ = stop.send(());
+}
+
+/// One hundred offline players reach play together. `SOAK_SECS` (default 20)
+/// is how long they stay connected. A day-long run is
+/// `SOAK_SECS=86400 cargo test -p mc-server --test join hundred_bots_stay_connected -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "a hundred players; set SOAK_SECS=86400 for the day-long run"]
+async fn hundred_bots_stay_connected() {
+    let Some(data_dir) = data_dir() else {
+        eprintln!("skipped: no extracted data (cargo xtask extract-data)");
+        return;
+    };
+    let mut config = Config::new(data_dir);
+    config.port = 0;
+    config.view_distance = 2;
+    config.simulation_distance = 2;
+    config.max_players = 100;
+    config.online_mode = false;
+    let server = Server::bind(config).await.unwrap();
+    let addr = server.local_addr();
+    let ids = server.context().ids.clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let running = tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    let mut bots = Vec::with_capacity(100);
+    for i in 0..100 {
+        let (bot, _) = join_offline(addr, ids.clone(), &format!("Bot{i}")).await;
+        bots.push(bot);
+    }
+    let secs: u64 = std::env::var("SOAK_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
+    tokio::time::sleep(Duration::from_secs(secs)).await;
+    assert_eq!(bots.len(), 100);
+    let _ = stop.send(());
+    let _ = running.await;
 }
 
 #[tokio::test]

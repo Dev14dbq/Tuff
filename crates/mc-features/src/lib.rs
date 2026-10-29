@@ -15,6 +15,7 @@ pub mod feature;
 mod misc;
 mod multiface;
 mod nether;
+mod pack;
 pub mod placement;
 pub mod predicate;
 pub mod rand;

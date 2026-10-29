@@ -216,6 +216,81 @@ fn fireball_hit(t: &mut Tick, e: &Entity) {
         .push(breath(t.ctx, owner, at, 3.0, (7.0 - 3.0) / 600.0, 600, 1));
 }
 
+/// A glass bottle on a breath cloud becomes dragon's breath and the cloud
+/// shrinks by half a block. Lingering-potion clouds are a different shot
+/// and are left alone.
+pub fn bottle(
+    ctx: &crate::context::ServerContext,
+    actor: &crate::interact::Actor,
+    e: &mut Entity,
+    hand: i32,
+    outcome: &mut crate::interact::Outcome,
+) -> bool {
+    let Kind::Projectile(p) = &e.kind else {
+        return false;
+    };
+    let Shot::Breath { radius, .. } = &p.shot else {
+        return false;
+    };
+    if *radius < 0.5 || actor.game_mode == 3 {
+        return false;
+    }
+    let held = {
+        let inventories = crate::tick::lock(&ctx.inventories);
+        let slot = inventories
+            .get(&actor.uuid)
+            .map(|h| h.hand_slot(hand))
+            .unwrap_or(0);
+        inventories
+            .get(&actor.uuid)
+            .and_then(|h| h.slots.get(slot).and_then(|s| s.as_ref()))
+            .map(|s| s.item)
+    };
+    let Some(held) = held else {
+        return false;
+    };
+    if ctx.items.name(held) != Some("minecraft:glass_bottle") {
+        return false;
+    }
+    let Kind::Projectile(p) = &mut e.kind else {
+        return false;
+    };
+    let Shot::Breath { radius, .. } = &mut p.shot else {
+        return false;
+    };
+    *radius -= 0.5;
+    let radius = *radius;
+    let pos = e.pos;
+    let id = e.id;
+    if radius < 0.5 {
+        e.removed = true;
+    }
+    crate::fx::sound(
+        ctx,
+        "item.bottle.fill_dragonbreath",
+        crate::fx::category::PLAYERS,
+        pos,
+        1.0,
+        1.0,
+    );
+    if e.removed {
+        let _ = ctx
+            .events
+            .send(crate::context::Event::EntitiesRemoved(vec![id]));
+    } else {
+        crate::fx::emit(
+            ctx,
+            crate::fx::Fx::Data(mc_protocol::packets::play::SetEntityData {
+                entity_id: id,
+                entries: vec![(8, mc_protocol::packets::play::MetadataValue::Float(radius))],
+            }),
+        );
+    }
+    let item = ctx.items.id("minecraft:dragon_breath");
+    crate::interact::replace_held(ctx, outcome, *actor, hand, item);
+    true
+}
+
 /// A cloud: it grows, harms those in it once a second each, and goes.
 fn cloud(t: &mut Tick, e: &mut Entity) {
     let age = e.age;

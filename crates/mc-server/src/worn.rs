@@ -220,6 +220,24 @@ pub fn start_gliding(ctx: &ServerContext, uuid: u128) {
     }
 }
 
+/// The wings come off the moment the chest slot is no longer a glider, so
+/// a swap in flight shows the armour at once and the glide's fall is gone.
+pub fn settle_gliding(ctx: &ServerContext, uuid: u128) {
+    let gliding = lock(&ctx.vitals).get(&uuid).is_some_and(|v| v.gliding);
+    if gliding && !has_glider(ctx, uuid) {
+        stop_gliding(ctx, uuid);
+    }
+}
+
+fn stop_gliding(ctx: &ServerContext, uuid: u128) {
+    crate::effects::change(ctx, uuid, |v| {
+        v.gliding = false;
+        v.fall_distance = 0.0;
+        v.glide_speed = 0.0;
+        v.struck_wall = false;
+    });
+}
+
 /// One tick of gliding: it ends on the ground, in water or without a
 /// glider; the elytra wears by 1 a second.
 fn glide(
@@ -241,12 +259,16 @@ fn glide(
         || !has_glider(ctx, uuid)
     {
         worn.glided = 0;
-        crate::effects::change(ctx, uuid, |v| v.gliding = false);
+        stop_gliding(ctx, uuid);
         return;
     }
     worn.glided += 1;
     if worn.glided % 20 == 0 && mode != 1 {
         crate::held::wear(ctx, uuid, 6, 1);
+        if !has_glider(ctx, uuid) {
+            worn.glided = 0;
+            stop_gliding(ctx, uuid);
+        }
     }
 }
 
@@ -385,6 +407,7 @@ fn gear_tick(
         let w = lock(&ctx.weather);
         (w.raining, w.thundering)
     };
+    let enchants = ctx.enchantments.get();
     let base = Situation {
         this: Some("minecraft:player"),
         mover: Some(&mover),
@@ -412,7 +435,7 @@ fn gear_tick(
             if !ee::acts_from(ctx, &name, slot) {
                 continue;
             }
-            let Some(e) = ctx.enchantments.get(&name) else {
+            let Some(e) = enchants.get(&name) else {
                 continue;
             };
             let entries = ee::effects_of(&e.effects["minecraft:location_changed"]);
@@ -461,7 +484,7 @@ fn gear_tick(
             if !ee::acts_from(ctx, &name, slot) {
                 continue;
             }
-            let Some(e) = ctx.enchantments.get(&name) else {
+            let Some(e) = enchants.get(&name) else {
                 continue;
             };
             for entry in ee::effects_of(&e.effects["minecraft:tick"]) {

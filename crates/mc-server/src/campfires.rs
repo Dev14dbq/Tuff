@@ -99,11 +99,13 @@ fn store(ctx: &ServerContext, p: Position, food: &Food, show: bool) {
 }
 
 /// The campfire recipe for `item`: its result and cooking time.
-fn recipe(ctx: &ServerContext, item: i32) -> Option<&crate::crafting::Cooking> {
+fn recipe(ctx: &ServerContext, item: i32) -> Option<crate::crafting::Cooking> {
     ctx.recipes
+        .get()
         .cooking
         .iter()
         .find(|r| r.kind == "minecraft:campfire_cooking" && r.input.contains(&item))
+        .cloned()
 }
 
 /// Puts one `stack` on the campfire at `p`; `false` when it is full or the
@@ -142,6 +144,9 @@ pub fn tick(ctx: &ServerContext) {
     let active: Vec<(i32, i32, i32)> = lock(&ctx.campfires).iter().copied().collect();
     for key in active {
         let p = Position::new(key.0, key.1, key.2);
+        if !crate::tickets::blocks_run(ctx, key.0 >> 4, key.2 >> 4) {
+            continue;
+        }
         if !tick_one(ctx, p) {
             lock(&ctx.campfires).remove(&key);
         }

@@ -344,13 +344,17 @@ fn begin(ctx: &ServerContext, at: Position, face: u8) {
 }
 
 fn roll(ctx: &ServerContext, at: Position, table: &str) -> Option<ItemStack> {
-    let table = ctx.loot.table(table)?.clone();
+    let table = ctx.loot.get().table(table)?.clone();
     let cx = crate::loot::LootCtx {
         origin: Some(centre(at)),
         ..crate::loot::LootCtx::default()
     };
     let env = crate::commands::loot::Env(ctx);
-    ctx.loot.roll(&env, &table, &cx).first().map(|d| d.stack())
+    ctx.loot
+        .get()
+        .roll(&env, &table, &cx)
+        .first()
+        .map(|d| d.stack())
 }
 
 fn edit(ctx: &ServerContext, at: Position, change: impl FnOnce(&mut Compound)) {

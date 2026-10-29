@@ -388,7 +388,8 @@ fn jukebox(
 }
 
 fn bed(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, p: Position, state: u32) -> bool {
-    let rule = crate::environment::bed_rule(ctx, [p.x, p.y, p.z]);
+    let straw = ctx.data.blocks.block_name(state) == Some("minecraft:straw_bed");
+    let rule = crate::environment::bed_rule(ctx, [p.x, p.y, p.z], straw);
     if rule.explodes {
         // Where its rule says so (the Nether, the End) both halves go and
         // the bed explodes (minecraft.wiki, "Bed").
@@ -507,6 +508,7 @@ fn bed(ctx: &ServerContext, outcome: &mut Outcome, actor: Actor, p: Position, st
                 since: age,
                 bed: head,
                 entity_id: actor.entity_id,
+                straw: rule.destroy_on_leave,
             },
         );
     }
@@ -556,6 +558,59 @@ pub fn wake(ctx: &ServerContext, uuid: u128) {
         uuid,
         packet: crate::mobs::blocks::sleep_data(sleeper.entity_id, None),
     });
+    if sleeper.straw {
+        break_straw(ctx, sleeper.bed);
+    }
+}
+
+/// A straw bed breaks when its sleeper gets up, and drops itself from the head.
+fn break_straw(ctx: &ServerContext, head: Position) {
+    let blocks = &ctx.data.blocks;
+    let Some(state) = ctx.world.block(head, blocks) else {
+        return;
+    };
+    if blocks.block_name(state) != Some("minecraft:straw_bed") {
+        return;
+    }
+    let other = blocks
+        .property(state, "facing")
+        .and_then(mc_tick::Dir::from_name)
+        .map(|facing| {
+            let (dx, _, dz) = facing.offset();
+            let sign = if blocks.property(state, "part") == Some("head") {
+                -1
+            } else {
+                1
+            };
+            Position::new(head.x + sign * dx, head.y, head.z + sign * dz)
+        });
+    let air = ctx.shapes.air();
+    let mut level = WorldLevel::new(ctx);
+    level.set_block(head, air);
+    if let Some(foot) = other
+        && ctx
+            .world
+            .block(foot, blocks)
+            .and_then(|s| blocks.block_name(s))
+            == Some("minecraft:straw_bed")
+    {
+        level.set_block(foot, air);
+    }
+    let changes = level.into_changes();
+    if !changes.is_empty() {
+        let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
+    }
+    let _ = ctx.events.send(Event::BlockBroken {
+        by: 0,
+        position: head,
+        state,
+    });
+    if ctx.game_rule_bool("block_drops") {
+        let props = |k: &str| blocks.property(state, k).map(str::to_owned);
+        for drop in ctx.loot.get().drops("minecraft:straw_bed", &props) {
+            crate::tick::drop_item(ctx, head, drop);
+        }
+    }
 }
 
 fn anchor(
@@ -650,6 +705,8 @@ pub struct Sleeper {
     /// The bed's head.
     pub bed: Position,
     pub entity_id: i32,
+    /// A straw bed: it breaks when they get up.
+    pub straw: bool,
 }
 
 /// Players asleep in beds: when enough of them have slept long enough, the
@@ -866,6 +923,49 @@ mod tests {
             tick(&ctx);
         }
         assert_eq!(clock(&ctx), 18000);
+    }
+
+    #[test]
+    fn a_straw_bed_sets_no_spawn_and_breaks_when_you_get_up() {
+        let Some(ctx) = crate::testkit::flat() else {
+            return;
+        };
+        let (actor, _, _) = sleeper(&ctx);
+        let blocks = &ctx.data.blocks;
+        let mut level = WorldLevel::new(&ctx);
+        for (part, z) in [("foot", 1), ("head", 2)] {
+            let state = blocks
+                .state_id(
+                    "minecraft:straw_bed",
+                    &[("part", part), ("facing", "south")],
+                )
+                .unwrap();
+            level.set_block(Position::new(0, -60, z), state);
+        }
+        let foot = Position::new(0, -60, 1);
+        let state = ctx.world.block(foot, blocks).unwrap();
+        set_clock(&ctx, 1000);
+        assert!(bed(&ctx, &mut Outcome::default(), actor, foot, state));
+        assert!(lock(&ctx.players)[&9].extra.respawn.is_none());
+        assert!(lock(&ctx.sleepers).is_empty());
+        set_clock(&ctx, 18000);
+        assert!(bed(&ctx, &mut Outcome::default(), actor, foot, state));
+        assert!(lock(&ctx.players)[&9].extra.respawn.is_none());
+        assert!(lock(&ctx.sleepers)[&9].straw);
+        wake(&ctx, 9);
+        let name = |z: i32| {
+            ctx.world
+                .block(Position::new(0, -60, z), blocks)
+                .and_then(|s| blocks.block_name(s).map(str::to_owned))
+        };
+        assert_eq!(name(1).as_deref(), Some("minecraft:air"));
+        assert_eq!(name(2).as_deref(), Some("minecraft:air"));
+        let id = ctx.items.id("minecraft:straw_bed").unwrap();
+        let drops = lock(&ctx.entities)
+            .iter()
+            .filter(|e| matches!(e.kind, mc_entity::Kind::Item { item, .. } if item == id))
+            .count();
+        assert_eq!(drops, 1);
     }
 
     #[test]

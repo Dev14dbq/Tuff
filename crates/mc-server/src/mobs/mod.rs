@@ -11,6 +11,7 @@
 //! - [`nbt`]: mobs as `/summon` and `/data` see them.
 
 pub mod air;
+pub mod anger;
 pub mod aqua;
 pub mod bees;
 pub(crate) mod blocks;
@@ -22,6 +23,7 @@ pub mod cube;
 pub mod eggs;
 pub mod endermite;
 pub mod golems;
+pub(crate) mod hitbox;
 pub mod hurt;
 mod illager;
 pub mod infest;
@@ -33,6 +35,7 @@ pub mod ride;
 pub(crate) mod spawn;
 mod spawner;
 mod terrain;
+pub(crate) use terrain::suffocates;
 pub mod village;
 pub mod warden;
 pub mod wolf_armor;
@@ -133,6 +136,8 @@ pub struct MobState {
     /// Villagers killed by a player: who and where, until the tick tells
     /// the villagers that saw (see [`village::witnesses`]).
     murders: Mutex<Vec<(usize, u128, [f64; 3])>>,
+    /// Players who died this tick: dimension, entity id and where.
+    pub(crate) deaths: Mutex<Vec<(usize, i32, [f64; 3])>>,
 }
 
 impl MobState {
@@ -213,6 +218,8 @@ pub fn clicked(
     target: i32,
     hand: i32,
     attack: bool,
+    // Fall distance when the attack packet arrived (`None` reads it now).
+    fall: Option<f64>,
 ) {
     let name = lock(&ctx.players)
         .get(&who.uuid)
@@ -227,7 +234,10 @@ pub fn clicked(
         sneaking: who.sneaking,
     };
     if attack {
-        let blow = crate::combat::swing(ctx, who.uuid, who.pose);
+        let blow = match fall {
+            Some(fall) => crate::combat::swing_at(ctx, who.uuid, who.pose, fall),
+            None => crate::combat::swing(ctx, who.uuid, who.pose),
+        };
         ctx.mobs.hit(ctx.dim, target, by, blow);
     } else {
         ctx.mobs.use_on(ctx.dim, target, by, hand);
@@ -287,6 +297,10 @@ pub struct MobMove {
     pub pitch: f32,
     pub head_yaw: f32,
     pub on_ground: bool,
+    /// Velocity the client should use for this mob's own animation. The
+    /// dragon's wing speed is `pow(2, vel.y)` over its horizontal speed, so
+    /// a missing velocity flaps as if it were hovering still.
+    pub motion: Option<[f64; 3]>,
 }
 
 /// The sky's darkening by time of day (0 by day, 11 at night).
@@ -577,7 +591,7 @@ struct Outcome {
 pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     let pending = lock(&ctx.mobs.pending).remove(&ctx.dim).unwrap_or_default();
     let targets = players(ctx);
-    if targets.is_empty() {
+    if targets.is_empty() && !crate::tickets::has_entity_chunks(ctx) {
         return;
     }
     let mut entities = std::mem::take(&mut *lock(&ctx.entities));
@@ -641,6 +655,9 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             (e.pos[0].floor() as i32) >> 4,
             (e.pos[2].floor() as i32) >> 4,
         );
+        if crate::tickets::limiting(ctx) && !crate::tickets::entities_run(ctx, cx, cz) {
+            continue;
+        }
         if !near || !ctx.world.chunk_loaded(cx, cz) && !m.species.boss() {
             continue;
         }
@@ -726,6 +743,20 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
             continue;
         }
         crate::mob_effects::tick(ctx, e, now);
+        // A wither rose the body overlaps gives Wither for two seconds.
+        // Wither skeletons, the wither and the dragon refuse it.
+        if let Some(kind) = crate::effects::kind_of("wither") {
+            let b = e.aabb();
+            if crate::hits::overlaps_block(ctx, b.min, b.max, "minecraft:wither_rose") {
+                crate::mob_effects::give(
+                    ctx,
+                    e,
+                    kind,
+                    crate::effects::Instance::new(0, 40, true),
+                    None,
+                );
+            }
+        }
         // The dragon dies its own way.
         if let Kind::Mob(m) = &e.kind
             && m.is_dead()
@@ -753,6 +784,13 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         if (e.pos, e.on_ground, m.yaw, m.pitch, m.head_yaw)
             != (before.0, before.1, before.2, before.3, before.4)
         {
+            let motion = (m.species == Species::EnderDragon).then(|| {
+                if m.dragon().is_some_and(|d| d.phase.sitting()) {
+                    [0.0; 3]
+                } else {
+                    e.vel
+                }
+            });
             out.moves.push(MobMove {
                 id: e.id,
                 pos: e.pos,
@@ -760,6 +798,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
                 pitch: m.pitch,
                 head_yaw: m.head_yaw,
                 on_ground: e.on_ground,
+                motion,
             });
         }
         if std::mem::take(&mut m.dirty) || (m.burning > 0) != before.5 {
@@ -826,6 +865,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     }
     entities.append(&mut out.fresh);
     aqua::carry(ctx, &mut entities);
+    anger::finish(ctx, &mut entities);
     let mut stored = lock(&ctx.entities);
     entities.append(&mut stored);
     *stored = entities;

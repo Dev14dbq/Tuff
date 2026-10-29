@@ -173,6 +173,7 @@ fn repairs(ctx: &ServerContext, item: i32, material: i32) -> bool {
         .any(|entry| match entry.strip_prefix('#') {
             Some(tag) => ctx
                 .recipes
+                .get()
                 .item_tags
                 .get(tag)
                 .is_some_and(|items| items.contains(&material)),
@@ -431,14 +432,16 @@ impl Machine {
     }
 
     /// Stonecutter recipes for the input, in the order clients list them.
-    fn cuts<'a>(&self, ctx: &'a ServerContext) -> Vec<&'a crate::crafting::Cut> {
+    fn cuts(&self, ctx: &ServerContext) -> Vec<crate::crafting::Cut> {
         let Some(input) = self.slots.first().and_then(Option::as_ref) else {
             return Vec::new();
         };
         ctx.recipes
+            .get()
             .stonecutting
             .iter()
             .filter(|c| c.input.contains(&input.item))
+            .cloned()
             .collect()
     }
 
@@ -484,13 +487,9 @@ impl Machine {
             return;
         }
         let shelves = shelves(ctx, self.at);
-        self.offers = crate::enchants::table_values(
-            &ctx.enchantments,
-            self.seed,
-            shelves,
-            item.item,
-            enchantable,
-        );
+        let enchants = ctx.enchantments.get();
+        self.offers =
+            crate::enchants::table_values(&enchants, self.seed, shelves, item.item, enchantable);
     }
 
     /// The player picked offer `slot`: levels and lapis are paid and the
@@ -513,8 +512,9 @@ impl Machine {
         }
         let enchantable = ctx.items.enchantable(item.item);
         let mut random = mc_worldgen::random::Legacy::new(0);
+        let enchants = ctx.enchantments.get();
         let list = crate::enchants::table_offer(
-            &ctx.enchantments,
+            &enchants,
             &mut random,
             self.seed,
             slot,
@@ -525,12 +525,12 @@ impl Machine {
         if list.is_empty() {
             return;
         }
-        let book = ctx.enchantments.is_book(item.item);
+        let book = ctx.enchantments.get().is_book(item.item);
         let mut made = item.clone();
-        if book && let Some(enchanted) = ctx.enchantments.enchanted_book() {
+        if book && let Some(enchanted) = ctx.enchantments.get().enchanted_book() {
             made.item = enchanted;
         }
-        let key = ctx.enchantments.key(made.item);
+        let key = ctx.enchantments.get().key(made.item);
         let mut have = crate::enchants::levels_in(&made, key);
         for (e, l) in &list {
             have.retain(|(n, _)| *n != e.id);
@@ -635,7 +635,8 @@ impl Machine {
         else {
             return None;
         };
-        let recipe = ctx.recipes.smithing.iter().find(|r| {
+        let recipes = ctx.recipes.get();
+        let recipe = recipes.smithing.iter().find(|r| {
             r.template.contains(&template.item)
                 && r.base.contains(&base.item)
                 && r.addition.contains(&addition.item)
@@ -678,19 +679,19 @@ impl Machine {
     /// Enchantments of a stack (stored ones for books) as the grindstone
     /// and anvil read them.
     fn crafting_levels(ctx: &ServerContext, stack: &ItemStack) -> Vec<(String, i32)> {
-        crate::enchants::levels_in(stack, ctx.enchantments.key(stack.item))
+        crate::enchants::levels_in(stack, ctx.enchantments.get().key(stack.item))
     }
 
     /// Leaves only curses on a stack (a book with none left is a plain
     /// book) and sets its repair cost by the curses kept.
     fn remove_non_curses(ctx: &ServerContext, mut stack: ItemStack) -> ItemStack {
-        let key = ctx.enchantments.key(stack.item);
+        let key = ctx.enchantments.get().key(stack.item);
         let mut kept = crate::enchants::levels_in(&stack, key);
-        kept.retain(|(n, _)| ctx.enchantments.is_curse(n));
+        kept.retain(|(n, _)| ctx.enchantments.get().is_curse(n));
         crate::enchants::set_levels(&mut stack, key, &kept);
         if kept.is_empty()
-            && ctx.enchantments.is_enchanted_book(stack.item)
-            && let Some(book) = ctx.enchantments.book()
+            && ctx.enchantments.get().is_enchanted_book(stack.item)
+            && let Some(book) = ctx.enchantments.get().book()
         {
             stack.item = book;
             stack.components.reset("stored_enchantments");
@@ -734,11 +735,11 @@ impl Machine {
                     }
                     a.with_count(2)
                 };
-                let key = ctx.enchantments.key(made.item);
+                let key = ctx.enchantments.get().key(made.item);
                 let mut have = crate::enchants::levels_in(&made, key);
                 for (name, level) in Self::crafting_levels(ctx, b) {
                     let current = have.iter().find(|(n, _)| *n == name).map_or(0, |(_, l)| *l);
-                    if !ctx.enchantments.is_curse(&name) || current == 0 {
+                    if !ctx.enchantments.get().is_curse(&name) || current == 0 {
                         have.retain(|(n, _)| *n != name);
                         have.push((name, level.max(current)));
                     }
@@ -754,8 +755,8 @@ impl Machine {
         let mut points = 0;
         for stack in self.slots[..2].iter().flatten() {
             for (name, level) in Self::crafting_levels(ctx, stack) {
-                if !ctx.enchantments.is_curse(&name)
-                    && let Some(e) = ctx.enchantments.get(&name)
+                if !ctx.enchantments.get().is_curse(&name)
+                    && let Some(e) = ctx.enchantments.get().get(&name)
                 {
                     points += e.min_cost(level);
                 }
@@ -779,7 +780,7 @@ impl Machine {
         let input = self.slots[0].clone()?;
         let creative = game_mode(ctx, uuid) == 1;
         let mut made = input.clone();
-        let input_key = ctx.enchantments.key(input.item);
+        let input_key = ctx.enchantments.get().key(input.item);
         let mut enchants = crate::enchants::levels_in(&made, input_key);
         let mut extra: i64 = i64::from(crate::enchants::repair_cost(&input));
         let mut cost = 0;
@@ -787,7 +788,7 @@ impl Machine {
         let max = ctx.items.max_damage(input.item);
         if let Some(addition) = &addition {
             extra += i64::from(crate::enchants::repair_cost(addition));
-            let book = ctx.enchantments.is_enchanted_book(addition.item)
+            let book = ctx.enchantments.get().is_enchanted_book(addition.item)
                 && !crate::enchants::levels_in(addition, "minecraft:stored_enchantments")
                     .is_empty();
             if max > 0 && repairs(ctx, input.item, addition.item) {
@@ -818,8 +819,9 @@ impl Machine {
                 }
                 let mut any_ok = false;
                 let mut any_bad = false;
+                let all = ctx.enchantments.get();
                 for (name, level) in Self::crafting_levels(ctx, addition) {
-                    let Some(e) = ctx.enchantments.get(&name) else {
+                    let Some(e) = all.get(&name) else {
                         continue;
                     };
                     let current = enchants
@@ -833,9 +835,9 @@ impl Machine {
                     };
                     let mut fits = e.supported.contains(&input.item)
                         || creative
-                        || ctx.enchantments.is_enchanted_book(input.item);
+                        || ctx.enchantments.get().is_enchanted_book(input.item);
                     for (other, _) in &enchants {
-                        if *other != name && !ctx.enchantments.compatible(&name, other) {
+                        if *other != name && !ctx.enchantments.get().compatible(&name, other) {
                             fits = false;
                             cost += 1;
                         }
@@ -985,7 +987,7 @@ impl Machine {
             Menu::Smithing => {
                 let inputs: Vec<ItemStack> = self.slots[..3].iter().flatten().cloned().collect();
                 if let [template, base, addition] = &inputs[..]
-                    && let Some(r) = ctx.recipes.smithing.iter().find(|r| {
+                    && let Some(r) = ctx.recipes.get().smithing.iter().find(|r| {
                         r.template.contains(&template.item)
                             && r.base.contains(&base.item)
                             && r.addition.contains(&addition.item)
@@ -1131,7 +1133,7 @@ mod tests {
 
     fn enchanted(ctx: &ServerContext, name: &str, list: &[(&str, i32)]) -> ItemStack {
         let mut s = stack(ctx, name, 1);
-        let key = ctx.enchantments.key(s.item);
+        let key = ctx.enchantments.get().key(s.item);
         let list: Vec<(String, i32)> = list
             .iter()
             .map(|(n, l)| (format!("minecraft:{n}"), *l))
@@ -1150,7 +1152,7 @@ mod tests {
     }
 
     fn levels(ctx: &ServerContext, s: &ItemStack) -> Vec<(String, i32)> {
-        let mut l = crate::enchants::levels_in(s, ctx.enchantments.key(s.item));
+        let mut l = crate::enchants::levels_in(s, ctx.enchantments.get().key(s.item));
         l.sort();
         l
     }

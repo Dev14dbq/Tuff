@@ -124,16 +124,47 @@ fn washable(ctx: Ctx, target: u32) -> bool {
         ))
 }
 
-/// Called whenever a fluid block is set: lava may harden, otherwise the fluid
-/// ticks after its delay.
-pub fn on_place(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) {
+/// Water (and a waterlogged block) cannot stay where the dimension
+/// evaporates it. The block becomes air, or dry, and the world hisses.
+/// `true` when the block that was just set is already gone.
+fn boil_away(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> bool {
+    if !level.ultrawarm() {
+        return false;
+    }
+    let water = matches!(fluid_of(ctx, state), Some((Fluid::Water, _)));
+    let logged = ctx.shapes.property(state, "waterlogged") == Some("true");
+    if !water && !logged {
+        return false;
+    }
+    let next = if logged {
+        let dry = ctx.shapes.with(state, "waterlogged", "false");
+        if dry == state {
+            return false;
+        }
+        dry
+    } else {
+        ctx.facts.air
+    };
+    set_block(level, ctx, p, next, Flags::ALL);
+    level.sponge_dried(p);
+    true
+}
+
+/// Called whenever a fluid block is set: lava may harden, water may vanish,
+/// otherwise the fluid ticks after its delay. `true` when the block could
+/// not stay and has already been replaced.
+pub fn on_place(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> bool {
+    if boil_away(level, ctx, p, state) {
+        return true;
+    }
     let Some((fluid, _)) = fluid_of(ctx, state) else {
-        return;
+        return false;
     };
     if fluid == Fluid::Lava && harden_lava(level, ctx, p, state) {
-        return;
+        return false;
     }
     level.schedule_fluid_tick(p, fluid as u32, props(level, fluid).delay);
+    false
 }
 
 /// A neighbour changed: same as being placed.
@@ -187,15 +218,21 @@ fn harden_lava(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> bool
 /// A due fluid tick at `p`.
 pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, fluid_id: u32) {
     let mut state = level.block(p);
+    if boil_away(level, ctx, p, state) {
+        return;
+    }
     let Some((fluid, lvl)) = fluid_of(ctx, state) else {
         return;
     };
     if fluid as u32 != fluid_id {
         return;
     }
+    let mut became_fall = false;
     if lvl != 0 {
         let new = new_state(level, ctx, p, fluid);
         if new != state {
+            let new_lvl = fluid_of(ctx, new).map(|(_, l)| l).unwrap_or(0);
+            became_fall = new_lvl >= 8 && lvl < 8;
             set_block(level, ctx, p, new, Flags::ALL);
             if ctx.shapes.is_air(new) {
                 return;
@@ -203,7 +240,7 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, fluid_id: u32) {
             state = new;
         }
     }
-    spread(level, ctx, p, state, fluid);
+    spread(level, ctx, p, state, fluid, became_fall);
 }
 
 /// What a flowing block should be, from its neighbours.
@@ -238,15 +275,37 @@ fn new_state(level: &dyn Level, ctx: Ctx, p: BlockPos, fluid: Fluid) -> u32 {
     }
 }
 
-/// Whether fluid at `p` could fall into the block below it. Lava can fall
-/// into water too (turning it to stone).
-fn hole_below(level: &dyn Level, ctx: Ctx, fluid: Fluid, p: BlockPos) -> bool {
-    let below = level.block(p.offset(Dir::Down));
+/// Whether fluid at `p` could fall into the block below it. A falling stream
+/// (level 8 or more) is a drop, and so is air. A pool of the same fluid
+/// sitting on the ground is not: aiming at it would send a full-strength
+/// flow into water that is already there.
+///
+/// `near` is the cell directly beside the block that is spreading. Water
+/// that is almost full (level 1) counts as a drop there, so a source still
+/// aims at a side whose block below was filled by an earlier sideways flow.
+/// Further along the search it does not: a level-1 pool four blocks away is
+/// not a cliff, and treating it as one pulls the whole flow past the cells
+/// beside a waterfall.
+fn hole_below(level: &dyn Level, ctx: Ctx, fluid: Fluid, p: BlockPos, near: bool) -> bool {
+    let below_pos = p.offset(Dir::Down);
+    let below = level.block(below_pos);
+    if let Some((other, lvl)) = fluid_of(ctx, below) {
+        if other == fluid {
+            return lvl >= 8 || (near && lvl == 1);
+        }
+        return fluid == Fluid::Lava && other == Fluid::Water;
+    }
     can_replace(ctx, fluid, below)
-        || (fluid == Fluid::Lava && matches!(fluid_of(ctx, below), Some((Fluid::Water, _))))
 }
 
-fn spread(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, fluid: Fluid) {
+fn spread(
+    level: &mut dyn Level,
+    ctx: Ctx,
+    p: BlockPos,
+    state: u32,
+    fluid: Fluid,
+    became_fall: bool,
+) {
     let Some((_, lvl)) = fluid_of(ctx, state) else {
         return;
     };
@@ -283,7 +342,88 @@ fn spread(level: &mut dyn Level, ctx: Ctx, p: BlockPos, state: u32, fluid: Fluid
         return;
     }
     let new = flowing(ctx, fluid, left);
-    for d in spread_directions(level, ctx, p, fluid) {
+    // Pond water that just started falling (a stream reached it from above)
+    // runs out every open side. Slope search would send the whole amount
+    // toward the nearest cliff and leave the cells beside the column behind.
+    // A fall that is already boxed in by this fluid or solid blocks steps
+    // into every weaker side. One that still has air beside it is still
+    // finding a cliff; sending it everywhere reaches the pond a tick early.
+    let boxed = Dir::HORIZONTAL.iter().all(|d| {
+        let block = level.block(p.offset(*d));
+        fluid_of(ctx, block).is_some() || !can_replace(ctx, fluid, block)
+    });
+    let dirs: Vec<Dir> = if became_fall && fluid == Fluid::Water && boxed {
+        Dir::HORIZONTAL
+            .into_iter()
+            .filter(|d| can_replace(ctx, fluid, level.block(p.offset(*d))))
+            .collect()
+    } else {
+        spread_directions(level, ctx, p, fluid)
+    };
+    for d in dirs {
+        let np = p.offset(d);
+        if takes_flow(ctx, fluid, level.block(np), left) {
+            set_block(level, ctx, np, new, Flags::ALL);
+        }
+    }
+    if became_fall && fluid == Fluid::Water && boxed {
+        // The cell straight out from the solid block behind this fall (the
+        // obsidian under the column) spreads to either side. Its own tick
+        // already ran, while the cells beside it are still the old pond.
+        let solids: Vec<Dir> = Dir::HORIZONTAL
+            .into_iter()
+            .filter(|d| {
+                let block = level.block(p.offset(*d));
+                fluid_of(ctx, block).is_none() && !can_replace(ctx, fluid, block)
+            })
+            .collect();
+        if solids.len() == 1 {
+            let away = solids[0].opposite();
+            let front = p.offset(away);
+            if matches!(fluid_of(ctx, level.block(front)), Some((f, 1)) if f == fluid)
+                && across_matches(level, ctx, fluid, front, away)
+            {
+                spread_across(level, ctx, front, fluid, away);
+            }
+        }
+    }
+}
+
+/// The two sides of `p` are the same flowing level. An uneven edge (the
+/// pond thinning toward air on one side) is not pulled in with the pair.
+fn across_matches(level: &dyn Level, ctx: Ctx, fluid: Fluid, p: BlockPos, axis: Dir) -> bool {
+    let mut seen = None;
+    for d in Dir::HORIZONTAL {
+        if d == axis || d == axis.opposite() {
+            continue;
+        }
+        let Some((other, lvl)) = fluid_of(ctx, level.block(p.offset(d))) else {
+            return false;
+        };
+        if other != fluid || lvl == 0 || lvl >= 8 {
+            return false;
+        }
+        if let Some(prev) = seen
+            && prev != lvl
+        {
+            return false;
+        }
+        seen = Some(lvl);
+    }
+    seen.is_some()
+}
+
+/// Level-1 water at `p` steps left and right of `axis`, not further along it.
+fn spread_across(level: &mut dyn Level, ctx: Ctx, p: BlockPos, fluid: Fluid, axis: Dir) {
+    let left = amount(1) - props(level, fluid).drop;
+    if left <= 0 {
+        return;
+    }
+    let new = flowing(ctx, fluid, left);
+    for d in Dir::HORIZONTAL {
+        if d == axis || d == axis.opposite() {
+            continue;
+        }
         let np = p.offset(d);
         if takes_flow(ctx, fluid, level.block(np), left) {
             set_block(level, ctx, np, new, Flags::ALL);
@@ -312,7 +452,7 @@ fn spread_directions(level: &dyn Level, ctx: Ctx, p: BlockPos, fluid: Fluid) -> 
         if !can_replace(ctx, fluid, target) {
             continue;
         }
-        let distance = if hole_below(level, ctx, fluid, np) {
+        let distance = if hole_below(level, ctx, fluid, np, true) {
             0
         } else {
             slope_distance(level, ctx, fluid, np, 1, d.opposite())
@@ -348,7 +488,7 @@ fn slope_distance(
         {
             continue;
         }
-        if hole_below(level, ctx, fluid, np) {
+        if hole_below(level, ctx, fluid, np, false) {
             return depth;
         }
         if depth < props(level, fluid).slope {

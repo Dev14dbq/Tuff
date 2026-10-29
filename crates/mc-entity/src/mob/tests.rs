@@ -229,6 +229,23 @@ fn babies_grow_up() {
 }
 
 #[test]
+fn a_sulfur_cube_is_large_until_it_is_small() {
+    let mut e = mob(Species::SulfurCube, [0.5, 0.0, 0.5]);
+    assert_eq!(m(&mut e).size, 2);
+    assert_eq!(m(&mut e).size(), (0.98, 0.98));
+    assert_eq!(m(&mut e).max_health, 8.0);
+    m(&mut e).set_baby(true);
+    assert_eq!(m(&mut e).size, 1);
+    assert_eq!(m(&mut e).size(), (0.49, 0.49));
+    assert_eq!(m(&mut e).max_health, 4.0);
+    m(&mut e).baby_age = -2;
+    run(&mut e, &[], 3, false);
+    assert!(!m(&mut e).is_baby());
+    assert_eq!(m(&mut e).size, 2);
+    assert_eq!(m(&mut e).size(), (0.98, 0.98));
+}
+
+#[test]
 fn a_skeleton_with_a_bow_shoots() {
     let mut e = mob(Species::Skeleton, [0.5, 0.0, 0.5]);
     m(&mut e).gear[slot::MAINHAND] = Some(Gear {
@@ -534,4 +551,64 @@ fn walking_speed_matches_vanilla() {
         body::physics(m(&mut e), &mut b, &s, input, &mut Vec::new());
     }
     assert!((b.vel[0] - 0.116).abs() < 0.01, "{}", b.vel[0]);
+}
+
+#[test]
+fn magma_burns_feet_and_a_cactus_pricks() {
+    struct Hot;
+    impl Collide for Hot {
+        fn solid(&self, _: i32, y: i32, _: i32) -> bool {
+            y < 0
+        }
+    }
+    impl Terrain for Hot {
+        fn liquid(&self, _: i32, _: i32, _: i32) -> Liquid {
+            Liquid::None
+        }
+        fn hazard(&self, _: i32, _: i32, _: i32) -> bool {
+            false
+        }
+        fn sky_light(&self, _: i32, _: i32, _: i32) -> u8 {
+            0
+        }
+        fn light(&self, _: i32, _: i32, _: i32) -> u8 {
+            0
+        }
+        fn burns_feet(&self, _: i32, y: i32, _: i32) -> bool {
+            y < 0
+        }
+        fn pricks(&self, x: i32, _: i32, _: i32) -> Option<&'static str> {
+            (x == 3).then_some("minecraft:cactus")
+        }
+    }
+    let once = |e: &mut Entity| {
+        let mut out = Vec::new();
+        let s = Senses {
+            world: &Hot,
+            players: &[],
+            mobs: &[],
+            items: &Wheat,
+            tick: 0,
+            difficulty: 2,
+            sunny: false,
+            raining: false,
+            nether: false,
+            day: false,
+            griefing: true,
+        };
+        tick(e, &s, &mut out);
+        out
+    };
+    let hurt = |out: &[MobEvent], kind: &str| {
+        out.iter()
+            .any(|e| matches!(e, MobEvent::Hurt { kind: k, .. } if *k == kind))
+    };
+    let mut pig = mob(Species::Pig, [0.5, 0.0, 0.5]);
+    pig.on_ground = true;
+    assert!(hurt(&once(&mut pig), "minecraft:hot_floor"));
+    let mut blaze = mob(Species::Blaze, [0.5, 0.0, 0.5]);
+    blaze.on_ground = true;
+    assert!(!hurt(&once(&mut blaze), "minecraft:hot_floor"));
+    let mut pig = mob(Species::Pig, [3.5, 0.0, 0.5]);
+    assert!(hurt(&once(&mut pig), "minecraft:cactus"));
 }

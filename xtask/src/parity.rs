@@ -293,7 +293,7 @@ impl Server {
         std::fs::create_dir_all(dir)?;
         std::fs::write(dir.join("server.properties"), properties)?;
         setup(dir)?;
-        let child = Command::new(root.join("target/release/mc-server"))
+        let child = Command::new(root.join("target/release/tuff"))
             .args(["--universe".as_ref(), dir.as_os_str()])
             .env("NO_COLOR", "1")
             .envs(env.iter().map(|(k, v)| (k, v)))

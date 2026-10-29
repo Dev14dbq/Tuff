@@ -1,0 +1,36 @@
+# Rail shapes and how far a powered rail carries a signal.
+region -2 -61 -2 14 -57 12
+run fill -2 -60 -2 14 -60 12 stone
+compare
+
+# A corner and the two straights leaving it.
+run setblock 0 -59 0 rail
+run setblock 1 -59 0 rail
+run setblock 0 -59 1 rail
+compare
+
+# A slope up onto a block.
+run setblock 4 -59 3 stone
+run setblock 3 -59 3 rail
+run setblock 4 -58 3 rail
+compare
+
+# A powered rail does not bend into a corner.
+run setblock 0 -59 5 powered_rail
+run setblock 1 -59 5 rail
+run setblock 0 -59 6 rail
+compare
+
+# Power reaches the neighbour of the source and eight rails past it.
+run fill 0 -59 8 11 -59 8 powered_rail
+run setblock -1 -59 8 redstone_block
+compare
+
+# Activator rails take power the same way.
+run fill 0 -59 10 3 -59 10 activator_rail
+run setblock -1 -59 10 redstone_block
+compare
+
+# A detector rail with nothing on it stays off.
+run setblock 8 -59 5 detector_rail
+compare

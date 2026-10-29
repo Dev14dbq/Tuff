@@ -160,6 +160,15 @@ pub fn apply(ctx: &ServerContext, m: &mut Mob, nbt: &Compound) {
                 m.set_size(v + 1);
             }
         }
+        Species::SulfurCube => {
+            if let Some(v) = int(nbt, "Size") {
+                m.set_size(v + 1);
+            } else if m.is_baby() {
+                m.size = 1;
+                m.set_max_health(4.0);
+                m.speed_attr = 0.3;
+            }
+        }
         Species::Phantom => {
             if let Some(v) = int(nbt, "size") {
                 m.size = v.clamp(0, 64);
@@ -687,6 +696,7 @@ pub fn write(ctx: &ServerContext, m: &Mob, c: &mut Compound) {
             c.insert("pickup_timer", Tag::Int(air.pickup_timer));
             c.insert("from_bucket", Tag::Byte(0));
             c.insert("Locked", Tag::Byte(i8::from(air.locked)));
+            c.insert("Size", Tag::Int(m.size - 1));
         }
         Species::Creaking => {
             if let Some(h) = m.quirks.air.home {

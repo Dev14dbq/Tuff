@@ -23,6 +23,7 @@ pub fn falls(ctx: Ctx, state: u32) -> bool {
                 | "minecraft:anvil"
                 | "minecraft:chipped_anvil"
                 | "minecraft:damaged_anvil"
+                | "minecraft:dragon_egg"
         )
 }
 

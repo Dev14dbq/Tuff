@@ -2,6 +2,7 @@
 //! in, waits for its chunks, then walks in a circle sending movement like a
 //! client, answering keep-alives. Reports joins, failures and traffic.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
@@ -30,6 +31,8 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut seconds = 30u64;
     let mut version = None;
     let mut view_distance = 2i8;
+    let mut follow = false;
+    let mut name = "Buddy".to_owned();
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let mut value = || {
@@ -43,10 +46,16 @@ pub fn run(args: &[String]) -> Result<()> {
             "--seconds" => seconds = value()?.parse().context("--seconds")?,
             "--version" => version = Some(value()?),
             "--view-distance" => view_distance = value()?.parse().context("--view-distance")?,
+            "--follow" => follow = true,
+            "--name" => name = value()?,
             other => bail!("unknown option `{other}` for bots"),
         }
     }
     let ids = load_packet_ids(version)?;
+    if follow {
+        println!("{name} follows a player on {addr} for {seconds} s");
+        return follow_bot(&addr, &name, ids, seconds, view_distance);
+    }
     let stats = Arc::new(Stats::default());
     let started = Instant::now();
     let deadline = started + Duration::from_secs(seconds);
@@ -238,4 +247,362 @@ fn bot(
     }
     ensure!(spawned, "never received its chunks");
     Ok(())
+}
+
+/// One bot that sprints and hops after the other player on the server.
+fn follow_bot(
+    addr: &str,
+    name: &str,
+    ids: PacketIds,
+    seconds: u64,
+    view_distance: i8,
+) -> Result<()> {
+    let mut client = Client::connect(addr, ids)?;
+    client.handshake(2)?;
+    let mut hello = Vec::new();
+    hello.put_string(name);
+    hello.put_uuid(0);
+    client.send("minecraft:hello", hello)?;
+    loop {
+        let (packet, body) = client.recv()?;
+        match packet.as_str() {
+            "minecraft:login_compression" => {
+                client.compression = usize::try_from(Reader::new(&body).varint()?).ok();
+            }
+            "minecraft:login_finished" => break,
+            "minecraft:hello" => bail!("server is in online mode; bots need --offline"),
+            "minecraft:login_disconnect" => bail!("refused: {}", Reader::new(&body).string(32767)?),
+            _ => {}
+        }
+    }
+    client.send("minecraft:login_acknowledged", Vec::new())?;
+    client.state = State::Configuration;
+    let mut info = Vec::new();
+    info.put_string("en_us");
+    info.put_i8(view_distance);
+    info.put_varint(0);
+    info.put_bool(true);
+    info.put_u8(0x7f);
+    info.put_varint(1);
+    info.put_bool(false);
+    info.put_bool(true);
+    info.put_varint(0);
+    client.send("minecraft:client_information", info)?;
+    loop {
+        let (packet, body) = client.recv()?;
+        match packet.as_str() {
+            "minecraft:select_known_packs" => client.send("minecraft:select_known_packs", body)?,
+            "minecraft:keep_alive" => client.send("minecraft:keep_alive", body)?,
+            "minecraft:finish_configuration" => break,
+            "minecraft:disconnect" => bail!("disconnected during configuration"),
+            _ => {}
+        }
+    }
+    client.send("minecraft:finish_configuration", Vec::new())?;
+    client.state = State::Play;
+    client.set_read_timeout(Duration::from_millis(50))?;
+
+    let mut names: HashMap<u128, String> = HashMap::new();
+    let mut ents: HashMap<u128, Seen> = HashMap::new();
+    let mut by_id: HashMap<i32, u128> = HashMap::new();
+    let mut pose = Pose::default();
+    let mut feet: Option<(f64, f64, f64)> = None;
+    let mut spawned = false;
+    let mut sprinting = false;
+    let mut greeted = false;
+    let mut tick = 0u32;
+    let mut rising = 0u32;
+    let mut sent_y = 0.0;
+    let mut next_tick = Instant::now();
+    let mut confirm: Option<Vec<u8>> = None;
+    let mut report = Instant::now();
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+
+    while Instant::now() < deadline {
+        if Instant::now() >= next_tick {
+            if let Some(confirm) = confirm.take() {
+                client.send("minecraft:accept_teleportation", confirm)?;
+            }
+            if spawned && let Some((x, y, z)) = feet {
+                if !sprinting && client.entity_id != 0 {
+                    let mut cmd = Vec::new();
+                    cmd.put_varint(client.entity_id);
+                    cmd.put_varint(1); // start sprinting
+                    cmd.put_varint(0);
+                    client.send("minecraft:player_command", cmd)?;
+                    sprinting = true;
+                }
+                let target = follow_target(&names, &ents, name);
+                if let Some((who, _)) = &target
+                    && !greeted
+                {
+                    let mut chat = Vec::new();
+                    chat.put_string("бегу за тобой");
+                    client.send("minecraft:chat", chat)?;
+                    println!("{name} is following {who}");
+                    greeted = true;
+                }
+                let (nx, ny, nz, yaw, flags) = steer(
+                    x,
+                    y,
+                    z,
+                    &mut sent_y,
+                    &mut tick,
+                    &mut rising,
+                    target.as_ref(),
+                );
+                feet = Some((nx, ny, nz));
+                pose.yaw = yaw;
+                let mut moved = Vec::new();
+                moved.put_f64(nx);
+                moved.put_f64(sent_y);
+                moved.put_f64(nz);
+                moved.put_f32(yaw);
+                moved.put_f32(0.0);
+                moved.put_u8(flags);
+                client.send("minecraft:move_player_pos_rot", moved)?;
+                client.send("minecraft:client_tick_end", Vec::new())?;
+                if report.elapsed() >= Duration::from_secs(2) {
+                    match &target {
+                        Some((who, seen)) => {
+                            let dx = seen.x - nx;
+                            let dz = seen.z - nz;
+                            println!(
+                                "{name} at ({nx:.1}, {sent_y:.1}, {nz:.1}), {who} is {:.0} blocks away",
+                                (dx * dx + dz * dz).sqrt()
+                            );
+                        }
+                        None => println!("{name} is in, waiting for another player"),
+                    }
+                    report = Instant::now();
+                }
+            }
+            next_tick = Instant::now() + Duration::from_millis(50);
+        }
+        let (packet, body) = match client.recv() {
+            Ok(p) => p,
+            Err(err) if is_timeout(&err) => continue,
+            Err(err) => return Err(err),
+        };
+        match packet.as_str() {
+            "minecraft:keep_alive" => client.send("minecraft:keep_alive", body)?,
+            "minecraft:login" => client.entity_id = Reader::new(&body).i32()?,
+            "minecraft:player_position" => {
+                confirm = Some(follow_teleport(&body, &mut pose)?);
+                feet = Some((pose.x, pose.y, pose.z));
+                sent_y = pose.y;
+                rising = 0;
+            }
+            "minecraft:player_info_update" => {
+                if let Err(err) = read_player_info(&body, &mut names) {
+                    eprintln!("player list: {err:#}");
+                }
+            }
+            "minecraft:add_entity" => {
+                if let Ok((id, uuid, x, y, z)) = read_spawn(&body) {
+                    by_id.insert(id, uuid);
+                    ents.insert(uuid, Seen { x, y, z });
+                }
+            }
+            "minecraft:entity_position_sync" => {
+                if let Ok((id, x, y, z)) = read_sync(&body)
+                    && let Some(uuid) = by_id.get(&id)
+                    && let Some(seen) = ents.get_mut(uuid)
+                {
+                    (seen.x, seen.y, seen.z) = (x, y, z);
+                }
+            }
+            "minecraft:remove_entities" => {
+                if let Ok(ids) = read_remove(&body) {
+                    for id in ids {
+                        if let Some(uuid) = by_id.remove(&id) {
+                            ents.remove(&uuid);
+                        }
+                    }
+                }
+            }
+            "minecraft:chunk_batch_finished" => {
+                let mut received = Vec::new();
+                received.put_f32(1000.0);
+                client.send("minecraft:chunk_batch_received", received)?;
+                if spawned {
+                    continue;
+                }
+                spawned = true;
+                client.send("minecraft:player_loaded", Vec::new())?;
+                println!("{name} spawned");
+            }
+            "minecraft:disconnect" => {
+                let text: String = String::from_utf8_lossy(&body)
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .collect();
+                bail!("kicked: {text}")
+            }
+            _ => {}
+        }
+    }
+    ensure!(spawned, "never received its chunks");
+    Ok(())
+}
+
+#[derive(Debug)]
+struct Seen {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+/// The other player we can see, by name.
+fn follow_target<'a>(
+    names: &'a HashMap<u128, String>,
+    ents: &'a HashMap<u128, Seen>,
+    me: &str,
+) -> Option<(String, &'a Seen)> {
+    let mut best: Option<(&str, u128)> = None;
+    for (uuid, name) in names {
+        if name == me {
+            continue;
+        }
+        if best.as_ref().is_none_or(|(n, _)| name.as_str() < *n) {
+            best = Some((name, *uuid));
+        }
+    }
+    let (name, uuid) = best?;
+    ents.get(&uuid).map(|seen| (name.to_owned(), seen))
+}
+
+/// Sprint toward `target`, hop once we're at their height, and drop for a
+/// tick now and then while climbing so a long rise is not "flying".
+fn steer(
+    mut x: f64,
+    mut y: f64,
+    mut z: f64,
+    sent_y: &mut f64,
+    tick: &mut u32,
+    rising: &mut u32,
+    target: Option<&(String, &Seen)>,
+) -> (f64, f64, f64, f32, u8) {
+    *tick = tick.wrapping_add(1);
+    let mut yaw = 0.0f32;
+    let mut feet_gap = 0.0;
+    if let Some((_, seen)) = target {
+        let (dx, dz) = (seen.x - x, seen.z - z);
+        let dist = (dx * dx + dz * dz).sqrt();
+        feet_gap = (y - seen.y).abs();
+        if dist > 3.0 {
+            let speed = if dist > 20.0 { 0.72_f64 } else { 0.30 };
+            let step = speed.min((dist - 2.4).max(0.0));
+            if dist > 1e-4 {
+                x += dx / dist * step;
+                z += dz / dist * step;
+                yaw = (-dx).atan2(dz).to_degrees() as f32;
+            }
+        } else {
+            let ang = f64::from(*tick) * 0.11;
+            let (ox, oz) = (seen.x + 2.5 * ang.cos(), seen.z + 2.5 * ang.sin());
+            let (odx, odz) = (ox - x, oz - z);
+            let od = (odx * odx + odz * odz).sqrt().max(1e-6);
+            let step = 0.26_f64.min(od);
+            x += odx / od * step;
+            z += odz / od * step;
+            yaw = (-odx).atan2(odz).to_degrees() as f32;
+        }
+        y += (seen.y - y).clamp(-0.5, 0.42);
+    }
+    let hop = if target.is_none() || feet_gap < 1.2 {
+        hop_height(*tick)
+    } else {
+        0.0
+    };
+    let mut at = y + hop;
+    if at - *sent_y >= -0.03125 {
+        *rising += 1;
+        if feet_gap > 1.5 && *rising >= 36 {
+            at = *sent_y - 0.1;
+            *rising = 0;
+        }
+    } else {
+        *rising = 0;
+    }
+    let on_ground = hop == 0.0 && (at - y).abs() < 0.05 && feet_gap < 0.3;
+    *sent_y = at;
+    (x, y, z, yaw, u8::from(on_ground))
+}
+
+/// One vanilla-ish jump, then a short pause on the ground.
+fn hop_height(tick: u32) -> f64 {
+    const ARC: [f64; 12] = [
+        0.42, 0.75, 1.00, 1.17, 1.25, 1.25, 1.17, 1.02, 0.80, 0.50, 0.20, 0.0,
+    ];
+    let t = tick % 22;
+    if t < 12 { ARC[t as usize] } else { 0.0 }
+}
+
+fn read_player_info(body: &[u8], names: &mut HashMap<u128, String>) -> Result<()> {
+    let mut r = Reader::new(body);
+    let actions = r.u8()?;
+    let count = r.length_prefix()?;
+    for _ in 0..count {
+        let uuid = r.uuid()?;
+        if actions & 0x01 != 0 {
+            let name = r.string(16)?;
+            let props = r.length_prefix()?;
+            for _ in 0..props {
+                r.string(32767)?;
+                r.string(32767)?;
+                if r.bool()? {
+                    r.string(32767)?;
+                }
+            }
+            names.insert(uuid, name);
+        }
+        if actions & 0x02 != 0 {
+            let _ = r.bool()?;
+        }
+        if actions & 0x04 != 0 {
+            r.varint()?;
+        }
+        if actions & 0x08 != 0 {
+            r.bool()?;
+        }
+        if actions & 0x10 != 0 {
+            r.varint()?;
+        }
+        if actions & 0x20 != 0 && r.bool()? {
+            r.nbt()?;
+        }
+        if actions & 0x40 != 0 {
+            r.varint()?;
+        }
+        if actions & 0x80 != 0 {
+            r.bool()?;
+        }
+    }
+    Ok(())
+}
+
+fn read_spawn(body: &[u8]) -> Result<(i32, u128, f64, f64, f64)> {
+    let mut r = Reader::new(body);
+    let id = r.varint()?;
+    let uuid = r.uuid()?;
+    r.varint()?;
+    Ok((id, uuid, r.f64()?, r.f64()?, r.f64()?))
+}
+
+fn read_sync(body: &[u8]) -> Result<(i32, f64, f64, f64)> {
+    let mut r = Reader::new(body);
+    let id = r.varint()?;
+    r.varint()?;
+    Ok((id, r.f64()?, r.f64()?, r.f64()?))
+}
+
+fn read_remove(body: &[u8]) -> Result<Vec<i32>> {
+    let mut r = Reader::new(body);
+    let n = r.length_prefix()?;
+    let mut ids = Vec::with_capacity(n.min(64));
+    for _ in 0..n {
+        ids.push(r.varint()?);
+    }
+    Ok(ids)
 }

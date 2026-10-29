@@ -3,7 +3,10 @@
 //! hurts what it hits by 1 and bursts; the burst (radius 1.2, a breeze's
 //! 3) hurts nothing but pushes everything near away from it, by the share
 //! of it the blast sees, 1.22 times as hard for a player's charge; it
-//! flips levers, buttons, doors, trapdoors and fence gates it reaches.
+//! flips levers, buttons, doors, trapdoors and fence gates it reaches,
+//! blows out lit candles and rings bells. With
+//! `projectiles_can_break_blocks` it also breaks chorus flowers, pointed
+//! dripstone and decorated pots in that radius.
 //! A player it launches takes fall damage only below where it hit them.
 
 use mc_entity::extra::Shot;
@@ -300,7 +303,8 @@ pub fn burst(ctx: &ServerContext, entities: &mut [Entity], g: &Gust) {
 
 /// Blocks the burst flips: levers, buttons, doors (by their lower half),
 /// trapdoors and fence gates within its radius, not iron ones and none
-/// that `blocks_wind_charge_explosions` shields.
+/// that `blocks_wind_charge_explosions` shields. Lit candles go out and
+/// bells ring.
 fn trigger(ctx: &ServerContext, g: &Gust) {
     let r = f64::from(g.radius);
     let immune = ctx
@@ -325,6 +329,7 @@ fn trigger(ctx: &ServerContext, g: &Gust) {
                     continue;
                 };
                 let name = blocks.block_name(state).unwrap_or("");
+                crate::pots::burst(ctx, &mut level, p);
                 if immune.iter().any(|m| m == name) || name.starts_with("minecraft:iron_") {
                     continue;
                 }
@@ -337,12 +342,63 @@ fn trigger(ctx: &ServerContext, g: &Gust) {
                     let logic = level.logic();
                     mc_tick::use_block(&mut level, logic, crate::level::to_pos(p));
                 }
+                let at = [f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5];
+                let candle = name == "minecraft:candle"
+                    || name.ends_with("_candle")
+                    || name.ends_with("candle_cake");
+                if candle
+                    && blocks.property(state, "lit") == Some("true")
+                    && let Some(dark) = blocks.with_property(state, "lit", "false")
+                {
+                    level.set_block(p, dark);
+                    crate::fx::sound(
+                        ctx,
+                        "block.candle.extinguish",
+                        crate::fx::category::BLOCKS,
+                        at,
+                        1.0,
+                        1.0,
+                    );
+                }
+                if name == "minecraft:bell" {
+                    ctx.mobs.bell(ctx.dim, p);
+                    crate::fx::sound(
+                        ctx,
+                        "block.bell.use",
+                        crate::fx::category::BLOCKS,
+                        at,
+                        2.0,
+                        1.0,
+                    );
+                    let _ = ctx.events.send(Event::BlockAction {
+                        position: p,
+                        action: 1,
+                        param: bell_direction(blocks.property(state, "facing")),
+                        block: ctx
+                            .data
+                            .builtin
+                            .id("minecraft:block", "minecraft:bell")
+                            .unwrap_or(0),
+                    });
+                }
             }
         }
     }
     let changes = level.into_changes();
     if !changes.is_empty() {
         let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
+    }
+}
+
+/// The direction a bell's ring animation takes (down 0, up 1, then the
+/// horizontal facings).
+fn bell_direction(facing: Option<&str>) -> u8 {
+    match facing {
+        Some("north") => 2,
+        Some("south") => 3,
+        Some("west") => 4,
+        Some("east") => 5,
+        _ => 1,
     }
 }
 
@@ -456,5 +512,68 @@ mod tests {
             .block(mc_protocol::Position::new(0, -60, 0), &ctx.data.blocks)
             .unwrap();
         assert_eq!(ctx.data.blocks.property(state, "powered"), Some("true"));
+    }
+
+    #[test]
+    fn a_gust_blows_out_candles_and_rings_a_bell() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let candle = ctx
+            .data
+            .blocks
+            .state_id("minecraft:red_candle", &[("candles", "1"), ("lit", "true")])
+            .unwrap();
+        let cake = ctx
+            .data
+            .blocks
+            .state_id("minecraft:candle_cake", &[("lit", "true")])
+            .unwrap();
+        let bell = ctx.data.blocks.default_state("minecraft:bell").unwrap();
+        let mut level = crate::level::WorldLevel::new(&ctx);
+        level.set_block(mc_protocol::Position::new(0, -59, 0), candle);
+        level.set_block(mc_protocol::Position::new(1, -59, 0), cake);
+        level.set_block(mc_protocol::Position::new(0, -59, 1), bell);
+        let _ = level.into_changes();
+        let mut events = ctx.events.subscribe();
+        burst(&ctx, &mut [], &Gust::charge([0.5, -58.5, 0.5], false));
+        let lit = |at: [i32; 3]| {
+            let state = ctx
+                .world
+                .block(
+                    mc_protocol::Position::new(at[0], at[1], at[2]),
+                    &ctx.data.blocks,
+                )
+                .unwrap();
+            ctx.data.blocks.property(state, "lit").unwrap().to_owned()
+        };
+        assert_eq!(lit([0, -59, 0]), "false");
+        assert_eq!(lit([1, -59, 0]), "false");
+        let mut rang = false;
+        while let Some(ev) = events.try_changed() {
+            if matches!(ev, Event::BlockAction { action: 1, .. }) {
+                rang = true;
+            }
+        }
+        assert!(rang, "the bell did not ring");
+    }
+
+    #[test]
+    fn a_gust_breaks_a_chorus_flower_unless_the_rule_is_off() {
+        let Some(ctx) = flat() else {
+            return;
+        };
+        set(&ctx, [0, -59, 0], "minecraft:chorus_flower");
+        burst(&ctx, &mut [], &Gust::charge([0.5, -58.5, 0.5], false));
+        assert_eq!(block(&ctx, [0, -59, 0]), "minecraft:air");
+
+        set(&ctx, [0, -59, 0], "minecraft:chorus_flower");
+        ctx.game_rules.lock().expect("rules").set(
+            "projectiles_can_break_blocks",
+            crate::rules::Value::Bool(false),
+        );
+        burst(&ctx, &mut [], &Gust::charge([0.5, -58.5, 0.5], false));
+        assert_eq!(block(&ctx, [0, -59, 0]), "minecraft:chorus_flower");
     }
 }

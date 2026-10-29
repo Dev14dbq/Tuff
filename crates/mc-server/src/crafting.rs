@@ -40,7 +40,7 @@ struct Recipe {
 }
 
 /// A furnace, blast furnace, smoker or campfire recipe.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Cooking {
     /// `minecraft:smelting`, `minecraft:blasting`, `minecraft:smoking`,
     /// `minecraft:campfire_cooking`.
@@ -56,7 +56,7 @@ pub struct Cooking {
 }
 
 /// A stonecutter recipe.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Cut {
     pub input: HashSet<i32>,
     pub result: ItemStack,
@@ -781,6 +781,77 @@ mod tests {
     fn data() -> Option<McData> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
         McData::load(&dir).ok()
+    }
+
+    #[test]
+    fn a_datapack_adds_a_recipe_and_a_loot_table() {
+        let Some(data) = data() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let tmp = std::env::temp_dir().join(format!("mc-pack-recipe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let recipe = tmp.join("data/pack/recipe");
+        std::fs::create_dir_all(&recipe).unwrap();
+        std::fs::write(
+            recipe.join("from_stick.json"),
+            r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stick"],"result":{"id":"minecraft:diamond","count":1}}"#,
+        )
+        .unwrap();
+        let loot = tmp.join("data/pack/loot_table/gameplay");
+        std::fs::create_dir_all(&loot).unwrap();
+        std::fs::write(loot.join("custom.json"), r#"{"pools":[]}"#).unwrap();
+        data.set_pack_layers(vec![tmp.join("data")]);
+        let recipes = Recipes::load(&data);
+        let id = |n: &str| data.builtin.id("minecraft:item", n).unwrap();
+        let stick = Some(ItemStack {
+            count: 1,
+            item: id("minecraft:stick"),
+            damage: 0,
+            components: Default::default(),
+        });
+        let (made, name) = recipes.craft_named(&[stick, None, None, None], 2).unwrap();
+        assert_eq!(name, "pack:from_stick");
+        assert_eq!(made.item, id("minecraft:diamond"));
+        let tables = crate::loot::BlockLoot::load(&data);
+        assert!(tables.has("pack:gameplay/custom"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn reload_picks_up_a_recipe_that_was_not_there() {
+        let Some(ctx) = crate::testkit::flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let stick = ctx.items.id("minecraft:stick").unwrap();
+        let grid = [Some(ItemStack::new(stick, 1)), None, None, None];
+        assert!(ctx.recipes.get().craft_named(&grid, 2).is_none());
+        let tmp = std::env::temp_dir().join(format!("mc-reload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let recipe = tmp.join("data/pack/recipe");
+        std::fs::create_dir_all(&recipe).unwrap();
+        std::fs::write(
+            recipe.join("from_stick.json"),
+            r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stick"],"result":{"id":"minecraft:diamond","count":1}}"#,
+        )
+        .unwrap();
+        {
+            let mut packs = ctx.packs.lock().expect("packs");
+            packs.all.push(crate::packs::Pack {
+                id: "file/extra".into(),
+                title: "extra".into(),
+                description: Tag::String(String::new()),
+                dir: Some(tmp.clone()),
+            });
+            packs.enabled.push("file/extra".into());
+        }
+        ctx.reload_content();
+        let recipes = ctx.recipes.get();
+        let (made, name) = recipes.craft_named(&grid, 2).unwrap();
+        assert_eq!(name, "pack:from_stick");
+        assert_eq!(made.item, ctx.items.id("minecraft:diamond").unwrap());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

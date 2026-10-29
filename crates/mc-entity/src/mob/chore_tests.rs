@@ -178,8 +178,12 @@ fn an_enderman_turns_on_a_player_who_stares_and_freezes() {
     let players = [looking([10.5, 0.0, 0.5], eye)];
     let mut out = Vec::new();
     let mut turned = None;
+    let mut froze = None;
     for t in 0..200 {
         tick(&mut e, &senses(&world, &players, t, 2), &mut out);
+        if froze.is_none() && m(&mut e).stared {
+            froze = Some(e.pos);
+        }
         if m(&mut e).target == Some(100) {
             turned = Some(t);
             break;
@@ -187,6 +191,26 @@ fn an_enderman_turns_on_a_player_who_stares_and_freezes() {
     }
     assert!(turned.is_some(), "never turned");
     assert!(m(&mut e).stared);
+    // It stops while the stare is still building, before it is hostile.
+    let froze = froze.expect("never froze");
+    assert!(
+        (e.pos[0] - froze[0]).abs() < 0.2 && (e.pos[2] - froze[2]).abs() < 0.2,
+        "walked through the stare: {froze:?} -> {:?}",
+        e.pos
+    );
+    // From across the island, not only from arm's reach.
+    let mut far = mob(Species::Enderman, at);
+    let far_eye = [at[0], at[1] + m(&mut far).eye_height(), at[2]];
+    let far_players = [looking([24.5, 0.0, 0.5], far_eye)];
+    let mut far_turned = false;
+    for t in 0..200 {
+        tick(&mut far, &senses(&world, &far_players, t, 2), &mut out);
+        if m(&mut far).target == Some(100) {
+            far_turned = true;
+            break;
+        }
+    }
+    assert!(far_turned, "a stare from 24 blocks did nothing");
     // Stared at, it stands still (it does not teleport this far off).
     let before = e.pos;
     for t in 0..20 {

@@ -75,13 +75,14 @@ pub fn report(description: &str, detail: &str, version: &str) -> String {
          \tMinecraft Version: {version}\n\
          \tMinecraft Version ID: {version}\n\
          \tOperating System: {os} ({arch})\n\
-         \tServer: minecraft-rewrite {ours}\n\
+         \tServer: {brand} {ours}\n\
          \tCPUs: {threads}\n\
          \tIs Modded: Unknown (can't tell)\n\
          \tType: Dedicated Server\n",
         os = std::env::consts::OS,
         arch = std::env::consts::ARCH,
         ours = env!("CARGO_PKG_VERSION"),
+        brand = crate::BRAND,
     )
 }
 

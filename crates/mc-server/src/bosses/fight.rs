@@ -360,13 +360,17 @@ pub fn tick(
     }
     let mut changed = false;
     if fight.needs_state_scanning {
-        scan_state(ctx, level, fight, entities);
+        scan_state(ctx, level, fight, entities, fresh);
         fight.needs_state_scanning = false;
         changed = true;
     }
-    if std::mem::take(&mut fight.check_respawn) {
-        changed |= try_respawn(ctx, level, fight, entities);
+    // Every tick, not only the one after a crystal is placed: the crystal
+    // can land in the entity list a tick late, and a missed check used to
+    // drop the ritual until another crystal was set down.
+    if fight.dragon_killed && fight.respawn.is_none() {
+        changed |= try_respawn(ctx, level, fight, entities, fresh);
     }
+    fight.check_respawn = false;
     if let Some(stage) = fight.respawn {
         let time = fight.respawn_time;
         fight.respawn_time += 1;
@@ -413,6 +417,7 @@ fn scan_state(
     level: &mut WorldLevel,
     fight: &mut Fight,
     entities: &mut [Entity],
+    fresh: &mut [Entity],
 ) {
     let active = has_active_portal(ctx, fight);
     if active {
@@ -423,9 +428,14 @@ fn scan_state(
             spawn_exit_portal(ctx, level, fight, false);
         }
     }
-    let first = entities.iter_mut().find(|e| {
+    let dragon = |e: &Entity| {
         !e.removed && matches!(&e.kind, Kind::Mob(m) if m.species == Species::EnderDragon)
-    });
+    };
+    let first = if let Some(d) = entities.iter_mut().find(|e| dragon(e)) {
+        Some(d)
+    } else {
+        fresh.iter_mut().find(|e| dragon(e))
+    };
     match first {
         None => fight.dragon_killed = true,
         Some(d) => {
@@ -450,8 +460,12 @@ fn find_or_create_dragon(
     entities: &[Entity],
     fresh: &mut Vec<Entity>,
 ) {
-    match dragons(entities).next() {
-        Some(d) => fight.dragon = Some(d.uuid),
+    let existing = dragons(entities)
+        .chain(dragons(fresh))
+        .next()
+        .map(|d| d.uuid);
+    match existing {
+        Some(id) => fight.dragon = Some(id),
         None => {
             let d = new_dragon(ctx);
             fight.dragon = Some(d.uuid);
@@ -494,6 +508,35 @@ fn spike_box(s: &Spike, min_y: i32) -> mc_entity::Aabb {
 fn inside(e: &Entity, b: &mc_entity::Aabb) -> bool {
     let a = e.aabb();
     (0..3).all(|i| a.min[i] < b.max[i] && a.max[i] > b.min[i])
+}
+
+/// A crystal on one side of the exit portal: overlapping the column two
+/// blocks from the centre, or standing on the bedrock three blocks out.
+fn crystal_on_side(e: &Entity, o: [i32; 3], dx: i32, dz: i32) -> bool {
+    if e.removed || !matches!(e.kind, Kind::Crystal(_)) {
+        return false;
+    }
+    let (x, y, z) = (
+        f64::from(o[0] + dx),
+        f64::from(o[1] + 1),
+        f64::from(o[2] + dz),
+    );
+    let column = mc_entity::Aabb {
+        min: [x, y, z],
+        max: [x + 1.0, y + 1.0, z + 1.0],
+    };
+    if inside(e, &column) {
+        return true;
+    }
+    let (sx, sz) = (dx.signum() * 3, dz.signum() * 3);
+    let feet = [
+        f64::from(o[0] + sx) + 0.5,
+        f64::from(o[1] + 1),
+        f64::from(o[2] + sz) + 0.5,
+    ];
+    (e.pos[0] - feet[0]).abs() <= 1.25
+        && (e.pos[2] - feet[2]).abs() <= 1.25
+        && (e.pos[1] - feet[1]).abs() <= 1.5
 }
 
 fn count_crystals(fight: &Fight, entities: &[Entity]) -> i32 {
@@ -687,6 +730,7 @@ fn try_respawn(
     level: &mut WorldLevel,
     fight: &mut Fight,
     entities: &[Entity],
+    fresh: &[Entity],
 ) -> bool {
     if !fight.dragon_killed || fight.respawn.is_some() {
         return false;
@@ -698,19 +742,13 @@ fn try_respawn(
         return false;
     };
     let mut found = Vec::new();
+    // Two blocks out is the column vanilla searches. The bedrock the player
+    // clicks is three blocks out; a crystal stands on that block.
     for (dx, dz) in [(0, -2), (2, 0), (0, 2), (-2, 0)] {
-        let (x, y, z) = (
-            f64::from(o[0] + dx),
-            f64::from(o[1] + 1),
-            f64::from(o[2] + dz),
-        );
-        let b = mc_entity::Aabb {
-            min: [x, y, z],
-            max: [x + 1.0, y + 1.0, z + 1.0],
-        };
         let here: Vec<u128> = entities
             .iter()
-            .filter(|e| !e.removed && matches!(e.kind, Kind::Crystal(_)) && inside(e, &b))
+            .chain(fresh.iter())
+            .filter(|e| crystal_on_side(e, o, dx, dz))
             .map(|e| e.uuid)
             .collect();
         if here.is_empty() {
@@ -1092,9 +1130,12 @@ pub fn dragon_killed(ctx: &ServerContext, level: &mut WorldLevel, dragon: u128) 
     }
     let mut state = lock(&ctx.bosses);
     let fight = state.fight.get_or_insert_with(|| Fight::load(ctx));
-    if fight.dragon != Some(dragon) {
+    // The first dragon to die is the fight's, even when its id was never
+    // written down (a second one, after a kill, is not).
+    if fight.dragon.is_some() && fight.dragon != Some(dragon) && fight.previously_killed {
         return;
     }
+    fight.dragon = Some(dragon);
     spawn_exit_portal(ctx, level, fight, true);
     spawn_new_gateway(ctx, level, fight);
     if !fight.previously_killed {
@@ -1193,32 +1234,49 @@ pub fn gateways(ctx: &ServerContext, level: &mut WorldLevel, now: i64) {
         else {
             continue;
         };
-        {
-            let mut state = lock(&ctx.bosses);
-            if state.cooldowns.get(&uuid).is_some_and(|&t| t > now) {
-                state.cooldowns.insert(uuid, now + 40);
-                continue;
-            }
-            state.cooldowns.insert(uuid, now + 40);
-        }
-        if let Some(to) = gateway_exit(ctx, level, [g.x, g.y, g.z]) {
-            crate::fx::level_event(
-                ctx,
-                3000,
-                [f64::from(g.x), f64::from(g.y), f64::from(g.z)],
-                0,
-            );
-            let _ = ctx.events.send(Event::Teleport {
-                uuid,
-                pose: Pose {
-                    x: to[0],
-                    y: to[1],
-                    z: to[2],
-                    ..pose
-                },
-            });
-        }
+        through_gateway(ctx, level, uuid, pose, [g.x, g.y, g.z], now);
     }
+}
+
+/// Sends `uuid` through the gateway at `g`. A pearl that strikes the
+/// block uses this for its thrower: the pearl is spent, and the thrower
+/// is not hurt. False while that player is still cooling down, or when
+/// the gateway has no exit.
+pub fn through_gateway(
+    ctx: &ServerContext,
+    level: &mut WorldLevel,
+    uuid: u128,
+    pose: Pose,
+    g: [i32; 3],
+    now: i64,
+) -> bool {
+    {
+        let mut state = lock(&ctx.bosses);
+        if state.cooldowns.get(&uuid).is_some_and(|&t| t > now) {
+            state.cooldowns.insert(uuid, now + 40);
+            return false;
+        }
+        state.cooldowns.insert(uuid, now + 40);
+    }
+    let Some(to) = gateway_exit(ctx, level, g) else {
+        return false;
+    };
+    crate::fx::level_event(
+        ctx,
+        3000,
+        [f64::from(g[0]), f64::from(g[1]), f64::from(g[2])],
+        0,
+    );
+    let _ = ctx.events.send(Event::Teleport {
+        uuid,
+        pose: Pose {
+            x: to[0],
+            y: to[1],
+            z: to[2],
+            ..pose
+        },
+    });
+    true
 }
 
 /// Where a gateway sends someone: its exit (found and linked the first

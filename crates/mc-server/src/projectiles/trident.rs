@@ -60,7 +60,7 @@ pub fn usable(ctx: &ServerContext, actor: &Actor, stack: &ItemStack) -> bool {
 /// level), else the throw.
 fn sound_of(ctx: &ServerContext, stack: &ItemStack) -> String {
     for (name, lvl) in crate::enchants::levels(stack) {
-        if let Some(e) = ctx.enchantments.get(&name)
+        if let Some(e) = ctx.enchantments.get().get(&name)
             && let Some(list) = e.effects["minecraft:trident_sound"].as_array()
             && let Some(s) = list
                 .get(
@@ -289,7 +289,7 @@ fn channel(t: &mut Tick, stack: Option<&ItemStack>, at: [f64; 3], on_rod: bool) 
     };
     let calls = if on_rod {
         sky && crate::enchants::levels(stack).iter().any(|(n, l)| {
-            ctx.enchantments.get(n).is_some_and(|e| {
+            ctx.enchantments.get().get(n).is_some_and(|e| {
                 ee::effects_of(&e.effects["minecraft:hit_block"])
                     .iter()
                     .any(|en| {

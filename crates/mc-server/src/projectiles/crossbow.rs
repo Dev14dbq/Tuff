@@ -71,7 +71,7 @@ fn sounds(
     stack: &ItemStack,
 ) -> (Option<String>, Option<String>, Option<String>) {
     for (name, level) in crate::enchants::levels(stack) {
-        if let Some(e) = ctx.enchantments.get(&name)
+        if let Some(e) = ctx.enchantments.get().get(&name)
             && let Some(list) = e.effects["minecraft:crossbow_charging_sounds"].as_array()
             && !list.is_empty()
         {

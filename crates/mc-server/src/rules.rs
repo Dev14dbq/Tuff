@@ -109,6 +109,13 @@ impl GameRules {
         }
     }
 
+    pub fn entries(&self) -> Vec<(String, Value)> {
+        self.values
+            .iter()
+            .map(|(key, value)| (key.clone(), *value))
+            .collect()
+    }
+
     pub fn set(&mut self, name: &str, value: Value) {
         self.values.insert(full(name), value);
         self.save();

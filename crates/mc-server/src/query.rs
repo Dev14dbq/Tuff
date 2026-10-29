@@ -108,7 +108,7 @@ fn facts(ctx: &ServerContext) -> Facts {
         a => a.to_string(),
     };
     Facts {
-        motd: ctx.config.motd.clone(),
+        motd: ctx.shown_motd.lock().expect("motd lock").clone(),
         map: ctx
             .config
             .level_dir
@@ -123,7 +123,7 @@ fn facts(ctx: &ServerContext) -> Facts {
             .values()
             .map(|p| p.profile.name.clone())
             .collect(),
-        max_players: ctx.config.max_players,
+        max_players: ctx.player_limit.load(std::sync::atomic::Ordering::Relaxed),
         port: ctx.config.port,
         ip,
     }

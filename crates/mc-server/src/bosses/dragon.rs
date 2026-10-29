@@ -15,8 +15,9 @@
 //! - only players and explosions hurt it: fully on the head, by
 //!   `damage / 4 + min(damage, 1)` elsewhere; arrows bounce off it on the
 //!   portal; a fatal blow sends it to the portal to die;
-//! - its wings fling away what they touch (5 damage unless it is perched),
-//!   head and neck hit for 10, not for half a second after it was hurt;
+//! - its wings fling away what they touch and deal 5 damage, except while
+//!   it is perched (the space under it stays open); head and neck hit for
+//!   10, not for half a second after it was hurt;
 //! - it flies through blocks, breaking all but the dragon-immune ones
 //!   (`mob_griefing`), and slows down in those;
 //! - dying takes 200 ticks: it rises, gives 12000 experience the first time
@@ -482,7 +483,8 @@ fn phase_tick(ctx: &ServerContext, me: &mut Entity, w: &World, out: &mut Vec<Eff
                         d.yaw_speed *= 0.8;
                         let f = dx.hypot(dz) + 1.0;
                         d.yaw_speed += (turn * 0.7 / f.min(40.0) / f) as f32;
-                        m.yaw += m.dragon().map_or(0.0, |d| d.yaw_speed);
+                        let speed = f64::from(d.yaw_speed) * 0.1;
+                        m.yaw += speed as f32;
                     }
                 }
             } else if time >= 100 {
@@ -795,9 +797,15 @@ fn fly(me: &mut Entity) {
     let d3 = dx * dx + dy * dy + dz * dz;
     let rise = fly_speed(phase);
     let flat = dx.hypot(dz);
-    if flat > 0.0 {
-        dy = (dy / flat).clamp(-rise, rise);
-    }
+    // A target straight above would otherwise add the whole height to the
+    // vertical speed. The client flaps with `pow(2, vel.y)`, so that speed
+    // has to stay within the phase's climb rate.
+    let slope = if flat > 1.0e-4 {
+        dy / flat
+    } else {
+        dy.signum()
+    };
+    dy = slope.clamp(-rise, rise);
     me.vel[1] += dy * 0.01;
     let yaw = wrap(f64::from(m.yaw));
     let to = normalize([dx, t[1] - pos[1], dz]);
@@ -895,7 +903,8 @@ fn overlaps(a: &mc_entity::Aabb, b: &mc_entity::Aabb) -> bool {
     (0..3).all(|k| a.min[k] < b.max[k] && a.max[k] > b.min[k])
 }
 
-/// Wings fling away whoever they touch; head and neck hit.
+/// Wings fling away whoever they touch, unless it is perched. Head and
+/// neck hit either way.
 fn touch(ctx: &ServerContext, me: &Entity, entities: &mut [Entity], i: usize, players: &[Target]) {
     let Kind::Mob(m) = &me.kind else {
         return;
@@ -938,13 +947,22 @@ fn touch(ctx: &ServerContext, me: &Entity, entities: &mut [Entity], i: usize, pl
     };
     for p in players.iter().filter(|p| p.present) {
         let b = player_box(p);
-        for w in &wings {
-            if overlaps(w, &b) {
-                let (dx, dz) = (p.pos[0] - cx, p.pos[2] - cz);
-                let d2 = (dx * dx + dz * dz).max(0.1);
-                crate::combat::push_player(ctx, p.uuid, p.id, [dx / d2 * 4.0, 0.2, dz / d2 * 4.0]);
-                if !sitting && p.targetable {
-                    crate::combat::hurt_player(ctx, p.uuid, &hit(5.0));
+        // Perched, the grown wing boxes cover the fountain. Vanilla leaves
+        // that space alone: only a flying dragon flings.
+        if !sitting {
+            for w in &wings {
+                if overlaps(w, &b) {
+                    let (dx, dz) = (p.pos[0] - cx, p.pos[2] - cz);
+                    let d2 = (dx * dx + dz * dz).max(0.1);
+                    crate::combat::push_player(
+                        ctx,
+                        p.uuid,
+                        p.id,
+                        [dx / d2 * 4.0, 0.2, dz / d2 * 4.0],
+                    );
+                    if p.targetable {
+                        crate::combat::hurt_player(ctx, p.uuid, &hit(5.0));
+                    }
                 }
             }
         }
@@ -959,14 +977,14 @@ fn touch(ctx: &ServerContext, me: &Entity, entities: &mut [Entity], i: usize, pl
             continue;
         }
         let b = o.aabb();
-        for w in &wings {
-            if overlaps(w, &b) {
-                let (dx, dz) = (o.pos[0] - cx, o.pos[2] - cz);
-                let d2 = (dx * dx + dz * dz).max(0.1);
-                o.vel[0] += dx / d2 * 4.0;
-                o.vel[1] += 0.2;
-                o.vel[2] += dz / d2 * 4.0;
-                if !sitting {
+        if !sitting {
+            for w in &wings {
+                if overlaps(w, &b) {
+                    let (dx, dz) = (o.pos[0] - cx, o.pos[2] - cz);
+                    let d2 = (dx * dx + dz * dz).max(0.1);
+                    o.vel[0] += dx / d2 * 4.0;
+                    o.vel[1] += 0.2;
+                    o.vel[2] += dz / d2 * 4.0;
                     let h = crate::mobs::hurt::Harm {
                         by: Some(me.id),
                         killer: Some("minecraft:ender_dragon".into()),
@@ -1110,19 +1128,7 @@ fn tick_death(ctx: &ServerContext, level: &mut WorldLevel, me: &mut Entity) {
         crate::xp::spawn(ctx, me.pos, (total as f32 * 0.08).floor() as i32);
     }
     if t == 1 {
-        fx::emit(
-            ctx,
-            fx::Fx::Level(play::LevelEvent {
-                event: 1028,
-                position: Position::new(
-                    me.pos[0].floor() as i32,
-                    me.pos[1].floor() as i32,
-                    me.pos[2].floor() as i32,
-                ),
-                data: 0,
-                global: true,
-            }),
-        );
+        fx::heard(ctx, 1028, me.pos);
     }
     me.pos[1] += 0.1;
     if t >= DEATH_TICKS {

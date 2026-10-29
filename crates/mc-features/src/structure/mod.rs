@@ -15,7 +15,7 @@ pub mod stronghold;
 pub mod template;
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use mc_worldgen::random::RandomSource;
@@ -158,7 +158,8 @@ impl Ctx2<'_> {
 
 pub struct Structures {
     facts: Arc<Facts>,
-    template_root: PathBuf,
+    /// Data folders, vanilla first, for structure templates.
+    roots: Vec<PathBuf>,
     templates: Templates,
     pools: HashMap<String, Arc<Pool>>,
     pub structures: Vec<Structure>,
@@ -221,40 +222,22 @@ const STEPS: [&str; 11] = [
     "top_layer_modification",
 ];
 
-fn read_dir_json(dir: &Path) -> Vec<(String, Value)> {
-    let mut out = Vec::new();
-    fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, Value)>) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(base, &p, out);
-            } else if p.extension().is_some_and(|x| x == "json")
-                && let Ok(text) = std::fs::read_to_string(&p)
-                && let Ok(v) = serde_json::from_str(&text)
-            {
-                let rel = p.strip_prefix(base).unwrap_or(&p).with_extension("");
-                let id = rel.to_string_lossy().replace('\\', "/");
-                out.push((format!("minecraft:{id}"), v));
-            }
-        }
-    }
-    walk(dir, dir, &mut out);
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
-}
-
 /// Biome ids of a holder set: an id, a list, or a tag (`#...`).
-fn biome_set(v: &Value, tags: &Path, ids: &HashMap<String, u32>, depth: usize) -> HashSet<u32> {
+fn biome_set(
+    v: &Value,
+    roots: &[PathBuf],
+    ids: &HashMap<String, u32>,
+    depth: usize,
+) -> HashSet<u32> {
     let mut out = HashSet::new();
     let add = |name: &str, out: &mut HashSet<u32>| {
         if let Some(tag) = name.strip_prefix('#') {
             if depth > 8 {
                 return;
             }
-            let path = tags.join(format!("{}.json", tag.trim_start_matches("minecraft:")));
+            let Some(path) = crate::pack::tag_file(roots, tag) else {
+                return;
+            };
             if let Ok(text) = std::fs::read_to_string(path)
                 && let Ok(t) = serde_json::from_str::<Value>(&text)
             {
@@ -262,7 +245,7 @@ fn biome_set(v: &Value, tags: &Path, ids: &HashMap<String, u32>, depth: usize) -
                     let n = e.as_str().or_else(|| e["id"].as_str()).unwrap_or("");
                     out.extend(biome_set(
                         &Value::String(n.to_owned()),
-                        tags,
+                        roots,
                         ids,
                         depth + 1,
                     ));
@@ -287,25 +270,32 @@ fn biome_set(v: &Value, tags: &Path, ids: &HashMap<String, u32>, depth: usize) -
 }
 
 impl Structures {
+    /// `roots` are `data` folders, vanilla first. A later file replaces the
+    /// same structure, pool, processor list, or structure set id.
     pub fn load(
-        worldgen: &Path,
+        roots: &[PathBuf],
         facts: Arc<Facts>,
         loader: &Loader,
         biome_ids: &HashMap<String, u32>,
     ) -> Self {
-        let data = worldgen.parent().unwrap_or(worldgen).to_owned();
-        let tags = data.join("tags/worldgen/biome");
-        let lists: HashMap<String, Value> = read_dir_json(&worldgen.join("processor_list"))
+        let lists: HashMap<String, Value> = crate::pack::read_kind(roots, "processor_list")
             .into_iter()
-            .map(|(k, v)| (k.trim_start_matches("minecraft:").to_owned(), v))
+            .map(|(k, v)| {
+                (
+                    k.strip_prefix("minecraft:")
+                        .unwrap_or(k.as_str())
+                        .to_owned(),
+                    v,
+                )
+            })
             .collect();
-        let pools: HashMap<String, Arc<Pool>> = read_dir_json(&worldgen.join("template_pool"))
+        let pools: HashMap<String, Arc<Pool>> = crate::pack::read_kind(roots, "template_pool")
             .into_iter()
             .map(|(k, v)| (k, Arc::new(Pool::parse(&v, loader, &lists))))
             .collect();
         let mut structures = Vec::new();
         let mut index = HashMap::new();
-        for (id, v) in read_dir_json(&worldgen.join("structure")) {
+        for (id, v) in crate::pack::read_kind(roots, "structure") {
             let ty = v["type"]
                 .as_str()
                 .unwrap_or("")
@@ -342,7 +332,7 @@ impl Structures {
             structures.push(Structure {
                 id,
                 kind,
-                biomes: biome_set(&v["biomes"], &tags, biome_ids, 0),
+                biomes: biome_set(&v["biomes"], roots, biome_ids, 0),
                 step,
                 adapt,
             });
@@ -352,7 +342,7 @@ impl Structures {
             by_step[s.step].push(i);
         }
         let mut sets = Vec::new();
-        for (id, v) in read_dir_json(&worldgen.join("structure_set")) {
+        for (id, v) in crate::pack::read_kind(roots, "structure_set") {
             let list: Vec<(usize, i32)> = v["structures"]
                 .as_array()
                 .into_iter()
@@ -369,7 +359,7 @@ impl Structures {
                     distance: p["distance"].as_i64().unwrap_or(32) as i32,
                     spread: p["spread"].as_i64().unwrap_or(3) as i32,
                     count: p["count"].as_i64().unwrap_or(128) as i32,
-                    preferred: biome_set(&p["preferred_biomes"], &tags, biome_ids, 0),
+                    preferred: biome_set(&p["preferred_biomes"], roots, biome_ids, 0),
                 }
             } else {
                 Placement::Spread {
@@ -402,11 +392,11 @@ impl Structures {
         }
         let monument_biomes = biome_set(
             &Value::String("#minecraft:required_ocean_monument_surrounding".into()),
-            &tags,
+            roots,
             biome_ids,
             0,
         );
-        let cold_biomes = read_dir_json(&worldgen.join("biome"))
+        let cold_biomes = crate::pack::read_kind(roots, "biome")
             .into_iter()
             .filter(|(_, v)| v["temperature"].as_f64().unwrap_or(0.5) < 0.15)
             .filter_map(|(id, _)| biome_ids.get(&id).copied())
@@ -414,7 +404,7 @@ impl Structures {
         Self {
             facts,
             cold_biomes,
-            template_root: data.join("structure"),
+            roots: roots.to_vec(),
             templates: Templates::default(),
             pools,
             structures,
@@ -422,9 +412,9 @@ impl Structures {
             by_step,
             rings: Mutex::new(HashMap::new()),
             monument_biomes,
-            observed_dir: data
-                .parent()
-                .and_then(Path::parent)
+            observed_dir: roots
+                .first()
+                .and_then(|d| d.parent())
                 .map(|d| d.join("observed"))
                 .unwrap_or_default(),
             observed: std::sync::OnceLock::new(),
@@ -452,7 +442,7 @@ impl Structures {
     }
 
     pub fn template(&self, id: &str) -> Option<Arc<Template>> {
-        self.templates.get(&self.template_root, &self.facts, id)
+        self.templates.get(&self.roots, &self.facts, id)
     }
 
     pub fn pool(&self, id: &str) -> Option<Arc<Pool>> {

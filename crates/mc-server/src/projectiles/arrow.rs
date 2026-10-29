@@ -22,9 +22,13 @@ pub fn fire_bow(ctx: &crate::context::ServerContext, actor: Actor, hand: i32, ti
         return;
     };
     let creative = actor.game_mode == 1;
-    let infinity = held::enchant(bow.comps.as_ref(), "infinity") > 0;
     let ammo = held::find(ctx, actor.uuid, super::is_arrow);
-    if ammo.is_none() && !creative && !infinity {
+    // Infinity still needs an arrow in the inventory. It only replaces a
+    // plain one: tipped and spectral arrows are spent, as the enchantment's
+    // ammo rule matches `minecraft:arrow` alone.
+    let infinite = held::enchant(bow.comps.as_ref(), "infinity") > 0
+        && ammo.as_ref().is_some_and(|a| a.name == "minecraft:arrow");
+    if ammo.is_none() && !creative {
         return;
     }
     let power = power(ticks);
@@ -53,8 +57,9 @@ pub fn fire_bow(ctx: &crate::context::ServerContext, actor: Actor, hand: i32, ti
     }
     arrow.punch = held::enchant(bow.comps.as_ref(), "punch");
     arrow.flame = held::enchant(bow.comps.as_ref(), "flame") > 0;
-    if creative || infinity {
-        // Infinity arrows can only be picked up by creative players.
+    if creative || infinite {
+        // An arrow that was not taken from the inventory can only be
+        // picked up by a creative player.
         arrow.pickup = Pickup::Creative;
     }
     let at = muzzle(&actor);
@@ -78,7 +83,7 @@ pub fn fire_bow(ctx: &crate::context::ServerContext, actor: Actor, hand: i32, ti
     );
     if !creative {
         held::wear(ctx, actor.uuid, bow.slot, 1);
-        if let (Some(a), false) = (&ammo, infinity) {
+        if let (Some(a), false) = (&ammo, infinite) {
             held::consume(ctx, actor.uuid, a.slot, 1);
         }
     }

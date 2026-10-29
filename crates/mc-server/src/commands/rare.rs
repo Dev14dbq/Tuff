@@ -56,6 +56,13 @@ impl State {
     pub fn use_sequence(&mut self, id: &str) {
         self.sequences.insert(id.to_owned());
     }
+
+    /// Colour and style `/waypoint` set for this player, if either was.
+    pub fn waypoint(&self, uuid: u128) -> (Option<String>, Option<String>) {
+        self.waypoints
+            .get(&uuid)
+            .map_or((None, None), |w| (w.color.clone(), w.style.clone()))
+    }
 }
 
 pub fn run(r: &mut Run, path: &[&str]) -> Option<Result<i32>> {
@@ -515,6 +522,7 @@ fn waypoint_modify(r: &mut Run, path: &[&str]) -> Result<i32> {
         }
     };
     drop(state);
+    r.out.events.push(Event::LocatorRefresh);
     r.success(msg, true);
     Ok(1)
 }

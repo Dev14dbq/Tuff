@@ -52,6 +52,7 @@ impl Breaker {
             .is_some_and(|h| held::enchant(h.comps.as_ref(), "silk_touch") > 0);
         let tool = held.as_ref().is_some_and(|h| {
             ctx.recipes
+                .get()
                 .item_tags
                 .get("minecraft:breaks_decorated_pots")
                 .is_some_and(|tag| tag.contains(&h.stack.item))
@@ -155,8 +156,20 @@ pub fn harvest(ctx: &ServerContext, at: Position, state: u32, breaker: Breaker) 
     Harvest { drops, shown }
 }
 
-/// A projectile's path. Shatters a decorated pot it meets.
+fn projectiles_break(ctx: &ServerContext) -> bool {
+    ctx.game_rule_bool("projectiles_can_break_blocks")
+}
+
+fn fragile(name: &str) -> bool {
+    name == "minecraft:chorus_flower" || name == "minecraft:pointed_dripstone"
+}
+
+/// A projectile's path. With `projectiles_can_break_blocks`, it shatters a
+/// decorated pot and breaks a chorus flower or pointed dripstone.
 pub fn projectile(ctx: &ServerContext, from: [f64; 3], to: [f64; 3]) {
+    if !projectiles_break(ctx) {
+        return;
+    }
     let Some((_, cell, _)) = crate::hits::first_solid(ctx, from, to) else {
         return;
     };
@@ -165,7 +178,18 @@ pub fn projectile(ctx: &ServerContext, from: [f64; 3], to: [f64; 3]) {
     let Some(state) = ctx.world.block(at, blocks) else {
         return;
     };
-    if blocks.block_name(state) != Some(POT) {
+    let Some(name) = blocks.block_name(state) else {
+        return;
+    };
+    if name != POT {
+        if fragile(name) {
+            let mut level = WorldLevel::new(ctx);
+            burst(ctx, &mut level, at);
+            let changes = level.into_changes();
+            if !changes.is_empty() {
+                let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
+            }
+        }
         return;
     }
     let harvest = harvest(ctx, at, state, Breaker::Projectile);
@@ -191,6 +215,63 @@ pub fn projectile(ctx: &ServerContext, from: [f64; 3], to: [f64; 3]) {
     if !changes.is_empty() {
         let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
     }
+}
+
+/// A wind burst reaches `at`. Same blocks a projectile breaks, on the
+/// level the burst is already editing.
+pub fn burst(ctx: &ServerContext, level: &mut WorldLevel, at: Position) {
+    if !projectiles_break(ctx) {
+        return;
+    }
+    let blocks = &ctx.data.blocks;
+    let Some(state) = ctx.world.block(at, blocks) else {
+        return;
+    };
+    let Some(name) = blocks.block_name(state) else {
+        return;
+    };
+    if name == POT {
+        let harvest = harvest(ctx, at, state, Breaker::Projectile);
+        let left = crate::blocks::break_block(&ctx.data, &ctx.rules, at, state, &|p| {
+            ctx.world.block(p, blocks)
+        })[0]
+            .1;
+        if !level.set_block(at, left) {
+            return;
+        }
+        if ctx.game_rule_bool("block_drops") {
+            for drop in harvest.drops {
+                crate::tick::drop_item(ctx, at, drop);
+            }
+        }
+        let _ = ctx.events.send(Event::BlockBroken {
+            by: 0,
+            position: at,
+            state: harvest.shown,
+        });
+        return;
+    }
+    if !fragile(name) {
+        return;
+    }
+    let left = crate::blocks::break_block(&ctx.data, &ctx.rules, at, state, &|p| {
+        ctx.world.block(p, blocks)
+    })[0]
+        .1;
+    if !level.set_block(at, left) {
+        return;
+    }
+    if ctx.game_rule_bool("block_drops") {
+        let props = |k: &str| blocks.property(state, k).map(str::to_owned);
+        for drop in ctx.loot.get().drops(name, &props) {
+            crate::tick::drop_item(ctx, at, drop);
+        }
+    }
+    let _ = ctx.events.send(Event::BlockBroken {
+        by: 0,
+        position: at,
+        state,
+    });
 }
 
 /// The one slot, rolling `LootTable` the first time it is read.
@@ -307,13 +388,17 @@ fn contents(ctx: &ServerContext, at: Position, data: &Compound) -> Option<ItemSt
 }
 
 fn roll_one(ctx: &ServerContext, at: Position, table: &str) -> Option<ItemStack> {
-    let table = ctx.loot.table(table)?.clone();
+    let table = ctx.loot.get().table(table)?.clone();
     let cx = crate::loot::LootCtx {
         origin: Some(centre(at)),
         ..crate::loot::LootCtx::default()
     };
     let env = crate::commands::loot::Env(ctx);
-    ctx.loot.roll(&env, &table, &cx).first().map(|d| d.stack())
+    ctx.loot
+        .get()
+        .roll(&env, &table, &cx)
+        .first()
+        .map(|d| d.stack())
 }
 
 fn pot_item(ctx: &ServerContext, sides: &[ItemStack; 4]) -> crate::loot::Drop {

@@ -137,6 +137,25 @@ impl Tree {
         Ok(tree)
     }
 
+    /// A command of our own, at the root, for operators of `level`.
+    pub fn add_literal(&mut self, name: &str, level: u8) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        let id = self.nodes.len();
+        self.nodes.push(Node {
+            name: name.to_owned(),
+            kind: Kind::Literal,
+            executable: true,
+            children: Vec::new(),
+            redirect: None,
+            suggestions: None,
+            level,
+            restricted: true,
+        });
+        self.nodes[ROOT].children.push(id);
+    }
+
     pub fn child(&self, node: usize, name: &str) -> Option<usize> {
         self.nodes[node]
             .children

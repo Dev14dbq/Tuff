@@ -778,14 +778,18 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             true
         }
         Goal::Stare { pending, .. } => {
-            if m.below(10) != 0 {
+            let e = eye(m, b.pos);
+            let who = s.nearest(b.pos, 64.0, |p| p.targetable && looks_at(p, e, s));
+            let Some(who) = who else {
+                return false;
+            };
+            // Vanilla notices a look one tick in ten. Inside the freeze
+            // distance it has already stopped, so the countdown starts now.
+            if dist_sq(who.pos, b.pos) > 256.0 && m.below(10) != 0 {
                 return false;
             }
-            let e = eye(m, b.pos);
-            *pending = s
-                .nearest(b.pos, 64.0, |p| p.targetable && looks_at(p, e, s))
-                .map(|p| p.id);
-            pending.is_some()
+            *pending = Some(who.id);
+            true
         }
         Goal::BreakDoor { door, time, stage } => {
             if !m.breaks_doors || s.difficulty < 3 || !s.griefing || !m.bumped {
@@ -796,7 +800,7 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
             *stage = -1;
             door.is_some()
         }
-        Goal::Freeze => stared_by_target(m, b, s),
+        Goal::Freeze => looked_at(m, b, s),
         Goal::TakeBlock => m.carried.is_none() && s.griefing && m.below(10) == 0,
         Goal::LeaveBlock => m.carried.is_some() && s.griefing && m.below(1000) == 0,
         Goal::Perch {
@@ -928,12 +932,12 @@ fn can_use(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
     }
 }
 
-/// Whether an enderman's target, within 16 blocks, looks it in the eyes.
-fn stared_by_target(m: &Mob, b: &Body, s: &Senses) -> bool {
+/// Whether a player within 16 blocks is looking this enderman in the eyes.
+/// It stops where it stands as soon as that is true, before it turns hostile.
+fn looked_at(m: &Mob, b: &Body, s: &Senses) -> bool {
     let e = eye(m, b.pos);
-    m.target
-        .and_then(|id| s.player(id))
-        .is_some_and(|p| p.targetable && dist_sq(p.pos, b.pos) <= 256.0 && looks_at(p, e, s))
+    s.nearest(b.pos, 16.0, |p| p.targetable && looks_at(p, e, s))
+        .is_some()
 }
 
 /// Whether a player looks an enderman in the eyes (no pumpkin on).
@@ -961,7 +965,27 @@ fn looks_at(p: &Target, eye_pos: [f64; 3], s: &Senses) -> bool {
         return false;
     }
     let dot = (look[0] * to[0] + look[1] * to[1] + look[2] * to[2]) / d;
-    dot > 1.0 - 0.025 / d && line_clear(s.world, from, eye_pos)
+    // The cone is vanilla's. The ray stops short of each body, so the
+    // block a player is standing in, or the one the head pokes into, is
+    // not a wall between them.
+    if dot <= 1.0 - 0.025 / d {
+        return false;
+    }
+    if d < 1.0 {
+        return true;
+    }
+    let pull = 0.5 / d;
+    let a = [
+        from[0] + to[0] * pull,
+        from[1] + to[1] * pull,
+        from[2] + to[2] * pull,
+    ];
+    let b = [
+        eye_pos[0] - to[0] * pull,
+        eye_pos[1] - to[1] * pull,
+        eye_pos[2] - to[2] * pull,
+    ];
+    line_clear(s.world, a, b)
 }
 
 fn owner_of<'a>(m: &Mob, s: &'a Senses) -> Option<&'a Target> {
@@ -1086,7 +1110,7 @@ fn can_continue(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses) -> bool {
         Goal::BreakDoor { door, time, .. } => {
             door.is_some_and(|d| chores::door_holds(b, s, d, *time))
         }
-        Goal::Freeze => stared_by_target(m, b, s),
+        Goal::Freeze => looked_at(m, b, s),
         Goal::TakeBlock | Goal::LeaveBlock => false,
         Goal::Perch {
             bed,
@@ -1209,7 +1233,13 @@ fn start(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobE
                 out.push(MobEvent::CaravanJoin { head });
             }
         }
-        Goal::Freeze => m.nav.stop(),
+        Goal::Freeze => {
+            if !m.stared {
+                m.stared = true;
+                m.dirty = true;
+            }
+            m.nav.stop();
+        }
         Goal::WakeFriends | Goal::Patrol { .. } | Goal::Notorious { .. } => {}
         Goal::OfferFlower { left, .. } => {
             *left = 400;
@@ -1298,6 +1328,16 @@ fn stop(g: &mut Goal, m: &mut Mob, out: &mut Vec<MobEvent>) {
             *pending = None;
             if m.anger == 0 {
                 m.target = None;
+                if m.stared {
+                    m.stared = false;
+                    m.dirty = true;
+                }
+            }
+        }
+        Goal::Freeze => {
+            if m.target.is_none() && m.anger == 0 && m.stared {
+                m.stared = false;
+                m.dirty = true;
             }
         }
         Goal::HurtBy { .. } | Goal::OwnerHurtBy | Goal::OwnerHurt
@@ -1581,6 +1621,10 @@ fn tick_goal(g: &mut Goal, m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<
             far,
         } => {
             if let Some(id) = *pending {
+                // Stood still while the stare finishes, so a glance can land.
+                if s.player(id).is_some_and(|p| dist_sq(p.pos, b.pos) <= 256.0) {
+                    m.nav.stop();
+                }
                 *aggro -= 1;
                 if *aggro <= 0 {
                     m.target = Some(id);

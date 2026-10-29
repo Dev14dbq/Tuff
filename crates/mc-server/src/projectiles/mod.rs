@@ -170,6 +170,9 @@ enum Class {
 
 /// One tick of a projectile.
 pub fn tick(t: &mut Tick, e: &mut Entity) {
+    if e.removed {
+        return;
+    }
     let Kind::Projectile(p) = &e.kind else {
         return;
     };
@@ -671,6 +674,142 @@ pub(crate) mod tests {
         // In the air nothing holds it.
         assert_eq!(a.stuck, 0);
         assert!(e.vel[1] < 0.0);
+    }
+
+    #[test]
+    fn letting_go_of_a_drawn_bow_shoots() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let uuid = 7;
+        let bow = ctx.items.id("minecraft:bow").unwrap();
+        let arrow_item = ctx.items.id("minecraft:arrow").unwrap();
+        let mut hands = crate::interact::Hands::default();
+        hands.slots[36] = Some(mc_protocol::packets::play::ItemStack::new(bow, 1));
+        hands.slots[37] = Some(mc_protocol::packets::play::ItemStack::new(arrow_item, 5));
+        lock(&ctx.inventories).insert(uuid, hands);
+        lock(&ctx.time).age = 1_000;
+        let actor = Actor {
+            uuid,
+            entity_id: 1,
+            game_mode: 0,
+            pose: crate::context::Pose {
+                x: 0.5,
+                y: -60.0,
+                z: 0.5,
+                yaw: 0.0,
+                pitch: 0.0,
+                on_ground: true,
+            },
+            sneaking: false,
+        };
+        let arrows = || {
+            lock(&ctx.entities)
+                .iter()
+                .filter(|e| matches!(e.kind, Kind::Projectile(_)))
+                .count()
+        };
+        use_item(&ctx, actor, 0, 0.0, 0.0);
+        assert!(lock(&ctx.shooting).draws.contains_key(&uuid));
+        // A tap is not a shot.
+        lock(&ctx.time).age = 1_002;
+        release(&ctx, actor);
+        assert_eq!(arrows(), 0);
+        assert!(lock(&ctx.shooting).draws.is_empty());
+        // Held for a second: the arrow leaves and one is spent.
+        lock(&ctx.time).age = 2_000;
+        use_item(&ctx, actor, 0, 0.0, 0.0);
+        lock(&ctx.time).age = 2_020;
+        release(&ctx, actor);
+        assert_eq!(arrows(), 1);
+        let shot = lock(&ctx.entities)
+            .iter()
+            .find(|e| matches!(e.kind, Kind::Projectile(_)))
+            .cloned()
+            .unwrap();
+        assert!(shot.vel[2] > 2.5, "{:?}", shot.vel);
+        let left = lock(&ctx.inventories)[&uuid].slots[37]
+            .as_ref()
+            .unwrap()
+            .count;
+        assert_eq!(left, 4);
+    }
+
+    #[test]
+    fn infinity_spares_plain_arrows_and_spends_tipped_ones() {
+        let Some(ctx) = flat() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let uuid = 8;
+        let bow_id = ctx.items.id("minecraft:bow").unwrap();
+        let arrow_item = ctx.items.id("minecraft:arrow").unwrap();
+        let tipped = ctx.items.id("minecraft:tipped_arrow").unwrap();
+        let mut bow = mc_protocol::packets::play::ItemStack::new(bow_id, 1);
+        let mut levels = mc_nbt::Compound::new();
+        levels.insert("minecraft:infinity", mc_nbt::Tag::Int(1));
+        bow.components
+            .set("enchantments", mc_nbt::Tag::Compound(levels));
+        let mut hands = crate::interact::Hands::default();
+        hands.slots[36] = Some(bow);
+        hands.slots[37] = Some(mc_protocol::packets::play::ItemStack::new(arrow_item, 5));
+        lock(&ctx.inventories).insert(uuid, hands);
+        let actor = Actor {
+            uuid,
+            entity_id: 1,
+            game_mode: 0,
+            pose: crate::context::Pose {
+                x: 0.5,
+                y: -60.0,
+                z: 0.5,
+                yaw: 0.0,
+                pitch: 0.0,
+                on_ground: true,
+            },
+            sneaking: false,
+        };
+        let count = |slot: usize| {
+            lock(&ctx.inventories)[&uuid].slots[slot]
+                .as_ref()
+                .map(|s| s.count)
+                .unwrap_or(0)
+        };
+        let take_arrow = || {
+            let mut entities = lock(&ctx.entities);
+            let i = entities
+                .iter()
+                .position(|e| matches!(e.kind, Kind::Projectile(_)))
+                .unwrap();
+            entities.swap_remove(i)
+        };
+        arrow::fire_bow(&ctx, actor, 0, 20);
+        assert_eq!(count(37), 5);
+        let shot = take_arrow();
+        let Kind::Projectile(p) = &shot.kind else {
+            panic!()
+        };
+        let Shot::Arrow(a) = &p.shot else { panic!() };
+        assert_eq!(a.pickup, mc_entity::extra::Pickup::Creative);
+
+        lock(&ctx.inventories).get_mut(&uuid).unwrap().slots[37] =
+            Some(mc_protocol::packets::play::ItemStack::new(tipped, 5));
+        arrow::fire_bow(&ctx, actor, 0, 20);
+        assert_eq!(count(37), 4);
+        let shot = take_arrow();
+        let Kind::Projectile(p) = &shot.kind else {
+            panic!()
+        };
+        let Shot::Arrow(a) = &p.shot else { panic!() };
+        assert_eq!(a.pickup, mc_entity::extra::Pickup::Yes);
+
+        lock(&ctx.inventories).get_mut(&uuid).unwrap().slots[37] = None;
+        arrow::fire_bow(&ctx, actor, 0, 20);
+        assert!(
+            lock(&ctx.entities)
+                .iter()
+                .all(|e| !matches!(e.kind, Kind::Projectile(_)))
+        );
     }
 
     #[test]

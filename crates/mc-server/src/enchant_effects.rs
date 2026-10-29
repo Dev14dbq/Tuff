@@ -369,8 +369,9 @@ pub fn modify(
 ) -> f32 {
     let item = ctx.items.name(stack.item).unwrap_or("").to_owned();
     let mut v = v;
+    let enchants = ctx.enchantments.get();
     for (name, level) in crate::enchants::levels(stack) {
-        let Some(e) = ctx.enchantments.get(&name) else {
+        let Some(e) = enchants.get(&name) else {
             continue;
         };
         let s = Situation { level, ..*s };
@@ -402,6 +403,7 @@ pub fn modify_worn(ctx: &ServerContext, uuid: u128, component: &str, s: &Situati
             .filter(|(i, st, main)| {
                 crate::enchants::levels(st).iter().any(|(n, _)| {
                     ctx.enchantments
+                        .get()
                         .get(n)
                         .is_some_and(|e| in_slot(&e.slots, *i, *main))
                 })
@@ -419,6 +421,7 @@ pub fn modify_worn(ctx: &ServerContext, uuid: u128, component: &str, s: &Situati
 pub fn has_effect(ctx: &ServerContext, stack: &ItemStack, component: &str) -> bool {
     crate::enchants::levels(stack).iter().any(|(name, _)| {
         ctx.enchantments
+            .get()
             .get(name)
             .is_some_and(|e| e.effects.get(component).is_some())
     })
@@ -460,6 +463,7 @@ fn slot_index(name: &str, main: usize) -> usize {
 /// Whether the enchantment acts from this equipment slot.
 pub fn acts_from(ctx: &ServerContext, enchantment: &str, slot: &str) -> bool {
     ctx.enchantments
+        .get()
         .get(enchantment)
         .is_some_and(|e| in_slot(&e.slots, slot_index(slot, 36), 36))
 }
@@ -493,9 +497,10 @@ pub fn gear_attributes(
     gear: &[(usize, &'static str, ItemStack)],
 ) -> Vec<(String, AttributeModifier)> {
     let mut out = Vec::new();
+    let enchants = ctx.enchantments.get();
     for (_, slot, stack) in gear {
         for (name, level) in crate::enchants::levels(stack) {
-            let Some(e) = ctx.enchantments.get(&name) else {
+            let Some(e) = enchants.get(&name) else {
                 continue;
             };
             if !acts_from(ctx, &name, slot) {
@@ -534,7 +539,7 @@ pub fn immune(ctx: &ServerContext, uuid: u128, damage_type: &str) -> bool {
         let item = ctx.items.name(stack.item).unwrap_or("").to_owned();
         crate::enchants::levels(stack).iter().any(|(name, level)| {
             acts_from(ctx, name, slot)
-                && ctx.enchantments.get(name).is_some_and(|e| {
+                && ctx.enchantments.get().get(name).is_some_and(|e| {
                     let s = Situation { level: *level, ..s };
                     effects_of(&e.effects["minecraft:damage_immunity"])
                         .iter()
@@ -631,13 +636,14 @@ pub fn post_attack(
     s: &Situation,
 ) -> Vec<PostAttack> {
     let mut out = Vec::new();
+    let enchants = ctx.enchantments.get();
     for (slot_index, slot, stack) in gear {
         let item = ctx.items.name(stack.item).unwrap_or("").to_owned();
         for (name, level) in crate::enchants::levels(stack) {
             if !acts_from(ctx, &name, slot) {
                 continue;
             }
-            let Some(e) = ctx.enchantments.get(&name) else {
+            let Some(e) = enchants.get(&name) else {
                 continue;
             };
             let s = Situation { level, ..*s };

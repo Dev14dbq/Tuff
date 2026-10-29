@@ -855,7 +855,10 @@ impl Mob {
                 let size = 1 << mob.below(3);
                 mob.set_size(size);
             }
-            Species::EnderDragon | Species::Wither => mob.persistent = true,
+            // A natural sulfur cube is the large one (size 2). The client
+            // draws the model at that size; 1 is the small cube.
+            Species::SulfurCube => mob.set_size(2),
+            Species::EnderDragon | Species::Wither | Species::Shulker => mob.persistent = true,
             Species::SnowGolem => mob.quirks.pumpkin = true,
             // Land animals (Cursor)
             Species::Goat => {
@@ -920,6 +923,15 @@ impl Mob {
 
     pub fn set_baby(&mut self, baby: bool) {
         self.baby_age = if baby { -24000 } else { 0 };
+        // Small sulfur cubes are size 1, large ones size 2. The client
+        // scales the model by this, and halves an adult again.
+        if self.species == Species::SulfurCube {
+            let want = if baby { 1 } else { self.size.max(2) };
+            if self.size != want {
+                self.set_size(want);
+                return;
+            }
+        }
         self.dirty = true;
     }
 
@@ -947,13 +959,21 @@ impl Mob {
         self.effects.active.get(name).map_or(0, |i| i.amplifier + 1)
     }
 
-    /// Slimes and magma cubes: size sets health, speed and damage.
+    /// Slimes, magma cubes and sulfur cubes: size sets health and speed.
+    /// A sulfur cube of size 1 is the small one (4 health, speed 0.3); size
+    /// 2 is the large one (8 health, speed 0.4).
     pub fn set_size(&mut self, size: i32) {
         self.size = size.clamp(1, 127);
         if matches!(self.species, Species::Slime | Species::MagmaCube) {
             let s = self.size as f32;
             self.set_max_health(s * s);
             self.speed_attr = 0.2 + 0.1 * f64::from(self.size);
+        } else if self.species == Species::SulfurCube {
+            self.set_max_health(4.0 * self.size as f32);
+            self.speed_attr = 0.2 + 0.1 * f64::from(self.size);
+            if self.size <= 1 && self.baby_age >= 0 {
+                self.baby_age = -24000;
+            }
         }
         self.dirty = true;
     }
@@ -965,6 +985,11 @@ impl Mob {
             Species::Slime | Species::MagmaCube => {
                 let s = f64::from(self.size);
                 (w * s, h * s)
+            }
+            // The type's box is 0.49; size 2 is the large cube (0.98).
+            Species::SulfurCube => {
+                let s = f64::from(self.size.max(1));
+                (0.49 * s, 0.49 * s)
             }
             Species::Phantom => {
                 let k = 1.0 + 0.15 * f64::from(self.size);

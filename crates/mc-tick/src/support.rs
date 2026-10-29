@@ -9,7 +9,7 @@
 //! cannot stay; it breaks when an update reaches it. Attached blocks
 //! (torches, buttons, dust, rails, signs...) look only at updates from the
 //! side that holds them, plants at updates from any side, and cactus, sugar
-//! cane and bamboo wait for a block tick. Candles never break.
+//! cane, bamboo and chorus wait for a block tick. Candles never break.
 
 use crate::dir::{BlockPos, Dir};
 use crate::level::Level;
@@ -54,7 +54,7 @@ pub fn check(ctx: Ctx, state: u32) -> Check {
         | "ladder"
         | "tripwire_hook" => attached(),
         "lever" => face_check(ctx, state),
-        "cactus" | "sugar_cane" | "bamboo" => Check::Tick,
+        "cactus" | "sugar_cane" | "bamboo" | "chorus_plant" | "chorus_flower" => Check::Tick,
         "cocoa" => facing(ctx, state).map_or(Check::Never, Check::From),
         "candle" => Check::Never,
         "piston_head" => facing(ctx, state).map_or(Check::Never, |f| Check::From(f.opposite())),
@@ -258,6 +258,8 @@ pub fn can_survive(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> bool
                     Some("minecraft:bamboo" | "minecraft:bamboo_sapling")
                 )
         }
+        "chorus_plant" => chorus_plant_survives(level, ctx, p),
+        "chorus_flower" => chorus_flower_survives(level, ctx, p),
         "lily_pad" => water_at(p.offset(Dir::Down)) || on("minecraft:supports_lily_pad"),
         "nether_wart" => on("minecraft:supports_nether_wart"),
         "wither_rose" => on("minecraft:supports_wither_rose"),
@@ -318,6 +320,87 @@ pub fn can_survive(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> bool
         }
         _ => true,
     }
+}
+
+fn named<'a>(ctx: Ctx<'a>, state: u32) -> Option<&'a str> {
+    ctx.shapes.block_name(state)
+}
+
+/// End stone, or a chorus plant the stem can keep climbing.
+fn chorus_ground(ctx: Ctx, state: u32) -> bool {
+    named(ctx, state) == Some("minecraft:chorus_plant")
+        || ctx.shapes.in_tag(state, "minecraft:supports_chorus_plant")
+}
+
+/// A chorus plant stays on end stone or another plant, or on a side branch
+/// whose neighbour still reaches that ground. A block with something both
+/// above and below cannot also branch sideways.
+fn chorus_plant_survives(level: &dyn Level, ctx: Ctx, p: BlockPos) -> bool {
+    let below = level.block(p.offset(Dir::Down));
+    let above = level.block(p.offset(Dir::Up));
+    let boxed = !ctx.shapes.is_air(above) && !ctx.shapes.is_air(below);
+    for d in Dir::HORIZONTAL {
+        let side = p.offset(d);
+        if named(ctx, level.block(side)) != Some("minecraft:chorus_plant") {
+            continue;
+        }
+        if boxed {
+            return false;
+        }
+        if chorus_ground(ctx, level.block(side.offset(Dir::Down))) {
+            return true;
+        }
+    }
+    chorus_ground(ctx, below)
+}
+
+/// A flower sits on a plant or end stone, or in the air beside one plant.
+fn chorus_flower_survives(level: &dyn Level, ctx: Ctx, p: BlockPos) -> bool {
+    let below = level.block(p.offset(Dir::Down));
+    if named(ctx, below) == Some("minecraft:chorus_plant")
+        || ctx.shapes.in_tag(below, "minecraft:supports_chorus_flower")
+    {
+        return true;
+    }
+    if !ctx.shapes.is_air(below) {
+        return false;
+    }
+    let mut branch = false;
+    for d in Dir::HORIZONTAL {
+        let side = level.block(p.offset(d));
+        if named(ctx, side) == Some("minecraft:chorus_plant") {
+            if branch {
+                return false;
+            }
+            branch = true;
+        } else if !ctx.shapes.is_air(side) {
+            return false;
+        }
+    }
+    branch
+}
+
+/// Chorus plant arms: joined to plants, flowers, and end stone underneath.
+pub fn chorus_connections(level: &dyn Level, ctx: Ctx, p: BlockPos, state: u32) -> u32 {
+    if named(ctx, state) != Some("minecraft:chorus_plant") {
+        return state;
+    }
+    let mut out = state;
+    for d in Dir::PP_ORDER {
+        let n = level.block(p.offset(d));
+        let join = match d {
+            Dir::Down => chorus_ground(ctx, n) || named(ctx, n) == Some("minecraft:chorus_flower"),
+            _ => matches!(
+                named(ctx, n),
+                Some("minecraft:chorus_plant" | "minecraft:chorus_flower")
+            ),
+        };
+        let want = if join { "true" } else { "false" };
+        if ctx.shapes.property(out, d.name()) != Some(want) {
+            out = ctx.shapes.with(out, d.name(), want);
+        }
+    }
+    out
 }
 
 /// Levers and buttons: on a floor, a ceiling or a wall.

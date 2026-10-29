@@ -748,10 +748,17 @@ impl crate::loot::LootEnv for Env<'_> {
     fn smelt(&self, item: i32) -> Option<i32> {
         self.0
             .recipes
+            .get()
             .cooking
             .iter()
             .find(|c| c.kind == "minecraft:smelting" && c.input.contains(&item))
             .map(|c| c.result.item)
+    }
+    fn enchantments(&self) -> Option<std::sync::Arc<crate::enchants::Enchantments>> {
+        Some(self.0.enchantments.get())
+    }
+    fn enchantable(&self, item: i32) -> i32 {
+        self.0.items.enchantable(item)
     }
 }
 
@@ -778,8 +785,8 @@ pub fn roll(
         player_kill: by_player,
         ..Default::default()
     };
-    match ctx.loot.table(table) {
-        Some(t) => ctx.loot.roll(&env, t, &cx),
+    match ctx.loot.get().table(table) {
+        Some(t) => ctx.loot.get().roll(&env, t, &cx),
         None => Vec::new(),
     }
 }
@@ -1170,6 +1177,80 @@ fn mix_wool(a: u8, b: u8, first: bool) -> u8 {
         _ => None,
     };
     mix.unwrap_or(if first { a } else { b })
+}
+
+/// What a lightning bolt does to the mob it strikes, besides the damage
+/// (minecraft.wiki, "Lightning"): a pig becomes a zombified piglin and a
+/// villager a witch, except on peaceful, where they only take the hit; a
+/// creeper charges; a mooshroom swaps red and brown. A replacement, when
+/// the struck mob is gone.
+pub fn thunder(ctx: &ServerContext, e: &mut Entity) -> Option<Entity> {
+    if e.removed {
+        return None;
+    }
+    let peaceful = ctx.difficulty() == 0;
+    enum Struck {
+        Pig,
+        Creeper,
+        Mooshroom,
+        Villager,
+    }
+    let which = match &e.kind {
+        Kind::Mob(m) => match m.species {
+            Species::Pig => Struck::Pig,
+            Species::Creeper => Struck::Creeper,
+            Species::Mooshroom => Struck::Mooshroom,
+            _ => return None,
+        },
+        Kind::Merchant(v) if !v.wandering => Struck::Villager,
+        _ => return None,
+    };
+    match which {
+        Struck::Pig if !peaceful => {
+            let pos = e.pos;
+            let mut born = convert(ctx, e, Species::ZombifiedPiglin)?;
+            if let Kind::Mob(m) = &mut born.kind {
+                m.gear = Default::default();
+                m.persistent = true;
+            }
+            fx::sound(
+                ctx,
+                "entity.piglin.converted_to_zombified",
+                5,
+                pos,
+                1.0,
+                1.0,
+            );
+            Some(born)
+        }
+        Struck::Villager if !peaceful => {
+            let pos = e.pos;
+            let id = e.id;
+            let mut born = super::new_mob(ctx, Species::Witch, pos);
+            if let Kind::Mob(m) = &mut born.kind {
+                m.persistent = true;
+            }
+            e.removed = true;
+            lock(&ctx.mobs.villagers).remove(&id);
+            Some(born)
+        }
+        Struck::Creeper => {
+            if let Kind::Mob(m) = &mut e.kind {
+                m.powered = true;
+            }
+            send_data(ctx, e);
+            None
+        }
+        Struck::Mooshroom => {
+            if let Kind::Mob(m) = &mut e.kind {
+                m.variant = i32::from(m.variant == 0);
+            }
+            send_data(ctx, e);
+            fx::sound(ctx, "entity.mooshroom.convert", 5, e.pos, 1.0, 1.0);
+            None
+        }
+        Struck::Pig | Struck::Villager => None,
+    }
 }
 
 /// A mob turns into another kind: a new entity in its place (returned), the

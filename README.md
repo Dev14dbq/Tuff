@@ -1,103 +1,99 @@
-# minecraft-rewrite
+# tuff
 
-Рабочая папка для изучения логики Minecraft Java Edition и написания своей реализации.
+Сервер Minecraft Java Edition 26.3, написанный с нуля. Ванильный клиент 26.3 заходит на него
+как на обычный выделенный сервер: тот же мир, `server.properties`, операторы из `ops.json`,
+датапаки и команды.
 
-- [docs/CONCEPT.md](docs/CONCEPT.md) — концепция целиком: сервер, клиент, платформа, аккаунты, пакеты
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — архитектура: слабые места ваниллы и наши решения, тик, моды
-- [docs/ROADMAP.md](docs/ROADMAP.md) — план работ по фазам с критериями готовности
-- [docs/specs/protocol-26.3.md](docs/specs/protocol-26.3.md) — где протокол 26.3 расходится с документацией и как это проверять
-- [docs/specs/world-26.3.md](docs/specs/world-26.3.md) — формат мира 26.3 и сверка чанков с ванилью
+Крейт сервера по-прежнему называется `mc-server`. Программа, которую он собирает, — `tuff`.
 
-## Референс
+- [docs/ADMIN.md](docs/ADMIN.md) — запуск, права, списки, прокси, management, датапаки
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — как устроен сервер
+- [docs/ROADMAP.md](docs/ROADMAP.md) — план по фазам
+- [docs/CONCEPT.md](docs/CONCEPT.md) — сервер, клиент и платформа целиком
 
-- **Версия:** Minecraft Java Edition **26.3** (latest release, вышла 2026-09-15), без обфускации, маппинги не нужны.
-- **Откуда:** официальный манифест Mojang
-  `https://piston-meta.mojang.com/mc/game/version_manifest_v2.json` → `latest.release` →
-  `https://piston-meta.mojang.com/v1/packages/11f1aefe473eefba0af62e3286c33b692807b2eb/26.3.json`
-- **client.jar:** `https://piston-data.mojang.com/v1/objects/e877b6a07acd633fb3bb475002175cec036e7b87/client.jar`
-  (SHA1 `e877b6a07acd633fb3bb475002175cec036e7b87`, сверен)
-- **server.jar:** `https://piston-data.mojang.com/v1/objects/33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c/server.jar`
-  (SHA1 `33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c`, сверен). Это бандлер: сам сервер лежит внутри,
-  в `META-INF/versions/26.3/server-26.3.jar` (SHA256 из `META-INF/versions.list` сверен).
-- **Декомпилятор:** [Vineflower](https://github.com/Vineflower/vineflower/releases) 1.12.0 → `tools/vineflower.jar`.
-- **Java:** нужна 21+ (у 26.3 в манифесте указано `javaVersion: 25`).
+## Запуск
 
-Всё перечисленное лежит в `reference/` и `tools/`. Обе папки в `.gitignore` и в репозиторий не попадают.
-
-## Декомпиляция
+Нужны Rust (версия в `rust-toolchain.toml`) и извлечённые данные ванили, см. ниже.
 
 ```bash
-# клиент
-java -jar tools/vineflower.jar reference/26.3/client.jar reference/26.3/client-src/
-
-# сервер: сначала достать внутренний jar из бандлера
-unzip -p reference/26.3/server.jar META-INF/versions/26.3/server-26.3.jar > reference/26.3/server-26.3.jar
-java -jar tools/vineflower.jar reference/26.3/server-26.3.jar reference/26.3/server-src/
+cargo build --release -p mc-server
+mkdir -p run && cd run && ../target/release/tuff --op <ник>
 ```
 
-## Разработка
+Сервер запускают в его папке. При первом старте там появляются `server.properties`,
+`ops.json`, белый список, баны, `usercache.json`, `logs/latest.log` и мир `world/`.
+`server-ip` по умолчанию `127.0.0.1`: слушает только этот компьютер. Пустое значение
+открывает все адреса.
 
-Нужны Rust (версия зафиксирована в `rust-toolchain.toml`, rustup поставит её сам) и Java 25+.
+Мир ванильного сервера 26.3 кладётся как `world/`. Подробности и переход с Paper —
+в [docs/ADMIN.md](docs/ADMIN.md).
+
+```bash
+RUST_LOG=debug ../target/release/tuff --op <ник>
+```
+
+`--offline` (или `online-mode=false`) выключает проверку аккаунтов. Если при этом
+`enforce-secure-profile=true`, чат без подписи не рассылается: поставьте
+`enforce-secure-profile=false`.
+
+## Docker
+
+В образ не входят данные игры и мир. Каталог данных монтируется снаружи.
+
+```bash
+docker build -t tuff .
+docker run --rm -p 25565:25565 \
+  -v "$PWD/cache/mcdata:/data/cache/mcdata:ro" \
+  -v tuff-data:/data \
+  tuff --bind 0.0.0.0
+```
+
+Образ слушает `0.0.0.0:25565`. Рабочая папка контейнера — `/data`.
+
+## Структура
+
+```
+crates/
+  mc-nbt        NBT
+  mc-protocol   пакеты 26.3, кадры, сжатие
+  mc-data       таблицы блоков и реестров из извлечённых данных
+  mc-world      секции, палитры, карты высот, свет на диске
+  mc-worldgen   шум, биомы, поверхность
+  mc-features   фичи, структуры, датапак-оверлей генерации
+  mc-light      свет
+  mc-entity     сущности, физика, навигация
+  mc-tick       фазы тика, жидкости, редстоун
+  mc-storage    регионы Anvil
+  mc-command    дерево команд
+  mc-server     сеть, тик, команды, бинарник tuff
+xtask/          cargo xtask: extract-data, bots, probe, parity
+docs/           устройство, администрирование, сверки
+```
+
+`cache/`, `reference/`, `tools/` и `run/` в git не попадают. В `reference/` лежит
+проприетарный код Mojang, его только читают. В репозиторий из него ничего не копируется.
+
+## Разработка
 
 ```bash
 # данные ванили из reference/<версия>/server.jar → cache/mcdata/<версия>/
 cargo xtask extract-data
 
-# то же, что проверяет CI
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-### Запуск сервера
-
-Сервер устроен как ванильный: его запускают в папке сервера (в репозитории это `run/`, она не
-попадает в git). При первом запуске там появляются `server.properties` со значениями ванили 26.3,
-`ops.json`, `whitelist.json`, `banned-players.json`, `banned-ips.json`, `usercache.json`,
-`logs/latest.log` и мир `world/`, сгенерированный из `level-seed`. Настройки берутся из
-`server.properties`, как у ванили.
+Нагрузочный прогон против уже запущенного сервера с `--offline`:
 
 ```bash
-cargo build --release -p mc-server
-mkdir -p run && cd run && ../target/release/mc-server --op <твой ник>
+cargo xtask bots --count 100 --seconds 30
 ```
 
-Отличие от ванили одно: в созданном `server.properties` стоит `server-ip=127.0.0.1`, то есть
-сервер слушает только этот компьютер. Пустое значение — все адреса, как у ванили. Ванильные опции
-`--universe <папка>`, `--world <имя>`, `--port`, `--initSettings`, `--nogui` работают. Свои:
-`--op <ник>` добавляет оператора, `--seed`, `--offline`, `--data`, `--no-console`. Подробные
-логи: `RUST_LOG=debug`.
-
-`level-type=minecraft:flat` даёт плоский тестовый мир. Мир, сохранённый ванильным сервером 26.3,
-можно просто положить в папку сервера как `world/`.
-
-`--offline` (или `online-mode=false`) отключает проверку аккаунтов и шифрование, тогда войти
-можно под любым именем. Это нужно для ботов и тестов:
-
-```bash
-cargo xtask bots --count 100 --seconds 30   # нагрузочный тест
-cargo xtask probe --mover                   # сверка форматов, см. docs/specs/protocol-26.3.md
-cargo xtask registry-diff --a <ваниль> --b <наш>   # реестры в NBT против ванили
-```
-
-`extract-data` сверяет SHA1 server.jar с JSON версии, достаёт встроенный датапак и `version.json`
-и запускает встроенный генератор данных Mojang (`--reports`): блоки и их состояния, реестры,
-пакеты протокола, команды. Результат в `cache/` и в репозиторий не попадает.
-
-CI (`.github/workflows/ci.yml`) заработает после пуша на GitHub. Кроме fmt/clippy/тестов на Linux
-и macOS он падает, если в git попал `reference/`, `tools/`, `cache/`, `*.jar` или `*.class`.
+CI (`.github/workflows/ci.yml`) гоняет fmt, clippy и тесты на Linux, macOS и Windows
+и не даёт закоммитить `reference/`, `tools/`, `cache/`, `*.jar` или `*.class`.
 
 ## Лицензия
 
-Наш код — [GPL-3.0-or-later](LICENSE). Это касается только кода в этом репозитории. Jar-файлы,
-декомпилированный код и данные Mojang (`reference/`, `cache/`) не наши, не распространяются
-и в репозиторий не попадают.
-
-## Правило проекта: clean-room
-
-Декомпилированный код Mojang проприетарный. Его можно **только читать**, чтобы понять логику
-(алгоритмы, форматы данных, протокол, порядок тиков и т.п.).
-
-- В код проекта ничего из `reference/` **не копируем**: ни файлы, ни классы, ни фрагменты.
-- Пишем свою реализацию своими словами, по своему пониманию поведения.
-- `reference/` и `tools/` никогда не коммитим.
+Код в этом репозитории — [GPL-3.0-or-later](LICENSE). Jar-файлы, декомпилированный код
+и данные Mojang не наши и здесь не лежат.

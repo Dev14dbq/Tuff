@@ -658,6 +658,82 @@ fn loot_chest(facts: &Facts, region: &mut dyn Region, r: &mut WorldgenRandom, p:
     region.set_block_entity(p, be);
 }
 
+/// What an End city data marker becomes: a treasure chest under it, a
+/// shulker, or the elytra's item frame. The marker block itself goes.
+fn end_city_marker(
+    facts: &Facts,
+    region: &mut dyn Region,
+    r: &mut WorldgenRandom,
+    chunk: BBox,
+    mp: P,
+    marker: &str,
+    rot: Rotation,
+) {
+    region.set(mp, facts.air);
+    if marker.starts_with("Chest") && chunk.inside(mp.below(1)) {
+        loot_chest(
+            facts,
+            region,
+            r,
+            mp.below(1),
+            "minecraft:chests/end_city_treasure",
+        );
+    } else if marker == "Sentry" {
+        region.add_entity(shulker_at(mp));
+    } else if marker == "Elytra" {
+        region.add_entity(elytra_frame(mp, rot));
+    }
+}
+
+/// A shulker where an End city's `Sentry` marker stood. It never despawns.
+fn shulker_at(at: P) -> Compound {
+    let mut nbt = Compound::new();
+    nbt.insert("id", Tag::String("minecraft:shulker".into()));
+    nbt.insert("PersistenceRequired", Tag::Byte(1));
+    nbt.insert(
+        "Pos",
+        Tag::List(vec![
+            Tag::Double(f64::from(at.x) + 0.5),
+            Tag::Double(f64::from(at.y)),
+            Tag::Double(f64::from(at.z) + 0.5),
+        ]),
+    );
+    nbt
+}
+
+/// The item frame on the ship's bow: it faces the template's south, turned
+/// with the piece, and holds an elytra.
+fn elytra_frame(at: P, rot: Rotation) -> Compound {
+    let mut item = Compound::new();
+    item.insert("id", Tag::String("minecraft:elytra".into()));
+    item.insert("count", Tag::Int(1));
+    let mut nbt = Compound::new();
+    nbt.insert("id", Tag::String("minecraft:item_frame".into()));
+    nbt.insert("Facing", Tag::Byte(rotated_south(rot)));
+    nbt.insert("Item", Tag::Compound(item));
+    nbt.insert(
+        "Pos",
+        Tag::List(vec![
+            Tag::Double(f64::from(at.x) + 0.5),
+            Tag::Double(f64::from(at.y) + 0.5),
+            Tag::Double(f64::from(at.z) + 0.5),
+        ]),
+    );
+    nbt
+}
+
+/// Facing byte of the template's south after `rot` (down 0 … east 5).
+fn rotated_south(rot: Rotation) -> i8 {
+    let d = transform(P::new(0, 0, 1), Mirror::None, rot, P::default());
+    match (d.x, d.z) {
+        (0, 1) => 3,
+        (-1, 0) => 4,
+        (0, -1) => 2,
+        (1, 0) => 5,
+        _ => 3,
+    }
+}
+
 fn place_template(
     s: &Structures,
     region: &mut dyn Region,
@@ -758,15 +834,7 @@ fn place_template(
                 }
             }
             (Post::EndCity, m) => {
-                if m.starts_with("Chest") && chunk.inside(mp.below(1)) {
-                    loot_chest(
-                        facts,
-                        region,
-                        r,
-                        mp.below(1),
-                        "minecraft:chests/end_city_treasure",
-                    );
-                }
+                end_city_marker(facts, region, r, chunk, mp, m, settings.rotation);
             }
             (Post::Mansion, m) if m.starts_with("Chest") => {
                 let facing = match m {
@@ -1006,5 +1074,155 @@ fn treasure(facts: &Facts, region: &mut dyn Region, r: &mut WorldgenRandom, p: P
 impl super::template::Rule {
     pub fn new(input: RuleTest, output: u32) -> Option<Self> {
         Some(Self::simple(input, output))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    use mc_nbt::Tag;
+
+    use super::super::template::{BBox, Settings, Template};
+    use super::{end_city_marker, rotated_south};
+    use crate::blocks::Facts;
+    use crate::rand::WorldgenRandom;
+    use crate::value::Heights;
+    use crate::{Heightmap, P, Region};
+
+    struct Mem {
+        blocks: HashMap<P, u32>,
+        air: u32,
+        entities: Vec<mc_nbt::Compound>,
+    }
+
+    impl Region for Mem {
+        fn block(&self, p: P) -> u32 {
+            self.blocks.get(&p).copied().unwrap_or(self.air)
+        }
+        fn set(&mut self, p: P, state: u32) -> bool {
+            self.blocks.insert(p, state);
+            true
+        }
+        fn height(&self, _: Heightmap, _: i32, _: i32) -> i32 {
+            0
+        }
+        fn biome(&self, _: P) -> u32 {
+            0
+        }
+        fn heights(&self) -> Heights {
+            Heights {
+                min_y: 0,
+                height: 256,
+                sea_level: 0,
+            }
+        }
+        fn set_block_entity(&mut self, _: P, _: mc_nbt::Compound) {}
+        fn schedule_tick(&mut self, _: P) {}
+        fn seed(&self) -> i64 {
+            1
+        }
+        fn add_entity(&mut self, nbt: mc_nbt::Compound) {
+            self.entities.push(nbt);
+        }
+    }
+
+    fn facts() -> Option<Facts> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
+        if !root.is_dir() {
+            return None;
+        }
+        let data = mc_data::McData::load(&root).ok()?;
+        let shapes = mc_tick::Shapes::new(&data, None, None);
+        let rules = mc_tick::BlockRules::new(&data).ok()?;
+        Facts::new(&data, shapes, rules).ok()
+    }
+
+    fn id(nbt: &mc_nbt::Compound) -> Option<&str> {
+        match nbt.get("id") {
+            Some(Tag::String(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_ship_keeps_its_top_and_the_elytra_frame_and_shulkers() {
+        assert_eq!(rotated_south(super::Rotation(0)), 3);
+        assert_eq!(rotated_south(super::Rotation(1)), 4);
+        assert_eq!(rotated_south(super::Rotation(2)), 2);
+        assert_eq!(rotated_south(super::Rotation(3)), 5);
+        let Some(facts) = facts() else {
+            return;
+        };
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cache/mcdata/26.3/data/minecraft/structure/end_city/ship.nbt");
+        let Some(ship) = Template::load(&path, &facts) else {
+            return;
+        };
+        // The corner sits just under 128, so the hull continues above it.
+        let origin = P::new(0, 120, 0);
+        let mut world = Mem {
+            blocks: HashMap::new(),
+            air: facts.air,
+            entities: Vec::new(),
+        };
+        let settings = Settings {
+            bbox: Some(BBox {
+                min: P::new(-64, 0, -64),
+                max: P::new(80, 255, 80),
+            }),
+            ..Settings::default()
+        };
+        let mut r = WorldgenRandom::legacy(1);
+        ship.place(&facts, &mut world, &mut r, origin, origin, &settings);
+        let top = world
+            .blocks
+            .iter()
+            .filter(|(_, s)| !facts.is_air(**s))
+            .map(|(p, _)| p.y)
+            .max()
+            .unwrap_or(0);
+        assert!(top > 127, "ship top {top}");
+        let markers = ship.data_markers(&facts, origin, &settings);
+        assert!(markers.iter().any(|(_, m)| m == "Elytra"));
+        assert!(markers.iter().any(|(_, m)| m == "Sentry"));
+        let room = BBox {
+            min: P::new(-64, 0, -64),
+            max: P::new(80, 255, 80),
+        };
+        for (mp, marker) in &markers {
+            end_city_marker(
+                &facts,
+                &mut world,
+                &mut r,
+                room,
+                *mp,
+                marker,
+                settings.rotation,
+            );
+        }
+        assert!(
+            world
+                .entities
+                .iter()
+                .any(|e| id(e) == Some("minecraft:shulker"))
+        );
+        let frame = world
+            .entities
+            .iter()
+            .find(|e| id(e) == Some("minecraft:item_frame"))
+            .expect("elytra frame");
+        assert_eq!(frame.get("Facing"), Some(&Tag::Byte(3)));
+        match frame.get("Item") {
+            Some(Tag::Compound(item)) => {
+                assert_eq!(
+                    item.get("id"),
+                    Some(&Tag::String("minecraft:elytra".into()))
+                );
+            }
+            other => panic!("elytra item {other:?}"),
+        }
+        assert!(markers.iter().all(|(p, _)| facts.is_air(world.block(*p))));
     }
 }

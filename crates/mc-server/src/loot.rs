@@ -67,6 +67,14 @@ pub trait LootEnv {
     fn item_name(&self, item: i32) -> String;
     /// What a furnace makes of an item.
     fn smelt(&self, item: i32) -> Option<i32>;
+    /// The game's enchantments (none: tables enchant nothing).
+    fn enchantments(&self) -> Option<std::sync::Arc<crate::enchants::Enchantments>> {
+        None
+    }
+    /// How well an item takes enchantments (`enchantable`), 0 if not at all.
+    fn enchantable(&self, _item: i32) -> i32 {
+        0
+    }
 }
 
 /// An entity as conditions see it.
@@ -899,33 +907,52 @@ impl Eval<'_> {
                 }
             }
             "enchant_randomly" | "enchant_with_levels" => {
-                let pool: Vec<String> = match f["options"].as_str() {
-                    Some(tag) => self
-                        .env
-                        .tag("minecraft:enchantment", tag.trim_start_matches('#')),
-                    None => self
-                        .env
-                        .tag("minecraft:enchantment", "minecraft:on_random_loot"),
+                let Some(all) = self.env.enchantments() else {
+                    return;
                 };
+                let pool = enchant_options(self.env, &all, &f["options"]);
                 for d in drops.iter_mut() {
-                    if pool.is_empty() {
-                        break;
-                    }
-                    let name = pool[rand_int(0, pool.len() as i32 - 1) as usize].clone();
-                    let max = self.loot.max_level(&name);
-                    let level = if kind.ends_with("levels") {
-                        (self.int(&f["levels"]) / 10 + 1).clamp(1, max)
+                    let book = all.is_book(d.item);
+                    let chosen: Vec<(String, i32)> = if kind == "enchant_randomly" {
+                        // One of the options the item takes (a book takes all).
+                        let any = book || !f["only_compatible"].as_bool().unwrap_or(true);
+                        let fits: Vec<_> = pool
+                            .iter()
+                            .filter(|e| any || e.supported.contains(&d.item))
+                            .collect();
+                        if fits.is_empty() {
+                            continue;
+                        }
+                        let e = fits[rand_int(0, fits.len() as i32 - 1) as usize];
+                        vec![(e.id.clone(), rand_int(1, e.max_level))]
                     } else {
-                        rand_int(1, max)
+                        // As an enchanting table would at that many levels.
+                        let mut random = mc_worldgen::random::Legacy::new(random_u64() as i64);
+                        let enchantable = self.env.enchantable(d.item);
+                        let levels = self.int(&f["levels"]);
+                        crate::enchants::select(
+                            &all,
+                            &mut random,
+                            d.item,
+                            enchantable,
+                            levels,
+                            &pool,
+                        )
+                        .into_iter()
+                        .map(|(e, l)| (e.id.clone(), l))
+                        .collect()
                     };
-                    if self.env.item_name(d.item) == "minecraft:book"
-                        && let Some(&book) = self.loot.items.get("minecraft:enchanted_book")
-                    {
-                        d.item = book;
+                    if book && let Some(enchanted) = all.enchanted_book() {
+                        d.item = enchanted;
                     }
                     let key = enchant_key(self.loot, d.item);
-                    let mut c = Compound::new();
-                    c.insert(name, Tag::Int(level));
+                    let mut c = match d.components.get(key) {
+                        Some(Tag::Compound(c)) => c.clone(),
+                        _ => Compound::new(),
+                    };
+                    for (name, level) in chosen {
+                        c.insert(name, Tag::Int(level));
+                    }
                     d.components.insert(key, Tag::Compound(c));
                 }
             }
@@ -971,6 +998,36 @@ impl Eval<'_> {
             _ => {}
         }
     }
+}
+
+/// The enchantments an `options` field names: a tag, one id or a list of
+/// them; every enchantment when it is left out.
+fn enchant_options<'e>(
+    env: &dyn LootEnv,
+    all: &'e crate::enchants::Enchantments,
+    options: &Value,
+) -> Vec<&'e crate::enchants::Enchantment> {
+    let one = |spec: &str, out: &mut Vec<&'e crate::enchants::Enchantment>| match spec
+        .strip_prefix('#')
+    {
+        Some(tag) => out.extend(
+            env.tag("minecraft:enchantment", tag)
+                .iter()
+                .filter_map(|n| all.get(n)),
+        ),
+        None => out.extend(all.get(spec)),
+    };
+    let mut out = Vec::new();
+    match options {
+        Value::String(spec) => one(spec, &mut out),
+        Value::Array(list) => {
+            for spec in list.iter().filter_map(Value::as_str) {
+                one(spec, &mut out);
+            }
+        }
+        _ => out.extend(all.all()),
+    }
+    out
 }
 
 fn enchant_key(loot: &BlockLoot, item: i32) -> &'static str {

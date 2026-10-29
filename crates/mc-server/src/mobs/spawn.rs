@@ -73,6 +73,8 @@ pub struct Spawner {
     /// When phantoms next look.
     phantoms_at: i64,
     siege: Siege,
+    /// The dimension's monster light rule, read once.
+    monster_light: Option<MonsterLight>,
 }
 
 /// Tonight's zombie siege (minecraft.wiki, "Zombie siege").
@@ -189,6 +191,61 @@ struct Spots<'a> {
     seed: Option<i64>,
     /// Moon brightness tonight (1 full .. 0 new).
     moon: f64,
+    /// How dark a monster's spot must be, from the dimension type.
+    monster_light: MonsterLight,
+}
+
+/// `monster_spawn_block_light_limit` and `monster_spawn_light_level`.
+/// The overworld rolls 0 to 7; the End's level is 15, so daylight is fine.
+#[derive(Clone, Copy, Debug)]
+struct MonsterLight {
+    block_limit: u8,
+    min: u8,
+    max: u8,
+}
+
+impl MonsterLight {
+    fn overworld() -> Self {
+        Self {
+            block_limit: 0,
+            min: 0,
+            max: 7,
+        }
+    }
+
+    /// A roll of the dimension's spawn light (inclusive).
+    fn roll(self) -> u8 {
+        let span = u32::from(self.max.saturating_sub(self.min)) + 1;
+        self.min + below(span) as u8
+    }
+}
+
+fn monster_light(ctx: &ServerContext) -> MonsterLight {
+    let Ok(json) = ctx
+        .data
+        .data_pack()
+        .read_entry("minecraft:dimension_type", &ctx.world.dimension)
+    else {
+        return MonsterLight::overworld();
+    };
+    let limit = json["monster_spawn_block_light_limit"]
+        .as_u64()
+        .unwrap_or(0)
+        .min(15) as u8;
+    let level = &json["monster_spawn_light_level"];
+    let (min, max) = if let Some(n) = level.as_u64() {
+        let n = n.min(15) as u8;
+        (n, n)
+    } else {
+        let min = level["min_inclusive"].as_u64().unwrap_or(0).min(15) as u8;
+        let max = level["max_inclusive"].as_u64().unwrap_or(7).min(15) as u8;
+        (min.min(max), max.max(min))
+    };
+    MonsterLight {
+        block_limit: limit,
+        min,
+        max,
+    }
 }
 
 /// The block tag animals of a kind spawn on.
@@ -419,11 +476,13 @@ impl Spots<'_> {
                 if species == Species::SulfurCube {
                     return true;
                 }
-                if self.ctx.world.block_light(p) > 0 {
+                let light = self.monster_light;
+                if self.ctx.world.block_light(p) > light.block_limit {
                     return false;
                 }
+                // The End's level is a flat 15: the sky never keeps them out.
                 let sky = self.ctx.world.sky_light(p).saturating_sub(self.dark());
-                u32::from(sky) <= below(8)
+                sky <= light.roll()
             }
         }
     }
@@ -602,15 +661,23 @@ fn spawn_round(
     // Chunks within range of a player that are loaded.
     if now - spawner.ranged_at >= RANGE_PERIOD || spawner.eligible.is_empty() {
         let mut chunks: HashSet<(i32, i32)> = HashSet::new();
-        for t in targets {
-            let (cx, cz) = (
-                (t.pos[0].floor() as i32) >> 4,
-                (t.pos[2].floor() as i32) >> 4,
-            );
-            for x in cx - RANGE..=cx + RANGE {
-                for z in cz - RANGE..=cz + RANGE {
-                    if ctx.world.chunk_loaded(x, z) {
-                        chunks.insert((x, z));
+        if crate::tickets::limiting(ctx) {
+            for (x, z) in crate::tickets::random_chunks(ctx) {
+                if crate::tickets::entities_run(ctx, x, z) && ctx.world.chunk_loaded(x, z) {
+                    chunks.insert((x, z));
+                }
+            }
+        } else {
+            for t in targets {
+                let (cx, cz) = (
+                    (t.pos[0].floor() as i32) >> 4,
+                    (t.pos[2].floor() as i32) >> 4,
+                );
+                for x in cx - RANGE..=cx + RANGE {
+                    for z in cz - RANGE..=cz + RANGE {
+                        if ctx.world.chunk_loaded(x, z) {
+                            chunks.insert((x, z));
+                        }
                     }
                 }
             }
@@ -660,6 +727,9 @@ fn spawn_round(
         nether: ctx.world.dimension == "minecraft:the_nether",
         seed,
         moon: [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75][phase as usize],
+        monster_light: *spawner
+            .monster_light
+            .get_or_insert_with(|| monster_light(ctx)),
     };
     drop(weather);
     let mut out = Vec::new();
@@ -1578,6 +1648,26 @@ mod tests {
     }
 
     #[test]
+    fn the_end_lets_monsters_spawn_in_daylight() {
+        let Some(ctx) = flat_ctx() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let over = monster_light(&ctx);
+        assert_eq!(over.block_limit, 0);
+        assert_eq!((over.min, over.max), (0, 7));
+        let Some(end) = ctx.in_dimension("minecraft:the_end") else {
+            eprintln!("skipped: no end");
+            return;
+        };
+        let end_light = monster_light(&end);
+        assert_eq!(end_light.block_limit, 0);
+        // A flat 15: sky light never rejects an enderman.
+        assert_eq!((end_light.min, end_light.max), (15, 15));
+        assert_eq!(end_light.roll(), 15);
+    }
+
+    #[test]
     fn water_mobs_spawn_in_open_water_within_thirteen_blocks_of_the_sea() {
         let Some(ctx) = flat_ctx() else {
             eprintln!("skipped: no game data");
@@ -1612,6 +1702,7 @@ mod tests {
             nether: false,
             seed: None,
             moon: 1.0,
+            monster_light: MonsterLight::overworld(),
         };
         let mid = sea - 2;
         for s in [Species::Cod, Species::Squid, Species::Dolphin] {
