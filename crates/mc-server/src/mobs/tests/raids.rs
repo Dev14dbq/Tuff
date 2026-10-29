@@ -289,3 +289,77 @@ fn a_patrol_captain_leaves_an_ominous_bottle() {
     assert!(dropped.contains(&bottle), "{dropped:?}");
     assert!(dropped.contains(&banner), "{dropped:?}");
 }
+
+#[test]
+fn with_raids_off_the_omen_still_turns_but_no_raid_comes() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    set_difficulty(&ctx, 2);
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    load(&ctx, 4);
+    village(&ctx, [2, -60, 2]);
+    lock(&ctx.game_rules).set("raids", crate::rules::Value::Bool(false));
+    let bad = effects::kind_of("bad_omen").unwrap();
+    assert!(effects::give(
+        &ctx,
+        STEVE,
+        bad,
+        Instance::new(0, 120_000, false)
+    ));
+    raid_ticks(&ctx, 1);
+    // Vanilla's Bad Omen does not look at the rule.
+    assert_eq!(has(&ctx, "bad_omen"), None);
+    assert_eq!(has(&ctx, "raid_omen"), Some(0));
+    for _ in 0..600 {
+        let now = {
+            let mut t = lock(&ctx.time);
+            t.age += 1;
+            t.age
+        };
+        effects::tick(&ctx, now);
+        raids::tick(&ctx);
+    }
+    assert_eq!(has(&ctx, "raid_omen"), None);
+    assert!(lock(&ctx.raids).raids.is_empty());
+}
+
+#[test]
+fn turning_raids_off_stops_every_raid() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    set_difficulty(&ctx, 2);
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    load(&ctx, 4);
+    village(&ctx, [2, -60, 2]);
+    let id = raids::start(&ctx, [2, -60, 2], 1, STEVE).expect("no raid");
+    raid_ticks(&ctx, 5);
+    assert_eq!(status(&ctx, id), Some(Status::Ongoing));
+    // A raid already won and celebrating stops too.
+    lock(&ctx.raids).raids[0].status = Status::Victory;
+    lock(&ctx.game_rules).set("raids", crate::rules::Value::Bool(false));
+    raid_ticks(&ctx, 1);
+    assert_eq!(status(&ctx, id), None);
+}
+
+#[test]
+fn the_patrol_clock_stands_still_while_patrols_are_off() {
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    set_difficulty(&ctx, 2);
+    let _ = join(&ctx, [0.5, -60.0, 0.5]);
+    lock(&ctx.raids).patrol_delay = 500;
+    raid_ticks(&ctx, 10);
+    assert_eq!(lock(&ctx.raids).patrol_delay, 490);
+    for rule in ["spawn_patrols", "spawn_mobs", "spawn_monsters"] {
+        lock(&ctx.game_rules).set(rule, crate::rules::Value::Bool(false));
+        raid_ticks(&ctx, 10);
+        assert_eq!(lock(&ctx.raids).patrol_delay, 490, "{rule}");
+        lock(&ctx.game_rules).set(rule, crate::rules::Value::Bool(true));
+    }
+}
