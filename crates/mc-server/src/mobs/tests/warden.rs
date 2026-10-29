@@ -190,13 +190,14 @@ fn shriekers_warn_four_times_then_a_warden_comes() {
             "warning {level}"
         );
         assert_eq!(lock(&ctx.vibrations).warnings[&STEVE].level, level);
+        // The shriek ends (Darkness comes with the answer) and the
+        // warning's 10 seconds pass.
+        hear(&ctx, 200);
         let dark = lock(&ctx.vitals)[&STEVE]
             .effects
             .active
             .contains_key("darkness");
         assert!(dark, "no darkness at warning {level}");
-        // The shriek ends and the warning's 10 seconds pass.
-        hear(&ctx, 200);
     }
     let wardens: Vec<i32> = lock(&ctx.entities)
         .iter()
@@ -211,6 +212,47 @@ fn shriekers_warn_four_times_then_a_warden_comes() {
             Doing::Emerging | Doing::Nothing
         ));
     });
+}
+
+#[test]
+fn with_spawn_wardens_off_a_shrieker_only_shrieks() {
+    let Some(ctx) = quiet() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
+    ctx.difficulty
+        .store(2, std::sync::atomic::Ordering::Relaxed);
+    lock(&ctx.game_rules).set("spawn_wardens", crate::rules::Value::Bool(false));
+    let _ = join(&ctx, [3.5, -60.0, 3.5]);
+    set_state(
+        &ctx,
+        [0, -60, 0],
+        state(&ctx, "minecraft:sculk_sensor", &[]),
+    );
+    set_state(
+        &ctx,
+        [0, -60, 4],
+        state(&ctx, "minecraft:sculk_shrieker", &[("can_summon", "true")]),
+    );
+    hear(&ctx, 1);
+    for _ in 0..5 {
+        placed(&ctx, [2, -60, 0], Source::player(&ctx, STEVE));
+        hear(&ctx, 12);
+        assert_eq!(prop(&ctx, [0, -60, 4], "shrieking"), "true");
+        hear(&ctx, 200);
+    }
+    // No warning levels, no Darkness, no warden.
+    assert!(!lock(&ctx.vibrations).warnings.contains_key(&STEVE));
+    let dark = lock(&ctx.vitals)[&STEVE]
+        .effects
+        .active
+        .contains_key("darkness");
+    assert!(!dark);
+    assert!(
+        !lock(&ctx.entities)
+            .iter()
+            .any(|e| matches!(&e.kind, Kind::Mob(m) if m.species == Species::Warden))
+    );
 }
 
 #[test]
