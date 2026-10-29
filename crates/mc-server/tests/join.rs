@@ -4121,8 +4121,9 @@ async fn too_quick_moves_are_sent_back_and_chat_spam_is_kicked() {
     let mut r = Reader::new(&back);
     r.varint().unwrap();
     assert_eq!(r.f64().unwrap(), spawn.0);
-    // Eleven chat lines at once from someone who is no operator.
-    for i in 0..11 {
+    // Ten chat lines at once from someone who is no operator: vanilla
+    // kicks once its counter reaches 200, 20 a line.
+    for i in 0..10 {
         let mut chat = Vec::new();
         chat.put_string(&format!("spam {i}"));
         chat.put_i64(0);

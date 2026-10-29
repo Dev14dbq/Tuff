@@ -48,6 +48,7 @@ mod fastmap;
 mod forced;
 mod furnaces;
 mod fx;
+mod gate;
 mod generation;
 mod growth;
 pub mod guard;
@@ -196,6 +197,15 @@ pub struct Config {
     /// Packets a second a player may send before being kicked; 0 for no
     /// limit (`rate-limit`).
     pub rate_limit: u32,
+    /// A login from an address this soon after its last one is refused;
+    /// zero for no limit (`connection-throttle`, milliseconds; not vanilla).
+    pub connection_throttle: std::time::Duration,
+    /// Connections one address may hold open before play; 0 for no limit
+    /// (`max-pending-connections-per-ip`; not vanilla).
+    pub max_pending_per_ip: u32,
+    /// Silence after which a connection is dropped: vanilla's 30 seconds
+    /// (tests shorten it).
+    pub read_timeout: std::time::Duration,
     /// A tick taking longer than this stops the server with a crash report
     /// (`max-tick-time`; `None` for -1).
     pub max_tick_time: Option<std::time::Duration>,
@@ -247,6 +257,9 @@ impl Config {
             query_port: None,
             allow_flight: false,
             rate_limit: 0,
+            connection_throttle: std::time::Duration::ZERO,
+            max_pending_per_ip: 0,
+            read_timeout: std::time::Duration::from_secs(30),
             max_tick_time: None,
             backup_minutes: 0,
             backup_keep: 5,
@@ -436,16 +449,28 @@ impl Server {
                 .management_bus
                 .publish(&crate::notify::Note::ServerStarted);
         }
+        let gate = if matches!(self.ctx.config.proxy, proxy::Mode::Off) {
+            gate::Gate::new(
+                self.ctx.config.connection_throttle,
+                self.ctx.config.max_pending_per_ip,
+            )
+        } else {
+            gate::Gate::new(std::time::Duration::ZERO, 0)
+        };
         loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
                     let (stream, peer) = accepted?;
+                    let Some(pending) = gate.admit(peer.ip()) else {
+                        tracing::debug!("{peer} has too many connections open, closing");
+                        continue;
+                    };
                     stream.set_nodelay(true)?;
                     let ctx = self.ctx.clone();
                     tokio::spawn(async move {
                         // Failed logins and broken connections show in the
                         // log, so a refused join can be told apart later.
-                        if let Err(err) = connection::handle(stream, peer, ctx).await {
+                        if let Err(err) = connection::handle(stream, peer, ctx, pending).await {
                             info!("{peer} lost connection: {err:#}");
                         }
                     });

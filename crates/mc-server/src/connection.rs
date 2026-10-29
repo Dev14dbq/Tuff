@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 use mc_protocol::crypto::{Cfb8, server_hash};
-use mc_protocol::frame::{decode_frame_body, split_frame};
+use mc_protocol::frame::{FrameBuffer, decode_frame_body};
 use mc_protocol::packets::{GameProfile, configuration, handshake, login, play, status};
 use mc_protocol::text;
 use mc_protocol::{Direction, Encode, Position, Reader, State, Write as _};
@@ -31,9 +31,18 @@ use crate::util::{offline_uuid, random_u64, random_uuid, uuid_string, valid_play
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long one write may wait for a client that does not read.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 const CREATIVE: i32 = 1;
 
-pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>) -> Result<()> {
+/// `pending` holds this connection's place among its address's connections
+/// short of play.
+pub async fn handle(
+    stream: TcpStream,
+    peer: SocketAddr,
+    ctx: Arc<ServerContext>,
+    pending: crate::gate::Pending,
+) -> Result<()> {
     let (read, write) = stream.into_split();
     let mut reader = PacketReader::new(read, ctx.clone());
     let mut writer = PacketWriter::new(write, ctx.clone());
@@ -51,6 +60,13 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
         // were not there.
         1 if !ctx.config.enable_status => Ok(()),
         1 => status(&mut reader, &mut writer).await,
+        2 | 3 if pending.login_throttled() => {
+            let reason = "Connection throttled! Please wait before reconnecting.";
+            writer
+                .send(&refusal(serde_json::json!({ "text": reason })))
+                .await?;
+            bail!("login throttled");
+        }
         2 | 3 => {
             let login = login(&mut reader, &mut writer, &intention, peer);
             let session = tokio::time::timeout(LOGIN_TIMEOUT, login)
@@ -59,6 +75,7 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
             let Some(player) = session else {
                 return Ok(());
             };
+            drop(pending);
             let name = player.player.profile.name.clone();
             let uuid = player.player.profile.uuid;
             let _ = uuid_string;
@@ -808,7 +825,12 @@ async fn play(
     // The vehicle the player sits in.
     let mut riding: Option<i32> = None;
     let mut floating = crate::guard::Floating::default();
-    let mut spam = crate::guard::Spam::default();
+    let (mut chat_spam, mut command_spam) = (
+        crate::guard::Throttle::chat(),
+        crate::guard::Throttle::chat(),
+    );
+    let mut creative_drops = crate::guard::Throttle::creative_drops();
+    let mut suggestions = crate::guard::Suggestions::default();
     let mut rate = crate::guard::Rate::new(ctx.config.rate_limit, Instant::now());
     let mut windows = windows::Windows::new();
     let vitals = session
@@ -891,8 +913,17 @@ async fn play(
                         writer.send(&play::Disconnect { reason }).await?;
                         bail!("{} exceeded the packet rate limit", me.profile.name);
                     }
-                    let chatting = matches!(packet, play::Serverbound::Chat(_) | play::Serverbound::ChatCommand { .. });
-                    if chatting && spam.said(Instant::now()) && crate::tick::lock(&ctx.lists).op(uuid, &me.profile.name).is_none() {
+                    if let Some(key) = crate::guard::refused(&packet) {
+                        let reason = text::translate(key, vec![]);
+                        writer.send(&play::Disconnect { reason }).await?;
+                        bail!("{} was kicked: {key}", me.profile.name);
+                    }
+                    let spam = match packet {
+                        play::Serverbound::Chat(_) => Some(&mut chat_spam),
+                        play::Serverbound::ChatCommand { .. } => Some(&mut command_spam),
+                        _ => None,
+                    };
+                    if spam.is_some_and(|s| s.said(Instant::now())) && crate::tick::lock(&ctx.lists).op(uuid, &me.profile.name).is_none() {
                         let reason = text::translate("disconnect.spam", vec![]);
                         writer.send(&play::Disconnect { reason }).await?;
                         bail!("{} was kicked for spamming", me.profile.name);
@@ -955,19 +986,27 @@ async fn play(
                             let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
                         play::Serverbound::CommandSuggestion { id, text } => {
-                            let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
-                            if let Some(answer) = crate::commands::suggest(&ctx, &source, id, &text) {
-                                writer.queue(&answer)?;
+                            suggestions.request(id, text);
+                            if let Some((id, text)) = suggestions.take(Instant::now()) {
+                                suggest(writer, &ctx, &me.profile.name, uuid, pose, id, &text)?;
                             }
                         }
-                        play::Serverbound::SetCreativeModeSlot { slot: -1, item: Some(stack) } if game_mode == CREATIVE => {
-                            // Dropped out of the creative inventory.
-                            if stack.count > 0 {
-                                crate::stats::threw(&ctx, uuid, &stack);
-                                crate::tick::throw_item_aged(&ctx, pose, stack, crate::dropped::LIFETIME - 1200);
+                        play::Serverbound::SetCreativeModeSlot { item: Some(stack), .. }
+                            if game_mode == CREATIVE && !crate::guard::creative_stack_ok(&ctx, &stack) => {}
+                        play::Serverbound::SetCreativeModeSlot { slot: ..0, item } if game_mode == CREATIVE => {
+                            // Dropped out of the creative inventory, as fast
+                            // as vanilla's throttle lets through.
+                            if let Some(stack) = item.filter(|s| s.count > 0) {
+                                if creative_drops.allow(Instant::now()) {
+                                    crate::stats::threw(&ctx, uuid, &stack);
+                                    crate::tick::throw_item_aged(&ctx, pose, stack, crate::dropped::LIFETIME - 1200);
+                                } else {
+                                    warn!("Player {} was dropping items too fast in creative mode, ignoring.", me.profile.name);
+                                }
                             }
                         }
-                        play::Serverbound::SetCreativeModeSlot { slot, item } if game_mode == CREATIVE => {
+                        play::Serverbound::SetCreativeModeSlot { slot, item }
+                            if game_mode == CREATIVE && crate::guard::CREATIVE_SLOTS.contains(&slot) => {
                             if let Ok(slot) = usize::try_from(slot) {
                                 change_hands(&ctx, uuid, entity_id, |hands| {
                                     if let Some(s) = hands.slots.get_mut(slot) {
@@ -1516,6 +1555,11 @@ async fn play(
                         sync_entities(writer, &ctx, &view, &mut seen_entities)?;
                         update_player(&ctx, uuid, |p| p.pose = Some(pose));
                         let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
+                    }
+                }
+                () = tokio::time::sleep_until(suggestions.due().unwrap_or_else(Instant::now).into()), if suggestions.due().is_some() => {
+                    if let Some((id, text)) = suggestions.take(Instant::now()) {
+                        suggest(writer, &ctx, &me.profile.name, uuid, pose, id, &text)?;
                     }
                 }
                 _ = keep_alive.tick() => {
@@ -2186,6 +2230,24 @@ async fn play(
 }
 
 /// Applies a movement packet's position; ignores non-finite values.
+/// Answers one Command Suggestions Request.
+fn suggest(
+    writer: &mut PacketWriter,
+    ctx: &ServerContext,
+    name: &str,
+    uuid: u128,
+    pose: Pose,
+    id: i32,
+    text: &str,
+) -> Result<()> {
+    let name = name.to_owned();
+    let source = Source::Player { uuid, name, pose };
+    if let Some(answer) = crate::commands::suggest(ctx, &source, id, text) {
+        writer.queue(&answer)?;
+    }
+    Ok(())
+}
+
 fn set_position(pose: &mut Pose, x: f64, y: f64, z: f64, flags: u8) -> bool {
     if !(x.is_finite() && y.is_finite() && z.is_finite()) {
         return false;
@@ -2760,20 +2822,23 @@ enum Packet {
 
 struct PacketReader {
     half: OwnedReadHalf,
-    buf: Vec<u8>,
+    frames: FrameBuffer,
     compression: Option<usize>,
     cipher: Option<Cfb8>,
     ctx: Arc<ServerContext>,
+    /// When bytes last came in, for the read timeout.
+    last_read: tokio::time::Instant,
 }
 
 impl PacketReader {
     fn new(half: OwnedReadHalf, ctx: Arc<ServerContext>) -> Self {
         Self {
             half,
-            buf: Vec::with_capacity(4096),
+            frames: FrameBuffer::new(),
             compression: None,
             cipher: None,
             ctx,
+            last_read: tokio::time::Instant::now(),
         }
     }
 
@@ -2781,35 +2846,46 @@ impl PacketReader {
     /// already buffered.
     fn enable_encryption(&mut self, secret: &[u8; 16]) {
         let mut cipher = Cfb8::new(secret);
-        cipher.decrypt(&mut self.buf);
+        cipher.decrypt(self.frames.unread_mut());
         self.cipher = Some(cipher);
     }
 
+    /// Reads more bytes. A connection that sends nothing for
+    /// `read_timeout` (30 s) is closed, in every state, as vanilla does.
     async fn fill(&mut self) -> Result<()> {
         // `read_buf` is cancel-safe, and decryption runs right after it without
-        // another await, so `next` can sit in a `select!`.
-        let start = self.buf.len();
-        if self.half.read_buf(&mut self.buf).await? == 0 {
+        // another await, so `next` can sit in a `select!`. The deadline
+        // counts from the last bytes read, not from this call, so a
+        // `select!` that keeps restarting it does not extend it.
+        let tail = self.frames.tail();
+        let start = tail.len();
+        let read = self.half.read_buf(tail);
+        let read =
+            tokio::time::timeout_at(self.last_read + self.ctx.config.read_timeout, read).await;
+        let Ok(read) = read else {
+            bail!("Timed out");
+        };
+        if read? == 0 {
             bail!("connection closed");
         }
+        self.last_read = tokio::time::Instant::now();
         if let Some(cipher) = &mut self.cipher {
-            cipher.decrypt(&mut self.buf[start..]);
+            cipher.decrypt(&mut self.frames.tail()[start..]);
         }
         Ok(())
     }
 
     async fn peek_byte(&mut self) -> Result<u8> {
-        while self.buf.is_empty() {
+        while self.frames.unread().is_empty() {
             self.fill().await?;
         }
-        Ok(self.buf[0])
+        Ok(self.frames.unread()[0])
     }
 
     async fn next(&mut self, state: State) -> Result<Packet> {
         loop {
-            if let Some((header, len)) = split_frame(&self.buf)? {
-                let body = decode_frame_body(&self.buf[header..header + len], self.compression)?;
-                self.buf.drain(..header + len);
+            if let Some(frame) = self.frames.next_frame()? {
+                let body = decode_frame_body(frame, self.compression)?;
                 let mut r = Reader::new(&body);
                 let id = r.varint()?;
                 let name = self
@@ -2882,7 +2958,12 @@ impl PacketWriter {
             if let Some(cipher) = &mut self.cipher {
                 cipher.encrypt(&mut self.out);
             }
-            self.half.write_all(&self.out).await?;
+            // A client that stops reading must not hold the connection
+            // (and its player) forever.
+            let write = self.half.write_all(&self.out);
+            if tokio::time::timeout(WRITE_TIMEOUT, write).await.is_err() {
+                bail!("Timed out");
+            }
             self.out.clear();
         }
         Ok(())
