@@ -116,3 +116,7 @@ Several agents often work at once, each in its own git worktree under `.claude/w
 on a `claude/<topic>` branch. Keep to one subsystem and its files so branches merge cleanly.
 After a branch is merged, remove its worktree and clear stale `target/` directories; they
 grow fast.
+
+When you split work across subagents, pick each one's model by
+[docs/AGENT_MODELS.md](docs/AGENT_MODELS.md): the cheapest model that gets the task right,
+not the strongest one everywhere.

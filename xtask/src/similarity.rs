@@ -33,7 +33,10 @@ const W: usize = 8;
 /// default `--fail` of 12 sits between.
 const COMMON: usize = 4;
 
-const USAGE: &str = "similarity [--reference <dir>] [--fail <n>] [--top <n>] [--self-test]";
+/// `--ours <dir>` (repeatable) checks other Rust sources instead of ours,
+/// such as code from another project before any of it is taken in.
+const USAGE: &str =
+    "similarity [--reference <dir>] [--ours <dir>]... [--fail <n>] [--top <n>] [--self-test]";
 
 pub fn run(args: &[String]) -> Result<()> {
     let root = crate::workspace_root();
@@ -43,6 +46,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut fail = 12usize;
     let mut top = 15usize;
     let mut self_test = false;
+    let mut sources = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || {
@@ -51,6 +55,7 @@ pub fn run(args: &[String]) -> Result<()> {
         };
         match a.as_str() {
             "--reference" => reference = PathBuf::from(value()?),
+            "--ours" => sources.push(PathBuf::from(value()?)),
             "--fail" => fail = value()?.parse()?,
             "--top" => top = value()?.parse()?,
             "--self-test" => self_test = true,
@@ -65,9 +70,12 @@ pub fn run(args: &[String]) -> Result<()> {
         return Ok(());
     }
 
+    if sources.is_empty() {
+        sources = vec![root.join("crates"), root.join("xtask")];
+    }
     let mut ours = Vec::new();
-    for dir in ["crates", "xtask"] {
-        collect(&root.join(dir), "rs", &mut ours)?;
+    for dir in &sources {
+        collect(dir, "rs", &mut ours)?;
     }
     let mut vanilla = Vec::new();
     collect(&reference, "java", &mut vanilla)?;
