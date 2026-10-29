@@ -1002,7 +1002,6 @@ pub fn explode_all(
     gone
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Whether only some of what a blast breaks drops (one in its power), by
 /// the drop decay rule of its kind; `tnt` is `tnt_explosion_drop_decay`.
 fn drops_decay(ctx: &ServerContext, blast: &Blast, tnt: bool) -> bool {
@@ -1015,6 +1014,7 @@ fn drops_decay(ctx: &ServerContext, blast: &Blast, tnt: bool) -> bool {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn explode_one(
     ctx: &ServerContext,
     level: &mut WorldLevel,

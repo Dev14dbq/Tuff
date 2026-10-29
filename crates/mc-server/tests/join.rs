@@ -2226,12 +2226,19 @@ async fn furnaces_smelt_with_fuel() {
     };
     assert_eq!(ctx.data.blocks.block_name(lit), Some("minecraft:furnace"));
     // 400 ticks at 400 a second: both ores smelt, a coal lasts 1600 ticks.
-    tokio::time::sleep(Duration::from_millis(1600)).await;
-    let be = ctx
-        .world
-        .block_entity(mc_protocol::Position::new(2, -60, 2), &ctx.data.blocks)
-        .unwrap();
-    let text = format!("{:?}", be.data.get("Items"));
+    // A busy machine runs fewer ticks a second, so wait for them.
+    let mut text = String::new();
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let be = ctx
+            .world
+            .block_entity(mc_protocol::Position::new(2, -60, 2), &ctx.data.blocks)
+            .unwrap();
+        text = format!("{:?}", be.data.get("Items"));
+        if text.contains("iron_ingot") && text.contains("Int(2)") {
+            break;
+        }
+    }
     assert!(
         text.contains("iron_ingot") && text.contains("Int(2)"),
         "{text}"
