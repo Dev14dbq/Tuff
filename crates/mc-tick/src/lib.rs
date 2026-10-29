@@ -1,6 +1,7 @@
 //! Tick logic in vanilla order: block updates (neighbour changed, shape),
 //! later scheduled ticks, block events and redstone (ROADMAP Ф3).
 
+pub mod block_entity;
 pub mod cauldron;
 pub mod command_block;
 pub mod composter;
