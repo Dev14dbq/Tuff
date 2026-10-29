@@ -1667,6 +1667,12 @@ async fn play(
                                     Fx::Damage(p) => writer.queue(&p)?,
                                     Fx::Swing(p) => writer.queue(&p)?,
                                     Fx::Data(p) => writer.queue(&p)?,
+                                    Fx::Heard { event, at, dim } => writer.queue(&play::LevelEvent {
+                                        event,
+                                        position: crate::fx::heard_at([pose.x, pose.y, pose.z], ctx.dim, at, dim),
+                                        data: 0,
+                                        global: true,
+                                    })?,
                                 }
                             }
                         }
