@@ -568,6 +568,7 @@ dependencies = [
  "mc-data",
  "mc-nbt",
  "mc-world",
+ "serde_json",
 ]
 
 [[package]]
