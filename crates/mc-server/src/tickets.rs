@@ -239,6 +239,11 @@ fn in_view(radius: i32, dx: i32, dz: i32) -> bool {
 
 struct Sources {
     players: Vec<(u128, i32, i32)>,
+    /// The chunks of the players that hold chunks around them: everyone
+    /// but spectators while `spectators_generate_chunks` is off (vanilla
+    /// still sends those what is loaded, but they keep nothing loaded or
+    /// ticking).
+    holders: Vec<(i32, i32)>,
     pearls: Vec<(i32, i32)>,
     dragon: bool,
     sim: i32,
@@ -247,12 +252,18 @@ struct Sources {
 }
 
 fn sources(ctx: &ServerContext) -> Sources {
+    let spectators_hold = ctx.game_rule_bool("spectators_generate_chunks");
+    let mut holders = Vec::new();
     let players = lock(&ctx.players)
         .values()
         .filter(|p| p.dimension == ctx.world.dimension)
         .filter_map(|p| {
-            p.pose
-                .map(|pose| (p.profile.uuid, chunk_of(pose.x), chunk_of(pose.z)))
+            let pose = p.pose?;
+            let at = (chunk_of(pose.x), chunk_of(pose.z));
+            if p.game_mode != 3 || spectators_hold {
+                holders.push(at);
+            }
+            Some((p.profile.uuid, at.0, at.1))
         })
         .collect();
     let pearls = lock(&ctx.entities)
@@ -272,6 +283,7 @@ fn sources(ctx: &ServerContext) -> Sources {
             .is_some_and(|f| !f.dragon_killed || f.respawn.is_some());
     Sources {
         players,
+        holders,
         pearls,
         dragon,
         sim: i32::from(ctx.config.simulation_distance),
@@ -332,8 +344,8 @@ fn sync(ctx: &ServerContext, expire: bool) {
     }
     map.levels.clear();
     let s = src.sim.min(src.view).max(0);
-    let player_chunks: Vec<(i32, i32)> = src.players.iter().map(|p| (p.1, p.2)).collect();
-    for &(cx, cz) in &player_chunks {
+    let player_chunks = &src.holders;
+    for &(cx, cz) in player_chunks {
         map.paint(cx, cz, ENTITY - s, 0);
         let reach = src.view + 1;
         for dz in -reach..=reach {
@@ -357,7 +369,7 @@ fn sync(ctx: &ServerContext, expire: bool) {
     for t in &timed {
         map.paint(t.x, t.z, t.level, t.radius);
     }
-    map.fill_random(&player_chunks, src.sim, src.view);
+    map.fill_random(player_chunks, src.sim, src.view);
     map.live = map.live || expire;
     let pin: HashSet<(i32, i32)> = map
         .levels
@@ -578,6 +590,26 @@ mod tests {
         assert!(map.random.contains(&(100, -40)));
         assert_eq!(level_at(&map, 100, -40), Some(ENTITY));
         assert_eq!(level_at(&map, 101, -40), Some(BLOCK));
+    }
+
+    #[test]
+    fn a_spectator_holds_chunks_only_with_spectators_generate_chunks() {
+        let Some(ctx) = crate::testkit::flat() else {
+            return;
+        };
+        crate::testkit::join(&ctx, 1, 70, [1000.5, -60.0, 1000.5], 3);
+        // Let the ticket of the join run out.
+        for _ in 0..=SPAWN_TICKS {
+            lock(&ctx.time).age += 1;
+            begin(&ctx);
+        }
+        assert!(entities_run(&ctx, chunk_of(1000.5), chunk_of(1000.5)));
+        ctx.game_rules.lock().expect("rules").set(
+            "spectators_generate_chunks",
+            crate::rules::Value::Bool(false),
+        );
+        rebuild(&ctx);
+        assert!(!entities_run(&ctx, chunk_of(1000.5), chunk_of(1000.5)));
     }
 
     #[test]
