@@ -464,6 +464,10 @@ pub struct Blast {
     /// is `bad_respawn_point`. `Some(true)` when water was next to the
     /// anchor, which shields the blocks.
     pub respawn: Option<bool>,
+    /// What vanilla files under block explosions: beds and respawn anchors,
+    /// end crystals and the spikes the dragon's respawn blows up. Their
+    /// drops follow `block_explosion_drop_decay`.
+    pub block: bool,
 }
 
 impl Blast {
@@ -483,6 +487,7 @@ impl Blast {
             by: None,
             fire: true,
             respawn: Some(shielded),
+            block: true,
         }
     }
 
@@ -499,6 +504,7 @@ impl Blast {
             by: None,
             fire: false,
             respawn: None,
+            block: false,
         }
     }
 }
@@ -997,6 +1003,18 @@ pub fn explode_all(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Whether only some of what a blast breaks drops (one in its power), by
+/// the drop decay rule of its kind; `tnt` is `tnt_explosion_drop_decay`.
+fn drops_decay(ctx: &ServerContext, blast: &Blast, tnt: bool) -> bool {
+    if blast.mob {
+        ctx.game_rule_bool("mob_explosion_drop_decay")
+    } else if blast.block {
+        ctx.game_rule_bool("block_explosion_drop_decay")
+    } else {
+        tnt
+    }
+}
+
 fn explode_one(
     ctx: &ServerContext,
     level: &mut WorldLevel,
@@ -1011,13 +1029,7 @@ fn explode_one(
 ) {
     sc.begin(ctx, blast.center, blast.dangerous);
     blown_positions(ctx, level, blast, rng, sc);
-    let decay = if blast.mob {
-        ctx.game_rule_bool("mob_explosion_drop_decay")
-    } else if blast.respawn.is_some() {
-        ctx.game_rule_bool("block_explosion_drop_decay")
-    } else {
-        decay
-    };
+    let decay = drops_decay(ctx, blast, decay);
     if blast.mob && !ctx.game_rule_bool("mob_griefing") || blast.respawn == Some(true) {
         sc.positions.clear();
     }
@@ -1416,6 +1428,7 @@ mod tests {
             by: None,
             fire: false,
             respawn: None,
+            block: false,
         };
         let gone = explode(&ctx, &mut level, &mut entities, &blast);
         let changes = level.into_changes();
@@ -1450,6 +1463,7 @@ mod tests {
             by: None,
             fire: false,
             respawn: None,
+            block: false,
         };
         explode(&ctx, &mut level, &mut entities, &blast);
         drop(level);
@@ -1534,6 +1548,33 @@ mod tests {
         for _ in 0..100 {
             assert!((10..30).contains(&chained_fuse(&mut rng)));
         }
+    }
+
+    #[test]
+    fn beds_anchors_and_crystals_follow_block_explosion_drop_decay() {
+        let Some(ctx) = flat() else {
+            return;
+        };
+        let bed = Blast::respawn_point(Position::new(0, -60, 0), false);
+        let crystal = Blast {
+            respawn: None,
+            fire: false,
+            ..bed
+        };
+        let tnt = Blast {
+            block: false,
+            ..crystal
+        };
+        // Vanilla's defaults: block blasts decay, TNT does not.
+        assert!(drops_decay(&ctx, &bed, false));
+        assert!(drops_decay(&ctx, &crystal, false));
+        assert!(!drops_decay(&ctx, &tnt, false));
+        lock(&ctx.game_rules).set(
+            "block_explosion_drop_decay",
+            crate::rules::Value::Bool(false),
+        );
+        assert!(!drops_decay(&ctx, &bed, false));
+        assert!(!drops_decay(&ctx, &crystal, false));
     }
 
     #[test]
