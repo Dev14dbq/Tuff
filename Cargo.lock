@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "mc-command"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-nbt",
  "mc-protocol",
@@ -481,7 +481,7 @@ dependencies = [
 
 [[package]]
 name = "mc-data"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-nbt",
  "serde_json",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "mc-entity"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-data",
  "mc-nbt",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "mc-features"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "flate2",
  "mc-data",
@@ -511,18 +511,18 @@ dependencies = [
 
 [[package]]
 name = "mc-light"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-world",
 ]
 
 [[package]]
 name = "mc-nbt"
-version = "0.0.0"
+version = "0.1.0"
 
 [[package]]
 name = "mc-protocol"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "aes",
  "flate2",
@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "mc-server"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "mc-storage"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "flate2",
  "lz4_flex",
@@ -572,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "mc-tick"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-data",
  "mc-entity",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "mc-world"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-data",
  "mc-nbt",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "mc-worldgen"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-data",
  "mc-world",
@@ -1446,7 +1446,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "flate2",

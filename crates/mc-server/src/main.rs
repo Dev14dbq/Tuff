@@ -35,6 +35,7 @@ Other options:
   --op <name>            add an operator to ops.json (repeatable)
   --offline              online-mode=false for this run
   --no-console           do not read commands from standard input
+  -V, --version          print the version and stop
 
 Logging: RUST_LOG=debug tuff
 ";
@@ -114,6 +115,15 @@ async fn run() -> Result<()> {
         match arg.as_str() {
             "-h" | "--help" => {
                 print!("{USAGE}");
+                return Ok(());
+            }
+            "-V" | "--version" => {
+                println!(
+                    "tuff {} (Minecraft {}, protocol {})",
+                    env!("CARGO_PKG_VERSION"),
+                    mc_protocol::VERSION_NAME,
+                    mc_protocol::PROTOCOL_VERSION
+                );
                 return Ok(());
             }
             "--nogui" | "nogui" | "--bonusChest" | "--eraseCache" | "--safeMode" => {}
