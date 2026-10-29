@@ -1,99 +1,81 @@
-# tuff
+# Tuff
 
-Сервер Minecraft Java Edition 26.3, написанный с нуля. Ванильный клиент 26.3 заходит на него
-как на обычный выделенный сервер: тот же мир, `server.properties`, операторы из `ops.json`,
-датапаки и команды.
+> [!WARNING]
+> **TUFF IS IN ALPHA.** Expect bugs, missing features and breaking changes between versions.
+> **Back up your world before you point Tuff at it**, and don't run it for a server you can't
+> afford to lose yet.
 
-Крейт сервера по-прежнему называется `mc-server`. Программа, которую он собирает, — `tuff`.
+A Minecraft: Java Edition server written from scratch in Rust.
 
-- [docs/ADMIN.md](docs/ADMIN.md) — запуск, права, списки, прокси, management, датапаки
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — как устроен сервер
-- [docs/ROADMAP.md](docs/ROADMAP.md) — план по фазам
-- [docs/CONCEPT.md](docs/CONCEPT.md) — сервер, клиент и платформа целиком
+Drop it into the folder of your vanilla 26.3 server and start it. Your world, `server.properties`,
+ops, whitelist, bans and datapacks keep working, and players join with the normal game client.
+It just uses a lot less CPU and memory doing it.
 
-## Запуск
+Where we're going: you join a server and its mods load for you. New blocks, mobs, items and
+UI come from the server, and nobody has to install a modpack. When you leave, they're gone.
+That part isn't built yet; the server underneath it is.
 
-Нужны Rust (версия в `rust-toolchain.toml`) и извлечённые данные ванили, см. ниже.
+## Numbers
+
+Same machine, same seed, 4 threads each. Median of three runs.
+
+| | vanilla 26.3 | Tuff |
+|---|---|---|
+| 50 players flying around, ms per tick | 15.0 | **3.4** |
+| idle server, RAM | 659 MB | **87 MB** |
+| 50 players, RAM | 969 MB | **879 MB** |
+| loading an existing world, chunks/s | 681 | **2092** |
+| generating new terrain, chunks/s | 79 | **101** |
+| 2000 cows in a pen, ms per tick | 12.8 | **3.0** |
+
+How it's measured: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
+## Status
+
+**Alpha.** Survival is playable: world generation, mobs, villagers, raids, the Ender Dragon
+and the Wither, redstone, enchanting, brewing, advancements, commands and datapacks. Online
+and offline mode, Velocity and BungeeCord, the vanilla management protocol.
+
+Not yet: plugins and mods, versions other than 26.3. If something behaves differently from
+vanilla, that's a bug. Please open an issue.
+
+## Running it
+
+You need Rust and, once, Java 25+. Tuff doesn't ship any Minecraft files, so the first step
+pulls game data out of Mojang's own `server.jar`.
 
 ```bash
+git clone https://github.com/Dev14dbq/tuff && cd tuff
+
+mkdir -p reference/26.3
+curl -o reference/26.3/26.3.json https://piston-meta.mojang.com/v1/packages/11f1aefe473eefba0af62e3286c33b692807b2eb/26.3.json
+curl -o reference/26.3/server.jar https://piston-data.mojang.com/v1/objects/33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c/server.jar
+cargo xtask extract-data
+
 cargo build --release -p mc-server
-mkdir -p run && cd run && ../target/release/tuff --op <ник>
+mkdir -p run && cd run && ../target/release/tuff --op YourName
 ```
 
-Сервер запускают в его папке. При первом старте там появляются `server.properties`,
-`ops.json`, белый список, баны, `usercache.json`, `logs/latest.log` и мир `world/`.
-`server-ip` по умолчанию `127.0.0.1`: слушает только этот компьютер. Пустое значение
-открывает все адреса.
+It listens on `127.0.0.1` by default. Clear `server-ip` in `server.properties` to open it to
+the network. More in [docs/ADMIN.md](docs/ADMIN.md).
 
-Мир ванильного сервера 26.3 кладётся как `world/`. Подробности и переход с Paper —
-в [docs/ADMIN.md](docs/ADMIN.md).
-
-```bash
-RUST_LOG=debug ../target/release/tuff --op <ник>
-```
-
-`--offline` (или `online-mode=false`) выключает проверку аккаунтов. Если при этом
-`enforce-secure-profile=true`, чат без подписи не рассылается: поставьте
-`enforce-secure-profile=false`.
-
-## Docker
-
-В образ не входят данные игры и мир. Каталог данных монтируется снаружи.
+With Docker:
 
 ```bash
 docker build -t tuff .
 docker run --rm -p 25565:25565 \
   -v "$PWD/cache/mcdata:/data/cache/mcdata:ro" \
   -v tuff-data:/data \
-  tuff --bind 0.0.0.0
+  tuff
 ```
 
-Образ слушает `0.0.0.0:25565`. Рабочая папка контейнера — `/data`.
+## Contributing
 
-## Структура
+Help is welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: we don't copy Minecraft's
+code, and every change gets checked against vanilla. The rest of the docs are in Russian for
+now.
 
-```
-crates/
-  mc-nbt        NBT
-  mc-protocol   пакеты 26.3, кадры, сжатие
-  mc-data       таблицы блоков и реестров из извлечённых данных
-  mc-world      секции, палитры, карты высот, свет на диске
-  mc-worldgen   шум, биомы, поверхность
-  mc-features   фичи, структуры, датапак-оверлей генерации
-  mc-light      свет
-  mc-entity     сущности, физика, навигация
-  mc-tick       фазы тика, жидкости, редстоун
-  mc-storage    регионы Anvil
-  mc-command    дерево команд
-  mc-server     сеть, тик, команды, бинарник tuff
-xtask/          cargo xtask: extract-data, bots, probe, parity
-docs/           устройство, администрирование, сверки
-```
+## License
 
-`cache/`, `reference/`, `tools/` и `run/` в git не попадают. В `reference/` лежит
-проприетарный код Mojang, его только читают. В репозиторий из него ничего не копируется.
-
-## Разработка
-
-```bash
-# данные ванили из reference/<версия>/server.jar → cache/mcdata/<версия>/
-cargo xtask extract-data
-
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
-
-Нагрузочный прогон против уже запущенного сервера с `--offline`:
-
-```bash
-cargo xtask bots --count 100 --seconds 30
-```
-
-CI (`.github/workflows/ci.yml`) гоняет fmt, clippy и тесты на Linux, macOS и Windows
-и не даёт закоммитить `reference/`, `tools/`, `cache/`, `*.jar` или `*.class`.
-
-## Лицензия
-
-Код в этом репозитории — [GPL-3.0-or-later](LICENSE). Jar-файлы, декомпилированный код
-и данные Mojang не наши и здесь не лежат.
+GPL-3.0-or-later. Not affiliated with Mojang or Microsoft. Minecraft is a trademark of Mojang
+Synergies AB.
