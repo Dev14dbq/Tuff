@@ -1,10 +1,14 @@
-//! Neutral anger and two game rules (minecraft.wiki, "Game rule"):
-//! - `universal_anger`: a provoked neutral mob, and the others of its kind
-//!   within follow range that are not already angry, go for the nearest
-//!   player rather than only the one who provoked them;
-//! - `forgive_dead_players`: they drop that anger when the player they were
-//!   after dies nearby. With universal anger on, they switch to whoever is
-//!   still there.
+//! Neutral mobs (bees, wolves, polar bears, iron golems, endermen and
+//! zombified piglins) and two game rules, as vanilla runs them:
+//! - `universal_anger`: a neutral mob a player hurts forgets whom it was
+//!   after and is angry at every player until it picks one, the nearest
+//!   survival or adventure player in its follow range. Bees, wolves and
+//!   zombified piglins pass that on to every mob of their kind within follow
+//!   range sideways and 10 blocks up or down, angry already or not. The
+//!   player who hit it is not singled out.
+//! - `forgive_dead_players`: when a player dies, the neutral mobs within 32
+//!   blocks sideways and 10 up or down of where they died that were angry
+//!   at them calm down. With the rule off they stay angry.
 
 use mc_entity::{Entity, Kind, Species};
 
@@ -13,6 +17,8 @@ use crate::tick::lock;
 
 use super::dist_sq;
 
+/// Vanilla's `NeutralMob`s, plus piglins, whose anger at a dead player is
+/// let go the same way.
 fn neutral(species: Species) -> bool {
     matches!(
         species,
@@ -21,7 +27,22 @@ fn neutral(species: Species) -> bool {
             | Species::ZombifiedPiglin
             | Species::Piglin
             | Species::Bee
+            | Species::PolarBear
+            | Species::IronGolem
     )
+}
+
+/// The kinds that call their own kind in when universal anger strikes.
+fn alerts_kin(species: Species) -> bool {
+    matches!(
+        species,
+        Species::Bee | Species::Wolf | Species::ZombifiedPiglin
+    )
+}
+
+/// How long a neutral mob stays angry: 20 to 39 seconds.
+fn anger_time(m: &mut mc_entity::Mob) -> i32 {
+    400 + m.below(381) as i32
 }
 
 /// A player died at `at`. Applied on the next mob tick, which holds the
@@ -34,47 +55,49 @@ pub fn note_death(ctx: &ServerContext, entity_id: i32, at: [f64; 3]) {
         .push((ctx.dim, entity_id, at));
 }
 
-/// Forgives deaths recorded since the last tick, then spreads universal anger.
+/// Forgives deaths recorded since the last tick, then runs universal anger.
 pub fn finish(ctx: &ServerContext, entities: &mut [Entity]) {
     let deaths: Vec<_> = lock(&ctx.mobs.deaths)
         .extract_if(.., |(dim, _, _)| *dim == ctx.dim)
         .collect();
-    for (_, id, at) in deaths {
-        forgive(ctx, entities, id, at);
+    if ctx.game_rule_bool("forgive_dead_players") {
+        for (_, id, at) in deaths {
+            forgive(entities, id, at);
+        }
     }
     if ctx.game_rule_bool("universal_anger") {
-        share(ctx, entities);
+        spread(entities);
+        aim(ctx, entities);
+    }
+    for e in entities.iter_mut() {
+        if let Kind::Mob(m) = &mut e.kind {
+            m.provoked = false;
+        }
     }
 }
 
-fn forgive(ctx: &ServerContext, entities: &mut [Entity], dead: i32, at: [f64; 3]) {
-    if !ctx.game_rule_bool("forgive_dead_players") {
-        return;
-    }
-    let universal = ctx.game_rule_bool("universal_anger");
+/// Vanilla tells the neutral mobs in a box around the dead player's block
+/// (32 sideways, 10 up and down) and those angry at them stop.
+fn forgive(entities: &mut [Entity], dead: i32, at: [f64; 3]) {
+    let block = at.map(f64::floor);
+    let within = |p: [f64; 3]| {
+        p[0] >= block[0] - 32.0
+            && p[0] < block[0] + 33.0
+            && p[1] >= block[1] - 10.0
+            && p[1] < block[1] + 11.0
+            && p[2] >= block[2] - 32.0
+            && p[2] < block[2] + 33.0
+    };
     for e in entities.iter_mut() {
         let pos = e.pos;
         let Kind::Mob(m) = &mut e.kind else {
             continue;
         };
-        if !neutral(m.species) || m.anger <= 0 || m.is_tame() {
+        if !neutral(m.species) || !within(pos) {
             continue;
         }
         let aimed = m.target == Some(dead) || m.revenge.is_some_and(|(id, _)| id == dead);
-        if !aimed {
-            continue;
-        }
-        let range = m.species.follow_range();
-        if dist_sq(pos, at) > range * range {
-            continue;
-        }
-        if universal {
-            if let Some(aim) = nearest_player(ctx, pos, Some(dead)) {
-                m.target = Some(aim);
-                m.revenge = Some((aim, m.anger));
-                m.dirty = true;
-            }
-        } else {
+        if aimed {
             m.anger = 0;
             m.target = None;
             m.revenge = None;
@@ -83,7 +106,9 @@ fn forgive(ctx: &ServerContext, entities: &mut [Entity], dead: i32, at: [f64; 3]
     }
 }
 
-fn share(ctx: &ServerContext, entities: &mut [Entity]) {
+/// A player hurt these: they forget their target and turn on all players,
+/// and some bring their kind along.
+fn spread(entities: &mut [Entity]) {
     let sparks: Vec<(usize, Species, [f64; 3])> = entities
         .iter()
         .enumerate()
@@ -91,62 +116,89 @@ fn share(ctx: &ServerContext, entities: &mut [Entity]) {
             let Kind::Mob(m) = &e.kind else {
                 return None;
             };
-            (neutral(m.species) && m.anger > 0 && !m.is_tame() && !m.is_dead())
+            (m.provoked && neutral(m.species) && m.species != Species::Piglin && !m.is_tame())
                 .then_some((i, m.species, e.pos))
         })
         .collect();
     for (i, species, pos) in sparks {
-        let Some(aim) = nearest_player(ctx, pos, None) else {
-            continue;
-        };
         let range = species.follow_range();
-        if let Kind::Mob(m) = &mut entities[i].kind
-            && m.target != Some(aim)
-        {
-            m.target = Some(aim);
-            m.dirty = true;
-        }
         for (j, e) in entities.iter_mut().enumerate() {
-            if j == i || dist_sq(e.pos, pos) > range * range {
+            let near = (e.pos[0] - pos[0].floor() - 0.5).abs() <= range + 0.5
+                && (e.pos[1] - pos[1].floor() - 0.5).abs() <= 10.5
+                && (e.pos[2] - pos[2].floor() - 0.5).abs() <= range + 0.5;
+            if j != i && !(alerts_kin(species) && near) {
                 continue;
             }
             let Kind::Mob(m) = &mut e.kind else {
                 continue;
             };
-            if m.species != species || m.anger > 0 || m.is_tame() || m.is_dead() {
+            if m.species != species || m.is_tame() || m.is_dead() {
                 continue;
             }
-            m.anger = 400;
-            m.target = Some(aim);
+            m.anger = anger_time(m);
+            m.target = None;
+            m.revenge = None;
             m.dirty = true;
         }
     }
 }
 
-/// The closest living player's entity id, skipping `except`.
-fn nearest_player(ctx: &ServerContext, at: [f64; 3], except: Option<i32>) -> Option<i32> {
+/// Mobs angry at everyone and after no one yet look for the nearest player
+/// (vanilla's target search runs about one tick in five).
+fn aim(ctx: &ServerContext, entities: &mut [Entity]) {
+    if ctx.difficulty() == 0 {
+        return;
+    }
+    let players = players(ctx);
+    for e in entities.iter_mut() {
+        let pos = e.pos;
+        let Kind::Mob(m) = &mut e.kind else {
+            continue;
+        };
+        if !neutral(m.species)
+            || m.species == Species::Piglin
+            || m.anger <= 0
+            || m.target.is_some()
+            || m.is_tame()
+            || m.is_dead()
+        {
+            continue;
+        }
+        if m.below(5) != 0 {
+            continue;
+        }
+        let range = m.species.follow_range();
+        let nearest = players
+            .iter()
+            .map(|&(id, at)| (dist_sq(pos, at), id))
+            .filter(|&(d, _)| d <= range * range)
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, id)) = nearest {
+            m.target = Some(id);
+            m.dirty = true;
+        }
+    }
+}
+
+/// Players a neutral mob may turn on: alive, here, survival or adventure.
+fn players(ctx: &ServerContext) -> Vec<(i32, [f64; 3])> {
     let standing: Vec<(u128, i32, [f64; 3])> = {
         let players = lock(&ctx.players);
         players
             .values()
-            .filter(|p| p.game_mode != 3 && except != Some(p.entity_id))
+            .filter(|p| matches!(p.game_mode, 0 | 2) && p.dimension == ctx.world.dimension)
             .filter_map(|p| {
                 p.pose
                     .map(|pose| (p.profile.uuid, p.entity_id, [pose.x, pose.y, pose.z]))
             })
             .collect()
     };
-    let mut best: Option<(f64, i32)> = None;
-    for (uuid, id, pos) in standing {
-        if lock(&ctx.vitals).get(&uuid).is_some_and(|v| v.dead) {
-            continue;
-        }
-        let d = dist_sq(at, pos);
-        if best.is_none_or(|(so_far, _)| d < so_far) {
-            best = Some((d, id));
-        }
-    }
-    best.map(|(_, id)| id)
+    let vitals = lock(&ctx.vitals);
+    standing
+        .into_iter()
+        .filter(|(uuid, _, _)| !vitals.get(uuid).is_some_and(|v| v.dead))
+        .map(|(_, id, at)| (id, at))
+        .collect()
 }
 
 #[cfg(test)]
@@ -156,45 +208,116 @@ mod tests {
     use crate::rules::Value;
     use crate::testkit::{flat, join};
 
+    fn mob(e: &Entity) -> &mc_entity::Mob {
+        let Kind::Mob(m) = &e.kind else {
+            panic!("not a mob")
+        };
+        m
+    }
+
     #[test]
-    fn universal_anger_spreads_and_a_death_is_forgiven() {
+    fn universal_anger_turns_the_kin_on_the_nearest_player() {
         let Some(ctx) = flat() else {
             return;
         };
-        join(&ctx, 1, 7000, [0.5, -60.0, 0.5], 0);
-        join(&ctx, 2, 7001, [8.0, -60.0, 0.5], 0);
+        ctx.difficulty
+            .store(2, std::sync::atomic::Ordering::Relaxed);
+        // The hitter stands further off than a bystander.
+        join(&ctx, 1, 7000, [20.5, -60.0, 0.5], 0);
+        join(&ctx, 2, 7001, [6.0, -60.0, 0.5], 0);
+        join(&ctx, 3, 7002, [2.0, -60.0, 0.5], 1);
         lock(&ctx.game_rules).set("universal_anger", Value::Bool(true));
-        lock(&ctx.game_rules).set("forgive_dead_players", Value::Bool(true));
 
-        let mut provoked = new_mob(&ctx, Species::ZombifiedPiglin, [0.5, -59.0, 0.5]);
-        if let Kind::Mob(m) = &mut provoked.kind {
+        let mut hit = new_mob(&ctx, Species::ZombifiedPiglin, [0.5, -60.0, 0.5]);
+        if let Kind::Mob(m) = &mut hit.kind {
             m.anger = 400;
             m.target = Some(7000);
+            m.revenge = Some((7000, 100));
+            m.provoked = true;
         }
-        let calm = new_mob(&ctx, Species::ZombifiedPiglin, [3.0, -59.0, 0.5]);
-        let mut entities = vec![provoked, calm];
-        share(&ctx, &mut entities);
-        let aimed =
-            |e: &Entity| matches!(&e.kind, Kind::Mob(m) if m.target == Some(7000) && m.anger > 0);
-        assert!(entities.iter().all(aimed), "both go for the nearer player");
+        let kin = new_mob(&ctx, Species::ZombifiedPiglin, [3.0, -60.0, 0.5]);
+        let far_kin = new_mob(&ctx, Species::ZombifiedPiglin, [3.0, -45.0, 0.5]);
+        let other = new_mob(&ctx, Species::Wolf, [3.0, -60.0, 1.5]);
+        let mut entities = vec![hit, kin, far_kin, other];
+        finish(&ctx, &mut entities);
+        assert!(mob(&entities[0]).anger > 0 && mob(&entities[1]).anger > 0);
+        assert_eq!(mob(&entities[2]).anger, 0, "more than 10 blocks below");
+        assert_eq!(mob(&entities[3]).anger, 0, "another kind");
+        assert!(!mob(&entities[0]).provoked);
+        for _ in 0..200 {
+            finish(&ctx, &mut entities);
+        }
+        // Not the hitter, not the creative player: the nearest survival one.
+        assert_eq!(mob(&entities[0]).target, Some(7001));
+        assert_eq!(mob(&entities[1]).target, Some(7001));
+        assert_eq!(mob(&entities[2]).target, None);
+    }
 
-        forgive(&ctx, &mut entities, 7000, [0.5, -60.0, 0.5]);
-        assert!(
-            entities
-                .iter()
-                .all(|e| matches!(&e.kind, Kind::Mob(m) if m.target == Some(7001))),
-            "universal anger switches to the player still standing"
-        );
+    #[test]
+    fn an_enderman_does_not_bring_its_kind() {
+        let Some(ctx) = flat() else {
+            return;
+        };
+        lock(&ctx.game_rules).set("universal_anger", Value::Bool(true));
+        let mut hit = new_mob(&ctx, Species::Enderman, [0.5, -60.0, 0.5]);
+        if let Kind::Mob(m) = &mut hit.kind {
+            m.provoked = true;
+        }
+        let kin = new_mob(&ctx, Species::Enderman, [3.0, -60.0, 0.5]);
+        let mut entities = vec![hit, kin];
+        finish(&ctx, &mut entities);
+        assert!(mob(&entities[0]).anger > 0);
+        assert_eq!(mob(&entities[1]).anger, 0);
+    }
 
-        lock(&ctx.game_rules).set("universal_anger", Value::Bool(false));
-        if let Kind::Mob(m) = &mut entities[0].kind {
-            m.target = Some(7001);
+    #[test]
+    fn without_universal_anger_a_hit_changes_nothing_here() {
+        let Some(ctx) = flat() else {
+            return;
+        };
+        let mut hit = new_mob(&ctx, Species::ZombifiedPiglin, [0.5, -60.0, 0.5]);
+        if let Kind::Mob(m) = &mut hit.kind {
             m.anger = 400;
+            m.target = Some(7000);
+            m.provoked = true;
         }
-        forgive(&ctx, &mut entities, 7001, [8.0, -60.0, 0.5]);
-        assert!(
-            matches!(&entities[0].kind, Kind::Mob(m) if m.anger == 0 && m.target.is_none()),
-            "without universal anger a death ends it"
-        );
+        let kin = new_mob(&ctx, Species::ZombifiedPiglin, [3.0, -60.0, 0.5]);
+        let mut entities = vec![hit, kin];
+        finish(&ctx, &mut entities);
+        assert_eq!(mob(&entities[0]).target, Some(7000));
+        assert_eq!(mob(&entities[1]).anger, 0);
+    }
+
+    #[test]
+    fn forgive_dead_players_calms_those_angry_at_the_dead_nearby() {
+        let Some(ctx) = flat() else {
+            return;
+        };
+        let angry = |at: [f64; 3], target: i32| {
+            let mut e = new_mob(&ctx, Species::ZombifiedPiglin, at);
+            if let Kind::Mob(m) = &mut e.kind {
+                m.anger = 400;
+                m.target = Some(target);
+            }
+            e
+        };
+        let mut entities = vec![
+            angry([10.5, -60.0, 0.5], 7000),
+            angry([40.5, -60.0, 0.5], 7000),
+            angry([10.5, -60.0, 0.5], 7001),
+        ];
+        // Off by default? No: vanilla's default is on.
+        assert!(ctx.game_rule_bool("forgive_dead_players"));
+        note_death(&ctx, 7000, [0.5, -60.0, 0.5]);
+        finish(&ctx, &mut entities);
+        assert_eq!(mob(&entities[0]).anger, 0);
+        assert_eq!(mob(&entities[0]).target, None);
+        assert!(mob(&entities[1]).anger > 0, "past 32 blocks");
+        assert!(mob(&entities[2]).anger > 0, "angry at someone else");
+
+        lock(&ctx.game_rules).set("forgive_dead_players", Value::Bool(false));
+        note_death(&ctx, 7001, [0.5, -60.0, 0.5]);
+        finish(&ctx, &mut entities);
+        assert_eq!(mob(&entities[2]).target, Some(7001), "the rule is off");
     }
 }

@@ -687,6 +687,9 @@ pub struct Mob {
     /// The player who last hurt it, and how many more ticks that counts
     /// (loot and experience).
     pub hurt_by_player: Option<(u128, i32)>,
+    /// A player hurt it since the world last looked (neutral mobs under
+    /// the `universal_anger` game rule turn on every player then).
+    pub provoked: bool,
     /// Ghasts charge and blazes burn before shooting.
     pub charge: i32,
     /// Zombies raise their arms while chasing.
@@ -809,6 +812,7 @@ impl Mob {
             ambient_timer: 0,
             walked: 0.0,
             hurt_by_player: None,
+            provoked: false,
             charge: 0,
             arms_up: false,
             boss: match species {
