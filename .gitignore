@@ -10,3 +10,5 @@
 /run/
 # Local agent state and worktrees
 .claude/
+# Private strategy notes, kept local
+/docs/roadmap/growth.md
