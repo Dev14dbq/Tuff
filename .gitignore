@@ -12,3 +12,5 @@
 .claude/
 # Private strategy notes, kept local
 /docs/roadmap/growth.md
+# Other projects checked out for reading (e.g. Horizon), never part of Tuff
+/external
