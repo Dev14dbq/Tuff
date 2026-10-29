@@ -276,9 +276,22 @@ async fn run() -> Result<()> {
             ctx.dimension(index);
         }
     });
-    server
-        .run(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
+    server.run(stop_signal()).await
+}
+
+/// Ctrl+C, or SIGTERM from `kill`, systemd or `docker stop`: vanilla saves
+/// and stops on either.
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
 }
