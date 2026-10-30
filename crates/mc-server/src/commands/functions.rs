@@ -609,6 +609,13 @@ fn refresh_pack_layers(ctx: &crate::context::ServerContext) {
 fn known_pack(r: &Run, name: &str) -> Result<Pack> {
     let packs = lock(&r.ctx.packs);
     if let Some(p) = packs.pack(name) {
+        let missing = packs.missing_flags(p);
+        if !missing.is_empty() && !packs.enabled.contains(&p.id) {
+            return Err(err(
+                "commands.datapack.enable.failed.no_flags",
+                vec![Tag::from(name), Tag::String(missing.join(", "))],
+            ));
+        }
         return Ok(p.clone());
     }
     if packs::FEATURE_PACKS.contains(&name) {

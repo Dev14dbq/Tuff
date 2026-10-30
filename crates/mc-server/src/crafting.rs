@@ -843,6 +843,8 @@ mod tests {
                 title: "extra".into(),
                 description: Tag::String(String::new()),
                 dir: Some(tmp.clone()),
+                features: Vec::new(),
+                overlays: Vec::new(),
             });
             packs.enabled.push("file/extra".into());
         }
