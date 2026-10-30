@@ -34,6 +34,14 @@ pub enum Fx {
     Swing(play::SwingAnimation),
     Data(play::SetEntityData),
     Cracks(play::BlockDestruction),
+    /// A level event every player hears wherever they are (the rule
+    /// `global_sound_events`): each gets it no more than 32 blocks away in
+    /// its direction, or at their own place in another dimension.
+    Heard {
+        event: i32,
+        at: mc_protocol::Position,
+        dim: usize,
+    },
 }
 
 impl Fx {
@@ -56,7 +64,7 @@ impl Fx {
     pub fn at(&self) -> Option<[f64; 3]> {
         match self {
             Fx::Sound(p) => Some([p.x, p.y, p.z]),
-            Fx::Level(p) if !p.global => Some([
+            Fx::Level(p) => Some([
                 f64::from(p.position.x),
                 f64::from(p.position.y),
                 f64::from(p.position.z),
@@ -139,23 +147,61 @@ pub fn particles(
     );
 }
 
-/// Wither spawn (1023) and the dragon's death (1028). With
-/// `global_sound_events` every client plays them; otherwise only those
-/// close enough to `at`.
+/// Wither spawn (1023), the dragon's death (1028) and an end portal
+/// opening (1038). With `global_sound_events` every player on the server
+/// hears them; otherwise they are an ordinary level event, heard near `at`.
 pub fn heard(ctx: &ServerContext, event: i32, at: [f64; 3]) {
+    if !ctx.game_rule_bool("global_sound_events") {
+        level_event(ctx, event, at, 0);
+        return;
+    }
     emit(
         ctx,
-        Fx::Level(play::LevelEvent {
+        Fx::Heard {
             event,
-            position: mc_protocol::Position::new(
+            at: mc_protocol::Position::new(
                 at[0].floor() as i32,
                 at[1].floor() as i32,
                 at[2].floor() as i32,
             ),
-            data: 0,
-            global: ctx.game_rule_bool("global_sound_events"),
-        }),
+            dim: ctx.dim,
+        },
     );
+}
+
+/// Where a player at `me` (in dimension `my_dim`) is told a global level
+/// event at `at` in `dim` happened.
+pub fn heard_at(
+    me: [f64; 3],
+    my_dim: usize,
+    at: mc_protocol::Position,
+    dim: usize,
+) -> mc_protocol::Position {
+    let block = |p: [f64; 3]| {
+        mc_protocol::Position::new(
+            p[0].floor() as i32,
+            p[1].floor() as i32,
+            p[2].floor() as i32,
+        )
+    };
+    if my_dim != dim {
+        return block(me);
+    }
+    let centre = [
+        f64::from(at.x) + 0.5,
+        f64::from(at.y) + 0.5,
+        f64::from(at.z) + 0.5,
+    ];
+    let d = [centre[0] - me[0], centre[1] - me[1], centre[2] - me[2]];
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    if len < 32.0 {
+        return block(centre);
+    }
+    block([
+        me[0] + d[0] / len * 32.0,
+        me[1] + d[1] / len * 32.0,
+        me[2] + d[2] / len * 32.0,
+    ])
 }
 
 /// A world event (2002 potion shatter: data is the colour).
@@ -552,6 +598,50 @@ pub fn type_name(kind: &Kind) -> Option<String> {
         },
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod heard_tests {
+    use super::*;
+    use crate::context::Event;
+    use mc_protocol::Position;
+
+    #[test]
+    fn a_global_event_comes_from_no_further_than_32_blocks() {
+        let at = Position::new(100, 64, 0);
+        assert_eq!(
+            heard_at([0.5, 64.5, 0.5], 0, at, 0),
+            Position::new(32, 64, 0)
+        );
+        assert_eq!(heard_at([90.5, 64.0, 0.5], 0, at, 0), at);
+        // In another dimension it is heard where one stands.
+        assert_eq!(
+            heard_at([5.2, 70.0, -3.5], 1, at, 0),
+            Position::new(5, 70, -4)
+        );
+    }
+
+    #[test]
+    fn global_sound_events_decides_who_hears_the_wither() {
+        let Some(ctx) = crate::testkit::flat() else {
+            return;
+        };
+        let mut events = ctx.events.subscribe();
+        heard(&ctx, 1023, [0.5, 64.0, 0.5]);
+        let ev = events.try_changed().expect("nothing sent");
+        assert!(ev.is_global());
+        assert!(matches!(ev, Event::Fx(Fx::Heard { event: 1023, .. })));
+
+        ctx.game_rules
+            .lock()
+            .expect("rules")
+            .set("global_sound_events", crate::rules::Value::Bool(false));
+        heard(&ctx, 1023, [0.5, 64.0, 0.5]);
+        let ev = events.try_changed().expect("nothing sent");
+        // An ordinary level event: only this dimension, only those near.
+        assert!(!ev.is_global());
+        assert!(matches!(ev, Event::Fx(Fx::Level(p)) if p.event == 1023 && !p.global));
+    }
 }
 
 #[cfg(test)]

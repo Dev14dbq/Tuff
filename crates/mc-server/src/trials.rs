@@ -386,9 +386,13 @@ pub fn tick(
     now: i64,
 ) -> Vec<Entity> {
     let mut out = Vec::new();
-    if !ctx.game_rule_bool("spawner_blocks_work") {
-        return out;
-    }
+    // Vanilla's "can spawn in this level": with `spawner_blocks_work` off,
+    // or on peaceful, or with `spawn_mobs` off, a waiting spawner forgets
+    // who it saw and an active one goes back to waiting. The other states
+    // (reward, cooldown) carry on as usual.
+    let can_spawn = ctx.game_rule_bool("spawner_blocks_work")
+        && difficulty != 0
+        && ctx.game_rule_bool("spawn_mobs");
     let spawners = ctx.world.block_entities_of(SPAWNER);
     let mut all = lock(&ctx.mobs.trials);
     all.retain(|&(dim, x, y, z), _| {
@@ -430,7 +434,10 @@ pub fn tick(
             }
             1 => {
                 *trial = Trial::default();
-                if difficulty != 0 && !near.is_empty() {
+                if !can_spawn {
+                    continue;
+                }
+                if !near.is_empty() {
                     trial.players = near.iter().map(|t| t.uuid).collect();
                     fx::sound(
                         ctx,
@@ -446,6 +453,11 @@ pub fn tick(
                 }
             }
             2 => {
+                if !can_spawn {
+                    *trial = Trial::default();
+                    set_property(ctx, p, "trial_spawner_state", "waiting_for_players");
+                    continue;
+                }
                 if near.is_empty() {
                     // Everyone left: the wave starts again.
                     *trial = Trial::default();
@@ -476,9 +488,6 @@ pub fn tick(
                     continue;
                 }
                 if now < trial.next_spawn || trial.mobs.len() as i32 >= want_now {
-                    continue;
-                }
-                if difficulty == 0 {
                     continue;
                 }
                 let Some(pot) = pick(&cfg.potentials) else {
@@ -1135,6 +1144,62 @@ mod tests {
         assert!(int(&be.data, "cooldown_ends_at").unwrap() >= now + DEFAULT_COOLDOWN - 1);
         now += DEFAULT_COOLDOWN + 1;
         step(&mut entities, &near, now);
+        assert_eq!(phase(&ctx), "waiting_for_players");
+    }
+
+    #[test]
+    fn spawner_blocks_work_off_sends_an_active_spawner_back_to_waiting() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let blocks = &ctx.data.blocks;
+        let p = Position::new(0, -60, 0);
+        let spawner = blocks.default_state("minecraft:trial_spawner").unwrap();
+        WorldLevel::new(&ctx).set_block(p, spawner);
+        let mut data = Compound::new();
+        data.insert(
+            "normal_config",
+            Tag::String("minecraft:trial_chamber/melee/zombie/normal".into()),
+        );
+        ctx.world.set_block_entity(
+            mc_world::BlockEntity {
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                id: SPAWNER.into(),
+                data,
+            },
+            blocks,
+        );
+        let phase = |ctx: &ServerContext| {
+            let s = ctx.world.block(p, &ctx.data.blocks).unwrap();
+            ctx.data
+                .blocks
+                .property(s, "trial_spawner_state")
+                .unwrap()
+                .to_owned()
+        };
+        let ground = Ground::new(&ctx);
+        let near = [target(7, [0.5, -59.0, 3.5])];
+        let rule = |on: bool| {
+            lock(&ctx.game_rules).set("spawner_blocks_work", crate::rules::Value::Bool(on));
+        };
+        tick(&ctx, &ground, &[], &near, 2, 0);
+        tick(&ctx, &ground, &[], &near, 2, 0);
+        assert_eq!(phase(&ctx), "active");
+        rule(false);
+        tick(&ctx, &ground, &[], &near, 2, 1);
+        assert_eq!(phase(&ctx), "waiting_for_players");
+        // While off, players in range do not wake it.
+        tick(&ctx, &ground, &[], &near, 2, 2);
+        assert_eq!(phase(&ctx), "waiting_for_players");
+        rule(true);
+        tick(&ctx, &ground, &[], &near, 2, 3);
+        assert_eq!(phase(&ctx), "active");
+        // `spawn_mobs` off has the same effect.
+        lock(&ctx.game_rules).set("spawn_mobs", crate::rules::Value::Bool(false));
+        tick(&ctx, &ground, &[], &near, 2, 4);
         assert_eq!(phase(&ctx), "waiting_for_players");
     }
 

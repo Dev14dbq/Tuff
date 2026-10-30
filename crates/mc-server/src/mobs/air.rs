@@ -22,7 +22,8 @@ pub fn filter(ctx: &ServerContext, m: &mc_entity::Mob, h: &Harm, amount: f32) ->
             if let (Some(home), Some(_)) = (m.quirks.air.home, h.player)
                 && super::creaking::awake_time(super::day_time(ctx))
             {
-                super::creaking::hit(ctx, home, lock(&ctx.time).age);
+                let now = lock(&ctx.time).age;
+                super::creaking::hit(ctx, home, now);
             }
             None
         }

@@ -193,6 +193,7 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     };
     if let Some(p) = h.player {
         m.hurt_by_player = Some((p, 100));
+        m.provoked = true;
     }
     if h.fire > 0 {
         m.burning = m.burning.max(h.fire * 20);
@@ -1371,11 +1372,12 @@ pub fn wear_gear(ctx: &ServerContext, e: &mut Entity, s: usize, amount: i32) {
 /// Sends a mob's metadata now (outside its tick).
 pub fn send_data(ctx: &ServerContext, e: &Entity) {
     if let Kind::Mob(m) = &e.kind {
+        let now = lock(&ctx.time).age;
         fx::emit(
             ctx,
             fx::Fx::Data(play::SetEntityData {
                 entity_id: e.id,
-                entries: metadata_of(ctx, m, lock(&ctx.time).age),
+                entries: metadata_of(ctx, m, now),
             }),
         );
     }

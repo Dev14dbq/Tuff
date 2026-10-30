@@ -220,6 +220,7 @@ pub fn tick(
                 by: Some("minecraft:wither"),
                 fire: false,
                 respawn: None,
+                block: false,
             });
             fx::heard(ctx, 1023, me.pos);
         }

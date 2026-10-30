@@ -956,6 +956,16 @@ fn use_item_on_block(
         use mc_tick::Level as _;
         let mut level = WorldLevel::new(ctx);
         level.set(to_pos(clicked), ctx.shapes.with(state, "eye", "true"));
+        crate::fx::level_event(
+            ctx,
+            1503,
+            [
+                f64::from(clicked.x),
+                f64::from(clicked.y),
+                f64::from(clicked.z),
+            ],
+            0,
+        );
         crate::portals::light_end_portal(&mut level, to_pos(clicked));
         let changes = level.into_changes();
         outcome.updates.extend(changes.iter().copied());
@@ -976,6 +986,12 @@ fn use_item_on_block(
             times: 1,
         });
         return outcome;
+    }
+    if let Some(name) = held_name
+        && name.ends_with("_spawn_egg")
+        && crate::mobs::eggs::refused_by_spawner(ctx, &mut outcome, actor, clicked)
+    {
+        return refuse(outcome);
     }
     // Spawn eggs of mobs (and a spawner's kind).
     if let Some(name) = held_name

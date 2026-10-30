@@ -109,9 +109,12 @@ pub fn tick(ctx: &ServerContext, entities: &mut [Entity], targets: &[Target]) {
                 half: PLAYER_WIDTH / 2.0,
                 height: PLAYER_HEIGHT,
             };
-            if overlap(a, &player)
-                && let Some(p) = push_from(a.pos, t.pos)
-            {
+            if !overlap(a, &player) {
+                continue;
+            }
+            // Players are pushable too, so they count towards the crowd.
+            crowd[k] += 1;
+            if let Some(p) = push_from(a.pos, t.pos) {
                 pushes[k][0] += p[0];
                 pushes[k][1] += p[1];
             }

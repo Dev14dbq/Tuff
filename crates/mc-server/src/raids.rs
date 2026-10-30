@@ -93,7 +93,8 @@ pub struct Raids {
     next: i32,
     pub raids: Vec<Raid>,
     omens: HashMap<u128, Omen>,
-    patrol_delay: i32,
+    /// Ticks until the patrol spawner next rolls (vanilla does not save it).
+    pub(crate) patrol_delay: i32,
 }
 
 /// Waves before the bonus one.
@@ -279,18 +280,19 @@ pub fn tick(ctx: &ServerContext) {
 /// Bad Omen turns into Raid Omen in a village; Raid Omen running out starts
 /// (or strengthens) a raid.
 fn omens(ctx: &ServerContext, players: &[Player]) {
-    let allowed = ctx.difficulty() > 0 && ctx.game_rule_bool("raids");
+    // Bad Omen turns into Raid Omen whatever the `raids` rule says; the
+    // rule (and whether raids may start there) only matters when the Raid
+    // Omen runs out.
+    let peaceful = ctx.difficulty() == 0;
     for p in players.iter().filter(|p| !p.spectator) {
-        if !allowed {
+        if peaceful {
             break;
         }
         let Some(amp) = amplifier_of(ctx, p.uuid, "bad_omen") else {
             continue;
         };
         let at = block_of(p.pos);
-        if !is_village(ctx, at)
-            || !crate::environment::flag(ctx, Some(at), crate::environment::CAN_START_RAID, true)
-        {
+        if !is_village(ctx, at) {
             continue;
         }
         let (Some(bad), Some(raid)) = (effects::kind_of("bad_omen"), effects::kind_of("raid_omen"))
@@ -329,7 +331,14 @@ fn omens(ctx: &ServerContext, players: &[Player]) {
         if let Some(k) = effects::kind_of("raid_omen") {
             effects::remove(ctx, uuid, Some(k));
         }
-        if allowed {
+        let can_start = ctx.game_rule_bool("raids")
+            && crate::environment::flag(
+                ctx,
+                Some(omen.center),
+                crate::environment::CAN_START_RAID,
+                true,
+            );
+        if can_start {
             start(ctx, omen.center, omen.level, uuid);
         }
     }
@@ -418,7 +427,9 @@ fn raids(ctx: &ServerContext, players: &[Player]) {
         return;
     }
     let difficulty = ctx.difficulty();
-    let allowed = difficulty > 0 && ctx.game_rule_bool("raids");
+    // The `raids` rule turned off stops every raid, celebrating ones too;
+    // peaceful stops only those still being fought.
+    let rule = ctx.game_rule_bool("raids");
     let mut send: Vec<(u128, u128, BossAction)> = Vec::new();
     let mut waves: Vec<(i32, [i32; 3], i32, bool)> = Vec::new();
     let mut heroes: Vec<(u128, i32)> = Vec::new();
@@ -431,8 +442,12 @@ fn raids(ctx: &ServerContext, players: &[Player]) {
             r.ticks += 1;
             let at = centre(r.center);
             let (count, health) = alive(&entities, r.id);
+            if !rule {
+                ended.push(r.id);
+                continue;
+            }
             if r.status == Status::Ongoing {
-                if !allowed || r.ticks >= MAX_TICKS {
+                if difficulty == 0 || r.ticks >= MAX_TICKS {
                     ended.push(r.id);
                     continue;
                 }
@@ -755,9 +770,15 @@ fn patrols(ctx: &ServerContext) {
     }
 }
 
-/// Every 10 to 11 minutes, maybe a patrol.
+/// Every 10 to 11 minutes, maybe a patrol. Like vanilla's other special
+/// spawners it only runs (and its clock only counts down) while `spawn_mobs`,
+/// `spawn_monsters` and its own rule `spawn_patrols` are all on.
 fn spawn_patrol(ctx: &ServerContext, players: &[Player]) {
-    if ctx.world.dimension != "minecraft:overworld" || !ctx.game_rule_bool("spawn_patrols") {
+    if ctx.world.dimension != "minecraft:overworld"
+        || !ctx.game_rule_bool("spawn_mobs")
+        || !ctx.game_rule_bool("spawn_monsters")
+        || !ctx.game_rule_bool("spawn_patrols")
+    {
         return;
     }
     {
@@ -773,7 +794,7 @@ fn spawn_patrol(ctx: &ServerContext, players: &[Player]) {
         return;
     }
     let candidates: Vec<&Player> = players.iter().filter(|p| !p.spectator).collect();
-    if candidates.is_empty() || ctx.difficulty() == 0 || !ctx.game_rule_bool("spawn_mobs") {
+    if candidates.is_empty() || ctx.difficulty() == 0 {
         return;
     }
     let p = candidates[below(candidates.len() as i32) as usize];

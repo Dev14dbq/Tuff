@@ -4,9 +4,8 @@
 //! 3) hurts nothing but pushes everything near away from it, by the share
 //! of it the blast sees, 1.22 times as hard for a player's charge; it
 //! flips levers, buttons, doors, trapdoors and fence gates it reaches,
-//! blows out lit candles and rings bells. With
-//! `projectiles_can_break_blocks` it also breaks chorus flowers, pointed
-//! dripstone and decorated pots in that radius.
+//! blows out lit candles and rings bells. It breaks nothing; the charge
+//! itself breaks a chorus flower or decorated pot it hits (see `pots`).
 //! A player it launches takes fall damage only below where it hit them.
 
 use mc_entity::extra::Shot;
@@ -145,7 +144,15 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                 }),
                 Strike::Block { .. } => {
                     hits::hit_block(t.ctx, &strike, e.pos, false);
-                    crate::pots::projectile(t.ctx, from, to);
+                    crate::pots::projectile(
+                        t.ctx,
+                        from,
+                        to,
+                        crate::pots::Impact::by(crate::pots::Launcher::of(
+                            owner,
+                            t.shooter.is_some(),
+                        )),
+                    );
                 }
             }
             // Burst a little short of what it hit.
@@ -329,7 +336,6 @@ fn trigger(ctx: &ServerContext, g: &Gust) {
                     continue;
                 };
                 let name = blocks.block_name(state).unwrap_or("");
-                crate::pots::burst(ctx, &mut level, p);
                 if immune.iter().any(|m| m == name) || name.starts_with("minecraft:iron_") {
                     continue;
                 }
@@ -560,19 +566,13 @@ mod tests {
     }
 
     #[test]
-    fn a_gust_breaks_a_chorus_flower_unless_the_rule_is_off() {
+    fn a_gust_only_triggers_blocks_and_breaks_none() {
         let Some(ctx) = flat() else {
             return;
         };
+        // Vanilla's wind burst triggers blocks; breaking a chorus flower or
+        // a pot takes the charge itself hitting it.
         set(&ctx, [0, -59, 0], "minecraft:chorus_flower");
-        burst(&ctx, &mut [], &Gust::charge([0.5, -58.5, 0.5], false));
-        assert_eq!(block(&ctx, [0, -59, 0]), "minecraft:air");
-
-        set(&ctx, [0, -59, 0], "minecraft:chorus_flower");
-        ctx.game_rules.lock().expect("rules").set(
-            "projectiles_can_break_blocks",
-            crate::rules::Value::Bool(false),
-        );
         burst(&ctx, &mut [], &Gust::charge([0.5, -58.5, 0.5], false));
         assert_eq!(block(&ctx, [0, -59, 0]), "minecraft:chorus_flower");
     }

@@ -660,6 +660,15 @@ pub fn light_end_portal(level: &mut WorldLevel, frame: BlockPos) -> bool {
                     );
                 }
             }
+            crate::fx::heard(
+                ctx,
+                1038,
+                [
+                    f64::from(center.x),
+                    f64::from(center.y),
+                    f64::from(center.z),
+                ],
+            );
             return true;
         }
     }
