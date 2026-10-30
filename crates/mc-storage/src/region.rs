@@ -64,6 +64,12 @@ pub struct RegionFile {
 impl RegionFile {
     pub fn open(path: &Path) -> Result<Self> {
         let data = fs::read(path).map_err(|e| StorageError::Io(path.to_owned(), e))?;
+        Self::from_bytes(path, data)
+    }
+
+    /// A region file's bytes, as if read from `path` (which names it and
+    /// where its oversized chunks live).
+    pub fn from_bytes(path: &Path, data: Vec<u8>) -> Result<Self> {
         if !data.is_empty() && data.len() < 2 * SECTOR {
             return Err(StorageError::Corrupt(
                 path.to_owned(),
@@ -647,5 +653,23 @@ mod tests {
     fn region_coordinates_from_names() {
         assert_eq!(region_coords(Path::new("/w/r.-1.2.mca")), Some((-1, 2)));
         assert_eq!(region_coords(Path::new("r.x.mca")), None);
+    }
+
+    #[test]
+    fn broken_headers_are_errors_not_panics() {
+        let path = Path::new("/nonexistent/r.0.0.mca");
+        assert!(RegionFile::from_bytes(path, vec![0; 100]).is_err());
+        // Chunk 0,0 at the largest offset; chunks 1,0 and 2,0 claiming
+        // more bytes than their one sector holds.
+        let mut data = vec![0u8; 3 * SECTOR];
+        data[0..4].copy_from_slice(&[0xff, 0xff, 0xff, 0x01]);
+        data[4..8].copy_from_slice(&[0, 0, 2, 1]);
+        data[8..12].copy_from_slice(&[0, 0, 2, 1]);
+        data[2 * SECTOR..2 * SECTOR + 4].copy_from_slice(&(SECTOR as u32 + 1).to_be_bytes());
+        let region = RegionFile::from_bytes(path, data).unwrap();
+        for x in 0..3 {
+            assert!(region.raw_chunk(x, 0).is_err(), "chunk {x}");
+        }
+        assert_eq!(region.chunks().len(), 3);
     }
 }

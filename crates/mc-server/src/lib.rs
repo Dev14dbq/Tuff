@@ -49,6 +49,7 @@ mod fastmap;
 mod forced;
 mod furnaces;
 mod fx;
+mod gate;
 mod generation;
 mod growth;
 pub mod guard;
@@ -70,6 +71,7 @@ mod menus;
 mod mob_effects;
 mod mobs;
 mod notify;
+pub mod oldlists;
 mod packs;
 mod persist;
 mod pipeline;
@@ -115,7 +117,7 @@ mod world;
 mod worn;
 mod xp;
 
-pub use upgrade::{Report, upgrade_world};
+pub use upgrade::{Report, prepare_world, upgrade_world};
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -148,8 +150,12 @@ pub struct Config {
     /// Refuse unsigned chat (`enforce-secure-profile`). Off in [`Config::new`]
     /// so tests keep today's chat; `server.properties` still defaults to true.
     pub enforce_secure_profile: bool,
-    /// Show `codeofconduct.txt` during configuration (`enable-code-of-conduct`).
-    pub enable_code_of_conduct: bool,
+    /// Seconds between `server/status` notifications to the management
+    /// server; 0 sends none (`status-heartbeat-interval`).
+    pub status_heartbeat_interval: u64,
+    /// The code of conduct shown during configuration, read from
+    /// `codeofconduct/` when `enable-code-of-conduct` is on.
+    pub code_of_conduct: Option<std::sync::Arc<serverlist::CodeOfConduct>>,
     /// Base URL of the session server (Mojang's by default).
     pub session_server: String,
     /// A world folder saved by vanilla 26.3; `None` for a superflat test world.
@@ -197,6 +203,23 @@ pub struct Config {
     /// Packets a second a player may send before being kicked; 0 for no
     /// limit (`rate-limit`).
     pub rate_limit: u32,
+    /// A login from an address this soon after its last one is refused;
+    /// zero for no limit (`connection-throttle`, milliseconds; not vanilla).
+    pub connection_throttle: std::time::Duration,
+    /// Connections one address may hold open before play; 0 for no limit
+    /// (`max-pending-connections-per-ip`; not vanilla).
+    pub max_pending_per_ip: u32,
+    /// Silence after which a connection is dropped: vanilla's 30 seconds
+    /// (tests shorten it).
+    pub read_timeout: std::time::Duration,
+    /// How long the login state may take: vanilla's 600 ticks. Configuration
+    /// that follows has no limit (tests shorten it).
+    pub login_timeout: std::time::Duration,
+    /// `chat-spam-threshold-seconds` and `command-spam-threshold-seconds`:
+    /// how many seconds' worth of messages a player may send at once
+    /// before the spam kick; 0 or less turns it off.
+    pub chat_spam_seconds: i32,
+    pub command_spam_seconds: i32,
     /// A tick taking longer than this stops the server with a crash report
     /// (`max-tick-time`; `None` for -1).
     pub max_tick_time: Option<std::time::Duration>,
@@ -225,7 +248,8 @@ impl Config {
             compression_threshold: Some(256),
             online_mode: true,
             enforce_secure_profile: false,
-            enable_code_of_conduct: false,
+            status_heartbeat_interval: 0,
+            code_of_conduct: None,
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
             world: None,
             level_dir: None,
@@ -248,6 +272,12 @@ impl Config {
             query_port: None,
             allow_flight: false,
             rate_limit: 0,
+            connection_throttle: std::time::Duration::ZERO,
+            max_pending_per_ip: 0,
+            read_timeout: std::time::Duration::from_secs(30),
+            login_timeout: std::time::Duration::from_secs(30),
+            chat_spam_seconds: 10,
+            command_spam_seconds: 10,
             max_tick_time: None,
             backup_minutes: 0,
             backup_keep: 5,
@@ -436,17 +466,51 @@ impl Server {
             self.ctx
                 .management_bus
                 .publish(&crate::notify::Note::ServerStarted);
+            if self.ctx.config.status_heartbeat_interval > 0 {
+                let ctx = self.ctx.clone();
+                let period =
+                    std::time::Duration::from_secs(self.ctx.config.status_heartbeat_interval);
+                tokio::spawn(async move {
+                    let mut timer =
+                        tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+                    loop {
+                        timer.tick().await;
+                        let names: Vec<String> = ctx
+                            .players
+                            .lock()
+                            .expect("players lock")
+                            .values()
+                            .map(|p| p.profile.name.clone())
+                            .collect();
+                        let state = management::server_state(names.len(), names);
+                        ctx.management_bus
+                            .publish(&crate::notify::Note::Status(state));
+                    }
+                });
+            }
         }
+        let gate = if matches!(self.ctx.config.proxy, proxy::Mode::Off) {
+            gate::Gate::new(
+                self.ctx.config.connection_throttle,
+                self.ctx.config.max_pending_per_ip,
+            )
+        } else {
+            gate::Gate::new(std::time::Duration::ZERO, 0)
+        };
         loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
                     let (stream, peer) = accepted?;
+                    let Some(pending) = gate.admit(peer.ip()) else {
+                        tracing::debug!("{peer} has too many connections open, closing");
+                        continue;
+                    };
                     stream.set_nodelay(true)?;
                     let ctx = self.ctx.clone();
                     tokio::spawn(async move {
                         // Failed logins and broken connections show in the
                         // log, so a refused join can be told apart later.
-                        if let Err(err) = connection::handle(stream, peer, ctx).await {
+                        if let Err(err) = connection::handle(stream, peer, ctx, pending).await {
                             info!("{peer} lost connection: {err:#}");
                         }
                     });

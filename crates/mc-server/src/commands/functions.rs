@@ -605,13 +605,37 @@ fn refresh_pack_layers(ctx: &crate::context::ServerContext) {
     ctx.reload_content();
 }
 
-/// The pack named `name`, or vanilla's error.
-fn known_pack(r: &Run, name: &str) -> Result<Pack> {
+/// The pack named `name`, or vanilla's error: unknown first, then already
+/// enabled or already disabled, and only when enabling the missing flags.
+fn known_pack(r: &Run, name: &str, enabling: bool) -> Result<Pack> {
     let packs = lock(&r.ctx.packs);
+    let enabled = packs.enabled.iter().any(|id| id == name);
+    let state_error = || {
+        let key = if enabling {
+            "commands.datapack.enable.failed"
+        } else {
+            "commands.datapack.disable.failed"
+        };
+        err(key, vec![Tag::from(name)])
+    };
     if let Some(p) = packs.pack(name) {
+        if enabling == enabled {
+            return Err(state_error());
+        }
+        let missing = packs.missing_flags(p);
+        if enabling && !missing.is_empty() {
+            return Err(err(
+                "commands.datapack.enable.failed.no_flags",
+                vec![Tag::from(name), Tag::String(missing.join(", "))],
+            ));
+        }
         return Ok(p.clone());
     }
     if packs::FEATURE_PACKS.contains(&name) {
+        // Vanilla's built-in feature packs are never on in this world.
+        if !enabling {
+            return Err(state_error());
+        }
         return Err(err(
             "commands.datapack.enable.failed.no_flags",
             vec![Tag::from(name), Tag::String(format!("minecraft:{name}"))],
@@ -623,16 +647,10 @@ fn known_pack(r: &Run, name: &str) -> Result<Pack> {
 fn datapack_enable(r: &mut Run, rest: &[&str]) -> Result<i32> {
     let name = r.string("name").unwrap_or_default();
     lock(&r.ctx.packs).scan();
-    let pack = known_pack(r, &name)?;
+    let pack = known_pack(r, &name, true)?;
     let existing = r.string("existing");
     {
         let mut packs = lock(&r.ctx.packs);
-        if packs.enabled.contains(&name) {
-            return Err(err(
-                "commands.datapack.enable.failed",
-                vec![Tag::String(name)],
-            ));
-        }
         let at = match rest {
             ["first"] => 0,
             [kind @ ("before" | "after"), ..] => {
@@ -658,7 +676,7 @@ fn datapack_enable(r: &mut Run, rest: &[&str]) -> Result<i32> {
 fn datapack_disable(r: &mut Run) -> Result<i32> {
     let name = r.string("name").unwrap_or_default();
     lock(&r.ctx.packs).scan();
-    let pack = known_pack(r, &name)?;
+    let pack = known_pack(r, &name, false)?;
     {
         let mut packs = lock(&r.ctx.packs);
         let Some(i) = packs.enabled.iter().position(|p| *p == name) else {

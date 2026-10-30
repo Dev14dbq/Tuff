@@ -1,0 +1,20 @@
+[package]
+name = "mc-bootstrap"
+description = "Prepares vanilla game data from Mojang's own server.jar, with no Java."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+serde_json = "1.0.154"
+sha1_smol = "1.0.1"
+sha2 = "0.10"
+tracing = "0.1.44"
+ureq = "3"
+zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

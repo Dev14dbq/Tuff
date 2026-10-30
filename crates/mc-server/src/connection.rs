@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 use mc_protocol::crypto::{Cfb8, server_hash};
-use mc_protocol::frame::{decode_frame_body, split_frame};
+use mc_protocol::frame::{FrameBuffer, decode_frame_body};
 use mc_protocol::packets::{GameProfile, configuration, handshake, login, play, status};
 use mc_protocol::text;
-use mc_protocol::{Direction, Encode, Position, Reader, State, Write as _};
+use mc_protocol::{Direction, Encode, Position, Reader, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -24,16 +24,26 @@ use crate::context::{Event, OnlinePlayer, Pose};
 use crate::interact::{Actor, Hands, Outcome};
 use crate::tick::{Action, Request};
 
+#[path = "configure.rs"]
+mod configure;
 #[path = "windows.rs"]
 mod windows;
 use crate::util::{offline_uuid, random_u64, random_uuid, uuid_string, valid_player_name};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
-const LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long one write may wait for a client that does not read.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 const CREATIVE: i32 = 1;
 
-pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>) -> Result<()> {
+/// `pending` holds this connection's place among its address's connections
+/// short of play.
+pub async fn handle(
+    stream: TcpStream,
+    peer: SocketAddr,
+    ctx: Arc<ServerContext>,
+    pending: crate::gate::Pending,
+) -> Result<()> {
     let (read, write) = stream.into_split();
     let mut reader = PacketReader::new(read, ctx.clone());
     let mut writer = PacketWriter::new(write, ctx.clone());
@@ -51,14 +61,25 @@ pub async fn handle(stream: TcpStream, peer: SocketAddr, ctx: Arc<ServerContext>
         // were not there.
         1 if !ctx.config.enable_status => Ok(()),
         1 => status(&mut reader, &mut writer).await,
+        2 | 3 if pending.login_throttled() => {
+            let reason = "Connection throttled! Please wait before reconnecting.";
+            writer
+                .send(&refusal(serde_json::json!({ "text": reason })))
+                .await?;
+            bail!("login throttled");
+        }
         2 | 3 => {
             let login = login(&mut reader, &mut writer, &intention, peer);
-            let session = tokio::time::timeout(LOGIN_TIMEOUT, login)
+            let session = tokio::time::timeout(ctx.config.login_timeout, login)
                 .await
                 .context("login timed out")??;
-            let Some(player) = session else {
+            let Some(mut player) = session else {
                 return Ok(());
             };
+            if !join(&mut reader, &mut writer, &mut player).await? {
+                return Ok(());
+            }
+            drop(pending);
             let name = player.player.profile.name.clone();
             let uuid = player.player.profile.uuid;
             let _ = uuid_string;
@@ -149,6 +170,8 @@ struct Session {
     /// Client Information `text_filtering`. Kept for the client; chat is not
     /// passed to an external filter.
     text_filtering: bool,
+    /// Client Information `locale` (`en_us`), which picks the code of conduct.
+    language: String,
     /// Where the client connects from.
     peer: SocketAddr,
 }
@@ -361,23 +384,17 @@ async fn login(
         return Ok(None);
     }
 
-    let mut session = Session {
+    // The player is registered now, with no await since: `join` takes it
+    // from here and unregisters them if they do not make it.
+    Ok(Some(Session {
         player,
         saved,
         view_distance: i32::from(ctx.view_distance.load(std::sync::atomic::Ordering::Relaxed)),
         skin_parts: 0,
         text_filtering: false,
+        language: "en_us".into(),
         peer,
-    };
-    // From here on the player is registered; remove them if login fails.
-    let result = configure(reader, writer, &mut session).await;
-    match result {
-        Ok(true) => Ok(Some(session)),
-        Ok(false) | Err(_) => {
-            ctx.players.lock().expect("players lock").remove(&uuid);
-            result.map(|_| None)
-        }
-    }
+    }))
 }
 
 /// Velocity answers `velocity:player_info` with an HMAC'd profile instead
@@ -451,6 +468,8 @@ async fn authenticate(
     let profile = auth::has_joined(&writer.ctx.config.session_server, name, &hash).await?;
     if profile.is_none() {
         warn!("session server did not verify {name}");
+    } else {
+        writer.ctx.management_bus.report_login_activity();
     }
     Ok(profile)
 }
@@ -459,14 +478,16 @@ fn note_client_info(session: &mut Session, info: &configuration::ClientInformati
     session.view_distance = i32::from(info.view_distance).clamp(2, max_view);
     session.skin_parts = info.skin_parts;
     session.text_filtering = info.text_filtering;
+    session.language = info.locale.clone();
 }
 
-/// Returns `Ok(false)` if the client was refused during configuration.
-async fn configure(
+/// The end of login: compression, Login Finished, and the client's
+/// acknowledgement, after which it is configuring.
+async fn finish_login(
     reader: &mut PacketReader,
     writer: &mut PacketWriter,
-    session: &mut Session,
-) -> Result<bool> {
+    session: &Session,
+) -> Result<()> {
     let ctx = writer.ctx.clone();
     if let Some(threshold) = ctx.config.compression_threshold {
         let compression = login::LoginCompression {
@@ -484,128 +505,33 @@ async fn configure(
         .await?;
     loop {
         match reader.next(State::Login).await? {
-            Packet::Login(login::Serverbound::LoginAcknowledged) => break,
+            Packet::Login(login::Serverbound::LoginAcknowledged) => return Ok(()),
             other => debug!("ignoring {other:?} before Login Acknowledged"),
         }
     }
+}
 
-    // Configuration.
-    let mut brand = Vec::new();
-    brand.put_string(crate::BRAND);
-    writer.queue(&configuration::CustomPayload {
-        channel: "minecraft:brand".into(),
-        data: brand,
-    })?;
-    writer.queue(&configuration::UpdateEnabledFeatures {
-        flags: vec!["minecraft:vanilla".into()],
-    })?;
-    writer.queue(&configuration::SelectKnownPacks {
-        packs: vec![ctx.core_pack.clone()],
-    })?;
-    writer.flush().await?;
-
-    let max_view = i32::from(ctx.view_distance.load(std::sync::atomic::Ordering::Relaxed));
-    let client_knows_core = loop {
-        match reader.next(State::Configuration).await? {
-            Packet::Configuration(configuration::Serverbound::SelectKnownPacks(packs)) => {
-                break packs.contains(&ctx.core_pack);
-            }
-            Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
-                note_client_info(session, &info, max_view);
-            }
-            other => trace!("configuration: {other:?}"),
-        }
-    };
-    // Clients with the vanilla data pack only need entry names; others get
-    // every entry's data as NBT.
-    let registries = if client_knows_core {
-        &ctx.registries
-    } else {
-        debug!("client does not know minecraft:core, sending registry data as NBT");
-        &ctx.registries_with_data
-    };
-    for registry in registries {
-        writer.queue(registry)?;
+/// Login's last step and configuration, for a player already registered;
+/// `Ok(false)` (or an error) unregisters them again.
+async fn join(
+    reader: &mut PacketReader,
+    writer: &mut PacketWriter,
+    session: &mut Session,
+) -> Result<bool> {
+    let ctx = writer.ctx.clone();
+    let result = async {
+        let login_timeout = ctx.config.login_timeout;
+        tokio::time::timeout(login_timeout, finish_login(reader, writer, session))
+            .await
+            .context("login timed out")??;
+        configure::configure(reader, writer, session).await
     }
-    writer.queue(&ctx.tags)?;
-    if let Some(links) = crate::serverlist::server_links(ctx.config.server_dir.as_deref()) {
-        writer.queue(&configuration::ServerLinks { links })?;
+    .await;
+    if !matches!(result, Ok(true)) {
+        let uuid = session.player.profile.uuid;
+        ctx.players.lock().expect("players lock").remove(&uuid);
     }
-    if let Some(pack) = &ctx.config.resource_pack {
-        writer.queue(&configuration::ResourcePackPush {
-            id: pack.id,
-            url: pack.url.clone(),
-            hash: pack.hash.clone(),
-            forced: pack.required,
-            prompt: pack.prompt.clone(),
-        })?;
-        writer.flush().await?;
-        // The client answers as it goes; joining waits for it to be done.
-        loop {
-            match reader.next(State::Configuration).await? {
-                Packet::Configuration(configuration::Serverbound::ResourcePack { id, result })
-                    if id == pack.id =>
-                {
-                    let (done, refused) = crate::serverlist::pack_outcome(result);
-                    if refused && pack.required {
-                        info!(
-                            "Disconnecting {} due to resource pack {} rejection",
-                            session.player.profile.name,
-                            uuid_string(pack.id)
-                        );
-                        writer
-                            .send(&configuration::Disconnect {
-                                reason: text::translate(
-                                    "multiplayer.requiredTexturePrompt.disconnect",
-                                    vec![],
-                                ),
-                            })
-                            .await?;
-                        return Ok(false);
-                    }
-                    if done {
-                        break;
-                    }
-                }
-                Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
-                    note_client_info(session, &info, max_view);
-                }
-                other => trace!("configuration: {other:?}"),
-            }
-        }
-    }
-    if let Some(text) = crate::serverlist::code_of_conduct(
-        ctx.config.enable_code_of_conduct,
-        ctx.config.server_dir.as_deref(),
-    ) {
-        writer.send(&configuration::CodeOfConduct { text }).await?;
-        loop {
-            match reader.next(State::Configuration).await? {
-                Packet::Configuration(configuration::Serverbound::AcceptCodeOfConduct) => break,
-                Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
-                    note_client_info(session, &info, max_view);
-                }
-                Packet::Configuration(configuration::Serverbound::KeepAlive(id)) => {
-                    writer.send(&configuration::KeepAlive { id }).await?;
-                }
-                other => trace!("configuration: {other:?}"),
-            }
-        }
-    }
-    writer.queue(&configuration::FinishConfiguration)?;
-    writer.flush().await?;
-
-    loop {
-        match reader.next(State::Configuration).await? {
-            Packet::Configuration(configuration::Serverbound::FinishConfiguration) => {
-                return Ok(true);
-            }
-            Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
-                note_client_info(session, &info, max_view);
-            }
-            other => trace!("configuration: {other:?}"),
-        }
-    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -808,7 +734,12 @@ async fn play(
     // The vehicle the player sits in.
     let mut riding: Option<i32> = None;
     let mut floating = crate::guard::Floating::default();
-    let mut spam = crate::guard::Spam::default();
+    let (mut chat_spam, mut command_spam) = (
+        crate::guard::Throttle::chat(ctx.config.chat_spam_seconds),
+        crate::guard::Throttle::chat(ctx.config.command_spam_seconds),
+    );
+    let mut creative_drops = crate::guard::Throttle::creative_drops();
+    let mut suggestions = crate::guard::Suggestions::default();
     let mut rate = crate::guard::Rate::new(ctx.config.rate_limit, Instant::now());
     let mut windows = windows::Windows::new();
     let vitals = session
@@ -891,8 +822,17 @@ async fn play(
                         writer.send(&play::Disconnect { reason }).await?;
                         bail!("{} exceeded the packet rate limit", me.profile.name);
                     }
-                    let chatting = matches!(packet, play::Serverbound::Chat(_) | play::Serverbound::ChatCommand { .. });
-                    if chatting && spam.said(Instant::now()) && crate::tick::lock(&ctx.lists).op(uuid, &me.profile.name).is_none() {
+                    if let Some(key) = crate::guard::refused(&packet) {
+                        let reason = text::translate(key, vec![]);
+                        writer.send(&play::Disconnect { reason }).await?;
+                        bail!("{} was kicked: {key}", me.profile.name);
+                    }
+                    let spam = match packet {
+                        play::Serverbound::Chat(_) => Some(&mut chat_spam),
+                        play::Serverbound::ChatCommand { .. } => Some(&mut command_spam),
+                        _ => None,
+                    };
+                    if spam.is_some_and(|s| s.said(Instant::now())) && crate::tick::lock(&ctx.lists).op(uuid, &me.profile.name).is_none() {
                         let reason = text::translate("disconnect.spam", vec![]);
                         writer.send(&play::Disconnect { reason }).await?;
                         bail!("{} was kicked for spamming", me.profile.name);
@@ -955,19 +895,28 @@ async fn play(
                             let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
                         play::Serverbound::CommandSuggestion { id, text } => {
+                            suggestions.request(id, text);
                             let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
-                            if let Some(answer) = crate::commands::suggest(&ctx, &source, id, &text) {
+                            if let Some(answer) = suggestions.answer(&ctx, &source, Instant::now()) {
                                 writer.queue(&answer)?;
                             }
                         }
-                        play::Serverbound::SetCreativeModeSlot { slot: -1, item: Some(stack) } if game_mode == CREATIVE => {
-                            // Dropped out of the creative inventory.
-                            if stack.count > 0 {
-                                crate::stats::threw(&ctx, uuid, &stack);
-                                crate::tick::throw_item_aged(&ctx, pose, stack, crate::dropped::LIFETIME - 1200);
+                        play::Serverbound::SetCreativeModeSlot { item: Some(stack), .. }
+                            if game_mode == CREATIVE && !crate::guard::creative_stack_ok(&ctx, &stack) => {}
+                        play::Serverbound::SetCreativeModeSlot { slot: ..0, item } if game_mode == CREATIVE => {
+                            // Dropped out of the creative inventory, as fast
+                            // as vanilla's throttle lets through.
+                            if let Some(stack) = item.filter(|s| s.count > 0) {
+                                if creative_drops.allow(Instant::now()) {
+                                    crate::stats::threw(&ctx, uuid, &stack);
+                                    crate::tick::throw_item_aged(&ctx, pose, stack, crate::dropped::LIFETIME - 1200);
+                                } else {
+                                    warn!("Player {} was dropping items too fast in creative mode, ignoring.", me.profile.name);
+                                }
                             }
                         }
-                        play::Serverbound::SetCreativeModeSlot { slot, item } if game_mode == CREATIVE => {
+                        play::Serverbound::SetCreativeModeSlot { slot, item }
+                            if game_mode == CREATIVE && crate::guard::CREATIVE_SLOTS.contains(&slot) => {
                             if let Ok(slot) = usize::try_from(slot) {
                                 change_hands(&ctx, uuid, entity_id, |hands| {
                                     if let Some(s) = hands.slots.get_mut(slot) {
@@ -1516,6 +1465,12 @@ async fn play(
                         sync_entities(writer, &ctx, &view, &mut seen_entities)?;
                         update_player(&ctx, uuid, |p| p.pose = Some(pose));
                         let _ = ctx.events.send(Event::PlayerMoved { uuid, entity_id, pose });
+                    }
+                }
+                () = tokio::time::sleep_until(suggestions.due().unwrap_or_else(Instant::now).into()), if suggestions.due().is_some() => {
+                    let source = Source::Player { uuid, name: me.profile.name.clone(), pose };
+                    if let Some(answer) = suggestions.answer(&ctx, &source, Instant::now()) {
+                        writer.queue(&answer)?;
                     }
                 }
                 _ = keep_alive.tick() => {
@@ -2766,20 +2721,23 @@ enum Packet {
 
 struct PacketReader {
     half: OwnedReadHalf,
-    buf: Vec<u8>,
+    frames: FrameBuffer,
     compression: Option<usize>,
     cipher: Option<Cfb8>,
     ctx: Arc<ServerContext>,
+    /// When bytes last came in, for the read timeout.
+    last_read: tokio::time::Instant,
 }
 
 impl PacketReader {
     fn new(half: OwnedReadHalf, ctx: Arc<ServerContext>) -> Self {
         Self {
             half,
-            buf: Vec::with_capacity(4096),
+            frames: FrameBuffer::new(),
             compression: None,
             cipher: None,
             ctx,
+            last_read: tokio::time::Instant::now(),
         }
     }
 
@@ -2787,35 +2745,46 @@ impl PacketReader {
     /// already buffered.
     fn enable_encryption(&mut self, secret: &[u8; 16]) {
         let mut cipher = Cfb8::new(secret);
-        cipher.decrypt(&mut self.buf);
+        cipher.decrypt(self.frames.unread_mut());
         self.cipher = Some(cipher);
     }
 
+    /// Reads more bytes. A connection that sends nothing for
+    /// `read_timeout` (30 s) is closed, in every state, as vanilla does.
     async fn fill(&mut self) -> Result<()> {
         // `read_buf` is cancel-safe, and decryption runs right after it without
-        // another await, so `next` can sit in a `select!`.
-        let start = self.buf.len();
-        if self.half.read_buf(&mut self.buf).await? == 0 {
+        // another await, so `next` can sit in a `select!`. The deadline
+        // counts from the last bytes read, not from this call, so a
+        // `select!` that keeps restarting it does not extend it.
+        let tail = self.frames.tail();
+        let start = tail.len();
+        let read = self.half.read_buf(tail);
+        let read =
+            tokio::time::timeout_at(self.last_read + self.ctx.config.read_timeout, read).await;
+        let Ok(read) = read else {
+            bail!("Timed out");
+        };
+        if read? == 0 {
             bail!("connection closed");
         }
+        self.last_read = tokio::time::Instant::now();
         if let Some(cipher) = &mut self.cipher {
-            cipher.decrypt(&mut self.buf[start..]);
+            cipher.decrypt(&mut self.frames.tail()[start..]);
         }
         Ok(())
     }
 
     async fn peek_byte(&mut self) -> Result<u8> {
-        while self.buf.is_empty() {
+        while self.frames.unread().is_empty() {
             self.fill().await?;
         }
-        Ok(self.buf[0])
+        Ok(self.frames.unread()[0])
     }
 
     async fn next(&mut self, state: State) -> Result<Packet> {
         loop {
-            if let Some((header, len)) = split_frame(&self.buf)? {
-                let body = decode_frame_body(&self.buf[header..header + len], self.compression)?;
-                self.buf.drain(..header + len);
+            if let Some(frame) = self.frames.next_frame()? {
+                let body = decode_frame_body(frame, self.compression)?;
                 let mut r = Reader::new(&body);
                 let id = r.varint()?;
                 let name = self
@@ -2888,7 +2857,12 @@ impl PacketWriter {
             if let Some(cipher) = &mut self.cipher {
                 cipher.encrypt(&mut self.out);
             }
-            self.half.write_all(&self.out).await?;
+            // A client that stops reading must not hold the connection
+            // (and its player) forever.
+            let write = self.half.write_all(&self.out);
+            if tokio::time::timeout(WRITE_TIMEOUT, write).await.is_err() {
+                bail!("Timed out");
+            }
             self.out.clear();
         }
         Ok(())

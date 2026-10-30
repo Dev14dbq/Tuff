@@ -19,6 +19,7 @@ mod parity;
 mod probe;
 mod quiet;
 mod registry_diff;
+mod release_data;
 mod similarity;
 mod tickets;
 mod vanilla_locate;
@@ -38,6 +39,11 @@ Tasks:
   extract-data [--version <id>]
       Extract vanilla game data from reference/<id>/server.jar into cache/mcdata/<id>/.
       Without --version, the newest release found in reference/ is used.
+  fetch-server-jar [--version <id>]
+      Download Mojang's version JSON and server.jar into reference/<id>/, checked by SHA1.
+  reports-bundle [--version <id>] [--out <dir>]
+      Pack cache/mcdata/<id>/reports and observed/commands.json into
+      <dir>/tuff-reports-<id>.zip (default dist/), the tables a release ships.
   probe [--addr <host:port>] [--name <player>] [--version <id>] [--dump <dir>] [--mover] [--batches <n>]
       Connect to a server as a client (status, login, configuration, spawn) and
       report what it sent, checking our packet layouts against it. --dump writes
@@ -121,6 +127,8 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("extract-data") => extract_data::run(&args[1..]),
+        Some("fetch-server-jar") => release_data::fetch_server_jar(&args[1..]),
+        Some("reports-bundle") => release_data::reports_bundle(&args[1..]),
         Some("probe") => probe::run(&args[1..]),
         Some("bench") => bench::run(&args[1..]),
         Some("bots") => bots::run(&args[1..]),

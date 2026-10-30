@@ -114,7 +114,10 @@ machine. Don't publish or commit numbers from a noisy run.
 
 Several agents often work at once, each in its own git worktree under `.claude/worktrees/`
 on a `claude/<topic>` branch. Keep to one subsystem and its files so branches merge cleanly.
-After a branch is merged, remove its worktree and clear stale `target/` directories; they
+A new worktree has no `cache/` or `reference/` (they're gitignored), and tests that need game
+data then print "skipped: no game data" and pass without testing anything. Link them first:
+`ln -s "$(git rev-parse --path-format=absolute --git-common-dir)/../cache" cache`, the same
+for `reference`, and check a data test doesn't print "skipped". After a branch is merged, remove its worktree and clear stale `target/` directories; they
 grow fast.
 
 When you split work across subagents, pick each one's model by

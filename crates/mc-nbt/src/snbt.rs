@@ -12,6 +12,7 @@ pub fn parse_snbt(text: &str) -> Result<Tag, String> {
     let mut p = Parser {
         s: text.as_bytes(),
         i: 0,
+        depth: 0,
     };
     let tag = p.value()?;
     p.skip_ws();
@@ -26,6 +27,7 @@ pub fn parse_snbt_prefix(text: &str) -> Result<(Tag, usize), String> {
     let mut p = Parser {
         s: text.as_bytes(),
         i: 0,
+        depth: 0,
     };
     let tag = p.value()?;
     Ok((tag, p.i))
@@ -34,6 +36,9 @@ pub fn parse_snbt_prefix(text: &str) -> Result<(Tag, usize), String> {
 struct Parser<'a> {
     s: &'a [u8],
     i: usize,
+    /// Lists and compounds open now; at most [`crate::MAX_DEPTH`], as for
+    /// binary NBT, so deep nesting is an error and not a stack overflow.
+    depth: usize,
 }
 
 fn bare(c: u8) -> bool {
@@ -63,8 +68,13 @@ impl Parser<'_> {
 
     fn value(&mut self) -> Result<Tag, String> {
         match self.peek() {
-            Some(b'{') => self.compound().map(Tag::Compound),
-            Some(b'[') => self.list(),
+            Some(b'{' | b'[') if self.depth >= crate::MAX_DEPTH => Err(format!(
+                "nested deeper than {} at {}",
+                crate::MAX_DEPTH,
+                self.i
+            )),
+            Some(b'{') => self.nested(|p| p.compound().map(Tag::Compound)),
+            Some(b'[') => self.nested(Self::list),
             Some(b'"' | b'\'') => self.quoted().map(Tag::String),
             Some(_) => {
                 let word = self.word()?;
@@ -72,6 +82,16 @@ impl Parser<'_> {
             }
             None => Err("unexpected end".into()),
         }
+    }
+
+    fn nested(
+        &mut self,
+        read: impl FnOnce(&mut Self) -> Result<Tag, String>,
+    ) -> Result<Tag, String> {
+        self.depth += 1;
+        let tag = read(self);
+        self.depth -= 1;
+        tag
     }
 
     fn word(&mut self) -> Result<String, String> {
@@ -248,6 +268,23 @@ mod tests {
         assert_eq!(c.get("on"), Some(&Tag::Byte(1)));
         assert_eq!(c.get("B"), Some(&Tag::ByteArray(vec![1, 2])));
         assert_eq!(c.get("w"), Some(&Tag::String("word".into())));
+    }
+
+    #[test]
+    fn deep_nesting_is_an_error() {
+        let depth = crate::MAX_DEPTH;
+        let ok = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+        assert!(parse_snbt(&ok).is_ok());
+        let deep = format!("{}{}", "[".repeat(depth + 1), "]".repeat(depth + 1));
+        assert!(parse_snbt(&deep).is_err());
+        // A whole command's worth of `{a:` must not overflow a tokio worker's 2 MiB stack.
+        let hostile = "{a:".repeat(32767 / 3);
+        let parsed = std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || parse_snbt(&hostile).is_err())
+            .unwrap()
+            .join();
+        assert_eq!(parsed.ok(), Some(true));
     }
 
     #[test]

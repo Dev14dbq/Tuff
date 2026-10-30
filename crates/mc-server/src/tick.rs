@@ -304,6 +304,7 @@ pub fn run(ctx: Arc<ServerContext>, requests: Receiver<Request>, stop: Arc<Atomi
     let mut control = TickControl::default();
     while !stop.load(Ordering::Relaxed) {
         ctx.heartbeat.end();
+        ctx.management_bus.tick_activity();
         let interval = Duration::from_secs_f64(1.0 / f64::from(control.rate));
         let now = Instant::now();
         if control.sprint.is_some() {

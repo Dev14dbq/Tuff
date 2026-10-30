@@ -15,8 +15,53 @@ mod snbt;
 pub use mutf8::{decode_mutf8, encode_mutf8};
 pub use snbt::{parse_snbt, parse_snbt_prefix};
 
-/// Maximum nesting depth accepted when decoding, same as the vanilla limit.
+/// How many lists and compounds may be open at once while decoding, the
+/// vanilla limit.
 pub const MAX_DEPTH: usize = 512;
+
+/// What a decode may cost before it is refused: a budget in vanilla's
+/// estimate of the decoded tags' memory, and the nesting depth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// Bytes of estimated memory the decoded tags may take.
+    pub quota: u64,
+    /// Lists and compounds that may be open at once.
+    pub depth: usize,
+}
+
+impl Limits {
+    /// NBT read from a connection: vanilla's default quota of 2 MiB.
+    pub const NETWORK: Limits = Limits {
+        quota: 2 * 1024 * 1024,
+        depth: MAX_DEPTH,
+    };
+    /// Files and other trusted data: depth only.
+    pub const TRUSTED: Limits = Limits {
+        quota: u64::MAX,
+        depth: MAX_DEPTH,
+    };
+}
+
+/// Vanilla's memory estimate for each tag, the unit of [`Limits::quota`].
+mod cost {
+    pub const BYTE: u64 = 9;
+    pub const SHORT: u64 = 10;
+    pub const INT: u64 = 12;
+    pub const LONG: u64 = 16;
+    pub const FLOAT: u64 = 12;
+    pub const DOUBLE: u64 = 16;
+    /// An array tag, before its elements.
+    pub const ARRAY: u64 = 24;
+    /// A string tag, before its two bytes per UTF-16 unit.
+    pub const STRING: u64 = 36;
+    /// A list, before its four bytes per element slot.
+    pub const LIST: u64 = 36;
+    pub const COMPOUND: u64 = 48;
+    /// A compound key, before its two bytes per UTF-16 unit.
+    pub const KEY: u64 = 28;
+    /// A new compound entry.
+    pub const ENTRY: u64 = 36;
+}
 
 /// Numeric tag type ids as they appear on the wire.
 pub mod tag_type {
@@ -143,9 +188,14 @@ impl Compound {
 pub enum NbtError {
     UnexpectedEof,
     InvalidTagType(u8),
-    MixedList { expected: u8, found: u8 },
+    MixedList {
+        expected: u8,
+        found: u8,
+    },
     NegativeLength(i32),
     TooDeep,
+    /// The decoded tags would go over [`Limits::quota`].
+    TooBig,
     StringTooLong(usize),
     InvalidMutf8,
     EndAsRoot,
@@ -161,6 +211,7 @@ impl fmt::Display for NbtError {
             }
             NbtError::NegativeLength(n) => write!(f, "negative NBT length {n}"),
             NbtError::TooDeep => write!(f, "NBT nested deeper than {MAX_DEPTH}"),
+            NbtError::TooBig => write!(f, "NBT tag too big for its quota"),
             NbtError::StringTooLong(n) => write!(f, "string of {n} bytes does not fit in NBT"),
             NbtError::InvalidMutf8 => write!(f, "invalid modified UTF-8 in NBT string"),
             NbtError::EndAsRoot => write!(f, "TAG_End cannot be a root tag"),
@@ -287,14 +338,20 @@ fn write_payload(tag: &Tag, out: &mut Vec<u8>, java: bool) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Decoding
 
-/// Reads a network-form tag. Returns the tag and the number of bytes consumed.
+/// Reads a network-form tag under [`Limits::NETWORK`], as the server reads
+/// what a client sends. Returns the tag and the number of bytes consumed.
 pub fn read_network(bytes: &[u8]) -> Result<(Tag, usize)> {
-    let mut reader = Reader { bytes, pos: 0 };
+    read_network_with(bytes, Limits::NETWORK)
+}
+
+/// [`read_network`] with other limits.
+pub fn read_network_with(bytes: &[u8], limits: Limits) -> Result<(Tag, usize)> {
+    let mut reader = Reader::new(bytes, limits);
     let type_id = reader.u8()?;
     if type_id == tag_type::END {
         return Err(NbtError::EndAsRoot);
     }
-    let tag = reader.payload(type_id, 0)?;
+    let tag = reader.payload(type_id)?;
     Ok((tag, reader.pos))
 }
 
@@ -307,24 +364,44 @@ pub fn read_network_optional(bytes: &[u8]) -> Result<(Option<Tag>, usize)> {
     }
 }
 
-/// Reads a named-form tag. Returns the root name, the tag and the bytes consumed.
+/// Reads a named-form tag (files) under [`Limits::TRUSTED`]. Returns the
+/// root name, the tag and the bytes consumed.
 pub fn read_named(bytes: &[u8]) -> Result<(String, Tag, usize)> {
-    let mut reader = Reader { bytes, pos: 0 };
+    let mut reader = Reader::new(bytes, Limits::TRUSTED);
     let type_id = reader.u8()?;
     if type_id == tag_type::END {
         return Err(NbtError::EndAsRoot);
     }
     let name = reader.string()?;
-    let tag = reader.payload(type_id, 0)?;
+    let tag = reader.payload(type_id)?;
     Ok((name, tag, reader.pos))
 }
+
+/// Compounds with more keys than this look duplicates up in a hash map while
+/// decoding, so a hostile compound cannot make decoding quadratic.
+const INDEXED_KEYS: usize = 16;
 
 struct Reader<'a> {
     bytes: &'a [u8],
     pos: usize,
+    limits: Limits,
+    /// Quota used so far.
+    used: u64,
+    /// Lists and compounds open now.
+    depth: usize,
 }
 
 impl<'a> Reader<'a> {
+    fn new(bytes: &'a [u8], limits: Limits) -> Self {
+        Self {
+            bytes,
+            pos: 0,
+            limits,
+            used: 0,
+            depth: 0,
+        }
+    }
+
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self.pos.checked_add(n).ok_or(NbtError::UnexpectedEof)?;
         let slice = self
@@ -343,6 +420,25 @@ impl<'a> Reader<'a> {
         Ok(self.array::<1>()?[0])
     }
 
+    fn account(&mut self, cost: u64) -> Result<()> {
+        match self.used.checked_add(cost) {
+            Some(used) if used <= self.limits.quota => {
+                self.used = used;
+                Ok(())
+            }
+            _ => Err(NbtError::TooBig),
+        }
+    }
+
+    /// The cost of a string: two bytes per UTF-16 unit on top of `base`.
+    fn account_text(&mut self, base: u64, text: &str) -> Result<()> {
+        if self.limits.quota == u64::MAX {
+            return Ok(());
+        }
+        let units = text.encode_utf16().count() as u64;
+        self.account(base + units * 2)
+    }
+
     /// A length prefix, checked against the remaining input so a hostile length
     /// cannot trigger a huge allocation.
     fn len(&mut self, element_size: usize) -> Result<usize> {
@@ -359,51 +455,81 @@ impl<'a> Reader<'a> {
         decode_mutf8(self.take(len)?).ok_or(NbtError::InvalidMutf8)
     }
 
-    fn payload(&mut self, type_id: u8, depth: usize) -> Result<Tag> {
-        use tag_type::*;
-        if depth > MAX_DEPTH {
+    /// Opens a list or compound.
+    fn push(&mut self) -> Result<()> {
+        if self.depth >= self.limits.depth {
             return Err(NbtError::TooDeep);
         }
+        self.depth += 1;
+        Ok(())
+    }
+
+    fn payload(&mut self, type_id: u8) -> Result<Tag> {
+        use tag_type::*;
         Ok(match type_id {
-            BYTE => Tag::Byte(self.u8()? as i8),
-            SHORT => Tag::Short(i16::from_be_bytes(self.array()?)),
-            INT => Tag::Int(i32::from_be_bytes(self.array()?)),
-            LONG => Tag::Long(i64::from_be_bytes(self.array()?)),
-            FLOAT => Tag::Float(f32::from_be_bytes(self.array()?)),
-            DOUBLE => Tag::Double(f64::from_be_bytes(self.array()?)),
+            BYTE => {
+                self.account(cost::BYTE)?;
+                Tag::Byte(self.u8()? as i8)
+            }
+            SHORT => {
+                self.account(cost::SHORT)?;
+                Tag::Short(i16::from_be_bytes(self.array()?))
+            }
+            INT => {
+                self.account(cost::INT)?;
+                Tag::Int(i32::from_be_bytes(self.array()?))
+            }
+            LONG => {
+                self.account(cost::LONG)?;
+                Tag::Long(i64::from_be_bytes(self.array()?))
+            }
+            FLOAT => {
+                self.account(cost::FLOAT)?;
+                Tag::Float(f32::from_be_bytes(self.array()?))
+            }
+            DOUBLE => {
+                self.account(cost::DOUBLE)?;
+                Tag::Double(f64::from_be_bytes(self.array()?))
+            }
             BYTE_ARRAY => {
+                self.account(cost::ARRAY)?;
                 let len = self.len(1)?;
+                self.account(len as u64)?;
                 Tag::ByteArray(self.take(len)?.iter().map(|&b| b as i8).collect())
             }
-            STRING => Tag::String(self.string()?),
+            STRING => {
+                let s = self.string()?;
+                self.account_text(cost::STRING, &s)?;
+                Tag::String(s)
+            }
             LIST => {
+                self.push()?;
+                self.account(cost::LIST)?;
                 let element = self.u8()?;
                 // An empty list may carry any element type, including END.
                 let len = self.len(if element == END { 0 } else { 1 })?;
                 if len > 0 && element == END {
                     return Err(NbtError::InvalidTagType(END));
                 }
+                self.account(4 * len as u64)?;
                 let mut items = Vec::with_capacity(len);
                 for _ in 0..len {
-                    items.push(self.payload(element, depth + 1)?);
+                    items.push(self.payload(element)?);
                 }
+                self.depth -= 1;
                 Tag::List(items)
             }
             COMPOUND => {
-                let mut compound = Compound::new();
-                loop {
-                    let child = self.u8()?;
-                    if child == END {
-                        break;
-                    }
-                    let key = self.string()?;
-                    let value = self.payload(child, depth + 1)?;
-                    compound.insert(key, value);
-                }
+                self.push()?;
+                self.account(cost::COMPOUND)?;
+                let compound = self.compound()?;
+                self.depth -= 1;
                 Tag::Compound(compound)
             }
             INT_ARRAY => {
+                self.account(cost::ARRAY)?;
                 let len = self.len(4)?;
+                self.account(4 * len as u64)?;
                 let mut values = Vec::with_capacity(len);
                 for _ in 0..len {
                     values.push(i32::from_be_bytes(self.array()?));
@@ -411,7 +537,9 @@ impl<'a> Reader<'a> {
                 Tag::IntArray(values)
             }
             LONG_ARRAY => {
+                self.account(cost::ARRAY)?;
                 let len = self.len(8)?;
+                self.account(8 * len as u64)?;
                 let mut values = Vec::with_capacity(len);
                 for _ in 0..len {
                     values.push(i64::from_be_bytes(self.array()?));
@@ -420,6 +548,42 @@ impl<'a> Reader<'a> {
             }
             other => return Err(NbtError::InvalidTagType(other)),
         })
+    }
+
+    /// Compound entries up to TAG_End. A repeated key replaces the earlier
+    /// value in its place.
+    fn compound(&mut self) -> Result<Compound> {
+        let mut entries: Vec<(String, Tag)> = Vec::new();
+        let mut index: std::collections::HashMap<String, usize> = Default::default();
+        loop {
+            let child = self.u8()?;
+            if child == tag_type::END {
+                return Ok(Compound(entries));
+            }
+            let key = self.string()?;
+            self.account_text(cost::KEY, &key)?;
+            let value = self.payload(child)?;
+            let earlier = if entries.len() < INDEXED_KEYS {
+                entries.iter().position(|(k, _)| *k == key)
+            } else {
+                if index.is_empty() {
+                    index = (entries.iter().enumerate())
+                        .map(|(i, (k, _))| (k.clone(), i))
+                        .collect();
+                }
+                index.get(&key).copied()
+            };
+            match earlier {
+                Some(i) => entries[i].1 = value,
+                None => {
+                    self.account(cost::ENTRY)?;
+                    if !index.is_empty() {
+                        index.insert(key.clone(), entries.len());
+                    }
+                    entries.push((key, value));
+                }
+            }
+        }
     }
 }
 
@@ -516,15 +680,85 @@ mod tests {
         );
     }
 
-    #[test]
-    fn depth_is_limited() {
-        // Root list, then MAX_DEPTH + 2 levels of "list of one list", then an empty list.
+    /// `lists` nested lists, the innermost empty.
+    fn nested_lists(lists: usize) -> Vec<u8> {
         let mut bytes = vec![tag_type::LIST];
-        for _ in 0..MAX_DEPTH + 2 {
+        for _ in 1..lists {
             bytes.extend_from_slice(&[tag_type::LIST, 0, 0, 0, 1]);
         }
         bytes.extend_from_slice(&[tag_type::END, 0, 0, 0, 0]);
-        assert_eq!(read_network(&bytes), Err(NbtError::TooDeep));
+        bytes
+    }
+
+    #[test]
+    fn depth_is_limited() {
+        // Vanilla opens at most 512 lists and compounds at once.
+        assert!(read_network(&nested_lists(MAX_DEPTH)).is_ok());
+        assert_eq!(
+            read_network(&nested_lists(MAX_DEPTH + 1)),
+            Err(NbtError::TooDeep)
+        );
+        let mut named = vec![tag_type::LIST, 0, 0];
+        named.extend_from_slice(&nested_lists(MAX_DEPTH + 1)[1..]);
+        assert_eq!(read_named(&named), Err(NbtError::TooDeep));
+        // Scalars inside the deepest list do not count.
+        let mut bytes = nested_lists(MAX_DEPTH);
+        let tail = bytes.len() - 5;
+        bytes.truncate(tail);
+        bytes.extend_from_slice(&[tag_type::INT, 0, 0, 0, 1, 0, 0, 0, 7]);
+        assert!(read_network(&bytes).is_ok());
+    }
+
+    /// A byte array of `len` bytes as a network root.
+    fn byte_array(len: usize) -> Vec<u8> {
+        let mut bytes = vec![tag_type::BYTE_ARRAY];
+        bytes.extend_from_slice(&(len as i32).to_be_bytes());
+        bytes.resize(bytes.len() + len, 0);
+        bytes
+    }
+
+    #[test]
+    fn network_reads_have_vanilla_quota() {
+        // 24 bytes for the tag, one per element: exactly 2 MiB fits.
+        let quota = Limits::NETWORK.quota as usize;
+        assert!(read_network(&byte_array(quota - 24)).is_ok());
+        assert_eq!(read_network(&byte_array(quota - 23)), Err(NbtError::TooBig));
+        // Files are not limited.
+        let mut named = vec![tag_type::BYTE_ARRAY, 0, 0];
+        named.extend_from_slice(&byte_array(quota)[1..]);
+        assert!(read_named(&named).is_ok());
+
+        // One byte on the wire, 48 in the quota: an empty compound per
+        // element is how small input would otherwise blow up in memory.
+        let count = 50_000usize;
+        let mut bytes = vec![tag_type::LIST, tag_type::COMPOUND];
+        bytes.extend_from_slice(&(count as i32).to_be_bytes());
+        bytes.resize(bytes.len() + count, tag_type::END);
+        assert_eq!(read_network(&bytes), Err(NbtError::TooBig));
+        assert!(read_network_with(&bytes, Limits::TRUSTED).is_ok());
+    }
+
+    #[test]
+    fn many_keys_decode_in_linear_time() {
+        let keys = 200_000;
+        let mut bytes = vec![tag_type::COMPOUND];
+        for i in 0..keys {
+            let key = format!("k{i}");
+            bytes.push(tag_type::BYTE);
+            bytes.extend_from_slice(&(key.len() as u16).to_be_bytes());
+            bytes.extend_from_slice(key.as_bytes());
+            bytes.push(1);
+        }
+        // A repeated key keeps its first place and takes the last value.
+        bytes.extend_from_slice(&[tag_type::BYTE, 0, 2, b'k', b'7', 9]);
+        bytes.push(tag_type::END);
+        let started = std::time::Instant::now();
+        let (tag, _) = read_network_with(&bytes, Limits::TRUSTED).unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        let Tag::Compound(c) = tag else { panic!() };
+        assert_eq!(c.len(), keys);
+        assert_eq!(c.get("k7"), Some(&Tag::Byte(9)));
+        assert_eq!(c.iter().nth(7).map(|(k, _)| k), Some("k7"));
     }
 
     #[test]

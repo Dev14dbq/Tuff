@@ -48,7 +48,10 @@ fn spawners_stop_and_refuse_eggs_while_spawner_blocks_work_is_off() {
     run(&ctx, 10);
     assert!(mobs_of(&ctx, Species::Silverfish).is_empty());
 
-    // An egg on it: refused with vanilla's message, the egg kept.
+    // An egg on it: refused with vanilla's message, the egg kept. (Natural
+    // spawning may have put a cow in the flat world already; only the egg is
+    // being judged.)
+    let cows = mobs_of(&ctx, Species::Cow).len();
     hold(&ctx, "minecraft:cow_spawn_egg", 2);
     let out = crate::interact::use_item_on(
         &ctx,
@@ -64,7 +67,7 @@ fn spawners_stop_and_refuse_eggs_while_spawner_blocks_work_is_off() {
             if line == &mc_protocol::text::translate("advMode.notEnabled.spawner", Vec::new()))
     });
     assert!(told, "no message");
-    assert!(mobs_of(&ctx, Species::Cow).is_empty());
+    assert_eq!(mobs_of(&ctx, Species::Cow).len(), cows);
     let left = lock(&ctx.inventories)[&STEVE].main_hand().map(|s| s.count);
     assert_eq!(left, Some(2));
     let be = ctx
@@ -165,6 +168,8 @@ fn phantoms_after(on: bool, game_mode: i32) -> usize {
     if let Some(p) = lock(&ctx.players).get_mut(&STEVE) {
         p.game_mode = game_mode;
     }
+    // Statistics only count for players whose file was loaded at join.
+    crate::stats::load(&ctx, STEVE);
     crate::stats::custom(&ctx, STEVE, "time_since_rest", 1_000_000_000);
     run(&ctx, 3);
     mobs_of(&ctx, Species::Phantom).len()

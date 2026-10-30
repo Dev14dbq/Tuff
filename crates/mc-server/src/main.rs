@@ -27,14 +27,21 @@ Vanilla options:
   --bind <address>       overrides server-ip for this run
   --initSettings         write server.properties and stop
   --nogui                accepted (there is no window)
-  --forceUpgrade         rewrite stored chunks before the server starts
+  --forceUpgrade         upgrade and rewrite every stored chunk and player
+                         before the server starts
+  --eraseCache           with --forceUpgrade, drop stored light and heightmaps
 
 Other options:
-  --data <dir>           extracted game data (default: cache/mcdata/<version> found upwards)
+  --data <dir>           extracted game data (default: cache/mcdata/<version> found
+                         upwards, else prepared in <server>/cache on the first start)
+  --reports <zip>        generated tables for that (default: tuff-reports-<version>.zip
+                         next to tuff or in the server folder, else downloaded from
+                         this Tuff release)
   --seed <seed>          seed of a new world (overrides level-seed)
   --op <name>            add an operator to ops.json (repeatable)
   --offline              online-mode=false for this run
   --no-console           do not read commands from standard input
+  -V, --version          print the version and stop
 
 Logging: RUST_LOG=debug tuff
 ";
@@ -84,8 +91,14 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Game data: given, or found above the server folder or the program.
-fn data_dir(given: Option<PathBuf>, server_dir: &Path) -> Result<PathBuf> {
+/// Game data: given, found above the server folder or the program, or
+/// prepared in `<server>/cache` from Mojang's `server.jar` and the tables of
+/// this release.
+async fn data_dir(
+    given: Option<PathBuf>,
+    reports: Option<PathBuf>,
+    server_dir: &Path,
+) -> Result<PathBuf> {
     if let Some(d) = given {
         return Ok(d);
     }
@@ -93,11 +106,44 @@ fn data_dir(given: Option<PathBuf>, server_dir: &Path) -> Result<PathBuf> {
         return Ok(d);
     }
     let exe = std::env::current_exe()?;
-    find_data_dir(exe.parent().unwrap_or(&exe))
+    let exe_dir = exe.parent().unwrap_or(&exe).to_path_buf();
+    if let Ok(d) = find_data_dir(&exe_dir) {
+        return Ok(d);
+    }
+    let version = mc_protocol::VERSION_NAME;
+    let name = mc_bootstrap::tables_name(version);
+    let tables = match reports {
+        Some(zip) => mc_bootstrap::Tables::File(zip),
+        None => [exe_dir.join(&name), server_dir.join(&name)]
+            .into_iter()
+            .find(|p| p.is_file())
+            .map_or_else(
+                || mc_bootstrap::Tables::Release {
+                    base: format!(
+                        "{}/releases/download/v{}",
+                        env!("CARGO_PKG_REPOSITORY"),
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                },
+                mc_bootstrap::Tables::File,
+            ),
+    };
+    let cache = server_dir.join("cache");
+    tokio::task::spawn_blocking(move || {
+        mc_bootstrap::prepare(&mc_bootstrap::Prepare {
+            version,
+            protocol: mc_protocol::PROTOCOL_VERSION,
+            cache: &cache,
+            tables,
+        })
+    })
+    .await?
+    .context("preparing game data (or pass --data <dir> made by `cargo xtask extract-data`)")
 }
 
 async fn run() -> Result<()> {
     let mut data: Option<PathBuf> = None;
+    let mut reports: Option<PathBuf> = None;
     let mut universe: Option<PathBuf> = None;
     let mut world_name: Option<String> = None;
     let mut port: Option<u16> = None;
@@ -105,6 +151,7 @@ async fn run() -> Result<()> {
     let mut seed_arg: Option<String> = None;
     let mut init_only = false;
     let mut force_upgrade = false;
+    let mut erase_cache = false;
     let mut offline = false;
     let mut console = true;
     let mut ops = Vec::new();
@@ -116,7 +163,17 @@ async fn run() -> Result<()> {
                 print!("{USAGE}");
                 return Ok(());
             }
-            "--nogui" | "nogui" | "--bonusChest" | "--eraseCache" | "--safeMode" => {}
+            "-V" | "--version" => {
+                println!(
+                    "tuff {} (Minecraft {}, protocol {})",
+                    env!("CARGO_PKG_VERSION"),
+                    mc_protocol::VERSION_NAME,
+                    mc_protocol::PROTOCOL_VERSION
+                );
+                return Ok(());
+            }
+            "--nogui" | "nogui" | "--bonusChest" | "--safeMode" => {}
+            "--eraseCache" => erase_cache = true,
             "--forceUpgrade" => force_upgrade = true,
             "--initSettings" => init_only = true,
             "--universe" => universe = Some(value()?.into()),
@@ -124,6 +181,7 @@ async fn run() -> Result<()> {
             "--port" => port = Some(value()?.parse().context("--port")?),
             "--bind" => bind = Some(value()?.parse().context("--bind")?),
             "--data" => data = Some(value()?.into()),
+            "--reports" => reports = Some(value()?.into()),
             "--seed" => seed_arg = Some(value()?),
             "--op" => ops.push(value()?),
             "--offline" => offline = true,
@@ -151,7 +209,7 @@ async fn run() -> Result<()> {
         props.set("level-name", name);
     }
 
-    let mut config = Config::new(data_dir(data, &server_dir)?);
+    let mut config = Config::new(data_dir(data, reports, &server_dir).await?);
     config.server_dir = Some(server_dir.clone());
     let ip = props.get("server-ip").trim().to_owned();
     config.bind = if let Some(addr) = bind {
@@ -176,7 +234,14 @@ async fn run() -> Result<()> {
     };
     config.online_mode = props.bool("online-mode") && !offline;
     config.enforce_secure_profile = props.bool("enforce-secure-profile");
-    config.enable_code_of_conduct = props.bool("enable-code-of-conduct");
+    config.status_heartbeat_interval =
+        props.int("status-heartbeat-interval").unwrap_or(0).max(0) as u64;
+    config.code_of_conduct = mc_server::serverlist::CodeOfConduct::load(
+        props.bool("enable-code-of-conduct"),
+        Some(&server_dir),
+    )
+    .map_err(anyhow::Error::msg)?
+    .map(std::sync::Arc::new);
     if !props.get("text-filtering-config").trim().is_empty() {
         tracing::warn!(
             "text-filtering-config is set; chat is delivered as written, with no external filter"
@@ -184,6 +249,20 @@ async fn run() -> Result<()> {
     }
     config.white_list = props.bool("white-list");
     config.op_permission_level = props.int("op-permission-level").unwrap_or(4).clamp(0, 4) as i32;
+    {
+        use mc_server::oldlists::{
+            MojangResolver, OfflineResolver, RETRY_DELAY, Resolver, convert,
+        };
+        let mut resolver: Box<dyn Resolver + Send> = if config.online_mode {
+            Box::new(MojangResolver)
+        } else {
+            Box::new(OfflineResolver)
+        };
+        let (dir, level) = (server_dir.clone(), config.op_permission_level);
+        tokio::task::spawn_blocking(move || convert(&dir, level, resolver.as_mut(), RETRY_DELAY))
+            .await?
+            .map_err(anyhow::Error::msg)?;
+    }
     config.new_world_game_mode = game_mode(props.get("gamemode"));
     config.new_world_difficulty = difficulty(props.get("difficulty"));
     config.seed = seed(seed_arg.as_deref().unwrap_or(props.get("level-seed")));
@@ -207,6 +286,19 @@ async fn run() -> Result<()> {
     }
     config.allow_flight = props.bool("allow-flight");
     config.rate_limit = props.int("rate-limit").unwrap_or(0).max(0) as u32;
+    config.connection_throttle = std::time::Duration::from_millis(
+        props.int("connection-throttle").unwrap_or(0).max(0) as u64,
+    );
+    config.max_pending_per_ip = props
+        .int("max-pending-connections-per-ip")
+        .unwrap_or(0)
+        .max(0) as u32;
+    let seconds = |key: &str| {
+        let s = props.int(key).unwrap_or(10);
+        s.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+    };
+    config.chat_spam_seconds = seconds("chat-spam-threshold-seconds");
+    config.command_spam_seconds = seconds("command-spam-threshold-seconds");
     config.max_tick_time = props
         .int("max-tick-time")
         .filter(|&ms| ms > 0)
@@ -245,14 +337,20 @@ async fn run() -> Result<()> {
         ["SURVIVAL", "CREATIVE", "ADVENTURE", "SPECTATOR"][config.new_world_game_mode as usize]
     );
     info!("Preparing level \"{level_name}\"");
-    if force_upgrade {
-        let world = server_dir.join(&level_name);
-        if world.is_dir() {
+    let world = server_dir.join(&level_name);
+    if world.is_dir() {
+        let version = mc_data::McData::read_version(&config.data_dir)?;
+        mc_server::prepare_world(&world, version.world_version, &version.name)?;
+        if force_upgrade {
             info!("Forcing world upgrade");
-            let report = mc_server::upgrade_world(&world)?;
+            let report = mc_server::upgrade_world(&world, version.world_version, erase_cache)?;
             info!(
-                "Upgraded {} chunks in {} region files, {} left as stored",
-                report.chunks_rewritten, report.regions, report.chunks_left
+                "Upgraded {} chunks in {} region files and {} players; {} current, {} left as stored",
+                report.chunks_rewritten,
+                report.regions,
+                report.players,
+                report.chunks_current,
+                report.chunks_left
             );
         }
     }
@@ -266,9 +364,22 @@ async fn run() -> Result<()> {
             ctx.dimension(index);
         }
     });
-    server
-        .run(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
+    server.run(stop_signal()).await
+}
+
+/// Ctrl+C, or SIGTERM from `kill`, systemd or `docker stop`: vanilla saves
+/// and stops on either.
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
 }

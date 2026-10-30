@@ -1,5 +1,20 @@
+# Only sources go into the build context. Mojang files (reference/, cache/,
+# jars) and local servers never do.
 target
 run
-.git
 cache
+reference
+tools
+.git
+.github
+.claude
+.cursor
+docs
+graphify-out
+**/*.jar
+**/*.class
 *.log
+Dockerfile
+.dockerignore
+dist
+external
