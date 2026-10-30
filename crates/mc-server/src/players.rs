@@ -209,11 +209,15 @@ impl Store {
         match mc_nbt::read_named(&bytes)? {
             (_, Tag::Compound(mut root), _) => {
                 // Saved by an older version: read it the way 26.3 writes it.
-                if let Err(why) = mc_storage::upgrade::files::upgrade_player(
-                    &mut root,
-                    mc_storage::upgrade::TARGET,
-                ) {
-                    tracing::warn!("{} was {why}; read as it is", path.display());
+                // One from a newer version is refused, so that the save
+                // (which reads it first) never downgrades it either.
+                use mc_storage::upgrade::{TARGET, Unsupported, files::upgrade_player};
+                match upgrade_player(&mut root, TARGET) {
+                    Err(why @ Unsupported::TooNew(_)) => {
+                        bail!("{} was {why}; left untouched", path.display())
+                    }
+                    Err(why) => tracing::warn!("{} was {why}; read as it is", path.display()),
+                    Ok(_) => {}
                 }
                 Ok(Some(root))
             }

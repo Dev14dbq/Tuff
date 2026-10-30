@@ -17,10 +17,13 @@ use mc_data::{Blocks, McData};
 use mc_nbt::Tag;
 use mc_protocol::Position;
 use mc_protocol::packets::play::{ChunkBlockEntity, LevelChunkWithLight, LightData, heightmap};
+use mc_storage::upgrade::Kind;
 use mc_storage::{Decoded, Names, Palettes, RegionStorage, decode_chunk, encode_chunk};
 use mc_world::{Chunk, Section};
 use mc_worldgen::{FlatGenerator, FlatLayer};
 use tracing::warn;
+
+mod stored;
 
 use crate::blocks::BlockRules;
 use crate::tick::{Clock, WorldTime};
@@ -170,15 +173,7 @@ struct Anvil {
     fallback_biome: u32,
     air: u32,
     unresolved_reported: AtomicU32,
-    /// Chunks too old or too new to upgrade, reported so far.
-    unsupported_reported: AtomicU32,
-}
-
-/// What reading old chunks of a dimension needs.
-#[derive(Debug)]
-struct Upgrade {
-    dimension: String,
-    data_version: i32,
+    stored: stored::Stored,
 }
 
 /// A superflat world's generator, with the heightmap table.
@@ -626,7 +621,7 @@ impl World {
                 fallback_biome,
                 air,
                 unresolved_reported: AtomicU32::new(0),
-                unsupported_reported: AtomicU32::new(0),
+                stored: stored::Stored::new(dim.name.clone(), data.version.world_version),
             })),
             chunks: Mutex::new(HashMap::default()),
             pinned: Mutex::new(HashSet::new()),
@@ -806,23 +801,12 @@ impl World {
         if chunks.contains_key(&(x, z)) {
             return;
         }
-        let read = anvil
-            .entities
-            .lock()
-            .expect("entity storage")
-            .read_chunk(x, z);
-        let read = read.map(|tag| {
-            tag.map(|mut tag| {
-                anvil.upgrade(
-                    &mut tag,
-                    mc_storage::upgrade::Kind::EntityChunk,
-                    &self.upgrade_context(),
-                    x,
-                    z,
-                );
-                tag
-            })
-        });
+        let mut storage = anvil.entities.lock().expect("entity storage");
+        let read = anvil.stored.read(&mut storage, Kind::EntityChunk, x, z);
+        drop(storage);
+        if stored::refused(&read) {
+            return; // not kept as read, so no save writes its file
+        }
         let list = match read {
             Ok(Some(Tag::Compound(root))) => match root.get("Entities") {
                 Some(Tag::List(list)) => list.clone(),
@@ -898,10 +882,9 @@ impl World {
                 _ => None,
             };
             let mine: Vec<Option<Tag>> = ours.iter().map(uuid).collect();
-            let mut stored = storage.read_chunk(x, z);
-            if let Ok(Some(tag)) = &mut stored {
-                let kind = mc_storage::upgrade::Kind::EntityChunk;
-                anvil.upgrade(tag, kind, &self.upgrade_context(), x, z);
+            let stored = anvil.stored.read(&mut storage, Kind::EntityChunk, x, z);
+            if stored::refused(&stored) {
+                continue;
             }
             let mut list = match stored {
                 Ok(Some(Tag::Compound(root))) => match root.get("Entities") {
@@ -995,13 +978,6 @@ impl World {
         }
     }
 
-    fn upgrade_context(&self) -> Upgrade {
-        Upgrade {
-            dimension: self.dimension.clone(),
-            data_version: self.data_version,
-        }
-    }
-
     /// Runs `f` on the chunk if it is in memory (nothing is loaded).
     pub fn peek_chunk<R>(&self, x: i32, z: i32, f: impl FnOnce(&Chunk) -> R) -> Option<R> {
         let chunks = self.chunks.lock().expect("chunks lock");
@@ -1027,16 +1003,8 @@ impl World {
                 (chunk.x, chunk.z) = (x, z);
                 (Some(Box::new(chunk)), false)
             }
-            Source::Anvil(anvil) => match anvil.load(
-                x,
-                z,
-                blocks,
-                self.min_y,
-                self.height,
-                &self.upgrade_context(),
-            ) {
-                Ok(Some((mut chunk, ticks))) => {
-                    anvil.fill_heightmaps(&mut chunk);
+            Source::Anvil(anvil) => match anvil.load(x, z, blocks, self.min_y, self.height) {
+                Ok(Some((chunk, ticks))) => {
                     self.read_entities(anvil, x, z);
                     self.wake_ticking(&chunk);
                     if !ticks.is_empty() {
@@ -1807,6 +1775,9 @@ impl World {
             .unwrap_or_default();
         let mut storage = anvil.storage.lock().expect("region storage");
         for chunk in protos {
+            if anvil.stored.is_refused(chunk.x, chunk.z) {
+                continue;
+            }
             let result = (|| -> Result<()> {
                 let Tag::Compound(mut root) = encode_chunk(&chunk, None, &names, true)? else {
                     bail!("encoded chunk is not a compound");
@@ -1829,11 +1800,9 @@ impl World {
         for chunk in dirty {
             let pending = ticks.remove(&(chunk.x, chunk.z)).unwrap_or_default();
             let result = (|| -> Result<()> {
-                let mut stored = storage.read_chunk(chunk.x, chunk.z)?;
-                if let Some(tag) = &mut stored {
-                    let kind = mc_storage::upgrade::Kind::Chunk;
-                    anvil.upgrade(tag, kind, &self.upgrade_context(), chunk.x, chunk.z);
-                }
+                let stored = anvil
+                    .stored
+                    .read(&mut storage, Kind::Chunk, chunk.x, chunk.z)?;
                 let mut tag = encode_chunk(&chunk, stored.as_ref(), &names, true)?;
                 if let Tag::Compound(root) = &mut tag {
                     root.insert("block_ticks", Tag::List(pending.0));
@@ -1846,6 +1815,7 @@ impl World {
             })();
             match result {
                 Ok(()) => saved.chunks += 1,
+                Err(err) if err.is::<stored::TooNew>() => {}
                 Err(err) => {
                     warn!("saving chunk {},{}: {err:#}", chunk.x, chunk.z);
                     saved.failed += 1;
@@ -2093,29 +2063,8 @@ impl crate::pipeline::Finished for Generated<'_> {
     }
 
     fn stored_proto(&self, x: i32, z: i32) -> Option<Chunk> {
-        let raw = self
-            .anvil
-            .storage
-            .lock()
-            .expect("region storage")
-            .read_raw(x, z)
-            .ok()??;
-        let mut tag = raw.parse().ok()?;
-        let ctx = self.world.upgrade_context();
-        self.anvil
-            .upgrade(&mut tag, mc_storage::upgrade::Kind::Chunk, &ctx, x, z);
-        let biome = |name: &str| self.anvil.biome_ids.get(name).copied();
-        let palettes = Palettes {
-            blocks: self.blocks,
-            biome: &biome,
-            air: self.anvil.air,
-            fallback_biome: self.anvil.fallback_biome,
-            unresolved: Default::default(),
-        };
-        let (status, chunk) =
-            mc_storage::decode_with_status(&tag, self.world.min_y, self.world.height, &palettes)
-                .ok()?;
-        (status == "minecraft:features").then_some(*chunk)
+        let (min_y, height) = (self.world.min_y, self.world.height);
+        self.anvil.stored_proto(x, z, self.blocks, min_y, height)
     }
 
     fn block(&self, p: mc_tick::BlockPos) -> Option<u32> {
@@ -2128,60 +2077,6 @@ impl crate::pipeline::Finished for Generated<'_> {
 }
 
 impl Anvil {
-    /// Whether the folder has a finished chunk here (without decoding it).
-    fn has_full(&self, x: i32, z: i32) -> bool {
-        let raw = self.storage.lock().expect("region storage").read_raw(x, z);
-        let Ok(Some(raw)) = raw else {
-            return false;
-        };
-        match raw.parse() {
-            Ok(Tag::Compound(root)) => match root.get("Status") {
-                Some(Tag::String(s)) => s == "minecraft:full" || s == "full",
-                _ => false,
-            },
-            _ => false,
-        }
-    }
-
-    /// Computes the heightmaps a stored chunk lacks (`--eraseCache` drops
-    /// them, as do some upgrade steps); vanilla does the same on load.
-    fn fill_heightmaps(&self, chunk: &mut Chunk) {
-        let counts = match (&self.generation, &self.flat) {
-            (Some(g), _) => &g.counts,
-            (None, Some(f)) => &f.counts,
-            (None, None) => return,
-        };
-        for (i, name) in HEIGHTMAPS.iter().enumerate() {
-            if chunk.heightmaps.iter().any(|(n, _)| n == name) {
-                continue;
-            }
-            let words =
-                chunk.heightmap(|s| counts.get(s as usize).is_some_and(|b| b & (1 << i) != 0));
-            chunk.heightmaps.push(((*name).to_owned(), words));
-        }
-    }
-
-    /// Brings a stored document saved by an older version up to date in
-    /// memory, as vanilla does when it reads one; what cannot be upgraded is
-    /// used as it is.
-    fn upgrade(
-        &self,
-        tag: &mut Tag,
-        kind: mc_storage::upgrade::Kind,
-        ctx: &Upgrade,
-        x: i32,
-        z: i32,
-    ) {
-        let context = mc_storage::upgrade::Context {
-            dimension: &ctx.dimension,
-        };
-        if let Err(why) = mc_storage::upgrade::upgrade_tag(tag, kind, &context, ctx.data_version)
-            && self.unsupported_reported.fetch_add(1, Ordering::Relaxed) < 5
-        {
-            warn!("chunk {x},{z} was {why}; read as it is");
-        }
-    }
-
     /// `None` if the world has no finished chunk here.
     fn load(
         &self,
@@ -2190,7 +2085,6 @@ impl Anvil {
         blocks: &Blocks,
         min_y: i32,
         height: u32,
-        ctx: &Upgrade,
     ) -> Result<Option<(Box<Chunk>, Vec<SavedTick>)>> {
         // Only the file read holds the lock; decompression and decoding do not.
         let raw = self
@@ -2202,7 +2096,7 @@ impl Anvil {
             return Ok(None);
         };
         let mut tag = raw.parse()?;
-        self.upgrade(&mut tag, mc_storage::upgrade::Kind::Chunk, ctx, x, z);
+        self.stored.upgrade(&mut tag, Kind::Chunk, x, z)?;
         let biome = |name: &str| self.biome_ids.get(name).copied();
         let palettes = Palettes {
             blocks,
@@ -2211,10 +2105,11 @@ impl Anvil {
             fallback_biome: self.fallback_biome,
             unresolved: Default::default(),
         };
-        let chunk = match decode_chunk(&tag, min_y, height, &palettes)? {
+        let mut chunk = match decode_chunk(&tag, min_y, height, &palettes)? {
             Decoded::Chunk(chunk) => chunk,
             Decoded::NotFull(_) => return Ok(None),
         };
+        self.fill_heightmaps(&mut chunk);
         let unresolved = palettes.unresolved.get();
         if unresolved > 0 && self.unresolved_reported.fetch_add(1, Ordering::Relaxed) < 5 {
             warn!("chunk {x},{z}: {unresolved} unknown blocks or biomes replaced");

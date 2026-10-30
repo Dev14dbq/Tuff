@@ -57,6 +57,9 @@ pub enum FileError {
     Io(io::Error),
     Unsupported(Unsupported),
     Nbt(String),
+    /// A file the fix had to read, upgrade or write; level.dat is left as
+    /// it was, so the next start tries again.
+    File(PathBuf, Box<FileError>),
 }
 
 impl std::fmt::Display for FileError {
@@ -65,11 +68,22 @@ impl std::fmt::Display for FileError {
             FileError::Io(e) => write!(f, "{e}"),
             FileError::Unsupported(u) => write!(f, "this world was {u}"),
             FileError::Nbt(e) => write!(f, "level.dat: {e}"),
+            FileError::File(path, e) => write!(f, "{}: {e}", path.display()),
         }
     }
 }
 
 impl std::error::Error for FileError {}
+
+impl FileError {
+    /// `e`, naming the file it happened to.
+    fn at(path: &Path, e: impl Into<FileError>) -> FileError {
+        match e.into() {
+            e @ FileError::File(..) => e,
+            e => FileError::File(path.to_owned(), Box::new(e)),
+        }
+    }
+}
 
 impl From<io::Error> for FileError {
     fn from(e: io::Error) -> Self {
@@ -94,7 +108,7 @@ pub fn read_gz(path: &Path) -> io::Result<Compound> {
 /// Writes next to `path` and renames over it.
 pub fn write_gz(path: &Path, root: &Compound) -> io::Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        create_dirs(parent)?;
     }
     let mut bytes = Vec::new();
     mc_nbt::write_named("", &Tag::Compound(root.clone()), &mut bytes)
@@ -106,7 +120,37 @@ pub fn write_gz(path: &Path, root: &Compound) -> io::Result<()> {
         gz.write_all(&bytes)?;
         gz.finish()?.sync_all()?;
     }
-    std::fs::rename(&tmp, path)
+    std::fs::rename(&tmp, path)?;
+    sync_parent(path)
+}
+
+/// `create_dir_all`, with each new folder's entry made durable.
+fn create_dirs(dir: &Path) -> io::Result<()> {
+    let missing: Vec<&Path> = dir.ancestors().take_while(|a| !a.exists()).collect();
+    std::fs::create_dir_all(dir)?;
+    for created in missing.iter().rev() {
+        sync_parent(created)?;
+    }
+    Ok(())
+}
+
+/// Makes renames and new files in `path`'s folder durable.
+fn sync_parent(path: &Path) -> io::Result<()> {
+    match path.parent() {
+        Some(p) => sync_dir(p),
+        None => Ok(()),
+    }
+}
+
+#[cfg(unix)]
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    std::fs::File::open(dir)?.sync_all()
+}
+
+/// Windows has no handle on a folder to flush; renames are journaled.
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 /// The dimension folders Paper keeps in sibling worlds, and where they
@@ -131,9 +175,11 @@ fn paper_dimensions(dir: &Path, report: &mut FileReport) -> io::Result<()> {
             if from.is_dir() {
                 let to = dir.join(folder);
                 if let Some(p) = to.parent() {
-                    std::fs::create_dir_all(p)?;
+                    create_dirs(p)?;
                 }
                 std::fs::rename(&from, &to)?;
+                sync_parent(&from)?;
+                sync_parent(&to)?;
                 report.paper.push(from.clone());
                 report.moved.push((from, to));
                 break;
@@ -153,9 +199,11 @@ fn mv(from: &Path, to: &Path, report: &mut FileReport) -> io::Result<()> {
         return Ok(());
     }
     if let Some(p) = to.parent() {
-        std::fs::create_dir_all(p)?;
+        create_dirs(p)?;
     }
     std::fs::rename(from, to)?;
+    sync_parent(from)?;
+    sync_parent(to)?;
     report.moved.push((from.to_owned(), to.to_owned()));
     Ok(())
 }
@@ -168,15 +216,12 @@ fn remove_if_empty(dir: &Path) {
 }
 
 /// Brings a saved data file to `target`, if it needs it.
-fn upgrade_saved(path: &Path, saved: Saved, target: i32) {
-    let Ok(mut root) = read_gz(path) else {
-        return;
-    };
-    if matches!(
-        upgrade(&mut root, Kind::Saved(saved), &Context::default(), target),
-        Ok(true)
-    ) {
-        let _ = write_gz(path, &root);
+fn upgrade_saved(path: &Path, saved: Saved, target: i32) -> Result<(), FileError> {
+    let mut root = read_gz(path).map_err(|e| FileError::at(path, e))?;
+    match upgrade(&mut root, Kind::Saved(saved), &Context::default(), target) {
+        Ok(true) => write_gz(path, &root).map_err(|e| FileError::at(path, e)),
+        Ok(false) => Ok(()),
+        Err(why) => Err(FileError::at(path, FileError::Unsupported(why))),
     }
 }
 
@@ -193,16 +238,21 @@ fn saved_kind(file: &str) -> Saved {
     }
 }
 
-fn move_saved(from: &Path, to: &Path, target: i32, report: &mut FileReport) -> io::Result<()> {
-    if from.is_file() {
+fn move_saved(
+    from: &Path,
+    to: &Path,
+    target: i32,
+    report: &mut FileReport,
+) -> Result<(), FileError> {
+    if from.is_file() && !to.exists() {
         let name = from.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        upgrade_saved(from, saved_kind(name), target);
+        upgrade_saved(from, saved_kind(name), target)?;
     }
-    mv(from, to, report)
+    mv(from, to, report).map_err(|e| FileError::at(from, e))
 }
 
 /// The moves of 4772.
-fn layout(dir: &Path, target: i32, report: &mut FileReport) -> io::Result<()> {
+fn layout(dir: &Path, target: i32, report: &mut FileReport) -> Result<(), FileError> {
     mv(
         &dir.join("resources.zip"),
         &dir.join("resourcepacks/resources.zip"),
@@ -274,7 +324,7 @@ fn layout(dir: &Path, target: i32, report: &mut FileReport) -> io::Result<()> {
                 .or_else(|| {
                     n.strip_prefix("command_storage_")
                         .and_then(|r| r.strip_suffix(".dat"))
-                        .filter(|ns| !ns.is_empty())
+                        .filter(|ns| is_namespace(ns))
                         .map(|ns| format!("{ns}/command_storage.dat"))
                 }),
         };
@@ -296,12 +346,25 @@ fn layout(dir: &Path, target: i32, report: &mut FileReport) -> io::Result<()> {
     Ok(())
 }
 
+/// A resource namespace as vanilla accepts it: `[a-z0-9_.-]+`.
+fn is_namespace(ns: &str) -> bool {
+    !ns.is_empty()
+        && ns
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b'-'))
+}
+
 /// Saved data file at `path` holding `data`.
-fn write_saved(path: &Path, data: Tag, version: i32, report: &mut FileReport) -> io::Result<()> {
+fn write_saved(
+    path: &Path,
+    data: Tag,
+    version: i32,
+    report: &mut FileReport,
+) -> Result<(), FileError> {
     let mut root = Compound::new();
     root.insert("data", data);
     root.insert("DataVersion", Tag::Int(version));
-    write_gz(path, &root)?;
+    write_gz(path, &root).map_err(|e| FileError::at(path, e))?;
     report.extracted.push(path.to_owned());
     Ok(())
 }
@@ -312,7 +375,7 @@ fn split_level(
     data: &mut Compound,
     target: i32,
     report: &mut FileReport,
-) -> io::Result<()> {
+) -> Result<(), FileError> {
     let dims = dir.join("dimensions/minecraft");
     let world = dir.join("data/minecraft");
     if let Some(fight) = data.remove("dragon_fight") {
@@ -327,7 +390,7 @@ fn split_level(
             Some(uuid @ Tag::IntArray(_)) => uuid.clone(),
             _ => {
                 let path = dir.join("players/data/00000000-0000-0000-0000-000000000000.dat");
-                write_gz(&path, &player)?;
+                write_gz(&path, &player).map_err(|e| FileError::at(&path, e))?;
                 report.extracted.push(path);
                 Tag::IntArray(vec![0; 4])
             }
@@ -387,32 +450,31 @@ fn generated_structures(dir: &Path, report: &mut FileReport) -> io::Result<()> {
 
 /// 4899: hardcore worlds once played in single player let spectators
 /// generate chunks again.
-fn hardcore_spectators(dir: &Path, data: &Compound) {
+fn hardcore_spectators(dir: &Path, data: &Compound) -> Result<(), FileError> {
     let hardcore = nbt::compound(data, "difficulty_settings")
         .and_then(|d| nbt::boolean(d, "hardcore"))
         .unwrap_or(false);
-    if data.get("singleplayer_uuid").is_none() || !hardcore {
-        return;
-    }
     let path = dir.join("data/minecraft/game_rules.dat");
-    if let Ok(mut root) = read_gz(&path) {
-        nbt::child(&mut root, "data")
-            .insert("minecraft:spectators_generate_chunks", nbt::flag(true));
-        let _ = write_gz(&path, &root);
+    if data.get("singleplayer_uuid").is_none() || !hardcore || !path.exists() {
+        return Ok(());
     }
+    let mut root = read_gz(&path).map_err(|e| FileError::at(&path, e))?;
+    nbt::child(&mut root, "data").insert("minecraft:spectators_generate_chunks", nbt::flag(true));
+    write_gz(&path, &root).map_err(|e| FileError::at(&path, e))
 }
 
 /// Brings `dir`'s level.dat and file layout to `target` (named
 /// `version_name`), as vanilla does at startup. A folder without level.dat
-/// is a new world and is left alone, Paper folders aside.
+/// is a new world and is left alone. Nothing is touched before level.dat
+/// has been read and its version accepted; level.dat is rewritten only
+/// after every other step succeeded.
 pub fn fix_world(dir: &Path, target: i32, version_name: &str) -> Result<FileReport, FileError> {
     let mut report = FileReport::default();
-    paper_dimensions(dir, &mut report)?;
     let level_path = dir.join("level.dat");
     if !level_path.is_file() {
         return Ok(report);
     }
-    let mut root = read_gz(&level_path)?;
+    let mut root = read_gz(&level_path).map_err(|e| FileError::at(&level_path, e))?;
     let from = data_version(&root, Kind::Level);
     report.from = from;
     let from = match from {
@@ -423,6 +485,9 @@ pub fn fix_world(dir: &Path, target: i32, version_name: &str) -> Result<FileRepo
     };
     let ctx = Context::default();
     if from < LAYOUT {
+        // Paper's sibling folders only follow a world that still has the
+        // old layout: a 26.x world would never read them in `DIM-1`.
+        paper_dimensions(dir, &mut report)?;
         run_between(&mut root, Kind::Level, &ctx, from, LAYOUT - 1);
         layout(dir, target, &mut report)?;
         let data = nbt::child(&mut root, "Data");
@@ -430,7 +495,7 @@ pub fn fix_world(dir: &Path, target: i32, version_name: &str) -> Result<FileRepo
         for path in report.extracted.clone() {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name.ends_with(".dat") && !path.starts_with(dir.join("players")) {
-                upgrade_saved(&path, saved_kind(name), target);
+                upgrade_saved(&path, saved_kind(name), target)?;
             }
         }
     }
@@ -440,7 +505,7 @@ pub fn fix_world(dir: &Path, target: i32, version_name: &str) -> Result<FileRepo
     run_between(&mut root, Kind::Level, &ctx, from.max(LAYOUT - 1), target);
     let data = nbt::child(&mut root, "Data");
     if from < 4899 {
-        hardcore_spectators(dir, data);
+        hardcore_spectators(dir, data)?;
     }
     data.insert("DataVersion", Tag::Int(target));
     // What vanilla appends when it next saves level.dat.
@@ -453,7 +518,11 @@ pub fn fix_world(dir: &Path, target: i32, version_name: &str) -> Result<FileRepo
     let version = nbt::child(data, "Version");
     version.insert("Id", Tag::Int(target));
     version.insert("Name", Tag::String(version_name.to_owned()));
-    std::fs::copy(&level_path, dir.join("level.dat_old"))?;
+    // Every move above made durable before level.dat says they are done.
+    sync_dir(dir)?;
+    let old = dir.join("level.dat_old");
+    std::fs::copy(&level_path, &old)?;
+    std::fs::File::open(&old)?.sync_all()?;
     write_gz(&level_path, &root)?;
     Ok(report)
 }

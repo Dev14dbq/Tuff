@@ -561,3 +561,100 @@ fn a_pre_1_18_world_is_refused() {
     let err = files::fix_world(&world, TARGET, "26.3").unwrap_err();
     assert!(err.to_string().contains("1.18"), "{err}");
 }
+
+fn level_at(version: i32) -> Compound {
+    c(vec![(
+        "Data",
+        Tag::Compound(c(vec![("DataVersion", Tag::Int(version))])),
+    )])
+}
+
+fn saved_at(version: i32) -> Compound {
+    c(vec![
+        ("DataVersion", Tag::Int(version)),
+        ("data", Tag::Compound(Compound::new())),
+    ])
+}
+
+/// A world that is refused, or that already has the 26.x layout, keeps
+/// Paper's sibling folders where they are.
+#[test]
+fn paper_siblings_move_only_into_an_accepted_old_world() {
+    let no_version = c(vec![("Data", Tag::Compound(Compound::new()))]);
+    let cases = [
+        (Some(level_at(TARGET + 1)), false),
+        (Some(no_version), false),
+        (None, false),
+        (Some(level_at(files::LAYOUT)), true),
+        (Some(level_at(TARGET)), true),
+    ];
+    for (i, (level, ok)) in cases.into_iter().enumerate() {
+        let scratch = Scratch::new(&format!("refused-{i}"));
+        let world = scratch.0.join("world");
+        let level_path = world.join("level.dat");
+        match level {
+            Some(level) => files::write_gz(&level_path, &level).unwrap(),
+            None => {
+                std::fs::create_dir_all(&world).unwrap();
+                std::fs::write(&level_path, b"not gzip").unwrap();
+            }
+        }
+        let sibling = scratch.0.join("world_nether/DIM-1/region");
+        write_region(&sibling, &chunk_1_20_1());
+        let result = files::fix_world(&world, TARGET, "26.3");
+        assert_eq!(result.is_ok(), ok, "case {i}: {result:?}");
+        assert!(sibling.join("r.0.0.mca").is_file(), "case {i}: moved");
+        assert!(!world.join("DIM-1").exists(), "case {i}");
+    }
+}
+
+/// A saved data file that cannot be read or upgraded stops the fix before
+/// level.dat is stamped, and names the file; the next start finishes it.
+#[test]
+fn a_broken_saved_file_leaves_level_dat_old() {
+    for (i, newer) in [false, true].into_iter().enumerate() {
+        let scratch = Scratch::new(&format!("broken-{i}"));
+        let world = scratch.0.join("world");
+        files::write_gz(&world.join("level.dat"), &level_at(3465)).unwrap();
+        write_region(&world.join("region"), &chunk_1_20_1());
+        let scoreboard = world.join("data/scoreboard.dat");
+        if newer {
+            files::write_gz(&scoreboard, &saved_at(TARGET + 1)).unwrap();
+        } else {
+            std::fs::create_dir_all(scoreboard.parent().unwrap()).unwrap();
+            std::fs::write(&scoreboard, b"garbage").unwrap();
+        }
+        let err = files::fix_world(&world, TARGET, "26.3").unwrap_err();
+        assert!(err.to_string().contains("scoreboard.dat"), "{err}");
+        assert!(scoreboard.is_file(), "the broken file stays");
+        let level = files::read_gz(&world.join("level.dat")).unwrap();
+        assert_eq!(data_version(&level, Kind::Level), Some(3465));
+
+        files::write_gz(&scoreboard, &saved_at(3465)).unwrap();
+        let report = files::fix_world(&world, TARGET, "26.3").unwrap();
+        assert_eq!(report.from, Some(3465));
+        assert!(world.join("data/minecraft/scoreboard.dat").is_file());
+        let region = world.join("dimensions/minecraft/overworld/region/r.0.0.mca");
+        assert!(region.is_file());
+        let level = files::read_gz(&world.join("level.dat")).unwrap();
+        assert_eq!(data_version(&level, Kind::Level), Some(TARGET));
+    }
+}
+
+/// Command storage moves only for namespaces vanilla accepts.
+#[test]
+fn command_storage_namespaces_follow_vanilla() {
+    let scratch = Scratch::new("storage");
+    let world = scratch.0.join("world");
+    files::write_gz(&world.join("level.dat"), &level_at(3465)).unwrap();
+    let data = world.join("data");
+    for ns in ["my.ns-1_x", "Bad", "a b"] {
+        let path = data.join(format!("command_storage_{ns}.dat"));
+        files::write_gz(&path, &saved_at(3465)).unwrap();
+    }
+    files::fix_world(&world, TARGET, "26.3").unwrap();
+    assert!(data.join("my.ns-1_x/command_storage.dat").is_file());
+    assert!(data.join("command_storage_Bad.dat").is_file());
+    assert!(data.join("command_storage_a b.dat").is_file());
+    assert!(!data.join("Bad").exists());
+}
