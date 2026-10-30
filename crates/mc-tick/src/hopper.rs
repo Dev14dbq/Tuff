@@ -23,6 +23,32 @@ use crate::updates::{Ctx, Flags, set_block};
 pub const HOPPER_COOLDOWN: i32 = 8;
 const DISPENSER_DELAY: i64 = 4;
 
+/// The hoppers that tick, in the order they came (placed or loaded), which
+/// is the order they take their turns in, as vanilla's block entity list.
+#[derive(Debug, Default)]
+pub struct Hoppers {
+    order: Vec<BlockPos>,
+    known: std::collections::HashSet<BlockPos>,
+}
+
+impl Hoppers {
+    pub fn insert(&mut self, p: BlockPos) {
+        if self.known.insert(p) {
+            self.order.push(p);
+        }
+    }
+
+    pub fn remove(&mut self, p: BlockPos) {
+        if self.known.remove(&p) {
+            self.order.retain(|k| *k != p);
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &BlockPos> {
+        self.order.iter()
+    }
+}
+
 pub fn is_hopper(ctx: Ctx, state: u32) -> bool {
     ctx.shapes.block_name(state) == Some("minecraft:hopper")
 }

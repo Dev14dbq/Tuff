@@ -1,49 +1,23 @@
-//! Campfires and soul campfires (minecraft.wiki: "Campfire").
-//!
-//! Four slots of food, put on with a right click (any `campfire_cooking`
-//! input, one item to the first free slot, lit or not). A lit campfire
-//! cooks each one tick a tick; at the recipe's time the result pops out
-//! above the block and the slot empties. Unlit, the cooking goes back two
-//! ticks a tick. The block entity (`minecraft:campfire` for both) keeps
-//! `Items`, `CookingTimes` and `CookingTotalTimes`; clients see the
-//! `Items` to draw them. Breaking it drops what is on it. A lit campfire
-//! hurts whoever stands in it: 1 (2 for a soul campfire) of `campfire`
-//! damage.
+//! Campfires and soul campfires on the server: the rules are in
+//! `mc_tick::block_entity::campfire`; this keeps the campfires with food on
+//! them ticking, drops the food when one breaks, and puts one out when water
+//! is poured in.
 
 use std::collections::HashSet;
 
-use mc_nbt::{Compound, Tag};
 use mc_protocol::Position;
 use mc_protocol::packets::play::ItemStack;
+use mc_tick::BlockPos;
+use mc_tick::block_entity::campfire;
 
-use crate::context::{Event, ServerContext};
+use crate::block_entities::Host;
+use crate::context::ServerContext;
+use crate::level::to_pos;
 use crate::tick::lock;
 
+pub use mc_tick::block_entity::campfire::{Food, is_campfire};
+
 pub type Active = HashSet<(i32, i32, i32)>;
-
-const ID: &str = "minecraft:campfire";
-
-/// What is on a campfire.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Food {
-    pub items: [Option<ItemStack>; 4],
-    pub times: [i32; 4],
-    pub totals: [i32; 4],
-}
-
-fn ints(data: &Compound, key: &str) -> [i32; 4] {
-    let mut out = [0; 4];
-    if let Some(Tag::IntArray(v)) = data.get(key) {
-        for (o, v) in out.iter_mut().zip(v) {
-            *o = *v;
-        }
-    }
-    out
-}
-
-pub fn is_campfire(name: &str) -> bool {
-    matches!(name, "minecraft:campfire" | "minecraft:soul_campfire")
-}
 
 fn block_name(ctx: &ServerContext, p: Position) -> Option<&str> {
     ctx.world
@@ -53,75 +27,15 @@ fn block_name(ctx: &ServerContext, p: Position) -> Option<&str> {
 
 /// The food on the campfire at `p`.
 pub fn food(ctx: &ServerContext, p: Position) -> Food {
-    let Some(be) = ctx.world.block_entity(p, &ctx.data.blocks) else {
-        return Food::default();
-    };
-    let slots = crate::containers::read_items(ctx, &be.data, 4);
-    let mut items: [Option<ItemStack>; 4] = Default::default();
-    for (i, s) in slots.into_iter().enumerate() {
-        items[i] = s;
-    }
-    Food {
-        items,
-        times: ints(&be.data, "CookingTimes"),
-        totals: ints(&be.data, "CookingTotalTimes"),
-    }
-}
-
-/// Writes the food back; with `show`, clients are told what is on it.
-fn store(ctx: &ServerContext, p: Position, food: &Food, show: bool) {
-    let blocks = &ctx.data.blocks;
-    let mut be = ctx
-        .world
-        .block_entity(p, blocks)
-        .unwrap_or(mc_world::BlockEntity {
-            x: p.x,
-            y: p.y,
-            z: p.z,
-            id: ID.to_owned(),
-            data: Compound::new(),
-        });
-    be.data
-        .insert("Items", crate::containers::write_items(ctx, &food.items));
-    be.data
-        .insert("CookingTimes", Tag::IntArray(food.times.to_vec()));
-    be.data
-        .insert("CookingTotalTimes", Tag::IntArray(food.totals.to_vec()));
-    let data = crate::world::client_data(ID, &be.data);
-    ctx.world.set_block_entity(be, blocks);
-    if show && let (Some(kind), Some(data)) = (ctx.world.block_entity_kind(ID), data) {
-        let _ = ctx.events.send(Event::BlockEntity {
-            position: p,
-            kind,
-            data,
-        });
-    }
-}
-
-/// The campfire recipe for `item`: its result and cooking time.
-fn recipe(ctx: &ServerContext, item: i32) -> Option<crate::crafting::Cooking> {
-    ctx.recipes
-        .get()
-        .cooking
-        .iter()
-        .find(|r| r.kind == "minecraft:campfire_cooking" && r.input.contains(&item))
-        .cloned()
+    campfire::food(&Host::new(ctx), to_pos(p))
 }
 
 /// Puts one `stack` on the campfire at `p`; `false` when it is full or the
 /// item does not cook.
 pub fn place(ctx: &ServerContext, p: Position, stack: &ItemStack) -> bool {
-    let Some(r) = recipe(ctx, stack.item) else {
+    if !campfire::place(&mut Host::new(ctx), to_pos(p), stack) {
         return false;
-    };
-    let mut food = food(ctx, p);
-    let Some(i) = food.items.iter().position(Option::is_none) else {
-        return false;
-    };
-    food.items[i] = Some(stack.with_count(1));
-    food.times[i] = 0;
-    food.totals[i] = r.time;
-    store(ctx, p, &food, true);
+    }
     wake(ctx, p);
     true
 }
@@ -142,60 +56,16 @@ pub fn wake(ctx: &ServerContext, p: Position) {
 /// One tick of every campfire with food on it.
 pub fn tick(ctx: &ServerContext) {
     let active: Vec<(i32, i32, i32)> = lock(&ctx.campfires).iter().copied().collect();
+    let mut host = Host::new(ctx);
     for key in active {
-        let p = Position::new(key.0, key.1, key.2);
         if !crate::tickets::blocks_run(ctx, key.0 >> 4, key.2 >> 4) {
             continue;
         }
-        if !tick_one(ctx, p) {
+        let p = BlockPos::new(key.0, key.1, key.2);
+        if !campfire::tick(&mut host, &ctx.data.blocks, p) {
             lock(&ctx.campfires).remove(&key);
         }
     }
-}
-
-/// `false` when there is nothing left to cook (or no campfire).
-fn tick_one(ctx: &ServerContext, p: Position) -> bool {
-    let blocks = &ctx.data.blocks;
-    let Some(state) = ctx.world.block(p, blocks) else {
-        return false;
-    };
-    if !blocks.block_name(state).is_some_and(is_campfire) {
-        return false;
-    }
-    let lit = blocks.property(state, "lit") == Some("true");
-    let before = food(ctx, p);
-    let mut food = before.clone();
-    let mut shown = false;
-    for i in 0..4 {
-        let Some(item) = food.items[i].clone() else {
-            continue;
-        };
-        if !lit {
-            food.times[i] = (food.times[i] - 2).max(0);
-            continue;
-        }
-        food.times[i] += 1;
-        if food.times[i] < food.totals[i] {
-            continue;
-        }
-        if let Some(r) = recipe(ctx, item.item) {
-            let at = [
-                f64::from(p.x) + 0.5,
-                f64::from(p.y) + 1.0,
-                f64::from(p.z) + 0.5,
-            ];
-            crate::tick::spawn_stack_at(ctx, at, &r.result);
-        }
-        food.items[i] = None;
-        shown = true;
-    }
-    if food != before {
-        store(ctx, p, &food, shown);
-    }
-    food.items
-        .iter()
-        .enumerate()
-        .any(|(i, s)| s.is_some() && (lit || food.times[i] > 0))
 }
 
 /// `state` with water poured in: a lit campfire goes out with a hiss.
@@ -220,15 +90,7 @@ pub fn waterlogged(ctx: &ServerContext, p: Position, state: u32) -> u32 {
 
 /// Damage a lit campfire at the feet does: 1, or 2 for a soul campfire.
 pub fn damage(ctx: &ServerContext, state: u32) -> Option<f32> {
-    let blocks = &ctx.data.blocks;
-    if blocks.property(state, "lit") != Some("true") {
-        return None;
-    }
-    match blocks.block_name(state)? {
-        "minecraft:campfire" => Some(1.0),
-        "minecraft:soul_campfire" => Some(2.0),
-        _ => None,
-    }
+    campfire::damage(&ctx.data.blocks, state)
 }
 
 #[cfg(test)]

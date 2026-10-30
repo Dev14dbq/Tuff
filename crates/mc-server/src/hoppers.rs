@@ -1,135 +1,30 @@
-//! What the block logic (`mc_tick::hopper`) needs from the server for
-//! hoppers, droppers and dispensers: moving single items between containers,
-//! the hopper's rest time, and picking items up off the ground.
-
-use std::collections::HashSet;
+//! Hoppers, hopper minecarts, droppers and dispensers on the server: the
+//! rules are in `mc_tick::hopper` and `mc_tick::block_entity::transfer`;
+//! this keeps the list of hoppers that tick and gives the rules the world
+//! ([`Host`]). The dispenser behaviours that change the block in front
+//! (buckets, bone meal, TNT, fire, shears, glass bottles) are here too, the
+//! rest in `dispense`.
 
 use mc_nbt::Tag;
 use mc_protocol::Position;
 use mc_protocol::packets::play::ItemStack;
 use mc_tick::Dir;
+use mc_tick::block_entity::transfer::{self, Dispensing};
 
 use mc_entity::extra::{Cart, Craft};
 
-use crate::containers::{self, Kind};
+use crate::block_entities::Host;
 use crate::context::ServerContext;
+use crate::level::{WorldLevel, to_pos};
 use crate::tick::lock;
 
-/// The hoppers that tick, in the order they came (placed or loaded), which
-/// is the order they take their turns in, as vanilla's block entity list.
-#[derive(Debug, Default)]
-pub struct Active {
-    order: Vec<(i32, i32, i32)>,
-    known: HashSet<(i32, i32, i32)>,
-}
+pub(crate) use mc_tick::block_entity::transfer::{Behavior, done};
 
-impl Active {
-    pub fn insert(&mut self, key: (i32, i32, i32)) {
-        if self.known.insert(key) {
-            self.order.push(key);
-        }
-    }
-
-    pub fn remove(&mut self, key: &(i32, i32, i32)) {
-        if self.known.remove(key) {
-            self.order.retain(|k| k != key);
-        }
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &(i32, i32, i32)> {
-        self.order.iter()
-    }
-}
-
-fn kind_at(ctx: &ServerContext, p: Position) -> Option<(Kind, &str)> {
-    let blocks = &ctx.data.blocks;
-    let state = ctx.world.block(p, blocks)?;
-    let name = blocks.block_name(state)?;
-    if name == "minecraft:decorated_pot" {
-        return Some((crate::pots::KIND, name));
-    }
-    let kind = containers::kind_of(name)?;
-    Some((kind, name))
-}
-
-/// Something holding items at a block's place: the block itself, or else an
-/// entity holding items (a chest minecart...) whose box is in that space.
-#[derive(Clone, Copy)]
-struct Store<'a> {
-    at: Position,
-    kind: Kind,
-    /// Block name (empty for an entity).
-    name: &'a str,
-}
-
-fn store_at(ctx: &ServerContext, p: Position) -> Option<Store<'_>> {
-    if let Some((kind, name)) = kind_at(ctx, p) {
-        return Some(Store { at: p, kind, name });
-    }
-    let (lo, hi) = (
-        [f64::from(p.x), f64::from(p.y), f64::from(p.z)],
-        [
-            f64::from(p.x) + 1.0,
-            f64::from(p.y) + 1.0,
-            f64::from(p.z) + 1.0,
-        ],
-    );
-    let found: Vec<(i32, Kind)> = lock(&ctx.entities)
-        .iter()
-        .filter(|e| !e.removed)
-        .filter_map(|e| {
-            let mc_entity::Kind::Vehicle(v) = &e.kind else {
-                return None;
-            };
-            let kind = containers::entity_kind(&crate::vehicles::item_of(&v.craft))?;
-            let b = e.aabb();
-            (0..3)
-                .all(|i| b.min[i] < hi[i] && b.max[i] > lo[i])
-                .then_some((e.id, kind))
-        })
-        .collect();
-    // One of them, at random.
-    let pick = found.get((crate::util::random_u64() % found.len().max(1) as u64) as usize)?;
-    Some(Store {
-        at: containers::entity_key(pick.0),
-        kind: pick.1,
-        name: "",
-    })
-}
-
-/// The slots a neighbour may push into through the face `side` of the
-/// container (in the order they are tried), or pull out of.
-fn sided_slots(name: &str, size: usize, side: Dir, inserting: bool) -> Vec<usize> {
-    match name {
-        "minecraft:ender_chest" => Vec::new(),
-        // Nothing comes out of a crafter, and the tenth slot is only shown.
-        "minecraft:crafter" if !inserting => Vec::new(),
-        "minecraft:crafter" => (0..9).collect(),
-        // The ingredient through the top, bottles and fuel through the
-        // sides, bottles and the ingredient through the bottom.
-        "minecraft:brewing_stand" => match side {
-            Dir::Up => vec![3],
-            Dir::Down => vec![0, 1, 2, 3],
-            _ => vec![0, 1, 2, 4],
-        },
-        "minecraft:furnace" | "minecraft:blast_furnace" | "minecraft:smoker" => {
-            if inserting {
-                match side {
-                    Dir::Up => vec![0],
-                    Dir::Down => Vec::new(),
-                    _ => vec![1],
-                }
-            } else if side == Dir::Down {
-                vec![2, 1]
-            } else {
-                Vec::new()
-            }
-        }
-        _ => (0..size).collect(),
-    }
-}
+/// The hoppers that tick, in the order they take their turns.
+pub type Active = mc_tick::hopper::Hoppers;
 
 /// Moves one item from `from` into `to`. See `Level::container_transfer`.
+#[cfg(test)]
 pub fn transfer(
     ctx: &ServerContext,
     from: Position,
@@ -137,190 +32,148 @@ pub fn transfer(
     to: Position,
     to_side: Dir,
 ) -> bool {
-    if let Some(done) = jukebox_transfer(ctx, from, from_side, to, to_side) {
-        return done;
-    }
-    let (Some(src), Some(dst)) = (store_at(ctx, from), store_at(ctx, to)) else {
-        return false;
-    };
-    move_one(ctx, src, from_side, dst, to_side)
+    transfer::transfer(
+        &mut Host::new(ctx),
+        &ctx.data.blocks,
+        to_pos(from),
+        from_side,
+        to_pos(to),
+        to_side,
+    )
 }
 
-/// Hoppers and jukeboxes: a hopper pointing into an empty one puts a disc
-/// in, and one under it takes the disc out. `None` if neither end is a
-/// jukebox.
-fn jukebox_transfer(
-    ctx: &ServerContext,
+/// A hopper's push or pull (`Level::container_transfer`): composters,
+/// jukeboxes and containers.
+pub fn container_transfer(
+    level: &mut WorldLevel,
     from: Position,
     from_side: Dir,
     to: Position,
     to_side: Dir,
-) -> Option<bool> {
-    let blocks = &ctx.data.blocks;
-    let jukebox = |p: Position| {
-        ctx.world
-            .block(p, blocks)
-            .is_some_and(|s| blocks.block_name(s) == Some("minecraft:jukebox"))
-    };
-    if jukebox(to) {
-        let Some(src) = store_at(ctx, from) else {
-            return Some(false);
-        };
-        let slots = containers::slots(ctx, src.at, src.kind);
-        let pick = sided_slots(src.name, slots.len(), from_side, false)
-            .into_iter()
-            .find_map(|i| {
-                let s = slots[i].clone()?;
-                let name = ctx.items.name(s.item)?;
-                crate::jukeboxes::song_of(ctx, name).map(|_| (i, s))
-            });
-        let Some((slot, stack)) = pick else {
-            return Some(false);
-        };
-        if !crate::jukeboxes::insert(ctx, to, &stack) {
-            return Some(false);
-        }
-        let left = (stack.count > 1).then(|| stack.with_count(stack.count - 1));
-        containers::put(ctx, src.at, src.kind, &[(slot, left)]);
-        return Some(true);
-    }
-    if jukebox(from) {
-        // Out of the bottom only, and the signal keeps hoppers still while
-        // a song plays.
-        if from_side != Dir::Down || crate::jukeboxes::playing(ctx, from) {
-            return Some(false);
-        }
-        let (Some(dst), Some(disc)) = (store_at(ctx, to), crate::jukeboxes::record(ctx, from))
-        else {
-            return Some(false);
-        };
-        let Some(item) = ctx.items.id(&disc) else {
-            return Some(false);
-        };
-        if !insert_one(ctx, dst, to_side, &ItemStack::new(item, 1)) {
-            return Some(false);
-        }
-        crate::jukeboxes::take(ctx, from);
-        return Some(true);
-    }
-    None
-}
-
-/// Moves one item from `src` (out through `from_side`) into `dst` (in
-/// through `to_side`).
-fn move_one(ctx: &ServerContext, src: Store, from_side: Dir, dst: Store, to_side: Dir) -> bool {
-    let slots = containers::slots(ctx, src.at, src.kind);
-    sided_slots(src.name, slots.len(), from_side, false)
-        .into_iter()
-        .filter(|&slot| slots[slot].is_some())
-        // Only an empty bottle comes out of a brewing stand's ingredient slot.
-        .filter(|&slot| {
-            src.name != "minecraft:brewing_stand"
-                || slot != 3
-                || slots[3].as_ref().map(|s| ctx.items.name(s.item))
-                    == Some(Some("minecraft:glass_bottle"))
-        })
-        .any(|slot| transfer_from_slot(ctx, src.at, src.kind, slot, dst, to_side))
+) -> bool {
+    let ctx = level.context();
+    let logic = level.logic();
+    transfer::container_transfer(
+        level,
+        logic,
+        &mut Host::new(ctx),
+        &ctx.data.blocks,
+        to_pos(from),
+        from_side,
+        to_pos(to),
+        to_side,
+    )
 }
 
 pub fn cooldown(ctx: &ServerContext, p: Position) -> i32 {
-    match ctx
-        .world
-        .block_entity(p, &ctx.data.blocks)
-        .and_then(|be| be.data.get("TransferCooldown").cloned())
-    {
-        Some(Tag::Int(v)) => v,
-        _ => 0,
-    }
+    transfer::cooldown(&Host::new(ctx), to_pos(p))
 }
 
 pub fn set_cooldown(ctx: &ServerContext, p: Position, ticks: i32) {
-    let blocks = &ctx.data.blocks;
-    let mut be = ctx
-        .world
-        .block_entity(p, blocks)
-        .unwrap_or(mc_world::BlockEntity {
-            x: p.x,
-            y: p.y,
-            z: p.z,
-            id: "minecraft:hopper".into(),
-            data: mc_nbt::Compound::new(),
-        });
-    be.data.insert("TransferCooldown", Tag::Int(ticks));
-    ctx.world.set_block_entity(be, blocks);
+    transfer::set_cooldown(&mut Host::new(ctx), to_pos(p), ticks);
 }
 
 /// The hopper takes one item (a whole stack's worth, one at a time) from an
 /// item entity in the space above it.
 pub fn pickup(ctx: &ServerContext, p: Position) -> bool {
-    let Some((kind, _)) = kind_at(ctx, p) else {
-        return false;
-    };
-    let (x, y, z) = (f64::from(p.x), f64::from(p.y), f64::from(p.z));
-    pickup_into(ctx, p, kind, [x, y + 0.6, z], [x + 1.0, y + 2.0, z + 1.0])
+    transfer::pickup(&mut Host::new(ctx), to_pos(p))
 }
 
-/// Takes one item entity whose position is in the box from `min` to `max`
-/// into the container at `p`.
-fn pickup_into(ctx: &ServerContext, p: Position, kind: Kind, min: [f64; 3], max: [f64; 3]) -> bool {
-    let mut entities = lock(&ctx.entities);
-    for e in entities.iter_mut() {
-        let Some(found) = e.kind.as_stack() else {
-            continue;
-        };
-        let (item, count) = (found.item, found.count);
-        if e.removed || (0..3).any(|i| e.pos[i] < min[i] || e.pos[i] >= max[i]) {
-            continue;
-        }
-        let mut slots = containers::slots(ctx, p, kind);
-        let max = ctx.items.max_stack(item);
-        let room = (0..slots.len())
-            .find(|&i| {
-                slots[i]
-                    .as_ref()
-                    .is_some_and(|s| s.same_kind(&found) && s.count < max)
-            })
-            .or_else(|| (0..slots.len()).find(|&i| slots[i].is_none()));
-        let Some(i) = room else { continue };
-        let add = count.min(max - slots[i].as_ref().map_or(0, |s| s.count));
-        slots[i] = Some(found.with_count(slots[i].as_ref().map_or(0, |s| s.count) + add));
-        containers::put(ctx, p, kind, &[(i, slots[i].clone())]);
-        if add >= count {
-            e.removed = true;
+/// A dropper or dispenser fires (`transfer::dispense`); armour goes on a
+/// player in front first, then the behaviours here and in `dispense`.
+pub fn dispense(level: &mut WorldLevel, p: Position, facing: Dir, dropper: bool) {
+    let ctx = level.context();
+    let mut behaviors = Behaviors { level };
+    transfer::dispense(
+        &mut Host::new(ctx),
+        &mut behaviors,
+        to_pos(p),
+        facing,
+        dropper,
+    );
+}
+
+/// The dispenser behaviours of the server's item registry.
+struct Behaviors<'l, 'a> {
+    level: &'l mut WorldLevel<'a>,
+}
+
+impl Dispensing for Behaviors<'_, '_> {
+    fn behavior(
+        &mut self,
+        name: &str,
+        stack: &ItemStack,
+        p: mc_tick::BlockPos,
+        facing: Dir,
+    ) -> Behavior {
+        let ctx = self.level.context();
+        let p = crate::level::to_position(p);
+        let (dx, dy, dz) = facing.offset();
+        let front = Position::new(p.x + dx, p.y + dy, p.z + dz);
+        if dress_player(ctx, front, stack) {
+            // Armour goes on a player in front first.
+            done(None)
         } else {
-            if let mc_entity::Kind::Item {
-                count,
-                pickup_delay,
-                ..
-            } = &mut e.kind
-            {
-                *count -= add;
-                *pickup_delay = 0;
-            }
+            behavior(ctx, self.level, name, stack, p, facing)
         }
-        return true;
     }
-    false
+
+    fn sound(&self, name: &str) -> Option<i32> {
+        crate::dispense::sound_of(name)
+    }
 }
 
-/// What a dispenser does with an item.
-pub(crate) enum Behavior {
-    /// It acted: one item is used up (or worn, for tools) and `leftover`
-    /// (an empty bucket, a full bottle) comes back, with its components.
-    Done {
-        leftover: Option<ItemStack>,
-        wear: i32,
-    },
-    /// It tried and could not: nothing is dispensed, the item stays.
-    Failed,
-    /// No special behaviour: the item is dropped.
-    Default,
+/// A hopper exists at `p`: it gets ticked.
+pub fn register(ctx: &ServerContext, p: Position) {
+    lock(&ctx.hoppers).insert(to_pos(p));
 }
 
-pub(crate) fn done(leftover: Option<i32>) -> Behavior {
-    Behavior::Done {
-        leftover: leftover.map(|i| ItemStack::new(i, 1)),
-        wear: 0,
+/// One game tick of every hopper minecart that is on (see
+/// `transfer::tick_cart`).
+pub fn tick_carts(ctx: &ServerContext) {
+    let carts: Vec<(i32, [f64; 3])> = lock(&ctx.entities)
+        .iter()
+        .filter(|e| {
+            !e.removed
+                && matches!(&e.kind, mc_entity::Kind::Vehicle(v)
+                    if v.enabled && v.craft == Craft::Minecart(Cart::Hopper))
+        })
+        .map(|e| (e.id, e.pos))
+        .collect();
+    let Some(kind) = crate::containers::entity_kind("minecraft:hopper_minecart") else {
+        return;
+    };
+    let mut host = Host::new(ctx);
+    for (id, pos) in carts {
+        transfer::tick_cart(&mut host, Host::entity_store(id, kind), pos);
+    }
+}
+
+/// One game tick of every known hopper.
+pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
+    let logic = level.logic();
+    let all: Vec<_> = lock(&ctx.hoppers).iter().copied().collect();
+    for at in all {
+        let p = crate::level::to_position(at);
+        // Hoppers in unloaded chunks wait; loading the chunk wakes them again.
+        // Outside the block-ticking square they wait without being forgotten.
+        if !ctx.world.is_loaded(p) {
+            lock(&ctx.hoppers).remove(at);
+            continue;
+        }
+        if !crate::tickets::blocks_run(ctx, at.x >> 4, at.z >> 4) {
+            continue;
+        }
+        let is_hopper = ctx
+            .world
+            .block(p, &ctx.data.blocks)
+            .and_then(|s| ctx.data.blocks.block_name(s))
+            == Some("minecraft:hopper");
+        if is_hopper {
+            mc_tick::hopper::tick(level, logic, at);
+        } else {
+            lock(&ctx.hoppers).remove(at);
+        }
     }
 }
 
@@ -569,358 +422,10 @@ fn dress_player(ctx: &ServerContext, front: Position, stack: &ItemStack) -> bool
     false
 }
 
-/// Puts a returned item (an empty bucket...) into the container, merging
-/// or in a free slot. Returns whether it fit.
-fn give_back(ctx: &ServerContext, p: Position, kind: Kind, back: &ItemStack) -> bool {
-    let slots = containers::slots(ctx, p, kind);
-    let max = ctx.items.max_stack(back.item);
-    let merge = (0..slots.len()).find(|&i| {
-        slots[i]
-            .as_ref()
-            .is_some_and(|s| s.same_kind(back) && s.count < max)
-    });
-    let target = merge.or_else(|| (0..slots.len()).find(|&i| slots[i].is_none()));
-    let Some(i) = target else { return false };
-    let stack = back.with_count(slots[i].as_ref().map_or(0, |s| s.count) + back.count);
-    containers::put(ctx, p, kind, &[(i, Some(stack))]);
-    true
-}
-
-/// A dropper or dispenser fires: a random stocked slot gives one item,
-/// which goes into the container in front (droppers) or out onto the
-/// ground. A dispenser acts on the item first where it has a behaviour
-/// (buckets, bone meal, TNT, flint and steel, shears, glass bottles,
-/// armour onto a player in front; the rest in `dispense`), with a click and
-/// smoke.
-pub fn dispense(level: &mut crate::level::WorldLevel, p: Position, facing: Dir, dropper: bool) {
-    let ctx = level.context();
-    let Some((kind, _)) = kind_at(ctx, p) else {
-        return;
-    };
-    let slots = containers::slots(ctx, p, kind);
-    let filled: Vec<usize> = (0..slots.len()).filter(|&i| slots[i].is_some()).collect();
-    let at = [f64::from(p.x), f64::from(p.y), f64::from(p.z)];
-    if filled.is_empty() {
-        // Empty: a higher click.
-        crate::fx::level_event(ctx, 1001, at, 0);
-        return;
-    }
-    let slot = filled[(crate::util::random_u64() % filled.len() as u64) as usize];
-    let Some(stack) = slots[slot].clone() else {
-        return;
-    };
-    let (dx, dy, dz) = facing.offset();
-    let front = Position::new(p.x + dx, p.y + dy, p.z + dz);
-    if dropper && let Some(dst) = store_at(ctx, front) {
-        // An empty hopper handed an item rests 8 ticks.
-        let empty_hopper = dst.name == "minecraft:hopper"
-            && containers::slots(ctx, dst.at, dst.kind)
-                .iter()
-                .all(Option::is_none);
-        if transfer_from_slot(ctx, p, kind, slot, dst, facing.opposite()) && empty_hopper {
-            set_cooldown(ctx, front, mc_tick::hopper::HOPPER_COOLDOWN);
-        }
-        return;
-    }
-    let name = ctx.items.name(stack.item).unwrap_or("").to_owned();
-    let action = if dropper || name.is_empty() {
-        Behavior::Default
-    } else if dress_player(ctx, front, &stack) {
-        // Armour goes on a player in front first.
-        done(None)
-    } else {
-        behavior(ctx, level, &name, &stack, p, facing)
-    };
-    // The click (a launch for projectiles, a failing click when it could
-    // not act) and smoke out of its face.
-    let sound = match action {
-        Behavior::Failed => Some(1001),
-        Behavior::Default => Some(1000),
-        Behavior::Done { .. } => crate::dispense::sound_of(&name),
-    };
-    if let Some(event) = sound {
-        crate::fx::level_event(ctx, event, at, 0);
-    }
-    crate::fx::level_event(ctx, 2000, at, facing as i32);
-    match action {
-        Behavior::Failed => {}
-        Behavior::Done { leftover, wear } => {
-            let max = ctx.items.max_damage(stack.item);
-            let worn = wear > 0 && max > 0;
-            let left = if worn {
-                // A tool is worn, not used up; it breaks at full damage.
-                let damage = stack.damage + wear;
-                (damage < max).then(|| ItemStack {
-                    damage,
-                    ..stack.clone()
-                })
-            } else {
-                (stack.count > 1).then(|| ItemStack {
-                    count: stack.count - 1,
-                    ..stack.clone()
-                })
-            };
-            let emptied = left.is_none();
-            containers::put(ctx, p, kind, &[(slot, left)]);
-            if let Some(back) = leftover {
-                // An emptied slot takes the leftover itself.
-                let placed = if emptied {
-                    containers::put(ctx, p, kind, &[(slot, Some(back.clone()))]);
-                    true
-                } else {
-                    give_back(ctx, p, kind, &back)
-                };
-                if !placed {
-                    crate::tick::spawn_stack_at(ctx, drop_point(p, dx, dy, dz), &back);
-                }
-            }
-        }
-        Behavior::Default => {
-            let left = (stack.count > 1).then(|| ItemStack {
-                count: stack.count - 1,
-                ..stack.clone()
-            });
-            containers::put(ctx, p, kind, &[(slot, left)]);
-            crate::tick::spawn_stack_at(ctx, drop_point(p, dx, dy, dz), &stack.with_count(1));
-        }
-    }
-}
-
-fn drop_point(p: Position, dx: i32, dy: i32, dz: i32) -> [f64; 3] {
-    [
-        f64::from(p.x) + 0.5 + f64::from(dx) * 0.7,
-        f64::from(p.y) + 0.5 + f64::from(dy) * 0.7 - if dy == 0 { 0.125 } else { 0.0 },
-        f64::from(p.z) + 0.5 + f64::from(dz) * 0.7,
-    ]
-}
-
-/// Moves one item out of a particular slot (a dropper facing a container).
-fn transfer_from_slot(
-    ctx: &ServerContext,
-    from: Position,
-    from_kind: Kind,
-    slot: usize,
-    dst: Store,
-    side: Dir,
-) -> bool {
-    let src = containers::slots(ctx, from, from_kind);
-    let Some(stack) = src[slot].clone() else {
-        return false;
-    };
-    if !insert_one(ctx, dst, side, &stack) {
-        return false;
-    }
-    let left = (stack.count > 1).then(|| ItemStack {
-        count: stack.count - 1,
-        ..stack.clone()
-    });
-    containers::put(ctx, from, from_kind, &[(slot, left)]);
-    true
-}
-
-/// Puts one of `stack` into whatever holds items at `p`, through its face
-/// `side`. `false` if there is nothing there or no room.
-pub fn insert_at(ctx: &ServerContext, p: Position, side: Dir, stack: &ItemStack) -> bool {
-    if ctx
-        .world
-        .block(p, &ctx.data.blocks)
-        .is_some_and(|s| ctx.data.blocks.block_name(s) == Some("minecraft:jukebox"))
-    {
-        return crate::jukeboxes::insert(ctx, p, stack);
-    }
-    store_at(ctx, p).is_some_and(|dst| insert_one(ctx, dst, side, stack))
-}
-
-/// Puts one of `stack` into `dst` through its face `side`,
-/// onto a matching stack first. `false` if there is no room.
-fn insert_one(ctx: &ServerContext, dst: Store, side: Dir, stack: &ItemStack) -> bool {
-    let (to, to_kind, to_name) = (dst.at, dst.kind, dst.name);
-    let mut dst = containers::slots(ctx, to, to_kind);
-    let mut into = sided_slots(to_name, dst.len(), side, true);
-    if to_name == "minecraft:brewing_stand" {
-        into.retain(|&i| crate::brewing::accepts(ctx, &dst, i, stack));
-    }
-    let max = ctx.items.max_stack(stack.item);
-    // A crafter takes it in the first slot that may have it.
-    if to_name == crate::crafter::ID {
-        let Some(t) = into
-            .into_iter()
-            .find(|&i| crate::crafter::accepts(ctx, to, &dst, i, stack))
-        else {
-            return false;
-        };
-        let moved = stack.with_count(dst[t].as_ref().map_or(0, |d| d.count) + 1);
-        containers::put(ctx, to, to_kind, &[(t, Some(moved))]);
-        return true;
-    }
-    let merge = into.iter().copied().find(|&i| {
-        dst[i]
-            .as_ref()
-            .is_some_and(|d| d.same_kind(stack) && d.count < max)
-    });
-    let Some(t) = merge.or_else(|| into.iter().copied().find(|&i| dst[i].is_none())) else {
-        return false;
-    };
-    let moved = stack.with_count(dst[t].as_ref().map_or(0, |d| d.count) + 1);
-    dst[t] = Some(moved.clone());
-    containers::put(ctx, to, to_kind, &[(t, Some(moved))]);
-    true
-}
-
-/// Hoppers and composters (minecraft.wiki, "Composter" → "Hopper"): one
-/// above puts compostable items in from the top, one below takes the bone
-/// meal out. `None` if neither end is a composter.
-pub fn composter_transfer(
-    level: &mut crate::level::WorldLevel,
-    from: Position,
-    from_side: Dir,
-    to: Position,
-    to_side: Dir,
-) -> Option<bool> {
-    let ctx = level.context();
-    let logic = level.logic();
-    let blocks = &ctx.data.blocks;
-    let composter = |p: Position| {
-        ctx.world
-            .block(p, blocks)
-            .filter(|&s| blocks.block_name(s) == Some("minecraft:composter"))
-    };
-    let layers = |s: u32| -> i32 {
-        blocks
-            .property(s, "level")
-            .and_then(|l| l.parse().ok())
-            .unwrap_or(0)
-    };
-    if let Some(state) = composter(to) {
-        if to_side != Dir::Up || layers(state) >= 7 {
-            return Some(false);
-        }
-        let Some(src) = store_at(ctx, from) else {
-            return Some(false);
-        };
-        let slots = containers::slots(ctx, src.at, src.kind);
-        let pick = sided_slots(src.name, slots.len(), from_side, false)
-            .into_iter()
-            .find_map(|i| {
-                let s = slots[i].as_ref()?;
-                let chance = crate::useblocks::compost_chance(ctx.items.name(s.item)?);
-                (chance > 0).then_some((i, s.clone(), chance))
-            });
-        let Some((slot, stack, chance)) = pick else {
-            return Some(false);
-        };
-        let left = (stack.count > 1).then(|| ItemStack {
-            count: stack.count - 1,
-            ..stack
-        });
-        containers::put(ctx, src.at, src.kind, &[(slot, left)]);
-        let success = crate::util::random_u64() % 100 < u64::from(chance);
-        mc_tick::composter::add(level, logic, crate::level::to_pos(to), state, success);
-        return Some(true);
-    }
-    let state = composter(from)?;
-    if from_side != Dir::Down || layers(state) != 8 {
-        return Some(false);
-    }
-    let (Some(dst), Some(bone_meal)) = (store_at(ctx, to), ctx.items.id("minecraft:bone_meal"))
-    else {
-        return Some(false);
-    };
-    if !insert_one(ctx, dst, to_side, &ItemStack::new(bone_meal, 1)) {
-        return Some(false);
-    }
-    mc_tick::composter::empty(level, logic, crate::level::to_pos(from), state);
-    Some(true)
-}
-
-/// A hopper exists at `p`: it gets ticked.
-pub fn register(ctx: &ServerContext, p: Position) {
-    lock(&ctx.hoppers).insert((p.x, p.y, p.z));
-}
-
-/// One game tick of every hopper minecart that is on (minecraft.wiki,
-/// "Minecart with Hopper"): it pulls one item from the container above it,
-/// or else picks up an item entity around it, every tick (it does not rest
-/// like a hopper).
-pub fn tick_carts(ctx: &ServerContext) {
-    let carts: Vec<(i32, [f64; 3])> = lock(&ctx.entities)
-        .iter()
-        .filter(|e| {
-            !e.removed
-                && matches!(&e.kind, mc_entity::Kind::Vehicle(v)
-                    if v.enabled && v.craft == Craft::Minecart(Cart::Hopper))
-        })
-        .map(|e| (e.id, e.pos))
-        .collect();
-    let Some(kind) = containers::entity_kind("minecraft:hopper_minecart") else {
-        return;
-    };
-    for (id, pos) in carts {
-        let dst = Store {
-            at: containers::entity_key(id),
-            kind,
-            name: "",
-        };
-        // The container above: its bottom 0.5 (exclusive) to 1.5 above
-        // the cart's bottom.
-        let above = Position::new(
-            pos[0].floor() as i32,
-            (pos[1] + 0.5 + 1.0).floor() as i32,
-            pos[2].floor() as i32,
-        );
-        // With a container there it only pulls; else it picks items up.
-        if let Some((k, name)) = kind_at(ctx, above) {
-            let src = Store {
-                at: above,
-                kind: k,
-                name,
-            };
-            move_one(ctx, src, Dir::Down, dst, Dir::Up);
-        } else {
-            let (x, y, z) = (pos[0], pos[1] + 0.5, pos[2]);
-            pickup_into(
-                ctx,
-                dst.at,
-                kind,
-                [x - 0.5, y - 0.5, z - 0.5],
-                [x + 0.5, y + 1.0, z + 0.5],
-            );
-        }
-    }
-}
-
-/// One game tick of every known hopper.
-pub fn tick(ctx: &ServerContext, level: &mut crate::level::WorldLevel) {
-    let logic = level.logic();
-    let all: Vec<_> = lock(&ctx.hoppers).iter().copied().collect();
-    for key in all {
-        let p = Position::new(key.0, key.1, key.2);
-        // Hoppers in unloaded chunks wait; loading the chunk wakes them again.
-        // Outside the block-ticking square they wait without being forgotten.
-        if !ctx.world.is_loaded(p) {
-            lock(&ctx.hoppers).remove(&key);
-            continue;
-        }
-        if !crate::tickets::blocks_run(ctx, key.0 >> 4, key.2 >> 4) {
-            continue;
-        }
-        let is_hopper = ctx
-            .world
-            .block(p, &ctx.data.blocks)
-            .and_then(|s| ctx.data.blocks.block_name(s))
-            == Some("minecraft:hopper");
-        if is_hopper {
-            mc_tick::hopper::tick(level, logic, crate::level::to_pos(p));
-        } else {
-            lock(&ctx.hoppers).remove(&key);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::level::WorldLevel;
+    use crate::containers;
 
     fn context() -> Option<std::sync::Arc<ServerContext>> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache/mcdata/26.3");
@@ -1257,7 +762,7 @@ mod tests {
                 containers::kind_of("minecraft:hopper").unwrap(),
                 &[(0, Some(ItemStack::new(stick, 3)))],
             );
-            lock(&ctx.hoppers).remove(&(hopper.x, hopper.y, hopper.z));
+            lock(&ctx.hoppers).remove(to_pos(hopper));
             crate::save(&ctx);
             stick
         };

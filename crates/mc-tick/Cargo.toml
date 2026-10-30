@@ -9,6 +9,8 @@ license.workspace = true
 
 [dependencies]
 mc-data.workspace = true
+mc-nbt.workspace = true
+mc-protocol.workspace = true
 mc-world.workspace = true
 mc-entity.workspace = true
 
