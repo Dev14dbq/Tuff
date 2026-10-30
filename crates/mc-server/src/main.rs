@@ -325,6 +325,10 @@ async fn run() -> Result<()> {
         secret: props.get("management-server-secret").to_owned(),
         tls: props.bool("management-server-tls-enabled"),
     };
+    // Made before the world is opened, so what the upgrade announces and the
+    // management server later serves are one stream.
+    let notes = mc_server::notify::Bus::new();
+    config.management_bus = Some(notes.clone());
     let level_name = props.get("level-name").to_owned();
     let flat = props.get("level-type").contains("flat");
     config.level_dir = Some(server_dir.join(&level_name));
@@ -340,7 +344,7 @@ async fn run() -> Result<()> {
     let world = server_dir.join(&level_name);
     if world.is_dir() {
         let version = mc_data::McData::read_version(&config.data_dir)?;
-        mc_server::prepare_world(&world, version.world_version, &version.name)?;
+        mc_server::prepare_world(&world, version.world_version, &version.name, &notes)?;
         if force_upgrade {
             info!("Forcing world upgrade");
             let report = mc_server::upgrade_world(&world, version.world_version, erase_cache)?;

@@ -1464,7 +1464,18 @@ impl LiveActions {
         let bans = parse_all(param_array(params, "bans")?, |value| {
             parse_user_ban(value, false)
         })?;
-        let stored = self.store_user_bans(bans, true)?;
+        let (before, stored) = self.store_user_bans(bans, true)?;
+        let unbanned: Vec<UserBan> = before
+            .iter()
+            .filter(|old| !stored.iter().any(|new| same_ban(old, new)))
+            .cloned()
+            .collect();
+        let banned: Vec<UserBan> = stored
+            .iter()
+            .filter(|new| !before.iter().any(|old| same_ban(old, new)))
+            .cloned()
+            .collect();
+        publish_user_bans(&self.ctx, &unbanned, &banned);
         Ok(list_json(&stored, UserBan::to_json))
     }
 
@@ -1484,7 +1495,8 @@ impl LiveActions {
         for ban in &incoming {
             upsert_user(&mut current, ban.clone());
         }
-        let stored = self.store_user_bans(current, false)?;
+        let (_, stored) = self.store_user_bans(current, false)?;
+        publish_user_bans(&self.ctx, &[], &incoming);
         let kick: Vec<Player> = incoming.into_iter().map(|ban| ban.player).collect();
         drop_then_kick(&self.ctx, &kick, "multiplayer.disconnect.banned");
         Ok(list_json(&stored, UserBan::to_json))
@@ -1502,18 +1514,36 @@ impl LiveActions {
             .map(user_of_ban)
             .collect();
         current.retain(|ban| !gone.iter().any(|player| same_player(&ban.player, player)));
-        let stored = self.store_user_bans(current, false)?;
+        let (before, stored) = self.store_user_bans(current, false)?;
+        let unbanned: Vec<UserBan> = before
+            .iter()
+            .filter(|old| {
+                !stored
+                    .iter()
+                    .any(|new| same_player(&old.player, &new.player))
+            })
+            .cloned()
+            .collect();
+        publish_user_bans(&self.ctx, &unbanned, &[]);
         Ok(list_json(&stored, UserBan::to_json))
     }
 
     fn bans_clear(&self) -> Result<Value, RpcError> {
         let mut lists = self.ctx.lists.lock().expect("lists lock");
+        let before: Vec<UserBan> = lists.banned_players.iter().map(user_of_ban).collect();
         lists.banned_players.clear();
         lists.save_bans();
+        drop(lists);
+        publish_user_bans(&self.ctx, &before, &[]);
         Ok(Value::Array(Vec::new()))
     }
 
-    fn store_user_bans(&self, bans: Vec<UserBan>, fresh: bool) -> Result<Vec<UserBan>, RpcError> {
+    /// Replaces the ban list; returns what it held and what it holds now.
+    fn store_user_bans(
+        &self,
+        bans: Vec<UserBan>,
+        fresh: bool,
+    ) -> Result<(Vec<UserBan>, Vec<UserBan>), RpcError> {
         let created = crate::util::now_text();
         let mut lists = self.ctx.lists.lock().expect("lists lock");
         let previous = lists.banned_players.clone();
@@ -1538,7 +1568,10 @@ impl LiveActions {
             })
             .collect();
         lists.save_bans();
-        Ok(lists.banned_players.iter().map(user_of_ban).collect())
+        Ok((
+            previous.iter().map(user_of_ban).collect(),
+            lists.banned_players.iter().map(user_of_ban).collect(),
+        ))
     }
 
     fn ip_bans(&self) -> Result<Value, RpcError> {
@@ -1557,7 +1590,19 @@ impl LiveActions {
         let bans = parse_all(param_array(params, "banlist")?, |value| {
             parse_ip_ban(value, false)
         })?;
-        Ok(list_json(&self.store_ip_bans(bans)?, IpBan::to_json))
+        let (before, stored) = self.store_ip_bans(bans)?;
+        let unbanned: Vec<IpBan> = before
+            .iter()
+            .filter(|old| !stored.iter().any(|new| same_ip_ban(old, new)))
+            .cloned()
+            .collect();
+        let banned: Vec<IpBan> = stored
+            .iter()
+            .filter(|new| !before.iter().any(|old| same_ip_ban(old, new)))
+            .cloned()
+            .collect();
+        publish_ip_bans(&self.ctx, &unbanned, &banned);
+        Ok(list_json(&stored, IpBan::to_json))
     }
 
     fn ip_bans_add(&self, params: Option<&Value>) -> Result<Value, RpcError> {
@@ -1576,7 +1621,8 @@ impl LiveActions {
         for ban in &incoming {
             upsert_ip(&mut current, ban.clone());
         }
-        let stored = self.store_ip_bans(current)?;
+        let (_, stored) = self.store_ip_bans(current)?;
+        publish_ip_bans(&self.ctx, &[], &incoming);
         let ips: Vec<String> = incoming.iter().map(|ban| ban.ip.to_string()).collect();
         let kicked = online_with_ip(&self.ctx, &ips);
         drop_kick_uuids(&self.ctx, &kicked, "multiplayer.disconnect.banned");
@@ -1595,19 +1641,31 @@ impl LiveActions {
             .filter_map(ip_of_ban)
             .collect();
         current.retain(|ban| !ips.contains(&ban.ip));
-        Ok(list_json(&self.store_ip_bans(current)?, IpBan::to_json))
+        let (before, stored) = self.store_ip_bans(current)?;
+        let unbanned: Vec<IpBan> = before
+            .iter()
+            .filter(|old| !stored.iter().any(|new| new.ip == old.ip))
+            .cloned()
+            .collect();
+        publish_ip_bans(&self.ctx, &unbanned, &[]);
+        Ok(list_json(&stored, IpBan::to_json))
     }
 
     fn ip_bans_clear(&self) -> Result<Value, RpcError> {
         let mut lists = self.ctx.lists.lock().expect("lists lock");
+        let before: Vec<IpBan> = lists.banned_ips.iter().filter_map(ip_of_ban).collect();
         lists.banned_ips.clear();
         lists.save_bans();
+        drop(lists);
+        publish_ip_bans(&self.ctx, &before, &[]);
         Ok(Value::Array(Vec::new()))
     }
 
-    fn store_ip_bans(&self, bans: Vec<IpBan>) -> Result<Vec<IpBan>, RpcError> {
+    /// Replaces the IP ban list; returns what it held and what it holds now.
+    fn store_ip_bans(&self, bans: Vec<IpBan>) -> Result<(Vec<IpBan>, Vec<IpBan>), RpcError> {
         let created = crate::util::now_text();
         let mut lists = self.ctx.lists.lock().expect("lists lock");
+        let before: Vec<IpBan> = lists.banned_ips.iter().filter_map(ip_of_ban).collect();
         lists.banned_ips = bans
             .iter()
             .map(|ban| crate::lists::Ban {
@@ -1623,7 +1681,10 @@ impl LiveActions {
             })
             .collect();
         lists.save_bans();
-        Ok(lists.banned_ips.iter().filter_map(ip_of_ban).collect())
+        Ok((
+            before,
+            lists.banned_ips.iter().filter_map(ip_of_ban).collect(),
+        ))
     }
 
     fn operators(&self) -> Result<Value, RpcError> {
@@ -1636,7 +1697,19 @@ impl LiveActions {
 
     fn operators_set(&self, params: Option<&Value>) -> Result<Value, RpcError> {
         let operators = parse_all(param_array(params, "operators")?, parse_operator)?;
-        self.write_ops(&operators)
+        let (before, after, json) = self.write_ops(&operators)?;
+        let removed: Vec<Operator> = before
+            .iter()
+            .filter(|old| !after.iter().any(|new| same_operator(old, new)))
+            .cloned()
+            .collect();
+        let added: Vec<Operator> = after
+            .iter()
+            .filter(|new| !before.iter().any(|old| same_operator(old, new)))
+            .cloned()
+            .collect();
+        publish_operators(&self.ctx, &removed, &added);
+        Ok(json)
     }
 
     fn operators_add(&self, params: Option<&Value>) -> Result<Value, RpcError> {
@@ -1650,10 +1723,12 @@ impl LiveActions {
             .iter()
             .map(operator_of)
             .collect();
-        for operator in incoming {
-            upsert_operator(&mut current, operator);
+        for operator in &incoming {
+            upsert_operator(&mut current, operator.clone());
         }
-        self.write_ops(&current)
+        let (_, _, json) = self.write_ops(&current)?;
+        publish_operators(&self.ctx, &[], &incoming);
+        Ok(json)
     }
 
     fn operators_remove(&self, params: Option<&Value>) -> Result<Value, RpcError> {
@@ -1672,17 +1747,36 @@ impl LiveActions {
                 .iter()
                 .any(|player| same_player(&operator.player, player))
         });
-        self.write_ops(&current)
+        let (before, after, json) = self.write_ops(&current)?;
+        let removed: Vec<Operator> = before
+            .iter()
+            .filter(|old| {
+                !after
+                    .iter()
+                    .any(|new| same_player(&old.player, &new.player))
+            })
+            .cloned()
+            .collect();
+        publish_operators(&self.ctx, &removed, &[]);
+        Ok(json)
     }
 
     fn operators_clear(&self) -> Result<Value, RpcError> {
         let mut lists = self.ctx.lists.lock().expect("lists lock");
+        let before: Vec<Operator> = lists.ops.iter().map(operator_of).collect();
         lists.ops.clear();
         lists.save_ops();
+        drop(lists);
+        publish_operators(&self.ctx, &before, &[]);
         Ok(Value::Array(Vec::new()))
     }
 
-    fn write_ops(&self, operators: &[Operator]) -> Result<Value, RpcError> {
+    /// Replaces the operator list; returns what it held, what it holds now
+    /// and the answer to the call.
+    fn write_ops(
+        &self,
+        operators: &[Operator],
+    ) -> Result<(Vec<Operator>, Vec<Operator>, Value), RpcError> {
         let mut stored = Vec::new();
         for operator in operators {
             let level = i32::try_from(operator.permission_level).map_err(|_| invalid_params())?;
@@ -1698,12 +1792,12 @@ impl LiveActions {
             });
         }
         let mut lists = self.ctx.lists.lock().expect("lists lock");
+        let before: Vec<Operator> = lists.ops.iter().map(operator_of).collect();
         lists.ops = stored;
         lists.save_ops();
-        Ok(list_json(
-            &lists.ops.iter().map(operator_of).collect::<Vec<_>>(),
-            Operator::to_json,
-        ))
+        let after: Vec<Operator> = lists.ops.iter().map(operator_of).collect();
+        let json = list_json(&after, Operator::to_json);
+        Ok((before, after, json))
     }
 
     fn gamerules(&self) -> Result<Value, RpcError> {
@@ -1939,6 +2033,87 @@ fn publish_allowlist_diff(
             ctx.management_bus
                 .publish(&crate::notify::Note::AllowlistRemoved(note_player(player)));
         }
+    }
+}
+
+fn same_ban(left: &UserBan, right: &UserBan) -> bool {
+    same_player(&left.player, &right.player)
+        && left.reason == right.reason
+        && left.source == right.source
+        && left.expires == right.expires
+}
+
+fn same_ip_ban(left: &IpBan, right: &IpBan) -> bool {
+    left.ip == right.ip
+        && left.reason == right.reason
+        && left.source == right.source
+        && left.expires == right.expires
+}
+
+fn same_operator(left: &Operator, right: &Operator) -> bool {
+    same_player(&left.player, &right.player)
+        && left.permission_level == right.permission_level
+        && left.bypasses_player_limit == right.bypasses_player_limit
+}
+
+/// The notifications the ban commands send when a player is banned or
+/// pardoned, for changes made through the API: unbans first, as the game
+/// removes entries before it adds new ones.
+fn publish_user_bans(
+    ctx: &crate::context::ServerContext,
+    unbanned: &[UserBan],
+    banned: &[UserBan],
+) {
+    use crate::notify::{Banned, Note};
+    for ban in unbanned {
+        ctx.management_bus
+            .publish(&Note::PlayerUnbanned(note_player(&ban.player)));
+    }
+    for ban in banned {
+        ctx.management_bus.publish(&Note::PlayerBanned(
+            note_player(&ban.player),
+            Banned {
+                subject: ban.player.name.clone().unwrap_or_default(),
+                reason: ban.reason.clone(),
+                source: ban.source.clone(),
+                expires: ban.expires.clone(),
+            },
+        ));
+    }
+}
+
+fn publish_ip_bans(ctx: &crate::context::ServerContext, unbanned: &[IpBan], banned: &[IpBan]) {
+    use crate::notify::{Banned, Note};
+    for ban in unbanned {
+        ctx.management_bus
+            .publish(&Note::IpUnbanned(ban.ip.to_string()));
+    }
+    for ban in banned {
+        ctx.management_bus.publish(&Note::IpBanned(Banned {
+            subject: ban.ip.to_string(),
+            reason: ban.reason.clone(),
+            source: ban.source.clone(),
+            expires: ban.expires.clone(),
+        }));
+    }
+}
+
+fn publish_operators(
+    ctx: &crate::context::ServerContext,
+    removed: &[Operator],
+    added: &[Operator],
+) {
+    use crate::notify::Note;
+    let note = |op: &Operator| crate::notify::Operator {
+        player: note_player(&op.player),
+        level: i32::try_from(op.permission_level).unwrap_or(DEFAULT_OP_LEVEL as i32),
+        bypasses_player_limit: op.bypasses_player_limit,
+    };
+    for op in removed {
+        ctx.management_bus.publish(&Note::OperatorRemoved(note(op)));
+    }
+    for op in added {
+        ctx.management_bus.publish(&Note::OperatorAdded(note(op)));
     }
 }
 
@@ -2964,6 +3139,133 @@ mod tests {
             .expect("motd");
         assert_eq!(motd["message"], "hello");
         assert_eq!(ctx.shown_motd.lock().expect("motd").as_str(), "hello");
+    }
+
+    /// What the bus said so far, as (method, params) pairs.
+    fn heard(
+        rx: &mut tokio::sync::broadcast::Receiver<String>,
+    ) -> Vec<(String, serde_json::Value)> {
+        let mut out = Vec::new();
+        while let Ok(line) = rx.try_recv() {
+            let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+            out.push((
+                v["method"].as_str().unwrap().to_owned(),
+                v["params"].clone(),
+            ));
+        }
+        out
+    }
+
+    #[test]
+    fn live_ban_and_operator_changes_send_the_notifications_the_commands_do() {
+        let Some(ctx) = crate::testkit::flat() else {
+            return;
+        };
+        let mut rx = ctx.management_bus.subscribe();
+        let actions = LiveActions::new(ctx.clone());
+        let call = |method: &str, params: serde_json::Value| {
+            actions
+                .call(method, Some(&params))
+                .expect("method")
+                .expect("answer")
+        };
+        let alex = json!({"name": "Alex", "id": "00000000-0000-0000-0000-000000000001"});
+        let sam = json!({"name": "Sam", "id": "00000000-0000-0000-0000-000000000002"});
+
+        // Banning: one notification per entry, with who, why and by whom.
+        call(
+            "minecraft:bans/add",
+            json!({"add": [{"player": alex, "reason": "griefing"}]}),
+        );
+        let got = heard(&mut rx);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "minecraft:notification/bans/added");
+        assert_eq!(got[0].1[0]["player"]["name"], "Alex");
+        assert_eq!(got[0].1[0]["reason"], "griefing");
+
+        // `set` is a difference: Alex goes, Sam comes.
+        call(
+            "minecraft:bans/set",
+            json!({"bans": [{"player": sam, "reason": "x"}]}),
+        );
+        let got = heard(&mut rx);
+        let methods: Vec<&str> = got.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(
+            methods,
+            [
+                "minecraft:notification/bans/removed",
+                "minecraft:notification/bans/added"
+            ]
+        );
+        assert_eq!(got[0].1[0]["name"], "Alex");
+        assert_eq!(got[1].1[0]["player"]["name"], "Sam");
+        // Setting the same list again changes nothing.
+        call(
+            "minecraft:bans/set",
+            json!({"bans": [{"player": sam, "reason": "x"}]}),
+        );
+        assert!(heard(&mut rx).is_empty());
+
+        // Pardoning tells only of entries that were there.
+        call("minecraft:bans/remove", json!({"remove": [alex, sam]}));
+        let got = heard(&mut rx);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "minecraft:notification/bans/removed");
+        assert_eq!(got[0].1[0]["name"], "Sam");
+
+        // Clearing pardons each.
+        call(
+            "minecraft:bans/add",
+            json!({"add": [{"player": alex}, {"player": sam}]}),
+        );
+        heard(&mut rx);
+        call("minecraft:bans/clear", json!({}));
+        assert_eq!(heard(&mut rx).len(), 2);
+
+        // Addresses.
+        call(
+            "minecraft:ip_bans/add",
+            json!({"add": [{"ip": "10.0.0.7", "reason": "bots"}]}),
+        );
+        let got = heard(&mut rx);
+        assert_eq!(got[0].0, "minecraft:notification/ip_bans/added");
+        assert_eq!(got[0].1[0]["ip"], "10.0.0.7");
+        call("minecraft:ip_bans/remove", json!({"ip": ["10.0.0.7"]}));
+        let got = heard(&mut rx);
+        assert_eq!(got[0].0, "minecraft:notification/ip_bans/removed");
+        assert_eq!(got[0].1[0], "10.0.0.7");
+        call("minecraft:ip_bans/remove", json!({"ip": ["10.0.0.7"]}));
+        assert!(heard(&mut rx).is_empty());
+
+        // Operators.
+        call(
+            "minecraft:operators/add",
+            json!({"add": [{"player": alex, "permissionLevel": 3}]}),
+        );
+        let got = heard(&mut rx);
+        assert_eq!(got[0].0, "minecraft:notification/operators/added");
+        assert_eq!(got[0].1[0]["player"]["name"], "Alex");
+        assert_eq!(got[0].1[0]["permissionLevel"], 3);
+        // A changed level is a removal and an addition.
+        call(
+            "minecraft:operators/set",
+            json!({"operators": [{"player": alex, "permissionLevel": 2}]}),
+        );
+        let got = heard(&mut rx);
+        let methods: Vec<&str> = got.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(
+            methods,
+            [
+                "minecraft:notification/operators/removed",
+                "minecraft:notification/operators/added"
+            ]
+        );
+        call("minecraft:operators/remove", json!({"remove": [alex]}));
+        let got = heard(&mut rx);
+        assert_eq!(got[0].0, "minecraft:notification/operators/removed");
+        assert_eq!(got[0].1[0]["permissionLevel"], 2);
+        call("minecraft:operators/clear", json!({}));
+        assert!(heard(&mut rx).is_empty());
     }
 
     #[test]

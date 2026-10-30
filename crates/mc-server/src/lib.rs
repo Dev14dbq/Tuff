@@ -71,7 +71,7 @@ mod maps;
 mod menus;
 mod mob_effects;
 mod mobs;
-mod notify;
+pub mod notify;
 pub mod oldlists;
 mod packs;
 mod persist;
@@ -161,6 +161,9 @@ pub struct Config {
     /// The external moderation service chat, signs and books go through
     /// (`text-filtering-config`); `None` delivers text as written.
     pub text_filter: Option<textfilter::TextFilter>,
+    /// The bus management notifications go out on, when something that runs
+    /// before the server starts (the world upgrade) has already used it.
+    pub management_bus: Option<notify::Bus>,
     /// Base URL of the session server (Mojang's by default).
     pub session_server: String,
     /// A world folder saved by vanilla 26.3; `None` for a superflat test world.
@@ -259,6 +262,7 @@ impl Config {
             status_heartbeat_interval: 0,
             code_of_conduct: None,
             text_filter: None,
+            management_bus: None,
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
             world: None,
             level_dir: None,

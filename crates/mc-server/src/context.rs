@@ -924,6 +924,7 @@ impl ServerContext {
     }
 
     pub fn new(config: Config, data: McData) -> Result<Arc<Self>> {
+        let management_bus = config.management_bus.clone().unwrap_or_default();
         let mut ids = PacketIds::new();
         for packet in &data.packets {
             if let (Some(state), Some(direction)) = (
@@ -1166,7 +1167,7 @@ impl ServerContext {
             shown_motd: Mutex::new(shown_motd),
             player_limit: std::sync::atomic::AtomicUsize::new(player_limit),
             view_distance: std::sync::atomic::AtomicU8::new(view_distance),
-            management_bus: crate::notify::Bus::new(),
+            management_bus,
             pregen: Mutex::new(pregen),
             explosion_particle: data
                 .builtin

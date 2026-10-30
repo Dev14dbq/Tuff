@@ -463,6 +463,23 @@ fn hardcore_spectators(dir: &Path, data: &Compound) -> Result<(), FileError> {
     write_gz(&path, &root).map_err(|e| FileError::at(&path, e))
 }
 
+/// The newest data version a file move or rewrite of `fix_world` belongs to.
+const LAST_FILE_FIX: i32 = 4899;
+
+/// The data version level.dat in `dir` was saved with; `None` when there is
+/// no readable level.dat.
+pub fn level_version(dir: &Path) -> Option<i32> {
+    let root = read_gz(&dir.join("level.dat")).ok()?;
+    data_version(&root, Kind::Level)
+}
+
+/// Whether a world saved at data version `from` goes through the file fixers
+/// when it is opened (vanilla's `requiresFileFixing`), as opposed to only
+/// having its level.dat brought up to date.
+pub fn needs_file_fix(from: i32) -> bool {
+    (OLDEST..LAST_FILE_FIX).contains(&from)
+}
+
 /// Brings `dir`'s level.dat and file layout to `target` (named
 /// `version_name`), as vanilla does at startup. A folder without level.dat
 /// is a new world and is left alone. Nothing is touched before level.dat
