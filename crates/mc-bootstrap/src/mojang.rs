@@ -22,6 +22,8 @@ const MOJANG_HOSTS: [&str; 2] = [
 
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
+        .https_only(true)
+        .max_redirects(3)
         .timeout_connect(Some(Duration::from_secs(20)))
         .timeout_recv_body(Some(Duration::from_secs(600)))
         .build()
@@ -73,13 +75,14 @@ pub fn version_json(version: &str) -> Result<Value> {
         .with_context(|| format!("Mojang's version manifest has no version {version}"))?;
     let url = mojang_url(entry["url"].as_str().context("manifest entry has no url")?)?;
     let bytes = get_bytes(url, 16 << 20)?;
-    if let Some(expected) = entry["sha1"].as_str() {
-        let sha1 = sha1_hex(&bytes);
-        ensure!(
-            sha1 == expected,
-            "{url} has SHA1 {sha1}, the manifest expects {expected}"
-        );
-    }
+    let expected = entry["sha1"]
+        .as_str()
+        .context("manifest entry has no sha1")?;
+    let sha1 = sha1_hex(&bytes);
+    ensure!(
+        sha1 == expected,
+        "{url} has SHA1 {sha1}, the manifest expects {expected}"
+    );
     serde_json::from_slice(&bytes).with_context(|| format!("{url} is not JSON"))
 }
 
@@ -94,7 +97,10 @@ pub fn server_download(meta: &Value) -> Result<(String, String, u64)> {
     let sha1 = server["sha1"]
         .as_str()
         .context("server download has no sha1")?;
-    let size = server["size"].as_u64().unwrap_or(0);
+    let size = server["size"]
+        .as_u64()
+        .filter(|&n| n > 0)
+        .context("server download has no size")?;
     Ok((url.to_owned(), sha1.to_owned(), size))
 }
 
@@ -125,12 +131,16 @@ pub fn download_checked(url: &str, sha1: &str, size: u64, dest: &Path) -> Result
         hasher.update(&buf[..n]);
         file.write_all(&buf[..n])?;
         total += n as u64;
-        if size > 0 && total > size {
+        if total > size {
             bail!("{url} is larger than the {size} bytes Mojang lists");
         }
     }
     file.sync_all()?;
     drop(file);
+    if total != size {
+        let _ = fs::remove_file(&part);
+        bail!("{url} gave {total} bytes, Mojang lists {size}");
+    }
     let got = hasher.digest().to_string();
     if got != sha1 {
         let _ = fs::remove_file(&part);

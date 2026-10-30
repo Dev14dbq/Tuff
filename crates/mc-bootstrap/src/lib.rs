@@ -27,7 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
-use tracing::info;
+use tracing::{info, warn};
 
 pub mod jar;
 pub mod mojang;
@@ -209,7 +209,11 @@ fn tables_zip(p: &Prepare) -> Result<(PathBuf, String)> {
     match &p.tables {
         Tables::File(path) => {
             ensure!(path.is_file(), "no {}", path.display());
-            info!("Using generated tables from {}", path.display());
+            warn!(
+                "Using generated tables from {} without a checksum (SHA-256 {}); it should be the file from a Tuff release archive",
+                path.display(),
+                jar::sha256_of_file(path)?
+            );
             Ok((path.clone(), path.display().to_string()))
         }
         Tables::Release { base } => {
@@ -230,15 +234,16 @@ fn tables_zip(p: &Prepare) -> Result<(PathBuf, String)> {
                 "Downloading generated tables (block, registry, packet and command ids) from {url}"
             );
             let bytes = mojang::get_bytes(&url, 256 << 20)?;
+            let got = jar::sha256_hex(&bytes);
+            if got != expected {
+                bail!("{url} has SHA-256 {got}, the release lists {expected}");
+            }
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::write(&dest, &bytes)?;
-            let got = jar::sha256_of_file(&dest)?;
-            if got != expected {
-                let _ = fs::remove_file(&dest);
-                bail!("{url} has SHA-256 {got}, the release lists {expected}");
-            }
+            let part = dest.with_extension("part");
+            fs::write(&part, &bytes)?;
+            fs::rename(&part, &dest)?;
             Ok((dest, url))
         }
     }
@@ -299,5 +304,9 @@ mod tests {
             "url": "https://piston-data.mojang.com/v1/objects/00/server.jar", "sha1": "00", "size": 1
         }}});
         assert!(mojang::server_download(&meta).is_ok());
+        let meta = json!({"downloads": {"server": {
+            "url": "https://piston-data.mojang.com/v1/objects/00/server.jar", "sha1": "00"
+        }}});
+        assert!(mojang::server_download(&meta).is_err(), "size is required");
     }
 }

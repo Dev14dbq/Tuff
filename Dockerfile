@@ -8,7 +8,8 @@
 # from /data or from the Tuff release. /data is the server folder: world,
 # server.properties, lists, logs. Details: docs/admin/docker.md.
 
-FROM rust:1.96.1-bookworm AS build
+# Pinned by digest; Dependabot (.github/dependabot.yml) proposes updates.
+FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663 AS build
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -18,7 +19,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && mkdir -p /out/data
 
 # glibc, libgcc and CA certificates, no shell; runs as uid 65532.
-FROM gcr.io/distroless/cc-debian12:nonroot
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 COPY --from=build /out/tuff /usr/local/bin/tuff
 COPY --from=build --chown=65532:65532 /out/data /data
 WORKDIR /data
