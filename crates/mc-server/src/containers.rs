@@ -99,8 +99,9 @@ pub struct Open {
 /// The containers decoded in memory, by block (or [`entity_key`]): every
 /// one somebody has open, and while hoppers take their turns also every one
 /// they touched, so a chain of hoppers does not read the same `Items` again
-/// for each item. The stored data is still written on every change, so
-/// whoever reads it sees the same as before.
+/// for each item. During the hopper turns changed `Items` are stored only
+/// at [`release`], so raw-NBT readers (such as the block entity query from
+/// the network thread) may see the data from before the tick until then.
 #[derive(Debug, Default)]
 pub struct Containers {
     open: mc_tick::fast::FastMap<(i32, i32, i32), Open>,
