@@ -631,11 +631,15 @@ heightmap тоже. Генерация в секунду на ядро ≥ ва�
     блока без сущности, имя `@`; ставят только операторы в креативе; команда не уходит в данные
     чанков. Вагонетка с командным блоком: призыв с `Command`, активаторные рельсы раз в 4 тика,
     `set_command_minecart`, метаданные команды и вывода (13, 14), выпадает простая вагонетка;
-  - правила, чьих механик ещё нет: `spawner_blocks_work`, `spread_vines`, `max_entity_cramming`, `universal_anger`,
-    `forgive_dead_players`, `raids`, `spawn_patrols`, `spawn_phantoms`, `spawn_wardens`,
-    `projectiles_can_break_blocks`, `global_sound_events`, `locator_bar`,
+  - ✅ правила с механиками по ванили: `spawner_blocks_work`, `spread_vines`, `raids`,
+    `spawn_patrols`, `spawn_wardens`, `global_sound_events`, `locator_bar`,
     `player_movement_check`, `elytra_movement_check`, `spectators_generate_chunks`,
-    `block_explosion_drop_decay` (взрывы кровати и якоря);
+    `block_explosion_drop_decay` (кровать, якорь, кристалл Края); список правил, типы, значения
+    по умолчанию и дерево `/gamerule` совпадают с 26.3;
+  - правила, где механика частичная: `max_entity_cramming` (нет урона игроку от толпы и
+    эффекта «слизистость»), `universal_anger` и `forgive_dead_players` (нет гнева пиглинов через
+    мозг, поиск цели без прямой видимости), `spawn_phantoms` (часы идут и без игроков рядом),
+    `projectiles_can_break_blocks` (нет `can_break` в приключении и защиты спавна);
   - решить владельцу: демо-режим, окно GUI сервера, `gametest`, отладочные пакеты (`/debug`), старый ping списка серверов.
 
 **Готово, когда:** популярные датапаки работают, набор тестов на ванильные команды зелёный,

@@ -36,6 +36,56 @@ pub fn split_frame(buf: &[u8]) -> Result<Option<(usize, usize)>> {
     Err(DecodeError::Invalid("frame length longer than 3 bytes"))
 }
 
+/// Bytes read from a connection, cut into frames. Taking a frame only moves
+/// a cursor; the unread rest is moved to the front when more is read, which
+/// happens only once no whole frame is left. Dropping each frame from the
+/// front of a `Vec` instead costs a copy of everything behind it, and a
+/// buffer full of tiny frames makes that quadratic.
+#[derive(Debug, Default)]
+pub struct FrameBuffer {
+    buf: Vec<u8>,
+    start: usize,
+}
+
+impl FrameBuffer {
+    pub fn new() -> Self {
+        Self {
+            buf: Vec::with_capacity(4096),
+            start: 0,
+        }
+    }
+
+    /// The bytes not yet taken as frames.
+    pub fn unread(&self) -> &[u8] {
+        &self.buf[self.start..]
+    }
+
+    /// [`FrameBuffer::unread`], to decrypt in place.
+    pub fn unread_mut(&mut self) -> &mut [u8] {
+        &mut self.buf[self.start..]
+    }
+
+    /// The buffer to append newly read bytes to, with the taken frames
+    /// dropped from its front.
+    pub fn tail(&mut self) -> &mut Vec<u8> {
+        if self.start > 0 {
+            self.buf.drain(..self.start);
+            self.start = 0;
+        }
+        &mut self.buf
+    }
+
+    /// The next whole frame's body (after its length), if one is buffered.
+    pub fn next_frame(&mut self) -> Result<Option<&[u8]>> {
+        let Some((header, len)) = split_frame(self.unread())? else {
+            return Ok(None);
+        };
+        let body = self.start + header;
+        self.start = body + len;
+        Ok(Some(&self.buf[body..body + len]))
+    }
+}
+
 /// Appends one frame with `id` and `body`. With `compression = Some(threshold)`
 /// the compressed format is used, and bodies of at least `threshold` bytes are
 /// zlib-compressed.
@@ -99,7 +149,8 @@ pub fn decode_frame_body(frame: &[u8], compression: Option<usize>) -> Result<Vec
     if data_len > MAX_UNCOMPRESSED_LEN {
         return Err(DecodeError::Invalid("uncompressed packet too large"));
     }
-    let mut out = Vec::with_capacity(data_len);
+    // The claimed length is only a promise; grow towards it as data comes.
+    let mut out = Vec::with_capacity(data_len.min(64 * 1024));
     ZlibDecoder::new(rest)
         .take(data_len as u64 + 1)
         .read_to_end(&mut out)
@@ -147,6 +198,65 @@ mod tests {
         claimed.put_len(MAX_UNCOMPRESSED_LEN.saturating_add(1));
         claimed.extend_from_slice(&[0x78, 0x9c, 0x01, 0x00, 0x00]);
         assert!(decode_frame_body(&claimed, Some(1)).is_err());
+    }
+
+    #[test]
+    fn frame_buffer_takes_frames_in_order() {
+        let mut stream = Vec::new();
+        write_frame(&mut stream, 1, &[1], None);
+        write_frame(&mut stream, 2, &[2; 200], None);
+        let mut frames = FrameBuffer::new();
+        // Fed one byte at a time, as a slow client would.
+        let mut seen = Vec::new();
+        for &b in &stream {
+            frames.tail().push(b);
+            while let Some(frame) = frames.next_frame().unwrap() {
+                seen.push(frame.to_vec());
+            }
+        }
+        assert_eq!(seen, [vec![1, 1], [&[2u8][..], &[2; 200]].concat()]);
+        assert!(frames.unread().is_empty());
+    }
+
+    #[test]
+    fn many_tiny_frames_take_linear_time() {
+        // A full 2 MiB read of one-byte frames.
+        let mut frames = FrameBuffer::new();
+        for _ in 0..MAX_FRAME_LEN / 2 {
+            frames.tail().extend_from_slice(&[1, 0]);
+        }
+        let started = std::time::Instant::now();
+        let mut n = 0;
+        while frames.next_frame().unwrap().is_some() {
+            n += 1;
+        }
+        assert_eq!(n, MAX_FRAME_LEN / 2);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn zlib_bomb_is_cut_off() {
+        // 8 MiB of zeros claimed as 1000 bytes: inflating stops right after
+        // the claimed length and the packet is refused.
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
+        encoder.write_all(&vec![0; MAX_UNCOMPRESSED_LEN]).unwrap();
+        let bomb = encoder.finish().unwrap();
+        assert!(bomb.len() < 64 * 1024);
+        let mut frame = Vec::new();
+        frame.put_len(1000);
+        frame.extend_from_slice(&bomb);
+        assert_eq!(
+            decode_frame_body(&frame, Some(256)),
+            Err(DecodeError::Invalid("decompressed length mismatch"))
+        );
+        // Claiming more than vanilla's 8 MiB is refused before inflating.
+        let mut frame = Vec::new();
+        frame.put_len(MAX_UNCOMPRESSED_LEN + 1);
+        frame.extend_from_slice(&bomb);
+        assert_eq!(
+            decode_frame_body(&frame, Some(256)),
+            Err(DecodeError::Invalid("uncompressed packet too large"))
+        );
     }
 
     #[test]

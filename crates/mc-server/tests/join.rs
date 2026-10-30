@@ -2874,6 +2874,9 @@ async fn locate_finds_what_vanilla_finds() {
     config.world = Some(dir.clone());
     config.seed = Some(12345);
     config.ops = vec!["Seeker".into()];
+    // The bot sits quiet while a slow /locate runs; a real client never
+    // goes 30 seconds without sending.
+    config.read_timeout = Duration::from_secs(120);
     let (addr, ctx, stop) = running(config).await;
     let (mut seeker, _) = join_offline(addr, ctx.ids.clone(), "Seeker").await;
     // What a vanilla 26.3 server says for this seed (`cargo xtask
@@ -4128,8 +4131,9 @@ async fn too_quick_moves_are_sent_back_and_chat_spam_is_kicked() {
     let mut r = Reader::new(&back);
     r.varint().unwrap();
     assert_eq!(r.f64().unwrap(), spawn.0);
-    // Eleven chat lines at once from someone who is no operator.
-    for i in 0..11 {
+    // Ten chat lines at once from someone who is no operator: vanilla
+    // kicks once its counter reaches 200, 20 a line.
+    for i in 0..10 {
         let mut chat = Vec::new();
         chat.put_string(&format!("spam {i}"));
         chat.put_i64(0);

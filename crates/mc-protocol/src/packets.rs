@@ -72,9 +72,27 @@ fn put_known_packs(out: &mut Vec<u8>, packs: &[KnownPack]) {
     }
 }
 
+/// Most packs a client may list in `select_known_packs`, as vanilla.
+pub const MAX_KNOWN_PACKS: usize = 64;
+/// Largest serverbound `custom_payload` body, as vanilla.
+pub const MAX_PAYLOAD_LEN: usize = 32767;
+/// Largest login `custom_query_answer` body, as vanilla.
+pub const MAX_QUERY_ANSWER_LEN: usize = 1_048_576;
+
+/// The rest of a payload packet, refused when longer than `max` bytes.
+fn read_payload<'a>(r: &mut Reader<'a>, max: usize) -> Result<&'a [u8]> {
+    if r.remaining() > max {
+        return Err(crate::codec::DecodeError::Invalid("payload too large"));
+    }
+    Ok(r.rest())
+}
+
 fn read_known_packs(r: &mut Reader) -> Result<Vec<KnownPack>> {
     let count = r.length_prefix()?;
-    let mut packs = Vec::with_capacity(count.min(64));
+    if count > MAX_KNOWN_PACKS {
+        return Err(crate::codec::DecodeError::Invalid("too many known packs"));
+    }
+    let mut packs = Vec::with_capacity(count);
     for _ in 0..count {
         packs.push(KnownPack {
             namespace: r.string(32767)?,
@@ -250,7 +268,7 @@ pub mod login {
                 "minecraft:custom_query_answer" => {
                     let id = r.varint()?;
                     let data = if r.bool()? {
-                        Some(r.rest().to_vec())
+                        Some(super::read_payload(r, super::MAX_QUERY_ANSWER_LEN)?.to_vec())
                     } else {
                         None
                     };
@@ -434,7 +452,7 @@ pub mod configuration {
                 }
                 "minecraft:custom_payload" => Serverbound::CustomPayload {
                     channel: r.identifier()?,
-                    data: r.rest().to_vec(),
+                    data: super::read_payload(r, super::MAX_PAYLOAD_LEN)?.to_vec(),
                 },
                 "minecraft:finish_configuration" => Serverbound::FinishConfiguration,
                 "minecraft:keep_alive" => Serverbound::KeepAlive(r.i64()?),
@@ -1350,7 +1368,13 @@ pub mod play {
                     id: r.identifier()?,
                     payload: r.rest().to_vec(),
                 },
-                other =>Serverbound::Other(other.to_owned()),
+                // Read only to hold it to vanilla's size limit.
+                "minecraft:custom_payload" => {
+                    r.identifier()?;
+                    super::read_payload(r, super::MAX_PAYLOAD_LEN)?;
+                    Serverbound::Other(name.to_owned())
+                }
+                other => Serverbound::Other(other.to_owned()),
             })
         }
     }
