@@ -178,12 +178,15 @@ impl Launcher {
 }
 
 /// What a projectile that struck a block was.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Impact {
     pub by: Launcher,
     /// A thrown trident going faster than 0.6 a tick: the only thing that
     /// snaps pointed dripstone and sulfur spikes.
     pub fast_trident: bool,
+    /// The `can_break` component of the item it was made from, if any
+    /// (arrows and tridents carry their stack).
+    pub can_break: Option<serde_json::Value>,
 }
 
 impl Impact {
@@ -191,30 +194,45 @@ impl Impact {
         Impact {
             by,
             fast_trident: false,
+            can_break: None,
         }
     }
 }
 
-/// Vanilla lets an impact projectile break a block when the game rule
-/// `projectiles_can_break_blocks` is on and its adventure-mode check passes:
-/// a player's only outside adventure mode, a mob's only with a `can_break`
-/// list (mob-shot ones never carry one), an ownerless one unless the world's
-/// default game mode is adventure.
-fn may_break(ctx: &ServerContext, by: Launcher) -> bool {
+/// Vanilla lets an impact projectile break the block at `at` when the game
+/// rule `projectiles_can_break_blocks` is on, whoever sent it may touch the
+/// block (a player not under spawn protection or past the border, a mob
+/// only with `mob_griefing`) and its adventure-mode check passes: one sent
+/// by a player in adventure mode or a mob, or ownerless in a world whose
+/// default game mode is adventure, breaks only blocks its own `can_break`
+/// lists; any other breaks them all.
+fn may_break(ctx: &ServerContext, hit: &Impact, at: Position) -> bool {
     if !ctx.game_rule_bool("projectiles_can_break_blocks") {
         return false;
     }
-    match by {
-        Launcher::Player(uuid) => lock(&ctx.players)
-            .get(&uuid)
-            .is_none_or(|p| p.game_mode != ADVENTURE),
-        Launcher::Mob => false,
-        Launcher::Nobody => {
-            ctx.default_game_mode
-                .load(std::sync::atomic::Ordering::Relaxed)
-                != ADVENTURE
-        }
-    }
+    let owner_mode = match hit.by {
+        Launcher::Player(uuid) => lock(&ctx.players).get(&uuid).map(|p| (uuid, p.game_mode)),
+        _ => None,
+    };
+    let default_adventure = ctx
+        .default_game_mode
+        .load(std::sync::atomic::Ordering::Relaxed)
+        == ADVENTURE;
+    let (allowed, checked) = match (hit.by, owner_mode) {
+        (Launcher::Player(_), Some((uuid, mode))) => (
+            crate::adventure::may_interact(ctx, uuid, at),
+            mode == ADVENTURE,
+        ),
+        (Launcher::Mob, _) => (ctx.game_rule_bool("mob_griefing"), true),
+        // Nobody, or an owner who has since left.
+        _ => (true, default_adventure),
+    };
+    allowed
+        && (!checked
+            || hit
+                .can_break
+                .as_ref()
+                .is_some_and(|p| crate::adventure::lists_block(ctx, p, at)))
 }
 
 const ADVENTURE: i32 = 2;
@@ -227,13 +245,13 @@ fn speleothem(name: &str) -> bool {
 /// flower breaks, and pointed dripstone or a sulfur spike snaps under a
 /// fast trident, when [`may_break`] allows.
 pub fn projectile(ctx: &ServerContext, from: [f64; 3], to: [f64; 3], hit: Impact) {
-    if !may_break(ctx, hit.by) {
-        return;
-    }
     let Some((_, cell, _)) = crate::hits::first_solid(ctx, from, to) else {
         return;
     };
     let at = Position::new(cell[0], cell[1], cell[2]);
+    if !may_break(ctx, &hit, at) {
+        return;
+    }
     let blocks = &ctx.data.blocks;
     let Some(state) = ctx.world.block(at, blocks) else {
         return;
@@ -768,27 +786,51 @@ mod tests {
         };
         crate::testkit::join(&ctx, 1, 70, [0.5, -60.0, 0.5], 0);
         crate::testkit::join(&ctx, 2, 71, [0.5, -60.0, 0.5], ADVENTURE);
-        let player = Impact::by(Launcher::Player(1));
+        let player = || Impact::by(Launcher::Player(1));
 
         // A mob's shot carries no `can_break`, so it breaks nothing.
         place(&ctx, "minecraft:chorus_flower");
         shoot(&ctx, Impact::by(Launcher::Mob));
         assert_eq!(name(&ctx), "minecraft:chorus_flower");
-        // Nor does a player's in adventure mode.
+        // Nor does a player's in adventure mode, unless its own list has
+        // the block.
         shoot(&ctx, Impact::by(Launcher::Player(2)));
         assert_eq!(name(&ctx), "minecraft:chorus_flower");
-        shoot(&ctx, player);
+        let listing = |blocks: serde_json::Value| Impact {
+            can_break: Some(blocks),
+            ..Impact::by(Launcher::Player(2))
+        };
+        shoot(
+            &ctx,
+            listing(serde_json::json!({"blocks": "minecraft:stone"})),
+        );
+        assert_eq!(name(&ctx), "minecraft:chorus_flower");
+        shoot(
+            &ctx,
+            listing(serde_json::json!([
+                {"blocks": "minecraft:stone"},
+                {"blocks": ["minecraft:chorus_flower"]}
+            ])),
+        );
+        assert_eq!(name(&ctx), "minecraft:air");
+        place(&ctx, "minecraft:chorus_flower");
+        shoot(
+            &ctx,
+            listing(serde_json::json!({"blocks": "#minecraft:logs"})),
+        );
+        assert_eq!(name(&ctx), "minecraft:chorus_flower");
+        shoot(&ctx, player());
         assert_eq!(name(&ctx), "minecraft:air");
 
         // Pointed dripstone snaps only under a fast trident.
         place(&ctx, "minecraft:pointed_dripstone");
-        shoot(&ctx, player);
+        shoot(&ctx, player());
         assert_eq!(name(&ctx), "minecraft:pointed_dripstone");
         shoot(
             &ctx,
             Impact {
                 fast_trident: true,
-                ..player
+                ..player()
             },
         );
         assert_ne!(name(&ctx), "minecraft:pointed_dripstone");

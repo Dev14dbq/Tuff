@@ -102,7 +102,7 @@ fn forgive(entities: &mut [Entity], dead: i32, at: [f64; 3]) {
             continue;
         };
         let piglin = is_piglin(m.species);
-        if !(neutral(m.species) || piglin) || !(piglin || within(pos)) {
+        if !(piglin || neutral(m.species) && within(pos)) {
             continue;
         }
         let aimed = m.target == Some(dead) || m.revenge.is_some_and(|(id, _)| id == dead);

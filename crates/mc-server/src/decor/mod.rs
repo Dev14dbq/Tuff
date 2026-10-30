@@ -491,6 +491,13 @@ pub fn interact(
         return;
     };
     let creative = actor.game_mode == 1;
+    // What hangs on a protected block, or past the border, is left be.
+    if attack {
+        let [x, y, z] = h.anchor;
+        if !crate::adventure::may_interact(ctx, actor.uuid, mc_protocol::Position::new(x, y, z)) {
+            return;
+        }
+    }
     let held = held::held(ctx, actor.uuid, hand);
     let now = lock(&ctx.time).age;
     match &mut h.decor {

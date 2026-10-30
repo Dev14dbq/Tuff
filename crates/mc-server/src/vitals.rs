@@ -750,7 +750,7 @@ pub fn moved(ctx: &ServerContext, uuid: u128, before: Pose, after: Pose, in_wate
             after.z.floor() as i32,
         );
         let roll = (crate::util::random_u64() >> 40) as f64 / (1u64 << 24) as f64;
-        if roll < fell - 0.5 {
+        if roll < fell - 0.5 && !crate::adventure::under_spawn_protection(ctx, uuid, below) {
             let mut level = crate::level::WorldLevel::new(ctx);
             let logic = level.logic();
             if mc_tick::random::trample(&mut level, logic, crate::level::to_pos(below)) {

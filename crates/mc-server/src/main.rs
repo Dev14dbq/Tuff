@@ -249,6 +249,7 @@ async fn run() -> Result<()> {
     }
     config.white_list = props.bool("white-list");
     config.op_permission_level = props.int("op-permission-level").unwrap_or(4).clamp(0, 4) as i32;
+    config.spawn_protection = props.int("spawn-protection").unwrap_or(16).max(0) as i32;
     {
         use mc_server::oldlists::{
             MojangResolver, OfflineResolver, RETRY_DELAY, Resolver, convert,

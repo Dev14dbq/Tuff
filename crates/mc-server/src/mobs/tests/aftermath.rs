@@ -21,6 +21,7 @@ fn kill_with(ctx: &ServerContext, id: i32, effect: &'static str) {
     });
 }
 
+#[allow(clippy::let_and_return)] // the guard must go before the world does
 fn crushed_player_health(limit: i32) -> f32 {
     let ctx = flat().expect("game data");
     rule(&ctx, "max_entity_cramming", Value::Int(limit));

@@ -272,7 +272,7 @@ fn state_is(ctx: &ServerContext, state: u32, want: &Value) -> bool {
     })
 }
 
-fn block_is(ctx: &ServerContext, p: &Value, at: Position) -> bool {
+pub(crate) fn block_is(ctx: &ServerContext, p: &Value, at: Position) -> bool {
     if p.is_null() {
         return true;
     }
