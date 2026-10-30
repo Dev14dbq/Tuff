@@ -12,6 +12,8 @@ mc-data.workspace = true
 flate2 = "1.1.10"
 mc-nbt.workspace = true
 mc-world.workspace = true
+# Text components were JSON strings before 25w02a; upgrading turns them into NBT.
+serde_json = "1.0.154"
 lz4_flex = { version = "0.11", default-features = false, features = ["safe-decode"] }
 
 [lints]

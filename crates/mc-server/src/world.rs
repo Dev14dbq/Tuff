@@ -17,10 +17,13 @@ use mc_data::{Blocks, McData};
 use mc_nbt::Tag;
 use mc_protocol::Position;
 use mc_protocol::packets::play::{ChunkBlockEntity, LevelChunkWithLight, LightData, heightmap};
+use mc_storage::upgrade::Kind;
 use mc_storage::{Decoded, Names, Palettes, RegionStorage, decode_chunk, encode_chunk};
 use mc_world::{Chunk, Section};
 use mc_worldgen::{FlatGenerator, FlatLayer};
 use tracing::warn;
+
+mod stored;
 
 use crate::blocks::BlockRules;
 use crate::tick::{Clock, WorldTime};
@@ -170,6 +173,7 @@ struct Anvil {
     fallback_biome: u32,
     air: u32,
     unresolved_reported: AtomicU32,
+    stored: stored::Stored,
 }
 
 /// A superflat world's generator, with the heightmap table.
@@ -617,6 +621,7 @@ impl World {
                 fallback_biome,
                 air,
                 unresolved_reported: AtomicU32::new(0),
+                stored: stored::Stored::new(dim.name.clone(), data.version.world_version),
             })),
             chunks: Mutex::new(HashMap::default()),
             pinned: Mutex::new(HashSet::new()),
@@ -796,11 +801,12 @@ impl World {
         if chunks.contains_key(&(x, z)) {
             return;
         }
-        let read = anvil
-            .entities
-            .lock()
-            .expect("entity storage")
-            .read_chunk(x, z);
+        let mut storage = anvil.entities.lock().expect("entity storage");
+        let read = anvil.stored.read(&mut storage, Kind::EntityChunk, x, z);
+        drop(storage);
+        if stored::refused(&read) {
+            return; // not kept as read, so no save writes its file
+        }
         let list = match read {
             Ok(Some(Tag::Compound(root))) => match root.get("Entities") {
                 Some(Tag::List(list)) => list.clone(),
@@ -876,7 +882,11 @@ impl World {
                 _ => None,
             };
             let mine: Vec<Option<Tag>> = ours.iter().map(uuid).collect();
-            let mut list = match storage.read_chunk(x, z) {
+            let stored = anvil.stored.read(&mut storage, Kind::EntityChunk, x, z);
+            if stored::refused(&stored) {
+                continue;
+            }
+            let mut list = match stored {
                 Ok(Some(Tag::Compound(root))) => match root.get("Entities") {
                     Some(Tag::List(l)) => l.clone(),
                     _ => Vec::new(),
@@ -1765,6 +1775,9 @@ impl World {
             .unwrap_or_default();
         let mut storage = anvil.storage.lock().expect("region storage");
         for chunk in protos {
+            if anvil.stored.is_refused(chunk.x, chunk.z) {
+                continue;
+            }
             let result = (|| -> Result<()> {
                 let Tag::Compound(mut root) = encode_chunk(&chunk, None, &names, true)? else {
                     bail!("encoded chunk is not a compound");
@@ -1787,7 +1800,9 @@ impl World {
         for chunk in dirty {
             let pending = ticks.remove(&(chunk.x, chunk.z)).unwrap_or_default();
             let result = (|| -> Result<()> {
-                let stored = storage.read_chunk(chunk.x, chunk.z)?;
+                let stored = anvil
+                    .stored
+                    .read(&mut storage, Kind::Chunk, chunk.x, chunk.z)?;
                 let mut tag = encode_chunk(&chunk, stored.as_ref(), &names, true)?;
                 if let Tag::Compound(root) = &mut tag {
                     root.insert("block_ticks", Tag::List(pending.0));
@@ -1800,6 +1815,7 @@ impl World {
             })();
             match result {
                 Ok(()) => saved.chunks += 1,
+                Err(err) if err.is::<stored::TooNew>() => {}
                 Err(err) => {
                     warn!("saving chunk {},{}: {err:#}", chunk.x, chunk.z);
                     saved.failed += 1;
@@ -2047,26 +2063,8 @@ impl crate::pipeline::Finished for Generated<'_> {
     }
 
     fn stored_proto(&self, x: i32, z: i32) -> Option<Chunk> {
-        let raw = self
-            .anvil
-            .storage
-            .lock()
-            .expect("region storage")
-            .read_raw(x, z)
-            .ok()??;
-        let tag = raw.parse().ok()?;
-        let biome = |name: &str| self.anvil.biome_ids.get(name).copied();
-        let palettes = Palettes {
-            blocks: self.blocks,
-            biome: &biome,
-            air: self.anvil.air,
-            fallback_biome: self.anvil.fallback_biome,
-            unresolved: Default::default(),
-        };
-        let (status, chunk) =
-            mc_storage::decode_with_status(&tag, self.world.min_y, self.world.height, &palettes)
-                .ok()?;
-        (status == "minecraft:features").then_some(*chunk)
+        let (min_y, height) = (self.world.min_y, self.world.height);
+        self.anvil.stored_proto(x, z, self.blocks, min_y, height)
     }
 
     fn block(&self, p: mc_tick::BlockPos) -> Option<u32> {
@@ -2079,21 +2077,6 @@ impl crate::pipeline::Finished for Generated<'_> {
 }
 
 impl Anvil {
-    /// Whether the folder has a finished chunk here (without decoding it).
-    fn has_full(&self, x: i32, z: i32) -> bool {
-        let raw = self.storage.lock().expect("region storage").read_raw(x, z);
-        let Ok(Some(raw)) = raw else {
-            return false;
-        };
-        match raw.parse() {
-            Ok(Tag::Compound(root)) => match root.get("Status") {
-                Some(Tag::String(s)) => s == "minecraft:full" || s == "full",
-                _ => false,
-            },
-            _ => false,
-        }
-    }
-
     /// `None` if the world has no finished chunk here.
     fn load(
         &self,
@@ -2112,7 +2095,8 @@ impl Anvil {
         let Some(raw) = raw else {
             return Ok(None);
         };
-        let tag = raw.parse()?;
+        let mut tag = raw.parse()?;
+        self.stored.upgrade(&mut tag, Kind::Chunk, x, z)?;
         let biome = |name: &str| self.biome_ids.get(name).copied();
         let palettes = Palettes {
             blocks,
@@ -2121,10 +2105,11 @@ impl Anvil {
             fallback_biome: self.fallback_biome,
             unresolved: Default::default(),
         };
-        let chunk = match decode_chunk(&tag, min_y, height, &palettes)? {
+        let mut chunk = match decode_chunk(&tag, min_y, height, &palettes)? {
             Decoded::Chunk(chunk) => chunk,
             Decoded::NotFull(_) => return Ok(None),
         };
+        self.fill_heightmaps(&mut chunk);
         let unresolved = palettes.unresolved.get();
         if unresolved > 0 && self.unresolved_reported.fetch_add(1, Ordering::Relaxed) < 5 {
             warn!("chunk {x},{z}: {unresolved} unknown blocks or biomes replaced");

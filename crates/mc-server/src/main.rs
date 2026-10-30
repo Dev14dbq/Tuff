@@ -27,7 +27,9 @@ Vanilla options:
   --bind <address>       overrides server-ip for this run
   --initSettings         write server.properties and stop
   --nogui                accepted (there is no window)
-  --forceUpgrade         rewrite stored chunks before the server starts
+  --forceUpgrade         upgrade and rewrite every stored chunk and player
+                         before the server starts
+  --eraseCache           with --forceUpgrade, drop stored light and heightmaps
 
 Other options:
   --data <dir>           extracted game data (default: cache/mcdata/<version> found
@@ -149,6 +151,7 @@ async fn run() -> Result<()> {
     let mut seed_arg: Option<String> = None;
     let mut init_only = false;
     let mut force_upgrade = false;
+    let mut erase_cache = false;
     let mut offline = false;
     let mut console = true;
     let mut ops = Vec::new();
@@ -169,7 +172,8 @@ async fn run() -> Result<()> {
                 );
                 return Ok(());
             }
-            "--nogui" | "nogui" | "--bonusChest" | "--eraseCache" | "--safeMode" => {}
+            "--nogui" | "nogui" | "--bonusChest" | "--safeMode" => {}
+            "--eraseCache" => erase_cache = true,
             "--forceUpgrade" => force_upgrade = true,
             "--initSettings" => init_only = true,
             "--universe" => universe = Some(value()?.into()),
@@ -312,14 +316,20 @@ async fn run() -> Result<()> {
         ["SURVIVAL", "CREATIVE", "ADVENTURE", "SPECTATOR"][config.new_world_game_mode as usize]
     );
     info!("Preparing level \"{level_name}\"");
-    if force_upgrade {
-        let world = server_dir.join(&level_name);
-        if world.is_dir() {
+    let world = server_dir.join(&level_name);
+    if world.is_dir() {
+        let version = mc_data::McData::read_version(&config.data_dir)?;
+        mc_server::prepare_world(&world, version.world_version, &version.name)?;
+        if force_upgrade {
             info!("Forcing world upgrade");
-            let report = mc_server::upgrade_world(&world)?;
+            let report = mc_server::upgrade_world(&world, version.world_version, erase_cache)?;
             info!(
-                "Upgraded {} chunks in {} region files, {} left as stored",
-                report.chunks_rewritten, report.regions, report.chunks_left
+                "Upgraded {} chunks in {} region files and {} players; {} current, {} left as stored",
+                report.chunks_rewritten,
+                report.regions,
+                report.players,
+                report.chunks_current,
+                report.chunks_left
             );
         }
     }

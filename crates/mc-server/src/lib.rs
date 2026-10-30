@@ -116,7 +116,7 @@ mod world;
 mod worn;
 mod xp;
 
-pub use upgrade::{Report, upgrade_world};
+pub use upgrade::{Report, prepare_world, upgrade_world};
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
