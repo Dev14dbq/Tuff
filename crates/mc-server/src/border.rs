@@ -102,6 +102,18 @@ impl Border {
         }
     }
 
+    /// Whether the block column at `x`, `z` is inside the border (its west
+    /// and north edges count, the east and south ones do not).
+    pub fn contains_block(&self, x: i32, z: i32) -> bool {
+        const LIMIT: f64 = 29_999_984.0;
+        let half = self.size / 2.0;
+        let range = |c: f64| ((c - half).max(-LIMIT), (c + half).min(LIMIT));
+        let (min_x, max_x) = range(self.center_x);
+        let (min_z, max_z) = range(self.center_z);
+        let (x, z) = (f64::from(x), f64::from(z));
+        x >= min_x && x < max_x && z >= min_z && z < max_z
+    }
+
     /// One tick (50 ms) of a moving border.
     pub fn tick(&mut self) {
         if self.lerp_time <= 0 {

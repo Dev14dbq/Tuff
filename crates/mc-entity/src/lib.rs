@@ -7,12 +7,14 @@
 //! first, then the larger horizontal one — and its velocity is damped.
 //! Blocks collide as full cubes for now; shapes come later.
 
+pub mod aftermath;
 pub mod boss;
 pub mod effect;
 pub mod extra;
 pub mod gossip;
 pub mod mob;
 pub mod nav;
+pub mod phantom;
 pub mod physics;
 pub mod trade;
 pub mod villager;

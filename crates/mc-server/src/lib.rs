@@ -5,6 +5,7 @@
 /// Name the client sees, new worlds record, and crash reports print.
 pub const BRAND: &str = "tuff";
 
+mod adventure;
 mod archaeology;
 mod auth;
 mod backup;
@@ -184,6 +185,9 @@ pub struct Config {
     pub new_world_flat: bool,
     /// The level `/op` gives (`op-permission-level`).
     pub op_permission_level: i32,
+    /// Blocks around the world spawn that only operators may change
+    /// (`spawn-protection`, 0 for none).
+    pub spawn_protection: i32,
     /// Answer server list pings (`enable-status`).
     pub enable_status: bool,
     /// Leave who is online out of server list pings (`hide-online-players`).
@@ -263,6 +267,7 @@ impl Config {
             new_world_difficulty: 2,
             new_world_flat: false,
             op_permission_level: 4,
+            spawn_protection: 16,
             enable_status: true,
             hide_online_players: false,
             icon: None,

@@ -71,7 +71,7 @@ pub struct Spawner {
     /// The world seed (slime chunks), once read.
     seed: Option<Option<i64>>,
     /// When phantoms next look.
-    phantoms_at: i64,
+    phantoms: mc_entity::phantom::Clock,
     siege: Siege,
     /// The dimension's monster light rule, read once.
     monster_light: Option<MonsterLight>,
@@ -188,6 +188,8 @@ struct Spots<'a> {
     raining: bool,
     thundering: bool,
     nether: bool,
+    /// The dimension has a sky (phantoms look for the open air in it).
+    sky: bool,
     seed: Option<i64>,
     /// Moon brightness tonight (1 full .. 0 new).
     moon: f64,
@@ -658,11 +660,6 @@ fn spawn_round(
     day_time: i64,
     difficulty: i32,
 ) -> Vec<Entity> {
-    // Vanilla's phantom clock only runs while `spawn_mobs`, `spawn_monsters`
-    // and `spawn_phantoms` are all on; held still, it moves along with time.
-    if !phantoms_on(ctx) && spawner.phantoms_at > now {
-        spawner.phantoms_at += 1;
-    }
     // Chunks within range of a player that are loaded.
     if now - spawner.ranged_at >= RANGE_PERIOD || spawner.eligible.is_empty() {
         let mut chunks: HashSet<(i32, i32)> = HashSet::new();
@@ -730,6 +727,7 @@ fn spawn_round(
         raining: weather.raining && ctx.world.dimension == "minecraft:overworld",
         thundering: weather.thundering,
         nether: ctx.world.dimension == "minecraft:the_nether",
+        sky: has_skylight(ctx),
         seed,
         moon: [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75][phase as usize],
         monster_light: *spawner
@@ -778,7 +776,7 @@ fn spawn_round(
     // Phantoms come for players who have not slept for three days.
     phantoms(
         ctx,
-        &mut spawner.phantoms_at,
+        &mut spawner.phantoms,
         &spots,
         now,
         difficulty,
@@ -1206,6 +1204,16 @@ pub fn dress(ctx: &ServerContext, e: &mut Entity, biome: Option<&str>) {
     }
 }
 
+/// Whether the dimension type has a sky (`has_skylight`).
+fn has_skylight(ctx: &ServerContext) -> bool {
+    ctx.data
+        .data_pack()
+        .read_entry("minecraft:dimension_type", &ctx.world.dimension)
+        .ok()
+        .and_then(|json| json["has_skylight"].as_bool())
+        .unwrap_or(ctx.world.dimension == "minecraft:overworld")
+}
+
 /// Whether the phantom spawner runs at all.
 fn phantoms_on(ctx: &ServerContext) -> bool {
     ctx.game_rule_bool("minecraft:spawn_mobs")
@@ -1219,18 +1227,23 @@ fn phantoms_on(ctx: &ServerContext) -> bool {
 /// spectators are passed over.
 fn phantoms(
     ctx: &ServerContext,
-    next_at: &mut i64,
+    clock: &mut mc_entity::phantom::Clock,
     spots: &Spots,
     now: i64,
     difficulty: i32,
     out: &mut Vec<Entity>,
 ) {
-    if ctx.world.dimension != "minecraft:overworld" || !phantoms_on(ctx) || now < *next_at {
+    // Only the overworld has the spawner. Its clock counts every tick the
+    // rules allow, with or without players to visit, one to two minutes
+    // apart.
+    if ctx.world.dimension != "minecraft:overworld" {
         return;
     }
-    *next_at = now + 1200 + i64::from(below(1200));
-    // Only under a sky that turns night.
-    if difficulty == 0 || spots.darken < 5 {
+    if !clock.advance(now, phantoms_on(ctx), || (60 + i64::from(below(60))) * 20) {
+        return;
+    }
+    // Only under a sky that turns night (or an overworld without a sky).
+    if difficulty == 0 || spots.sky && spots.darken < 5 {
         return;
     }
     let day_time = super::day_time(ctx);
@@ -1248,8 +1261,7 @@ fn phantoms(
             t.pos[1].floor() as i32,
             t.pos[2].floor() as i32,
         );
-        if p.y < ctx.world.sea_level
-            || ctx.world.sky_light(p) < 15
+        if spots.sky && (p.y < ctx.world.sea_level || ctx.world.sky_light(p) < 15)
             || regional <= rand() * 3.0
             || unrest < 72_000
             || i64::from(below(unrest.min(u32::MAX as i64) as u32)) < 72_000
@@ -1709,6 +1721,7 @@ mod tests {
             raining: false,
             thundering: false,
             nether: false,
+            sky: true,
             seed: None,
             moon: 1.0,
             monster_light: MonsterLight::overworld(),

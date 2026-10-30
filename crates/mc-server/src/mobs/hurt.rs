@@ -216,6 +216,9 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     let Kind::Mob(m) = &mut e.kind else {
         return false;
     };
+    if m.effects.active.contains_key("infested") {
+        super::aftermath::infested(ctx, e.pos, m.size().1, m.yaw, m.pitch);
+    }
     fx::emit(
         ctx,
         fx::Fx::Damage(play::DamageEvent {
@@ -834,6 +837,8 @@ pub fn die(
     }
     m.dying = Some(20);
     m.health = 0.0;
+    // Oozing, weaving and wind charged act on a kill.
+    super::aftermath::killed(ctx, id, e.pos, m.size(), false, &m.effects);
     let source = crate::vibrations::Source {
         warden: m.species == Species::Warden,
         ..crate::vibrations::Source::entity(id)

@@ -491,6 +491,21 @@ pub fn interact(
         return;
     };
     let creative = actor.game_mode == 1;
+    // What hangs on a protected block, or past the border, is left be.
+    if attack {
+        // Frames and paintings are at the block in front of their wall.
+        let [x, y, z] = h.anchor;
+        let [x, y, z] = match h.decor {
+            Decor::Frame(_) | Decor::Painting { .. } => {
+                let (dx, dy, dz) = FACES[usize::from(h.facing)];
+                [x + dx, y + dy, z + dz]
+            }
+            _ => [x, y, z],
+        };
+        if !crate::adventure::may_interact(ctx, actor.uuid, mc_protocol::Position::new(x, y, z)) {
+            return;
+        }
+    }
     let held = held::held(ctx, actor.uuid, hand);
     let now = lock(&ctx.time).age;
     match &mut h.decor {

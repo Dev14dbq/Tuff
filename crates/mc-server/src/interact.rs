@@ -465,6 +465,23 @@ pub fn dig(
         return outcome;
     }
     let (world, blocks) = (&ctx.world, &ctx.data.blocks);
+    if status == dig::START && actor.game_mode != SPECTATOR {
+        // Spawn protection says so and goes no further; the border and
+        // the adventure rules leave the client's guess to be corrected.
+        if crate::adventure::under_spawn_protection(ctx, actor.uuid, position) {
+            crate::adventure::protected_message(&mut outcome, actor.uuid, position);
+            return outcome;
+        }
+        let refused = !crate::adventure::may_interact(ctx, actor.uuid, position)
+            || actor.game_mode != CREATIVE
+                && crate::adventure::break_restricted(ctx, &actor, position);
+        if refused {
+            if let Some(state) = world.block(position, blocks) {
+                outcome.updates.push((position, state));
+            }
+            return outcome;
+        }
+    }
     // Hitting a block puts out fire on the face hit.
     if status == dig::START
         && actor.game_mode != SPECTATOR
@@ -518,6 +535,7 @@ pub fn dig(
         (dig::FINISH, CREATIVE) => false,
         (dig::FINISH, _) => {
             let ok = in_reach(&actor.pose, position)
+                && !crate::adventure::break_restricted(ctx, &actor, position)
                 && crate::digging::may_finish(ctx, &actor, position, state);
             crate::digging::stop(ctx, actor.uuid);
             if !ok {
@@ -839,6 +857,18 @@ fn use_item_on_block(
     let held = held.as_ref();
     let (world, blocks) = (&ctx.world, &ctx.data.blocks);
     let block_at = |p: Position| world.block(p, blocks);
+    // Spawn protection and the border keep the client's guess from standing.
+    if !crate::adventure::may_interact(ctx, actor.uuid, clicked) {
+        if crate::adventure::under_spawn_protection(ctx, actor.uuid, clicked) {
+            crate::adventure::protected_message(&mut outcome, actor.uuid, clicked);
+        }
+        for p in [clicked, offset(clicked, face)] {
+            if let Some(state) = block_at(p) {
+                outcome.updates.push((p, state));
+            }
+        }
+        return outcome;
+    }
     let use_blocks = !(actor.sneaking && held.is_some());
     // Crafting tables open their grid.
     if use_blocks
@@ -936,6 +966,11 @@ fn use_item_on_block(
         }
         outcome
     };
+    // An adventure player's item acts on the blocks it lists in
+    // `can_place_on`, and on no others.
+    if !crate::adventure::may_use_on(ctx, &actor, held, clicked) {
+        return refuse(outcome);
+    }
     // Axes, hoes, shovels, bone meal, honeycomb and stacking candles act
     // on the block.
     if crate::blockuse::use_item_on(ctx, &mut outcome, actor, hand, clicked, face, cursor) {
@@ -1500,6 +1535,11 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
     let Some((hit, face)) = look_at(ctx, actor, yaw, pitch, fluid.is_none()) else {
         return outcome;
     };
+    if !crate::adventure::may_interact(ctx, actor.uuid, hit)
+        || !crate::adventure::may_use_on(ctx, &actor, held.as_ref(), hit)
+    {
+        return outcome;
+    }
     let blocks = &ctx.data.blocks;
     let state_at = |p: Position| ctx.world.block(p, blocks).unwrap_or(0);
     let mut level = WorldLevel::new(ctx);

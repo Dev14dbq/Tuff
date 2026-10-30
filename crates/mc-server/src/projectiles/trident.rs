@@ -465,6 +465,10 @@ pub fn tick(t: &mut Tick, e: &mut Entity) {
                             by: crate::pots::Launcher::of(owner, t.shooter.is_some()),
                             fast_trident: a.trident
                                 && e.vel.iter().map(|v| v * v).sum::<f64>() > 0.36,
+                            can_break: a
+                                .stack
+                                .as_ref()
+                                .and_then(|s| ctx.items.component(s, "minecraft:can_break")),
                         },
                     );
                     fx::sound(
