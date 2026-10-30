@@ -32,12 +32,37 @@ How it's measured: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Status
 
-**Alpha.** Survival is playable: world generation, mobs, villagers, raids, the Ender Dragon
-and the Wither, redstone, enchanting, brewing, advancements, commands and datapacks. Online
-and offline mode, Velocity and BungeeCord, the vanilla management protocol.
+**Alpha.** Survival is playable. If something behaves differently from vanilla, that's a bug.
+Please open an issue.
 
-Not yet: plugins and mods, versions other than 26.3. If something behaves differently from
-vanilla, that's a bug. Please open an issue.
+✅ done and checked against vanilla · 🟡 works, still being finished or checked · ⬜ not started
+
+| | |
+|---|---|
+| ✅ | Joining with the normal 26.3 client, online and offline mode, encryption, compression |
+| ✅ | Opening and saving vanilla worlds; vanilla opens them again afterwards |
+| ✅ | Worlds from 1.18 on and Paper worlds are upgraded on first start |
+| ✅ | World generation: terrain, biomes, caves, villages and most structures |
+| ✅ | Redstone, pistons, fluids, hoppers and block updates in vanilla order |
+| ✅ | Mobs, villagers and trading, raids, the Ender Dragon, the Wither |
+| ✅ | Enchanting, brewing, crafting, advancements, statistics, recipe book |
+| ✅ | All vanilla commands, scoreboards, boss bars, `.mcfunction`, datapacks, game rules |
+| ✅ | Whitelist, bans, ops, RCON, query, the vanilla management protocol |
+| ✅ | Hardened against malicious clients; packets, NBT, regions and commands are fuzzed |
+| 🟡 | Ocean monuments and woodland mansions: rooms are not laid out like vanilla yet |
+| 🟡 | Popular third-party datapacks (Terralith and others): not tested yet |
+| 🟡 | Velocity and BungeeCord: built, not yet tested behind a real proxy |
+| 🟡 | Text filter service: version 0 works, version 1 (Azure login) doesn't |
+| 🟡 | Backups, built-in profiler, `/pregen`: built, still being checked |
+| 🟡 | Release builds for macOS, Linux, Windows and Docker: first release not cut yet |
+| 🟡 | 24-hour run with 100 bots: in progress |
+| 🟡 | Beating vanilla with Lithium and C2ME on every benchmark: hoppers done, redstone in progress |
+| ⬜ | A full audit of every vanilla system, item by item |
+| ⬜ | Dimensions ticking in parallel |
+| ⬜ | Mods sent by the server (WASM) |
+| ⬜ | Versions other than 26.3 |
+
+The detailed plan is in [docs/ROADMAP.md](docs/ROADMAP.md) (in Russian).
 
 ## Running it
 
