@@ -130,7 +130,6 @@ pub fn tick(
         }
         let min = short(&be.data, "MinSpawnDelay").unwrap_or(MIN_DELAY);
         let max = short(&be.data, "MaxSpawnDelay").unwrap_or(MAX_DELAY);
-        *delay = min + below((max - min).max(1) as u32) as i32;
         let range = short(&be.data, "SpawnRange").unwrap_or(SPAWN_RANGE);
         let count = short(&be.data, "SpawnCount").map_or(SPAWN_COUNT, |c| c.max(0) as u32);
         let max_nearby =
@@ -145,10 +144,8 @@ pub fn tick(
         let (w, h) = species.size();
         let params = PathParams::walker(h.ceil() as i32);
         let mut made = false;
+        let mut crowded = false;
         for _ in 0..count {
-            if nearby >= max_nearby {
-                break;
-            }
             let x = be.x + below(2 * range as u32 + 1) as i32 - range;
             let y = be.y + below(3) as i32 - 1;
             let z = be.z + below(2 * range as u32 + 1) as i32 - range;
@@ -157,6 +154,10 @@ pub fn tick(
                 || ctx.world.block_light(Position::new(x, y, z)) <= 11;
             if !fits || !dark || w > 2.0 {
                 continue;
+            }
+            if nearby >= max_nearby {
+                crowded = true;
+                break;
             }
             let pos = [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5];
             let mut e = new_mob(ctx, species, pos);
@@ -170,6 +171,11 @@ pub fn tick(
         }
         if made {
             fx::level_event(ctx, 2004, center, 0);
+        }
+        // Vanilla waits again only after a spawn or a crowded spawner; a
+        // round where every try failed is repeated on the next tick.
+        if made || crowded {
+            *delay = min + below((max - min).max(1) as u32) as i32;
         }
     }
     out

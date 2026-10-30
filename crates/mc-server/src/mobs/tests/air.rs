@@ -672,7 +672,8 @@ fn a_bat_hangs_from_the_ceiling_until_a_player_comes_near() {
         eprintln!("skipped: no game data");
         return;
     };
-    let _ = join(&ctx, [30.5, -60.0, 30.5]);
+    // Within 32 blocks, or vanilla may despawn the idle bat at random.
+    let _ = join(&ctx, [20.5, -60.0, 20.5]);
     // A low room, so the bat flits about under its ceiling.
     for x in -6..=6 {
         for z in -6..=6 {
