@@ -9,7 +9,7 @@
 # server.properties, lists, logs. Details: docs/admin/docker.md.
 
 # Pinned by digest; Dependabot (.github/dependabot.yml) proposes updates.
-FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663 AS build
+FROM rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS build
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
