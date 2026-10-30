@@ -189,6 +189,16 @@ async fn run() -> Result<()> {
     }
     config.white_list = props.bool("white-list");
     config.op_permission_level = props.int("op-permission-level").unwrap_or(4).clamp(0, 4) as i32;
+    {
+        use mc_server::oldlists::{MojangResolver, OfflineResolver, Resolver, convert};
+        let mut resolver: Box<dyn Resolver> = if config.online_mode {
+            Box::new(MojangResolver)
+        } else {
+            Box::new(OfflineResolver)
+        };
+        convert(&server_dir, config.op_permission_level, resolver.as_mut())
+            .map_err(anyhow::Error::msg)?;
+    }
     config.new_world_game_mode = game_mode(props.get("gamemode"));
     config.new_world_difficulty = difficulty(props.get("difficulty"));
     config.seed = seed(seed_arg.as_deref().unwrap_or(props.get("level-seed")));

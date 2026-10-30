@@ -70,6 +70,7 @@ mod menus;
 mod mob_effects;
 mod mobs;
 mod notify;
+pub mod oldlists;
 mod packs;
 mod persist;
 mod pipeline;

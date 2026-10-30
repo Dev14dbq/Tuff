@@ -1054,11 +1054,8 @@ fn profiles(r: &Run, name: &str) -> Result<Vec<(String, u128)>> {
         {
             return Ok(vec![(p.profile.name.clone(), p.profile.uuid)]);
         }
-        let known = lock(&r.ctx.lists)
-            .usercache
-            .iter()
-            .find(|(p, _)| p.name.eq_ignore_ascii_case(n))
-            .and_then(|(p, _)| Some((p.name.clone(), p.uuid?)));
+        let cached = lock(&r.ctx.lists).cached_by_name(n);
+        let known = cached.and_then(|p| Some((p.name, p.uuid?)));
         if let Some(k) = known {
             return Ok(vec![k]);
         }

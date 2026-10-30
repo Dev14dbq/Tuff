@@ -10,6 +10,9 @@ use tracing::warn;
 
 use crate::util::{date_text, now_secs, parse_date, parse_uuid, uuid_string};
 
+/// Vanilla keeps the 1000 most recently used profiles in `usercache.json`.
+pub const USERCACHE_LIMIT: usize = 1000;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Op {
     pub uuid: Option<u128>,
@@ -240,21 +243,65 @@ impl Lists {
         );
     }
 
+    /// `usercache.json` as vanilla writes it: one compact line, newest
+    /// access first, at most [`USERCACHE_LIMIT`] entries, keys in the order
+    /// `uuid`, `name`, `expiresOn`. Entries without a uuid are not kept.
     pub fn save_usercache(&self) {
-        self.write(
-            "usercache.json",
-            self.usercache
-                .iter()
-                .map(|(n, e)| {
-                    let mut v = json!({ "name": n.name });
-                    if let Some(u) = n.uuid {
-                        v["uuid"] = Value::String(uuid_string(u));
-                    }
-                    v["expiresOn"] = Value::String(e.clone());
-                    v
-                })
-                .collect(),
+        let Some(dir) = &self.dir else { return };
+        let entries: Vec<String> = self
+            .usercache
+            .iter()
+            .filter_map(|(n, e)| {
+                Some(format!(
+                    "{{\"uuid\":{},\"name\":{},\"expiresOn\":{}}}",
+                    Value::String(uuid_string(n.uuid?)),
+                    Value::String(n.name.clone()),
+                    Value::String(e.clone()),
+                ))
+            })
+            .take(USERCACHE_LIMIT)
+            .collect();
+        let path = dir.join("usercache.json");
+        if let Err(err) = std::fs::write(&path, format!("[{}]", entries.join(","))) {
+            warn!("writing {}: {err}", path.display());
+        }
+    }
+
+    /// Remembers a profile for a month and makes it the newest entry.
+    pub fn cache_profile(&mut self, uuid: u128, name: &str) {
+        self.usercache
+            .retain(|(n, _)| n.uuid != Some(uuid) && !n.name.eq_ignore_ascii_case(name));
+        self.usercache.insert(
+            0,
+            (
+                Named {
+                    uuid: Some(uuid),
+                    name: name.to_owned(),
+                },
+                date_text(now_secs() + 30 * 86_400),
+            ),
         );
+        self.usercache.truncate(USERCACHE_LIMIT);
+        self.save_usercache();
+    }
+
+    /// The cached profile of a name (any letter case). An entry past its
+    /// expiry is dropped and the file written again; a hit becomes the
+    /// newest entry, as in vanilla.
+    pub fn cached_by_name(&mut self, name: &str) -> Option<Named> {
+        let at = self
+            .usercache
+            .iter()
+            .position(|(n, _)| n.name.eq_ignore_ascii_case(name))?;
+        if expired(&self.usercache[at].1) {
+            self.usercache.remove(at);
+            self.save_usercache();
+            return None;
+        }
+        let entry = self.usercache.remove(at);
+        let found = entry.0.clone();
+        self.usercache.insert(0, entry);
+        Some(found)
     }
 
     pub fn save_all(&self) {
@@ -322,20 +369,7 @@ impl Lists {
         if wl_changed {
             self.save_whitelist();
         }
-        self.usercache
-            .retain(|(n, _)| n.uuid != Some(uuid) && !n.name.eq_ignore_ascii_case(name));
-        self.usercache.insert(
-            0,
-            (
-                Named {
-                    uuid: Some(uuid),
-                    name: name.to_owned(),
-                },
-                date_text(now_secs() + 30 * 86_400),
-            ),
-        );
-        self.usercache.truncate(1000);
-        self.save_usercache();
+        self.cache_profile(uuid, name);
     }
 
     /// An op without a uuid yet (the `--op` option); it is filled in on join.
@@ -364,6 +398,50 @@ fn expired(expires: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mc-lists-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn usercache_is_compact_newest_first_and_capped() {
+        let dir = temp("cap");
+        let mut lists = Lists::load(&dir);
+        for i in 0..USERCACHE_LIMIT as u128 + 5 {
+            lists.cache_profile(i + 1, &format!("p{i}"));
+        }
+        assert_eq!(lists.usercache.len(), USERCACHE_LIMIT);
+        assert_eq!(
+            lists.usercache[0].0.name,
+            format!("p{}", USERCACHE_LIMIT + 4)
+        );
+        let text = std::fs::read_to_string(dir.join("usercache.json")).unwrap();
+        assert!(!text.contains('\n'));
+        assert!(text.starts_with("[{\"uuid\":\""));
+        let first: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(first[0]["name"], format!("p{}", USERCACHE_LIMIT + 4));
+        assert!(first[0]["expiresOn"].as_str().unwrap().len() > 20);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn usercache_drops_expired_names_and_refreshes_hits() {
+        let dir = temp("expiry");
+        std::fs::write(
+            dir.join("usercache.json"),
+            r#"[{"uuid":"00000000-0000-0000-0000-000000000001","name":"Old","expiresOn":"2001-01-01 00:00:00 +0000"},{"uuid":"00000000-0000-0000-0000-000000000002","name":"Fresh","expiresOn":"2999-01-01 00:00:00 +0000"},{"uuid":"00000000-0000-0000-0000-000000000003","name":"Other","expiresOn":"2999-01-01 00:00:00 +0000"}]"#,
+        )
+        .unwrap();
+        let mut lists = Lists::load(&dir);
+        assert!(lists.cached_by_name("old").is_none());
+        assert_eq!(lists.usercache.len(), 2);
+        assert_eq!(lists.cached_by_name("OTHER").unwrap().uuid, Some(3));
+        assert_eq!(lists.usercache[0].0.name, "Other");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn legacy_whitelist_names_resolve_through_usercache() {
