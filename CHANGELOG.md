@@ -17,7 +17,11 @@ First tagged alpha. A stock Minecraft: Java Edition 26.3 client joins it; everyt
 - Server: the `tuff` binary, started in the folder of a vanilla server. It reads and fills in
   `server.properties` with vanilla's defaults (except `server-ip`, which is `127.0.0.1`),
   keeps `ops.json`, `whitelist.json`, `banned-players.json`, `banned-ips.json` and
-  `usercache.json`, and logs to `logs/latest.log`. `tuff --version` prints the version.
+  `usercache.json`, and logs to `logs/latest.log`. `tuff --version` prints the version; SIGTERM
+  saves and stops like `/stop`.
+- No Java needed to run it: on the first start `tuff` downloads `server.jar` from Mojang
+  (version manifest, SHA1 checked) into `cache/`, reads the vanilla data pack out of it, and
+  takes the generated id tables from `tuff-reports-26.3.zip` in the release.
 - Protocol: 26.3 handshake, status, login, configuration and play; compression and
   encryption; online mode with Mojang session checks and offline mode; signed chat; Velocity
   modern forwarding, BungeeCord forwarding and BungeeGuard tokens; server links, resource packs,
@@ -48,8 +52,11 @@ First tagged alpha. A stock Minecraft: Java Edition 26.3 client joins it; everyt
 - Tooling: `cargo xtask` with data extraction from the user's own `server.jar`, parity and
   observation runs against vanilla, worldgen and chunk diffs, a protocol probe, load-test bots,
   benchmarks and a clean-room similarity check.
-- Release: CI on Linux, macOS and Windows; release builds for five targets with SHA-256
-  checksums; `cargo deny` and `cargo audit` checks; a Docker image.
+- Release: CI on Linux, macOS and Windows; release builds for Linux (x86_64 and aarch64,
+  glibc and static musl), macOS (aarch64 and x86_64) and Windows (x86_64) with SHA-256
+  checksums and the generated tables; `cargo deny` and `cargo audit` checks; a Docker image
+  that runs as a non-root user.
+- Admin docs in Russian: settings, commands, moving from vanilla and Paper, Docker.
 
 [Unreleased]: https://github.com/Dev14dbq/tuff/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/Dev14dbq/tuff/releases/tag/v0.1.0

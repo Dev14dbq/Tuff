@@ -41,33 +41,32 @@ vanilla, that's a bug. Please open an issue.
 
 ## Running it
 
-You need Rust and, once, Java 25+. Tuff doesn't ship any Minecraft files, so the first step
-pulls game data out of Mojang's own `server.jar`.
+Download the archive for your system from
+[Releases](https://github.com/Dev14dbq/tuff/releases), check it against `SHA256SUMS`, unpack
+it, and start `tuff` in your server's folder:
 
 ```bash
-git clone https://github.com/Dev14dbq/tuff && cd tuff
-
-mkdir -p reference/26.3
-curl -o reference/26.3/26.3.json https://piston-meta.mojang.com/v1/packages/11f1aefe473eefba0af62e3286c33b692807b2eb/26.3.json
-curl -o reference/26.3/server.jar https://piston-data.mojang.com/v1/objects/33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c/server.jar
-cargo xtask extract-data
-
-cargo build --release -p mc-server
-mkdir -p run && cd run && ../target/release/tuff --op YourName
+cd my-server && /path/to/tuff --op YourName
 ```
 
-It listens on `127.0.0.1` by default. Clear `server-ip` in `server.properties` to open it to
-the network. More in [docs/ADMIN.md](docs/ADMIN.md).
+No Java, no Rust. Tuff ships no Minecraft files: on the first start it downloads `server.jar`
+from Mojang (about 60 MB, checked by SHA1) into `cache/` and reads the game data out of it.
+The id tables it can't make without Java (`tuff-reports-26.3.zip`) come in the archive.
 
-With Docker:
+It listens on `127.0.0.1` by default. Clear `server-ip` in `server.properties` to open it to
+the network. Settings, commands and moving from vanilla or Paper:
+[docs/ADMIN.md](docs/ADMIN.md).
+
+With Docker (details in [docs/admin/docker.md](docs/admin/docker.md)):
 
 ```bash
 docker build -t tuff .
-docker run --rm -p 25565:25565 \
-  -v "$PWD/cache/mcdata:/data/cache/mcdata:ro" \
-  -v tuff-data:/data \
-  tuff
+docker run -it -p 25565:25565 -v tuff-data:/data tuff
 ```
+
+From source, for development: `cargo build --release -p mc-server`. A build that isn't a
+release needs the tables from `cargo xtask extract-data`, which takes Java 25+ once
+([CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ## Contributing
 
