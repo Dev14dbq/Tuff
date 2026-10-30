@@ -71,10 +71,21 @@ const PASSABLE: &[&str] = &[
     "minecraft:big_dripleaf_stem",
     "minecraft:hanging_roots",
     "minecraft:spore_blossom",
+    "minecraft:sunflower",
+    "minecraft:lilac",
+    "minecraft:peony",
+    "minecraft:rose_bush",
+    "minecraft:pitcher_plant",
+    "minecraft:mangrove_propagule",
+    "minecraft:pink_petals",
+    "minecraft:wildflowers",
+    "minecraft:cactus_flower",
 ];
 const PASSABLE_TAGS: &[&str] = &[
     "minecraft:replaceable",
-    "minecraft:flowers",
+    // Not `minecraft:flowers`: it also lists flowering azalea, its leaves,
+    // cherry leaves and the chorus flower, which all have collision.
+    "minecraft:small_flowers",
     "minecraft:saplings",
     "minecraft:crops",
     "minecraft:buttons",
