@@ -176,6 +176,8 @@ async fn run() -> Result<()> {
     };
     config.online_mode = props.bool("online-mode") && !offline;
     config.enforce_secure_profile = props.bool("enforce-secure-profile");
+    config.status_heartbeat_interval =
+        props.int("status-heartbeat-interval").unwrap_or(0).max(0) as u64;
     config.code_of_conduct = mc_server::serverlist::CodeOfConduct::load(
         props.bool("enable-code-of-conduct"),
         Some(&server_dir),

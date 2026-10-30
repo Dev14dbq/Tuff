@@ -454,6 +454,8 @@ async fn authenticate(
     let profile = auth::has_joined(&writer.ctx.config.session_server, name, &hash).await?;
     if profile.is_none() {
         warn!("session server did not verify {name}");
+    } else {
+        writer.ctx.management_bus.report_login_activity();
     }
     Ok(profile)
 }

@@ -149,6 +149,9 @@ pub struct Config {
     /// Refuse unsigned chat (`enforce-secure-profile`). Off in [`Config::new`]
     /// so tests keep today's chat; `server.properties` still defaults to true.
     pub enforce_secure_profile: bool,
+    /// Seconds between `server/status` notifications to the management
+    /// server; 0 sends none (`status-heartbeat-interval`).
+    pub status_heartbeat_interval: u64,
     /// The code of conduct shown during configuration, read from
     /// `codeofconduct/` when `enable-code-of-conduct` is on.
     pub code_of_conduct: Option<std::sync::Arc<serverlist::CodeOfConduct>>,
@@ -227,6 +230,7 @@ impl Config {
             compression_threshold: Some(256),
             online_mode: true,
             enforce_secure_profile: false,
+            status_heartbeat_interval: 0,
             code_of_conduct: None,
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
             world: None,
@@ -438,6 +442,28 @@ impl Server {
             self.ctx
                 .management_bus
                 .publish(&crate::notify::Note::ServerStarted);
+            if self.ctx.config.status_heartbeat_interval > 0 {
+                let ctx = self.ctx.clone();
+                let period =
+                    std::time::Duration::from_secs(self.ctx.config.status_heartbeat_interval);
+                tokio::spawn(async move {
+                    let mut timer =
+                        tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+                    loop {
+                        timer.tick().await;
+                        let names: Vec<String> = ctx
+                            .players
+                            .lock()
+                            .expect("players lock")
+                            .values()
+                            .map(|p| p.profile.name.clone())
+                            .collect();
+                        let state = management::server_state(names.len(), names);
+                        ctx.management_bus
+                            .publish(&crate::notify::Note::Status(state));
+                    }
+                });
+            }
         }
         loop {
             tokio::select! {

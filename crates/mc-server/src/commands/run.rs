@@ -1100,6 +1100,16 @@ fn op(r: &mut Run, make: bool) -> Result<i32> {
         }
         lists.save_ops();
         drop(lists);
+        let operator = crate::notify::Operator {
+            player: crate::notify::Player::known(uuid, &name),
+            level: r.ctx.config.op_permission_level,
+            bypasses_player_limit: false,
+        };
+        r.ctx.management_bus.publish(&if make {
+            crate::notify::Note::OperatorAdded(operator)
+        } else {
+            crate::notify::Note::OperatorRemoved(operator)
+        });
         changed += 1;
         r.out.events.push(Event::Permissions { uuid });
         let key = if make {
@@ -1246,7 +1256,7 @@ fn ban(r: &mut Run) -> Result<i32> {
         if lists.player_ban(uuid, &name).is_some() {
             continue;
         }
-        lists.banned_players.push(crate::lists::Ban {
+        let entry = crate::lists::Ban {
             uuid: Some(uuid),
             name: name.clone(),
             created: crate::util::now_text(),
@@ -1257,9 +1267,17 @@ fn ban(r: &mut Run) -> Result<i32> {
             } else {
                 reason.clone()
             },
-        });
+        };
+        let banned = crate::notify::Banned::from_entry(&entry);
+        lists.banned_players.push(entry);
         lists.save_bans();
         drop(lists);
+        r.ctx
+            .management_bus
+            .publish(&crate::notify::Note::PlayerBanned(
+                crate::notify::Player::known(uuid, &name),
+                banned,
+            ));
         changed += 1;
         r.success(
             translate(
@@ -1292,6 +1310,11 @@ fn pardon(r: &mut Run) -> Result<i32> {
         }
         lists.save_bans();
         drop(lists);
+        r.ctx
+            .management_bus
+            .publish(&crate::notify::Note::PlayerUnbanned(
+                crate::notify::Player::known(uuid, &name),
+            ));
         changed += 1;
         r.success(
             translate("commands.pardon.success", vec![str_tag(&name)]),
@@ -1324,7 +1347,7 @@ fn ban_ip(r: &mut Run) -> Result<i32> {
     if lists.ip_ban(&ip).is_some() {
         return Err(err("commands.banip.failed", Vec::new()));
     }
-    lists.banned_ips.push(crate::lists::Ban {
+    let entry = crate::lists::Ban {
         uuid: None,
         name: ip.clone(),
         created: crate::util::now_text(),
@@ -1335,9 +1358,14 @@ fn ban_ip(r: &mut Run) -> Result<i32> {
         } else {
             reason.clone()
         },
-    });
+    };
+    let banned = crate::notify::Banned::from_entry(&entry);
+    lists.banned_ips.push(entry);
     lists.save_bans();
     drop(lists);
+    r.ctx
+        .management_bus
+        .publish(&crate::notify::Note::IpBanned(banned));
     r.success(
         translate(
             "commands.banip.success",
@@ -1382,6 +1410,9 @@ fn pardon_ip(r: &mut Run) -> Result<i32> {
     }
     lists.save_bans();
     drop(lists);
+    r.ctx
+        .management_bus
+        .publish(&crate::notify::Note::IpUnbanned(ip.clone()));
     r.success(
         translate("commands.pardonip.success", vec![str_tag(&ip)]),
         true,
