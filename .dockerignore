@@ -16,3 +16,5 @@ graphify-out
 *.log
 Dockerfile
 .dockerignore
+dist
+external

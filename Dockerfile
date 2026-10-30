@@ -2,10 +2,11 @@
 #
 # tuff, a Minecraft: Java Edition 26.3 server.
 #
-# The image holds no Mojang files. Game data is extracted once from your own
-# server.jar (`cargo xtask extract-data`, see README "Running it") and mounted
-# at /data/cache/mcdata; the server folder (world, server.properties, lists,
-# logs) is the /data volume. Details: docs/admin/docker.md.
+# The image holds no Mojang files and needs no Java. On the first start tuff
+# downloads server.jar from Mojang into /data/cache, reads the vanilla data
+# pack out of it, and takes the generated id tables (tuff-reports-26.3.zip)
+# from /data or from the Tuff release. /data is the server folder: world,
+# server.properties, lists, logs. Details: docs/admin/docker.md.
 
 FROM rust:1.96.1-bookworm AS build
 WORKDIR /src

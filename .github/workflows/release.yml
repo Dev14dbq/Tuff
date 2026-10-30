@@ -1,6 +1,12 @@
 # Builds tuff for every supported platform when a version tag (v0.1.0) is
 # pushed, and attaches the archives and their SHA-256 checksums to a draft
 # GitHub release. The owner reviews the draft and publishes it by hand.
+#
+# Each release also carries tuff-reports-<minecraft>.zip: the id and name
+# tables vanilla's data generator and a running vanilla server produce
+# (blocks, registries, packets, commands, block facts), which tuff cannot
+# make without Java. Never Mojang assets, the vanilla data pack or a jar:
+# tuff downloads server.jar from Mojang itself on its first start.
 name: Release
 
 on:
@@ -19,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.check.outputs.version }}
+      minecraft: ${{ steps.check.outputs.minecraft }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,11 +43,64 @@ jobs:
             echo "::error::CHANGELOG.md has no section for $version"
             exit 1
           fi
+          minecraft=$(sed -n 's/^pub const VERSION_NAME: &str = "\(.*\)";/\1/p' crates/mc-protocol/src/lib.rs)
+          [ -n "$minecraft" ] || { echo "::error::no VERSION_NAME in mc-protocol"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "minecraft=$minecraft" >> "$GITHUB_OUTPUT"
+
+  reports:
+    name: Vanilla tables for Minecraft ${{ needs.version.outputs.minecraft }}
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      MINECRAFT: ${{ needs.version.outputs.minecraft }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Observing the command tree and block facts runs Mojang's server, which
+      # needs its EULA (https://aka.ms/MinecraftEULA) accepted. Only the owner
+      # can do that, by setting the repository variable MOJANG_EULA_ACCEPTED
+      # to true; CI does not accept it on its own.
+      - name: EULA accepted by the owner
+        env:
+          ACCEPTED: ${{ vars.MOJANG_EULA_ACCEPTED }}
+        run: |
+          if [ "$ACCEPTED" != "true" ]; then
+            echo "::error::set the repository variable MOJANG_EULA_ACCEPTED=true after reading https://aka.ms/MinecraftEULA"
+            exit 1
+          fi
+          mkdir -p "cache/vanilla-server/$MINECRAFT"
+          echo "eula=true" > "cache/vanilla-server/$MINECRAFT/eula.txt"
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install || rustup show
+      - name: server.jar from Mojang
+        run: cargo xtask fetch-server-jar --version "$MINECRAFT"
+      - name: Data generator reports
+        run: cargo xtask extract-data --version "$MINECRAFT"
+      - name: Command tree and game rules
+        run: cargo xtask observe-commands
+      - name: Block facts
+        run: |
+          for fact in attach conductor opacity instrument support push; do
+            cargo xtask observe "$fact"
+          done
+      - name: Bundle
+        run: cargo xtask reports-bundle --version "$MINECRAFT" --out dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tuff-reports
+          path: dist/tuff-reports-*
+          if-no-files-found: error
+          retention-days: 7
 
   build:
     name: Build ${{ matrix.target }}
-    needs: version
+    needs: [version, reports]
     strategy:
       fail-fast: false
       matrix:
@@ -94,12 +154,16 @@ jobs:
           out=$("target/$TARGET/release/tuff" --version)
           echo "$out"
           case "$out" in "tuff $VERSION "*) ;; *) echo "::error::unexpected version: $out"; exit 1 ;; esac
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tuff-reports
+          path: reports
       - name: Package
         shell: bash
         run: |
           name="tuff-$VERSION-$TARGET"
           mkdir "$name"
-          cp LICENSE README.md CHANGELOG.md "$name/"
+          cp LICENSE README.md CHANGELOG.md reports/tuff-reports-*.zip "$name/"
           if [ "${RUNNER_OS}" = "Windows" ]; then
             cp "target/$TARGET/release/tuff.exe" "$name/"
             7z a -tzip "$name.zip" "$name" > /dev/null
@@ -124,7 +188,7 @@ jobs:
 
   release:
     name: Draft GitHub release
-    needs: [version, build]
+    needs: [version, reports, build]
     runs-on: ubuntu-latest
     permissions:
       # Creating a release and uploading its files; nothing else.
