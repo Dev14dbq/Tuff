@@ -282,9 +282,10 @@ pub fn metadata_packet(ctx: &ServerContext, entity: &Entity) -> Option<SetEntity
     let Kind::Mob(m) = &entity.kind else {
         return None;
     };
+    let now = lock(&ctx.time).age;
     Some(SetEntityData {
         entity_id: entity.id,
-        entries: metadata_of(ctx, m, lock(&ctx.time).age),
+        entries: metadata_of(ctx, m, now),
     })
 }
 

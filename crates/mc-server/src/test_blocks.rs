@@ -705,7 +705,8 @@ mod tests {
         assert!(said.len() >= 2);
         assert_eq!(string(&d, "status"), "running");
         store(&ctx, p, INSTANCE, d);
-        tick(&ctx, lock(&ctx.time).age + 5);
+        let now = lock(&ctx.time).age;
+        tick(&ctx, now + 5);
         assert_eq!(status(&ctx, p), "finished");
         assert!(
             data(&ctx, p, INSTANCE)

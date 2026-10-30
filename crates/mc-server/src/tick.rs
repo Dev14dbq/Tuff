@@ -642,7 +642,8 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
     crate::profile::add(crate::profile::blocks(), blocks_at);
     let entities_at = crate::profile::mark();
     tick_entities(ctx, &mut level);
-    crate::trading::tick_spawner(ctx, lock(&ctx.time).age);
+    let now = lock(&ctx.time).age;
+    crate::trading::tick_spawner(ctx, now);
     crate::mobs::tick(ctx, &mut level);
     crate::profile::add(crate::profile::entities(), entities_at);
     crate::raids::tick(ctx);
