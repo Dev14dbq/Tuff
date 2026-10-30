@@ -9,6 +9,7 @@ mod aquatic;
 // Land animals (Cursor)
 mod illagers;
 mod land;
+mod phantoms;
 mod raids;
 mod rules;
 mod sieges;

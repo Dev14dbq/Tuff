@@ -14,6 +14,7 @@ pub mod extra;
 pub mod gossip;
 pub mod mob;
 pub mod nav;
+pub mod phantom;
 pub mod physics;
 pub mod trade;
 pub mod villager;
