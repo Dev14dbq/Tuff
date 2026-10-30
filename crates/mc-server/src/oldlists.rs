@@ -75,9 +75,20 @@ impl Resolver for MojangResolver {
     }
 }
 
-/// Converts whatever old lists are in `dir`. Returns `Err` with the log
-/// lines vanilla prints when an old file is left, which stops the start.
-pub fn convert(dir: &Path, op_level: i32, resolver: &mut dyn Resolver) -> Result<(), String> {
+/// Vanilla tries each list up to three times, waiting this long between.
+pub const RETRY_DELAY: Duration = Duration::from_secs(5);
+
+/// Converts whatever old lists are in `dir`, retrying a list that failed
+/// (the profile service may be down) two more times after `retry_delay`.
+/// Returns `Err` with the log lines vanilla prints when an old file is
+/// left, which stops the start. Asks the network: call from a blocking
+/// context.
+pub fn convert(
+    dir: &Path,
+    op_level: i32,
+    resolver: &mut dyn Resolver,
+    retry_delay: Duration,
+) -> Result<(), String> {
     let present = |name: &str| dir.join(name).is_file();
     if present(OLD_PLAYER_BANS)
         || present(OLD_IP_BANS)
@@ -85,18 +96,21 @@ pub fn convert(dir: &Path, op_level: i32, resolver: &mut dyn Resolver) -> Result
         || present(OLD_WHITELIST)
     {
         let mut lists = Lists::load(dir);
-        if present(OLD_PLAYER_BANS) {
-            bans(dir, &mut lists, resolver);
-        }
-        if present(OLD_IP_BANS) {
-            ip_bans(dir, &mut lists);
-        }
-        if present(OLD_OPS) {
-            ops(dir, &mut lists, op_level, resolver);
-        }
-        if present(OLD_WHITELIST) {
-            whitelist(dir, &mut lists, resolver);
-        }
+        let mut attempt = |name: &str, run: &mut dyn FnMut(&mut Lists)| {
+            for tries in 0..3 {
+                if !present(name) {
+                    return;
+                }
+                if tries > 0 {
+                    std::thread::sleep(retry_delay);
+                }
+                run(&mut lists);
+            }
+        };
+        attempt(OLD_PLAYER_BANS, &mut |l| bans(dir, l, resolver));
+        attempt(OLD_IP_BANS, &mut |l| ip_bans(dir, l));
+        attempt(OLD_OPS, &mut |l| ops(dir, l, op_level, resolver));
+        attempt(OLD_WHITELIST, &mut |l| whitelist(dir, l, resolver));
     }
     let left: Vec<&str> = [OLD_PLAYER_BANS, OLD_IP_BANS, OLD_OPS, OLD_WHITELIST]
         .into_iter()
@@ -294,7 +308,7 @@ mod tests {
             "10.0.0.1|2020-01-02 03:04:05 +0000|Admin|2999-01-01 00:00:00 +0000|Spam\n",
         )
         .unwrap();
-        convert(&dir, 3, &mut OfflineResolver).unwrap();
+        convert(&dir, 3, &mut OfflineResolver, Duration::ZERO).unwrap();
         for old in [OLD_WHITELIST, OLD_OPS, OLD_PLAYER_BANS, OLD_IP_BANS] {
             assert!(!dir.join(old).exists());
             assert!(dir.join(format!("{old}.converted")).exists());
@@ -330,7 +344,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.join(OLD_WHITELIST), "New\n").unwrap();
-        convert(&dir, 4, &mut OfflineResolver).unwrap();
+        convert(&dir, 4, &mut OfflineResolver, Duration::ZERO).unwrap();
         let lists = Lists::load(&dir);
         assert_eq!(lists.whitelist.len(), 2);
         assert_eq!(lists.whitelist[0].name, "Kept");
@@ -341,15 +355,41 @@ mod tests {
     fn a_failed_lookup_leaves_the_old_file_and_stops_the_start() {
         let dir = temp("fail");
         std::fs::write(dir.join(OLD_OPS), "Steve\n").unwrap();
-        assert!(convert(&dir, 4, &mut Failing).is_err());
+        assert!(convert(&dir, 4, &mut Failing, Duration::ZERO).is_err());
         assert!(dir.join(OLD_OPS).exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
+    fn a_list_is_tried_three_times() {
+        struct Flaky(u32, u32);
+        impl Resolver for Flaky {
+            fn resolve(&mut self, names: &[String]) -> Result<Vec<(String, u128)>, String> {
+                self.0 += 1;
+                if self.0 < self.1 {
+                    return Err("down".into());
+                }
+                OfflineResolver.resolve(names)
+            }
+        }
+        let dir = temp("retry");
+        std::fs::write(dir.join(OLD_OPS), "Steve\n").unwrap();
+        let mut flaky = Flaky(0, 3);
+        convert(&dir, 4, &mut flaky, Duration::ZERO).unwrap();
+        assert_eq!(flaky.0, 3);
+        let dir2 = temp("retry-fail");
+        std::fs::write(dir2.join(OLD_OPS), "Steve\n").unwrap();
+        let mut never = Flaky(0, 99);
+        assert!(convert(&dir2, 4, &mut never, Duration::ZERO).is_err());
+        assert_eq!(never.0, 3);
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(dir2);
+    }
+
+    #[test]
     fn no_old_files_is_a_no_op() {
         let dir = temp("none");
-        convert(&dir, 4, &mut OfflineResolver).unwrap();
+        convert(&dir, 4, &mut OfflineResolver, Duration::ZERO).unwrap();
         assert!(!dir.join("ops.json").exists());
         let _ = std::fs::remove_dir_all(dir);
     }

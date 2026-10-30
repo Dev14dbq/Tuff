@@ -202,17 +202,22 @@ fn notification(method: &str, params: Option<Value>) -> String {
 #[derive(Clone, Debug)]
 pub struct Bus {
     tx: tokio::sync::broadcast::Sender<String>,
-    activity: std::sync::Arc<std::sync::Mutex<ActivityMonitor>>,
+    activity: std::sync::Arc<ActivityMonitor>,
 }
 
 /// Vanilla's rate limit on `server/activity`: one notification per 30 s.
 pub const ACTIVITY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Vanilla's `ServerActivityMonitor`, on atomics: login threads set the
+/// flag, the tick thread and the login both run the rate limit.
 #[derive(Debug)]
 struct ActivityMonitor {
-    interval: std::time::Duration,
-    pending: bool,
-    last: Option<std::time::Instant>,
+    start: std::time::Instant,
+    interval_ms: u64,
+    pending: std::sync::atomic::AtomicBool,
+    /// Milliseconds after `start` of the last notification, plus one; 0
+    /// means none was sent yet.
+    last_ms: std::sync::atomic::AtomicU64,
 }
 
 impl Bus {
@@ -223,37 +228,43 @@ impl Bus {
     pub fn with_activity_interval(interval: std::time::Duration) -> Self {
         Self {
             tx: tokio::sync::broadcast::channel(64).0,
-            activity: std::sync::Arc::new(std::sync::Mutex::new(ActivityMonitor {
-                interval,
-                pending: false,
-                last: None,
-            })),
+            activity: std::sync::Arc::new(ActivityMonitor {
+                start: std::time::Instant::now(),
+                interval_ms: interval.as_millis() as u64,
+                pending: std::sync::atomic::AtomicBool::new(false),
+                last_ms: std::sync::atomic::AtomicU64::new(0),
+            }),
         }
     }
 
     /// A player was verified by the session server. Marks activity and
     /// sends the notification right away unless one went out lately.
     pub fn report_login_activity(&self) {
-        self.activity.lock().expect("activity").pending = true;
+        self.activity
+            .pending
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.tick_activity();
     }
 
     /// Once per server tick: sends the pending activity notification if
     /// the rate limit allows, and forgets the activity either way.
     pub fn tick_activity(&self) {
-        let due = {
-            let mut monitor = self.activity.lock().expect("activity");
-            let due = monitor.pending
-                && monitor
-                    .last
-                    .is_none_or(|last| last.elapsed() >= monitor.interval);
-            if due {
-                monitor.last = Some(std::time::Instant::now());
-            }
-            monitor.pending = false;
-            due
-        };
-        if due {
+        use std::sync::atomic::Ordering::{AcqRel, Relaxed};
+        let monitor = &*self.activity;
+        // The flag is read and cleared in one step, so two callers never
+        // both send for the same activity.
+        if !monitor.pending.swap(false, AcqRel) {
+            return;
+        }
+        let now = monitor.start.elapsed().as_millis() as u64 + 1;
+        let last = monitor.last_ms.load(Relaxed);
+        let due = last == 0 || now.saturating_sub(last) >= monitor.interval_ms;
+        if due
+            && monitor
+                .last_ms
+                .compare_exchange(last, now, AcqRel, Relaxed)
+                .is_ok()
+        {
             self.publish(&Note::Activity);
         }
     }

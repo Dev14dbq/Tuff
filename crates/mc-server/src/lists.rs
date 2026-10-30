@@ -278,7 +278,7 @@ impl Lists {
                     uuid: Some(uuid),
                     name: name.to_owned(),
                 },
-                date_text(now_secs() + 30 * 86_400),
+                date_text(one_month_from_now()),
             ),
         );
         self.usercache.truncate(USERCACHE_LIMIT);
@@ -475,5 +475,35 @@ mod tests {
         assert_eq!(alex.uuid, None);
         assert!(lists.whitelisted(0, "Alex"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Seconds since the epoch of this moment next calendar month, in local
+/// time, as vanilla's `Calendar.add(MONTH, 1)` gives (the day of month is
+/// cut to the last day of a shorter month).
+pub(crate) fn one_month_from_now() -> i64 {
+    month_after(chrono::Local::now())
+}
+
+fn month_after<Tz: chrono::TimeZone>(from: chrono::DateTime<Tz>) -> i64 {
+    let now = from.timestamp();
+    from.checked_add_months(chrono::Months::new(1))
+        .map_or_else(|| now + 30 * 86_400, |t| t.timestamp())
+}
+
+#[cfg(test)]
+mod month_tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn expiry_is_a_calendar_month_not_thirty_days() {
+        let jan31 = Utc.with_ymd_and_hms(2027, 1, 31, 12, 0, 0).unwrap();
+        let feb28 = Utc.with_ymd_and_hms(2027, 2, 28, 12, 0, 0).unwrap();
+        assert_eq!(month_after(jan31), feb28.timestamp());
+        let mar1 = Utc.with_ymd_and_hms(2027, 3, 1, 0, 0, 0).unwrap();
+        let apr1 = Utc.with_ymd_and_hms(2027, 4, 1, 0, 0, 0).unwrap();
+        assert_eq!(month_after(mar1), apr1.timestamp());
+        assert_ne!(month_after(mar1), mar1.timestamp() + 30 * 86_400);
     }
 }

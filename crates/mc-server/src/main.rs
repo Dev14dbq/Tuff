@@ -246,13 +246,17 @@ async fn run() -> Result<()> {
     config.white_list = props.bool("white-list");
     config.op_permission_level = props.int("op-permission-level").unwrap_or(4).clamp(0, 4) as i32;
     {
-        use mc_server::oldlists::{MojangResolver, OfflineResolver, Resolver, convert};
-        let mut resolver: Box<dyn Resolver> = if config.online_mode {
+        use mc_server::oldlists::{
+            MojangResolver, OfflineResolver, RETRY_DELAY, Resolver, convert,
+        };
+        let mut resolver: Box<dyn Resolver + Send> = if config.online_mode {
             Box::new(MojangResolver)
         } else {
             Box::new(OfflineResolver)
         };
-        convert(&server_dir, config.op_permission_level, resolver.as_mut())
+        let (dir, level) = (server_dir.clone(), config.op_permission_level);
+        tokio::task::spawn_blocking(move || convert(&dir, level, resolver.as_mut(), RETRY_DELAY))
+            .await?
             .map_err(anyhow::Error::msg)?;
     }
     config.new_world_game_mode = game_mode(props.get("gamemode"));
