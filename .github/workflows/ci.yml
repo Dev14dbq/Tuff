@@ -50,3 +50,21 @@ jobs:
       - name: Similarity with vanilla (clean-room)
         if: matrix.os == 'ubuntu-latest'
         run: cargo xtask similarity
+
+  fuzz:
+    name: Fuzz smoke
+    runs-on: ubuntu-latest
+    env:
+      # The nightly and cargo-fuzz the targets were last run with.
+      NIGHTLY: nightly-2026-10-28
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install "$NIGHTLY" --profile minimal
+      - run: cargo +"$NIGHTLY" install cargo-fuzz --locked --version 0.13.2
+      # No extracted game data here, so the packet and command targets only
+      # build; NBT and region files run for a minute each.
+      - run: cargo +"$NIGHTLY" fuzz build
+      - run: cargo +"$NIGHTLY" fuzz run nbt -- -max_total_time=60
+      - run: cargo +"$NIGHTLY" fuzz run region -- -max_total_time=60

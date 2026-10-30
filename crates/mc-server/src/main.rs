@@ -261,6 +261,19 @@ async fn run() -> Result<()> {
     }
     config.allow_flight = props.bool("allow-flight");
     config.rate_limit = props.int("rate-limit").unwrap_or(0).max(0) as u32;
+    config.connection_throttle = std::time::Duration::from_millis(
+        props.int("connection-throttle").unwrap_or(0).max(0) as u64,
+    );
+    config.max_pending_per_ip = props
+        .int("max-pending-connections-per-ip")
+        .unwrap_or(0)
+        .max(0) as u32;
+    let seconds = |key: &str| {
+        let s = props.int(key).unwrap_or(10);
+        s.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+    };
+    config.chat_spam_seconds = seconds("chat-spam-threshold-seconds");
+    config.command_spam_seconds = seconds("command-spam-threshold-seconds");
     config.max_tick_time = props
         .int("max-tick-time")
         .filter(|&ms| ms > 0)

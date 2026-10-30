@@ -1,0 +1,49 @@
+[package]
+name = "tuff-fuzz"
+description = "cargo-fuzz targets for what a hostile client or file can feed Tuff."
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Not part of the main workspace, so normal builds do not need nightly.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mc-command = { path = "../crates/mc-command" }
+mc-data = { path = "../crates/mc-data" }
+mc-nbt = { path = "../crates/mc-nbt" }
+mc-protocol = { path = "../crates/mc-protocol" }
+mc-storage = { path = "../crates/mc-storage" }
+
+[[bin]]
+name = "packet"
+path = "fuzz_targets/packet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nbt"
+path = "fuzz_targets/nbt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "region"
+path = "fuzz_targets/region.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "command"
+path = "fuzz_targets/command.rs"
+test = false
+doc = false
+bench = false
