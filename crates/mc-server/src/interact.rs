@@ -11,6 +11,7 @@
 //!   Event "block broken" (particles, sound), then the update.
 
 use mc_protocol::Position;
+use mc_protocol::filter::FilteredText;
 use mc_protocol::packets::play::{HashedStack, ItemStack, dig};
 
 use crate::blocks::{self, Placement, offset};
@@ -1625,14 +1626,35 @@ pub fn use_item(ctx: &ServerContext, actor: Actor, hand: i32, yaw: f32, pitch: f
     outcome
 }
 
-/// Text written in the sign editor. Returns what viewers must be told.
+/// A sign line as the editor sent it: formatting codes do not survive, as in
+/// the game.
+pub fn strip_sign_formatting(line: &str) -> String {
+    let mut out = String::new();
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{a7}' {
+            chars.next();
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Text written in the sign editor, as the text filter judged it (an editor
+/// with text filtering on only ever stores the filtered text). Returns what
+/// viewers must be told.
 pub fn sign_update(
     ctx: &ServerContext,
     actor: Actor,
     position: Position,
     front: bool,
-    lines: [String; 4],
+    lines: &[FilteredText],
+    editor_filtering: bool,
 ) -> Option<Event> {
+    if lines.len() != 4 {
+        return None;
+    }
     if actor.game_mode == 3 {
         return None;
     }
@@ -1664,28 +1686,28 @@ pub fn sign_update(
     if matches!(be.data.get("is_waxed"), Some(mc_nbt::Tag::Byte(1))) {
         return None;
     }
-    // Formatting codes do not survive, as in the game.
-    let lines = lines.map(|l| {
-        let mut out = String::new();
-        let mut chars = l.chars();
-        while let Some(c) = chars.next() {
-            if c == '\u{a7}' {
-                chars.next();
-            } else {
-                out.push(c);
-            }
-        }
-        out
-    });
     let key = if front { "front_text" } else { "back_text" };
     let mut side = match be.data.get(key) {
         Some(mc_nbt::Tag::Compound(c)) => c.clone(),
         _ => sign_side(Default::default()),
     };
-    side.insert(
-        "messages",
-        mc_nbt::Tag::List(lines.into_iter().map(mc_nbt::Tag::String).collect()),
-    );
+    let lines_of = |text: &dyn Fn(&FilteredText) -> String| {
+        mc_nbt::Tag::List(lines.iter().map(|l| mc_nbt::Tag::String(text(l))).collect())
+    };
+    let shown = lines_of(&|l| l.filtered_or_empty());
+    if editor_filtering {
+        side.insert("messages", shown);
+        side.remove("filtered_messages");
+    } else {
+        let raw = lines_of(&|l| l.raw.clone());
+        // Stored only when the filter changed something, as in the game.
+        if raw == shown {
+            side.remove("filtered_messages");
+        } else {
+            side.insert("filtered_messages", shown);
+        }
+        side.insert("messages", raw);
+    }
     be.data.insert(key, mc_nbt::Tag::Compound(side));
     let kind = ctx.world.block_entity_kind(&be.id)?;
     let data = crate::world::client_data(&be.id, &be.data)?;

@@ -32,6 +32,10 @@ pub struct OnlinePlayer {
     pub entity_id: i32,
     /// Displayed skin parts, sent to others as entity metadata.
     pub skin_parts: u8,
+    /// The client's "only show filtered chat" option (Client Information
+    /// `text_filtering`): it gets filtered text, and so do the others when
+    /// they write to it.
+    pub text_filtering: bool,
     /// Where the player is; `None` until they spawn in play.
     pub pose: Option<Pose>,
     /// The dimension they are in.
@@ -124,6 +128,16 @@ pub struct EntityTypes {
 #[derive(Clone, Debug)]
 pub enum Event {
     Chat(Tag),
+    /// A chat line the external text filter changed. `full` is as written;
+    /// `filtered` is the same with the removed characters hidden, or `None`
+    /// when all of it was. A recipient other than the sender gets `filtered`
+    /// when the sender or the recipient has text filtering on, else `full`.
+    FilteredChat {
+        sender: u128,
+        sender_filtering: bool,
+        full: Tag,
+        filtered: Option<Tag>,
+    },
     PlayerJoined(OnlinePlayer),
     PlayerLeft {
         uuid: u128,

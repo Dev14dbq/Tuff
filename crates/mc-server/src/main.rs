@@ -242,11 +242,10 @@ async fn run() -> Result<()> {
     )
     .map_err(anyhow::Error::msg)?
     .map(std::sync::Arc::new);
-    if !props.get("text-filtering-config").trim().is_empty() {
-        tracing::warn!(
-            "text-filtering-config is set; chat is delivered as written, with no external filter"
-        );
-    }
+    config.text_filter = mc_server::textfilter::TextFilter::from_properties(
+        props.int("text-filtering-version").unwrap_or(0),
+        props.get("text-filtering-config"),
+    );
     config.white_list = props.bool("white-list");
     config.op_permission_level = props.int("op-permission-level").unwrap_or(4).clamp(0, 4) as i32;
     config.spawn_protection = props.int("spawn-protection").unwrap_or(16).max(0) as i32;

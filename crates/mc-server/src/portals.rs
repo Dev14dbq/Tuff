@@ -737,6 +737,7 @@ mod tests {
                 game_mode,
                 entity_id: 1,
                 skin_parts: 0,
+                text_filtering: false,
                 pose: Some(pose),
                 dimension: ctx.dimension_name().to_owned(),
                 main_hand: None,

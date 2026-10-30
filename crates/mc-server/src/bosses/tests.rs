@@ -67,6 +67,7 @@ fn join(ctx: &ServerContext, pos: [f64; 3]) -> u128 {
             game_mode: 0,
             entity_id: 7000,
             skin_parts: 0,
+            text_filtering: false,
             pose: Some(pose(pos)),
             dimension: ctx.world.dimension.clone(),
             main_hand: None,
