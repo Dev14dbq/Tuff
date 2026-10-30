@@ -361,6 +361,11 @@ pub mod configuration {
         },
         /// The player accepted `minecraft:code_of_conduct`. No fields.
         AcceptCodeOfConduct,
+        /// A dialog button with a custom action (id and raw NBT payload).
+        CustomClickAction {
+            id: String,
+            payload: Vec<u8>,
+        },
         Other(String),
     }
 
@@ -441,6 +446,10 @@ pub mod configuration {
                     result: r.varint()?,
                 },
                 "minecraft:accept_code_of_conduct" => Serverbound::AcceptCodeOfConduct,
+                "minecraft:custom_click_action" => Serverbound::CustomClickAction {
+                    id: r.identifier()?,
+                    payload: r.rest().to_vec(),
+                },
                 other => Serverbound::Other(other.to_owned()),
             })
         }
@@ -606,6 +615,27 @@ pub mod configuration {
         fn encode(&self, out: &mut Vec<u8>) {
             super::put_server_links(out, &self.links);
         }
+    }
+
+    /// Show Dialog, configuration phase. The context-free codec has no
+    /// registry id: the dialog is always written out as NBT.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ShowDialog {
+        pub dialog: Tag,
+    }
+    packet!(ShowDialog, Configuration, "minecraft:show_dialog");
+    impl Encode for ShowDialog {
+        fn encode(&self, out: &mut Vec<u8>) {
+            put_nbt(out, &self.dialog);
+        }
+    }
+
+    /// Clear Dialog, configuration phase. No fields.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ClearDialog;
+    packet!(ClearDialog, Configuration, "minecraft:clear_dialog");
+    impl Encode for ClearDialog {
+        fn encode(&self, _out: &mut Vec<u8>) {}
     }
 }
 
@@ -913,6 +943,12 @@ pub mod play {
         /// The player started (0x02) or stopped flying.
         PlayerAbilities {
             flags: u8,
+        },
+        /// A dialog button with a custom action (id and raw NBT payload).
+        /// Vanilla only logs it at debug level.
+        CustomClickAction {
+            id: String,
+            payload: Vec<u8>,
         },
         Other(String),
     }
@@ -1310,7 +1346,11 @@ pub mod play {
                     }
                 }
                 "minecraft:player_abilities" => Serverbound::PlayerAbilities { flags: r.u8()? },
-                other => Serverbound::Other(other.to_owned()),
+                "minecraft:custom_click_action" => Serverbound::CustomClickAction {
+                    id: r.identifier()?,
+                    payload: r.rest().to_vec(),
+                },
+                other =>Serverbound::Other(other.to_owned()),
             })
         }
     }
@@ -4162,6 +4202,48 @@ mod tests {
         expected.extend_from_slice(&uuid.to_be_bytes());
         expected.extend_from_slice(b"\x06Probe2\x00\x00\x00\x01\x00\x00\x00\x01");
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn dialog_packets_of_the_configuration_phase() {
+        let mut out = Vec::new();
+        configuration::ClearDialog.encode(&mut out);
+        assert!(out.is_empty());
+        let mut out = Vec::new();
+        configuration::ShowDialog {
+            dialog: Tag::Compound(mc_nbt::Compound::new()),
+        }
+        .encode(&mut out);
+        // Network NBT: the compound tag id, no name, then the end tag.
+        assert_eq!(out, vec![0x0a, 0x00]);
+        assert_eq!(configuration::ShowDialog::NAME, "minecraft:show_dialog");
+        assert_eq!(configuration::ClearDialog::NAME, "minecraft:clear_dialog");
+    }
+
+    #[test]
+    fn custom_click_actions_keep_id_and_payload() {
+        let mut body = vec![0x0e];
+        body.extend_from_slice(b"example:button");
+        body.extend_from_slice(&[0x01, 0x0a, 0x00]);
+        let id = "example:button".to_owned();
+        let payload = vec![0x01, 0x0a, 0x00];
+        let expected = play::Serverbound::CustomClickAction {
+            id: id.clone(),
+            payload: payload.clone(),
+        };
+        assert_eq!(
+            play::Serverbound::decode("minecraft:custom_click_action", &mut Reader::new(&body))
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            configuration::Serverbound::decode(
+                "minecraft:custom_click_action",
+                &mut Reader::new(&body)
+            )
+            .unwrap(),
+            configuration::Serverbound::CustomClickAction { id, payload }
+        );
     }
 
     #[test]
