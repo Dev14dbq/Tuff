@@ -71,6 +71,7 @@ mod maps;
 mod menus;
 mod mob_effects;
 mod mobs;
+mod nearby;
 mod notify;
 pub mod oldlists;
 mod packs;

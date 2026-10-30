@@ -132,22 +132,26 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
 }
 
 /// One game tick of the hopper at `p` (the host calls it for every hopper
-/// that exists in loaded chunks).
-pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+/// that exists in loaded chunks). `false` if there is no hopper there.
+pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos) -> bool {
+    tick_with(level, ctx, p, true)
+}
+
+/// [`tick`]; with `skip`, an empty hopper does not try to push and a full
+/// one does not try to pull, as vanilla does (`tryMoveItems`). Either try
+/// would move nothing and change nothing, so the result is the same; the
+/// tests compare both.
+pub fn tick_with(level: &mut dyn Level, ctx: Ctx, p: BlockPos, skip: bool) -> bool {
     let state = level.block(p);
     if !is_hopper(ctx, state) {
-        return;
+        return false;
     }
     level.mark_hopper_ticked(p);
-    let cooldown = level.hopper_cooldown(p);
-    if cooldown > 0 {
-        level.set_hopper_cooldown(p, cooldown - 1);
-        if cooldown > 1 {
-            return;
-        }
+    if level.count_down_hopper(p) > 1 {
+        return true;
     }
     if !flag(ctx, state, "enabled") {
-        return;
+        return true;
     }
     let facing = ctx
         .shapes
@@ -156,33 +160,47 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
         .unwrap_or(Dir::Down);
     let mut moved = false;
     // Push into what it faces.
+    let empty = skip && level.container_empty(p) == Some(true);
+    if !empty && push(level, ctx, p, facing) {
+        moved = true;
+    }
+    // Pull from above (its own rest is set below).
+    let full = skip && level.container_full(p) == Some(true);
+    let above = p.offset(Dir::Up);
+    if !full {
+        if level.container_transfer(above, Dir::Down, p, Dir::Up) {
+            moved = true;
+            touched(level, ctx, above, p);
+        } else if level.hopper_pickup(p) {
+            moved = true;
+            redstone::container_changed(level, ctx, p);
+        }
+    }
+    if moved {
+        level.set_hopper_cooldown(p, HOPPER_COOLDOWN);
+    }
+    true
+}
+
+/// The hopper at `p` pushes one item into what it faces.
+fn push(level: &mut dyn Level, ctx: Ctx, p: BlockPos, facing: Dir) -> bool {
     let out = p.offset(facing);
     let was_empty = empty_hopper(level, ctx, out);
     if level.container_transfer(p, facing, out, facing.opposite()) {
-        moved = true;
         touched(level, ctx, p, out);
         if was_empty {
             let turn = i32::from(level.hopper_ticked(out));
             level.set_hopper_cooldown(out, HOPPER_COOLDOWN - turn);
         }
-    }
-    // Pull from above (its own rest is set below).
-    let above = p.offset(Dir::Up);
-    if level.container_transfer(above, Dir::Down, p, Dir::Up) {
-        moved = true;
-        touched(level, ctx, above, p);
-    } else if level.hopper_pickup(p) {
-        moved = true;
-        redstone::container_changed(level, ctx, p);
-    }
-    if moved {
-        level.set_hopper_cooldown(p, HOPPER_COOLDOWN);
+        true
+    } else {
+        false
     }
 }
 
 /// Whether `p` is a hopper with nothing in it.
 pub fn empty_hopper(level: &dyn Level, ctx: Ctx, p: BlockPos) -> bool {
-    is_hopper(ctx, level.block(p)) && level.container_signal(p) == Some(0)
+    is_hopper(ctx, level.block(p)) && level.container_empty(p) == Some(true)
 }
 
 /// Two containers changed: comparators look again.

@@ -139,12 +139,15 @@ impl Compound {
     }
 
     /// Inserts or replaces `key`.
-    pub fn insert(&mut self, key: impl Into<String>, value: impl Into<Tag>) -> &mut Self {
-        let key = key.into();
+    pub fn insert<K>(&mut self, key: K, value: impl Into<Tag>) -> &mut Self
+    where
+        K: AsRef<str> + Into<String>,
+    {
         let value = value.into();
-        match self.0.iter_mut().find(|(k, _)| *k == key) {
+        // The key is only copied when it is new.
+        match self.0.iter_mut().find(|(k, _)| k == key.as_ref()) {
             Some(entry) => entry.1 = value,
-            None => self.0.push((key, value)),
+            None => self.0.push((key.into(), value)),
         }
         self
     }

@@ -46,17 +46,28 @@ pub struct Store<K> {
 }
 
 /// Containers in the world, read and written whole (vanilla `Container`).
-/// Reading returns a fresh copy of the slots; a host that wants hoppers to
-/// move items without allocating can later offer slot-level access here.
+/// Hoppers look at slots in place ([`Containers::with_slots`]) and change
+/// one at a time.
 pub trait Containers: Items + Blocks {
     /// The host's handle for a container's layout.
     type Kind: Copy;
     /// What holds items at the space `p`: its block, or else one of the
     /// item-holding entities there, chosen at random as vanilla does.
     fn store_at(&mut self, p: BlockPos) -> Option<Store<Self::Kind>>;
+    /// [`Containers::store_at`] where the block at `p` is known to be
+    /// `state` (`None`: not loaded).
+    fn store_in(&mut self, p: BlockPos, state: Option<u32>) -> Option<Store<Self::Kind>> {
+        let _ = state;
+        self.store_at(p)
+    }
     /// The container block at `p` only.
     fn block_store(&self, p: BlockPos) -> Option<Store<Self::Kind>>;
     fn slots(&self, store: &Store<Self::Kind>) -> Slots;
+    /// Looks at the slots without copying them. `f` must not reach back
+    /// into the host's containers.
+    fn with_slots(&self, store: &Store<Self::Kind>, f: &mut dyn FnMut(&[Option<ItemStack>])) {
+        f(&self.slots(store));
+    }
     /// Changes some slots: stored, shown to whoever has it open, and
     /// comparators are told.
     fn put(&mut self, store: &Store<Self::Kind>, changes: &[(usize, Option<ItemStack>)]);
@@ -77,33 +88,51 @@ pub trait ItemEntities {
 
 /// The slots a neighbour may push into through the face `side` of the
 /// container (in the order they are tried), or pull out of.
-fn sided_slots(holder: Holder, size: usize, side: Dir, inserting: bool) -> Vec<usize> {
+fn sided_slots(holder: Holder, size: usize, side: Dir, inserting: bool) -> Faces {
     match holder {
-        Holder::EnderChest => Vec::new(),
+        Holder::EnderChest => Faces::Some(&[]),
         // Nothing comes out of a crafter, and the tenth slot is only shown.
-        Holder::Crafter if !inserting => Vec::new(),
-        Holder::Crafter => (0..9).collect(),
+        Holder::Crafter if !inserting => Faces::Some(&[]),
+        Holder::Crafter => Faces::All(9),
         // The ingredient through the top, bottles and fuel through the
         // sides, bottles and the ingredient through the bottom.
         Holder::BrewingStand => match side {
-            Dir::Up => vec![3],
-            Dir::Down => vec![0, 1, 2, 3],
-            _ => vec![0, 1, 2, 4],
+            Dir::Up => Faces::Some(&[3]),
+            Dir::Down => Faces::Some(&[0, 1, 2, 3]),
+            _ => Faces::Some(&[0, 1, 2, 4]),
         },
         Holder::Furnace => {
             if inserting {
                 match side {
-                    Dir::Up => vec![0],
-                    Dir::Down => Vec::new(),
-                    _ => vec![1],
+                    Dir::Up => Faces::Some(&[0]),
+                    Dir::Down => Faces::Some(&[]),
+                    _ => Faces::Some(&[1]),
                 }
             } else if side == Dir::Down {
-                vec![2, 1]
+                Faces::Some(&[2, 1])
             } else {
-                Vec::new()
+                Faces::Some(&[])
             }
         }
-        _ => (0..size).collect(),
+        _ => Faces::All(size),
+    }
+}
+
+/// The slots one face of a container reaches (see [`sided_slots`]).
+#[derive(Clone, Copy, Debug)]
+enum Faces {
+    /// Slots 0 up to this.
+    All(usize),
+    Some(&'static [usize]),
+}
+
+impl Faces {
+    fn iter(self) -> impl Iterator<Item = usize> {
+        let (all, some) = match self {
+            Faces::All(n) => (0..n, &[][..]),
+            Faces::Some(list) => (0..0, list),
+        };
+        all.chain(some.iter().copied())
     }
 }
 
@@ -130,10 +159,35 @@ pub fn container_transfer<H>(
 where
     H: Containers + Effects + Recipes + Jukeboxes,
 {
+    // Mostly neither end is a composter or a jukebox: each block is read
+    // once to know.
+    let special = |s: Option<u32>| {
+        s.and_then(|s| blocks.block_name(s))
+            .is_some_and(|n| n == "minecraft:composter" || n == jukebox::ID)
+    };
+    let (to_state, from_state) = (host.block(to), host.block(from));
+    if !special(to_state) && !special(from_state) {
+        let (Some(src), Some(dst)) = (host.store_in(from, from_state), host.store_in(to, to_state))
+        else {
+            return false;
+        };
+        return move_one(host, src, from_side, dst, to_side);
+    }
     if let Some(done) = composter_transfer(level, ctx, host, blocks, from, from_side, to, to_side) {
         return done;
     }
     transfer(host, blocks, from, from_side, to, to_side)
+}
+
+/// Moves one item between whatever holds items at `from` and at `to`.
+fn move_between<H>(host: &mut H, from: BlockPos, from_side: Dir, to: BlockPos, to_side: Dir) -> bool
+where
+    H: Containers + Recipes,
+{
+    let (Some(src), Some(dst)) = (host.store_at(from), host.store_at(to)) else {
+        return false;
+    };
+    move_one(host, src, from_side, dst, to_side)
 }
 
 /// Moves one item from whatever holds items at `from` into whatever holds
@@ -152,10 +206,7 @@ where
     if let Some(done) = jukebox_transfer(host, blocks, from, from_side, to, to_side) {
         return done;
     }
-    let (Some(src), Some(dst)) = (host.store_at(from), host.store_at(to)) else {
-        return false;
-    };
-    move_one(host, src, from_side, dst, to_side)
+    move_between(host, from, from_side, to, to_side)
 }
 
 /// Hoppers and jukeboxes: a hopper pointing into an empty one puts a disc
@@ -178,7 +229,7 @@ where
         };
         let slots = host.slots(&src);
         let pick = sided_slots(src.holder, slots.len(), from_side, false)
-            .into_iter()
+            .iter()
             .find_map(|i| {
                 let s = slots[i].clone()?;
                 let name = host.name(s.item)?;
@@ -223,34 +274,61 @@ fn move_one<H: Containers + Recipes>(
     dst: Store<H::Kind>,
     to_side: Dir,
 ) -> bool {
-    let slots = host.slots(&src);
-    for slot in sided_slots(src.holder, slots.len(), from_side, false) {
-        if slots[slot].is_none() {
-            continue;
+    // The slots that may give an item, in the order they are tried (at most
+    // 64: no container is larger).
+    let mut ready = 0u64;
+    let reader = &*host;
+    reader.with_slots(&src, &mut |slots| {
+        for slot in sided_slots(src.holder, slots.len(), from_side, false).iter() {
+            let Some(stack) = &slots[slot] else { continue };
+            // Only an empty bottle comes out of a brewing stand's ingredient
+            // slot.
+            if src.holder == Holder::BrewingStand
+                && slot == 3
+                && reader.name(stack.item) != Some("minecraft:glass_bottle")
+            {
+                continue;
+            }
+            if slot < 64 {
+                ready |= 1 << slot;
+            }
         }
-        // Only an empty bottle comes out of a brewing stand's ingredient slot.
-        if src.holder == Holder::BrewingStand
-            && slot == 3
-            && slots[3].as_ref().map(|s| host.name(s.item)) != Some(Some("minecraft:glass_bottle"))
-        {
-            continue;
-        }
-        if transfer_from_slot(host, &src, slot, dst, to_side) {
-            return true;
-        }
-    }
-    false
+    });
+    let order = sided_slots(src.holder, 64, from_side, false);
+    order
+        .iter()
+        .filter(|&slot| slot < 64 && ready & (1 << slot) != 0)
+        .any(|slot| transfer_from_slot(host, &src, slot, dst, to_side))
 }
 
 /// The rest a hopper still has (its block entity's `TransferCooldown`).
 pub fn cooldown(host: &impl Blocks, p: BlockPos) -> i32 {
-    match host
-        .block_entity(p)
-        .and_then(|data| data.get("TransferCooldown").cloned())
-    {
-        Some(Tag::Int(v)) => v,
-        _ => 0,
-    }
+    let mut ticks = 0;
+    host.read_block_entity(p, &mut |data| {
+        if let Some(Tag::Int(v)) = data.get("TransferCooldown") {
+            ticks = *v;
+        }
+    });
+    ticks
+}
+
+/// One tick of the hopper's rest at `p` goes by (see
+/// `Level::count_down_hopper`); what it was.
+pub fn count_down(host: &mut impl Blocks, p: BlockPos) -> i32 {
+    let mut was = 0;
+    host.change_block_entity(p, &mut |data| match data.get_mut("TransferCooldown") {
+        Some(Tag::Int(v)) => {
+            was = *v;
+            if *v > 0 {
+                *v -= 1;
+                true
+            } else {
+                false
+            }
+        }
+        _ => false,
+    });
+    was
 }
 
 pub fn set_cooldown(host: &mut impl Blocks, p: BlockPos, ticks: i32) {
@@ -494,7 +572,9 @@ fn transfer_from_slot<H: Containers + Recipes>(
     dst: Store<H::Kind>,
     side: Dir,
 ) -> bool {
-    let Some(stack) = host.slots(src)[slot].clone() else {
+    let mut stack = None;
+    host.with_slots(src, &mut |slots| stack = slots.get(slot).cloned().flatten());
+    let Some(stack) = stack else {
         return false;
     };
     if !insert_one(host, dst, side, &stack) {
@@ -526,34 +606,38 @@ fn insert_one<H: Containers + Recipes>(
     side: Dir,
     stack: &ItemStack,
 ) -> bool {
-    let slots = host.slots(&dst);
-    let mut into = sided_slots(dst.holder, slots.len(), side, true);
-    if dst.holder == Holder::BrewingStand {
-        into.retain(|&i| super::brewing::accepts(host, &slots, i, stack));
-    }
     let max = host.max_stack(stack.item);
-    // A crafter takes it in the first slot that may have it.
-    if dst.holder == Holder::Crafter {
-        let Some(t) = into
-            .into_iter()
-            .find(|&i| super::crafter::accepts(host, dst.at, &slots, i, stack))
-        else {
-            return false;
+    // The slot it goes in and how many are there then.
+    let mut target = None;
+    let reader = &*host;
+    reader.with_slots(&dst, &mut |slots| {
+        let into = sided_slots(dst.holder, slots.len(), side, true);
+        let count = |t: usize| slots[t].as_ref().map_or(0, |d| d.count) + 1;
+        // A crafter takes it in the first slot that may have it.
+        if dst.holder == Holder::Crafter {
+            target = into
+                .iter()
+                .find(|&i| super::crafter::accepts(reader, dst.at, slots, i, stack))
+                .map(|t| (t, count(t)));
+            return;
+        }
+        let allowed = |i: usize| {
+            dst.holder != Holder::BrewingStand || super::brewing::accepts(reader, slots, i, stack)
         };
-        let moved = stack.with_count(slots[t].as_ref().map_or(0, |d| d.count) + 1);
-        host.put(&dst, &[(t, Some(moved))]);
-        return true;
-    }
-    let merge = into.iter().copied().find(|&i| {
-        slots[i]
-            .as_ref()
-            .is_some_and(|d| d.same_kind(stack) && d.count < max)
+        let merge = into.iter().find(|&i| {
+            allowed(i)
+                && slots[i]
+                    .as_ref()
+                    .is_some_and(|d| d.same_kind(stack) && d.count < max)
+        });
+        target = merge
+            .or_else(|| into.iter().find(|&i| allowed(i) && slots[i].is_none()))
+            .map(|t| (t, count(t)));
     });
-    let Some(t) = merge.or_else(|| into.iter().copied().find(|&i| slots[i].is_none())) else {
+    let Some((t, count)) = target else {
         return false;
     };
-    let moved = stack.with_count(slots[t].as_ref().map_or(0, |d| d.count) + 1);
-    host.put(&dst, &[(t, Some(moved))]);
+    host.put(&dst, &[(t, Some(stack.with_count(count)))]);
     true
 }
 
@@ -589,7 +673,7 @@ where
         };
         let slots = host.slots(&src);
         let pick = sided_slots(src.holder, slots.len(), from_side, false)
-            .into_iter()
+            .iter()
             .find_map(|i| {
                 let s = slots[i].as_ref()?;
                 let chance = crate::composter::chance(host.name(s.item)?);

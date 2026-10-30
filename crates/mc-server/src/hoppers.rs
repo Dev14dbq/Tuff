@@ -164,14 +164,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         if !crate::tickets::blocks_run(ctx, at.x >> 4, at.z >> 4) {
             continue;
         }
-        let is_hopper = ctx
-            .world
-            .block(p, &ctx.data.blocks)
-            .and_then(|s| ctx.data.blocks.block_name(s))
-            == Some("minecraft:hopper");
-        if is_hopper {
-            mc_tick::hopper::tick(level, logic, at);
-        } else {
+        if !mc_tick::hopper::tick(level, logic, at) {
             lock(&ctx.hoppers).remove(at);
         }
     }
@@ -779,5 +772,259 @@ mod tests {
             Some((stick, 1))
         );
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// A world of hopper setups for [`shortcuts_change_nothing`]: chains
+    /// into and out of chests, a full hopper under a chest, an empty one,
+    /// a locked one, composters fed and emptied, a furnace, a brewing
+    /// stand, a jukebox, minecarts both ways and items thrown in. Returns
+    /// the containers to compare.
+    fn setups(ctx: &ServerContext) -> Vec<(Position, containers::Kind)> {
+        let blocks = &ctx.data.blocks;
+        let state = |name: &str, props: &[(&str, &str)]| blocks.state_id(name, props).unwrap();
+        let place = |p: Position, s: u32| assert!(WorldLevel::new(ctx).set_block(p, s));
+        let item = |n: &str| ctx.items.id(n).unwrap();
+        let kind = |n: &str| containers::kind_of(n).unwrap();
+        let hopper = |facing: &str| state("minecraft:hopper", &[("facing", facing)]);
+        let y = -60;
+        let watch = std::cell::RefCell::new(Vec::new());
+        let fill = |p: Position, block: &str, slots: &[(usize, &str, i32)]| {
+            let changes: Vec<_> = slots
+                .iter()
+                .map(|&(i, n, c)| (i, Some(ItemStack::new(item(n), c))))
+                .collect();
+            containers::put(ctx, p, kind(block), &changes);
+            watch.borrow_mut().push((p, kind(block)));
+        };
+        // A chest emptied down a chain of three hoppers into a chest; the
+        // middle one starts full of something else.
+        place(Position::new(0, y + 1, 0), state("minecraft:chest", &[]));
+        place(Position::new(0, y, 0), hopper("east"));
+        place(Position::new(1, y, 0), hopper("east"));
+        place(Position::new(2, y, 0), hopper("east"));
+        place(Position::new(3, y, 0), state("minecraft:chest", &[]));
+        fill(
+            Position::new(0, y + 1, 0),
+            "minecraft:chest",
+            &[(0, "minecraft:stick", 20), (5, "minecraft:cobblestone", 3)],
+        );
+        fill(Position::new(0, y, 0), "minecraft:hopper", &[]);
+        fill(
+            Position::new(1, y, 0),
+            "minecraft:hopper",
+            &[
+                (0, "minecraft:dirt", 64),
+                (1, "minecraft:dirt", 64),
+                (2, "minecraft:dirt", 64),
+                (3, "minecraft:dirt", 64),
+                (4, "minecraft:dirt", 63),
+            ],
+        );
+        fill(Position::new(2, y, 0), "minecraft:hopper", &[]);
+        fill(
+            Position::new(3, y, 0),
+            "minecraft:chest",
+            &[(0, "minecraft:stick", 63)],
+        );
+        // A full hopper under a chest: nothing comes down.
+        place(Position::new(0, y + 1, 4), state("minecraft:chest", &[]));
+        place(Position::new(0, y, 4), hopper("down"));
+        let full: Vec<_> = (0..5).map(|i| (i, "minecraft:cobblestone", 64)).collect();
+        fill(Position::new(0, y, 4), "minecraft:hopper", &full);
+        fill(
+            Position::new(0, y + 1, 4),
+            "minecraft:chest",
+            &[(0, "minecraft:stone", 5)],
+        );
+        // A locked hopper over a chest.
+        place(
+            Position::new(4, y, 4),
+            state(
+                "minecraft:hopper",
+                &[("facing", "down"), ("enabled", "false")],
+            ),
+        );
+        place(Position::new(4, y - 1, 4), state("minecraft:chest", &[]));
+        fill(
+            Position::new(4, y, 4),
+            "minecraft:hopper",
+            &[(2, "minecraft:stick", 4)],
+        );
+        fill(Position::new(4, y - 1, 4), "minecraft:chest", &[]);
+        // Pumpkin pie into a composter (always a layer), and bone meal out
+        // of a full one.
+        place(Position::new(8, y + 1, 0), hopper("down"));
+        place(Position::new(8, y, 0), state("minecraft:composter", &[]));
+        fill(
+            Position::new(8, y + 1, 0),
+            "minecraft:hopper",
+            &[(0, "minecraft:pumpkin_pie", 9)],
+        );
+        place(
+            Position::new(8, y + 1, 4),
+            state("minecraft:composter", &[("level", "8")]),
+        );
+        place(Position::new(8, y, 4), hopper("east"));
+        fill(Position::new(8, y, 4), "minecraft:hopper", &[]);
+        // Into a furnace's top and side, and a brewing stand.
+        place(Position::new(12, y + 1, 0), hopper("down"));
+        place(Position::new(12, y, 0), state("minecraft:furnace", &[]));
+        place(Position::new(11, y, 0), hopper("east"));
+        fill(
+            Position::new(12, y + 1, 0),
+            "minecraft:hopper",
+            &[(0, "minecraft:raw_iron", 3)],
+        );
+        fill(
+            Position::new(11, y, 0),
+            "minecraft:hopper",
+            &[(0, "minecraft:coal", 2), (1, "minecraft:stick", 2)],
+        );
+        fill(Position::new(12, y, 0), "minecraft:furnace", &[]);
+        place(Position::new(12, y + 1, 4), hopper("down"));
+        place(
+            Position::new(12, y, 4),
+            state("minecraft:brewing_stand", &[]),
+        );
+        fill(
+            Position::new(12, y + 1, 4),
+            "minecraft:hopper",
+            &[(0, "minecraft:nether_wart", 2), (1, "minecraft:stick", 1)],
+        );
+        fill(Position::new(12, y, 4), "minecraft:brewing_stand", &[]);
+        // A disc into a jukebox.
+        place(Position::new(16, y + 1, 0), hopper("down"));
+        place(Position::new(16, y, 0), state("minecraft:jukebox", &[]));
+        fill(
+            Position::new(16, y + 1, 0),
+            "minecraft:hopper",
+            &[(0, "minecraft:music_disc_cat", 1)],
+        );
+        // A chest minecart over a hopper; a hopper minecart under a chest.
+        place(Position::new(20, y, 0), hopper("east"));
+        place(Position::new(21, y, 0), state("minecraft:chest", &[]));
+        place(Position::new(20, y + 1, 0), state("minecraft:rail", &[]));
+        fill(Position::new(20, y, 0), "minecraft:hopper", &[]);
+        fill(Position::new(21, y, 0), "minecraft:chest", &[]);
+        let chest = cart(ctx, Cart::Chest, [20.5, f64::from(y + 1), 0.5]);
+        let chest_kind = containers::entity_kind("minecraft:chest_minecart").unwrap();
+        containers::put(
+            ctx,
+            containers::entity_key(chest),
+            chest_kind,
+            &[(3, Some(ItemStack::new(item("minecraft:stick"), 4)))],
+        );
+        watch
+            .borrow_mut()
+            .push((containers::entity_key(chest), chest_kind));
+        place(Position::new(24, y + 1, 0), state("minecraft:chest", &[]));
+        fill(
+            Position::new(24, y + 1, 0),
+            "minecraft:chest",
+            &[(7, "minecraft:apple", 3)],
+        );
+        let hc = cart(ctx, Cart::Hopper, [24.5, f64::from(y), 0.5]);
+        watch.borrow_mut().push((
+            containers::entity_key(hc),
+            containers::entity_kind("minecraft:hopper_minecart").unwrap(),
+        ));
+        // Empty hoppers with items thrown in over them, one over a chest.
+        place(Position::new(28, y, 0), hopper("down"));
+        place(Position::new(28, y - 1, 0), state("minecraft:chest", &[]));
+        place(Position::new(28, y, 4), hopper("east"));
+        fill(Position::new(28, y, 0), "minecraft:hopper", &[]);
+        fill(Position::new(28, y - 1, 0), "minecraft:chest", &[]);
+        fill(Position::new(28, y, 4), "minecraft:hopper", &[]);
+        crate::tick::spawn_item_at(
+            ctx,
+            [28.5, f64::from(y) + 1.0, 0.5],
+            item("minecraft:stick"),
+            3,
+        );
+        crate::tick::spawn_item_at(
+            ctx,
+            [28.5, f64::from(y) + 1.5, 4.5],
+            item("minecraft:egg"),
+            20,
+        );
+        watch.into_inner()
+    }
+
+    /// One game tick of every hopper and hopper minecart, with the
+    /// shortcuts (containers kept decoded, the entity index, vanilla's
+    /// empty and full checks) or without; what then is where.
+    fn step(
+        ctx: &ServerContext,
+        shortcuts: bool,
+        watch: &[(Position, containers::Kind)],
+        tick: usize,
+    ) -> String {
+        if tick == 6 {
+            // Something thrown in on the way.
+            let egg = ctx.items.id("minecraft:egg").unwrap();
+            crate::tick::spawn_item_at(ctx, [28.5, -59.0, 0.5], egg, 2);
+        }
+        if shortcuts {
+            containers::keep(ctx);
+        }
+        let mut level = WorldLevel::new(ctx);
+        let logic = level.logic();
+        let all: Vec<_> = lock(&ctx.hoppers).iter().copied().collect();
+        for at in all {
+            mc_tick::hopper::tick_with(&mut level, logic, at, shortcuts);
+        }
+        drop(level);
+        tick_carts(ctx);
+        if shortcuts {
+            containers::release(ctx);
+        }
+        let mut seen = String::new();
+        for &(p, kind) in watch {
+            let slots = containers::slots(ctx, p, kind);
+            let stored = (containers::entity_of(p).is_none()).then(|| {
+                ctx.world
+                    .block_entity(p, &ctx.data.blocks)
+                    .map(|be| be.data)
+            });
+            seen += &format!("{p:?} {slots:?} {stored:?} {}\n", cooldown(ctx, p));
+        }
+        for x in [8, 12, 16] {
+            for z in [0, 4] {
+                for dy in [-1, 0, 1] {
+                    let p = Position::new(x, -60 + dy, z);
+                    seen += &format!("{:?}\n", ctx.world.block(p, &ctx.data.blocks));
+                }
+            }
+        }
+        for e in lock(&ctx.entities).iter() {
+            seen += &format!(
+                "{} {:?} {}\n",
+                e.id,
+                e.kind.as_stack().map(|s| s.count),
+                e.removed
+            );
+        }
+        seen
+    }
+
+    #[test]
+    fn shortcuts_change_nothing() {
+        let (Some(fast), Some(plain)) = (context(), context()) else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let watch = setups(&fast);
+        assert_eq!(setups(&plain).len(), watch.len());
+        let mut moved = 0;
+        let mut last = String::new();
+        for tick in 0..60 {
+            let a = step(&fast, true, &watch, tick);
+            let b = step(&plain, false, &watch, tick);
+            assert_eq!(a, b, "tick {tick}");
+            moved += usize::from(a != last);
+            last = a;
+        }
+        // The setups really do something over the run.
+        assert!(moved > 10, "only {moved} ticks changed anything");
     }
 }

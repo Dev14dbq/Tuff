@@ -59,9 +59,12 @@ fn holder(name: &str) -> Holder {
 
 /// The container block at `p` and its name.
 fn kind_at(ctx: &ServerContext, p: Position) -> Option<(Kind, &str)> {
-    let blocks = &ctx.data.blocks;
-    let state = ctx.world.block(p, blocks)?;
-    let name = blocks.block_name(state)?;
+    kind_of_state(ctx, ctx.world.block(p, &ctx.data.blocks)?)
+}
+
+/// The container a block state is and its name.
+fn kind_of_state(ctx: &ServerContext, state: u32) -> Option<(Kind, &str)> {
+    let name = ctx.data.blocks.block_name(state)?;
     if name == "minecraft:decorated_pot" {
         return Some((crate::pots::KIND, name));
     }
@@ -107,6 +110,24 @@ impl Blocks for Host<'_> {
             .map(|be| be.data)
     }
 
+    fn read_block_entity(&self, p: BlockPos, f: &mut dyn FnMut(&Compound)) -> bool {
+        self.ctx
+            .world
+            .read_block_entity(to_position(p), &self.ctx.data.blocks, |be| f(&be.data))
+            .is_some()
+    }
+
+    fn change_block_entity(
+        &mut self,
+        p: BlockPos,
+        f: &mut dyn FnMut(&mut Compound) -> bool,
+    ) -> bool {
+        self.ctx
+            .world
+            .edit_block_entity(to_position(p), &self.ctx.data.blocks, |be| f(&mut be.data))
+            .unwrap_or(false)
+    }
+
     fn edit_block_entity(
         &mut self,
         p: BlockPos,
@@ -115,16 +136,24 @@ impl Blocks for Host<'_> {
     ) {
         let blocks = &self.ctx.data.blocks;
         let at = to_position(p);
-        let mut be = match (self.ctx.world.block_entity(at, blocks), create) {
-            (Some(be), _) => be,
-            (None, Some(id)) => mc_world::BlockEntity {
-                x: p.x,
-                y: p.y,
-                z: p.z,
-                id: id.to_owned(),
-                data: Compound::new(),
-            },
-            (None, None) => return,
+        if self
+            .ctx
+            .world
+            .edit_block_entity(at, blocks, |be| {
+                edit(&mut be.data);
+                true
+            })
+            .is_some()
+        {
+            return;
+        }
+        let Some(id) = create else { return };
+        let mut be = mc_world::BlockEntity {
+            x: p.x,
+            y: p.y,
+            z: p.z,
+            id: id.to_owned(),
+            data: Compound::new(),
         };
         edit(&mut be.data);
         self.ctx.world.set_block_entity(be, blocks);
@@ -135,8 +164,13 @@ impl Containers for Host<'_> {
     type Kind = Kind;
 
     fn store_at(&mut self, p: BlockPos) -> Option<Store<Kind>> {
+        let state = self.ctx.world.block(to_position(p), &self.ctx.data.blocks);
+        self.store_in(p, state)
+    }
+
+    fn store_in(&mut self, p: BlockPos, state: Option<u32>) -> Option<Store<Kind>> {
         let ctx = self.ctx;
-        if let Some((kind, name)) = kind_at(ctx, to_position(p)) {
+        if let Some((kind, name)) = state.and_then(|s| kind_of_state(ctx, s)) {
             return Some(Self::store(to_position(p), kind, name));
         }
         let (lo, hi) = (
@@ -147,8 +181,18 @@ impl Containers for Host<'_> {
                 f64::from(p.z) + 1.0,
             ],
         );
-        let found: Vec<(i32, Kind)> = lock(&ctx.entities)
-            .iter()
+        let mut near = Vec::new();
+        let len = lock(&ctx.containers)
+            .nearby
+            .vehicles((p.x, p.y, p.z), &mut near);
+        let entities = lock(&ctx.entities);
+        let all: &mut dyn Iterator<Item = &mc_entity::Entity> = match len {
+            Some(len) if crate::nearby::still(len, &entities, &near) => {
+                &mut near.iter().map(|&(i, _)| &entities[i as usize])
+            }
+            _ => &mut entities.iter(),
+        };
+        let found: Vec<(i32, Kind)> = all
             .filter(|e| !e.removed)
             .filter_map(|e| {
                 let mc_entity::Kind::Vehicle(v) = &e.kind else {
@@ -161,8 +205,11 @@ impl Containers for Host<'_> {
                     .then_some((e.id, kind))
             })
             .collect();
+        if found.is_empty() {
+            return None;
+        }
         // One of them, at random.
-        let pick = found.get((crate::util::random_u64() % found.len().max(1) as u64) as usize)?;
+        let pick = found.get((crate::util::random_u64() % found.len() as u64) as usize)?;
         Some(Self::entity_store(pick.0, pick.1))
     }
 
@@ -175,6 +222,10 @@ impl Containers for Host<'_> {
         containers::slots(self.ctx, to_position(store.at), store.kind)
     }
 
+    fn with_slots(&self, store: &Store<Kind>, f: &mut dyn FnMut(&[Option<ItemStack>])) {
+        containers::with_slots(self.ctx, to_position(store.at), store.kind, f);
+    }
+
     fn put(&mut self, store: &Store<Kind>, changes: &[(usize, Option<ItemStack>)]) {
         containers::put(self.ctx, to_position(store.at), store.kind, changes);
     }
@@ -182,9 +233,16 @@ impl Containers for Host<'_> {
 
 impl ItemEntities for Host<'_> {
     fn items_in(&self, min: [f64; 3], max: [f64; 3]) -> Vec<(i32, ItemStack)> {
-        lock(&self.ctx.entities)
-            .iter()
-            .filter(|e| !e.removed && !(0..3).any(|i| e.pos[i] < min[i] || e.pos[i] >= max[i]))
+        let mut near = Vec::new();
+        let len = lock(&self.ctx.containers).nearby.items(min, max, &mut near);
+        let entities = lock(&self.ctx.entities);
+        let all: &mut dyn Iterator<Item = &mc_entity::Entity> = match len {
+            Some(len) if crate::nearby::still(len, &entities, &near) => {
+                &mut near.iter().map(|&(i, _)| &entities[i as usize])
+            }
+            _ => &mut entities.iter(),
+        };
+        all.filter(|e| !e.removed && !(0..3).any(|i| e.pos[i] < min[i] || e.pos[i] >= max[i]))
             .filter_map(|e| Some((e.id, e.kind.as_stack()?)))
             .collect()
     }

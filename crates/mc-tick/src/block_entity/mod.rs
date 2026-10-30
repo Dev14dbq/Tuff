@@ -45,9 +45,38 @@ pub trait Blocks {
     fn block(&self, p: BlockPos) -> Option<u32>;
     /// The saved data of the block entity at `p`.
     fn block_entity(&self, p: BlockPos) -> Option<Compound>;
+    /// Looks at the saved data of the block entity at `p` without copying
+    /// it; `false` if there is none. `f` must not reach back into the host.
+    fn read_block_entity(&self, p: BlockPos, f: &mut dyn FnMut(&Compound)) -> bool {
+        match self.block_entity(p) {
+            Some(data) => {
+                f(&data);
+                true
+            }
+            None => false,
+        }
+    }
+    /// Changes the data of the block entity at `p` where it is, if `f` says
+    /// it changed something (else it is left as it was, not even marked
+    /// changed). `false` if there is none or nothing changed. `f` must not
+    /// reach back into the host.
+    fn change_block_entity(
+        &mut self,
+        p: BlockPos,
+        f: &mut dyn FnMut(&mut Compound) -> bool,
+    ) -> bool {
+        let Some(mut data) = self.block_entity(p) else {
+            return false;
+        };
+        if !f(&mut data) {
+            return false;
+        }
+        self.edit_block_entity(p, None, &mut |d| *d = data.clone());
+        true
+    }
     /// Changes the data of the block entity at `p` and stores it. With
     /// `create`, a missing one is made with that id; without, nothing
-    /// happens when there is none.
+    /// happens when there is none. `edit` must not reach back into the host.
     fn edit_block_entity(
         &mut self,
         p: BlockPos,

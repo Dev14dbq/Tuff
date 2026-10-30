@@ -475,12 +475,18 @@ impl ItemStack {
     /// [`ItemStack::to_nbt`] with the item's name given.
     pub fn to_nbt_with(&self, id: &str) -> Compound {
         let mut c = Compound::new();
+        self.write_nbt(id, &mut c);
+        c
+    }
+
+    /// Adds the stack's `id`, `count` and `components` to `c`, after what
+    /// it holds already (a container's `Slot`).
+    pub fn write_nbt(&self, id: &str, c: &mut Compound) {
         c.insert("id", Tag::String(id.to_owned()));
         c.insert("count", Tag::Int(self.count));
         if let Some(components) = self.components.to_nbt(self.damage) {
             c.insert("components", Tag::Compound(components));
         }
-        c
     }
 
     /// The stack saved inside a component (a count of 1 left out).

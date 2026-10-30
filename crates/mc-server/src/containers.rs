@@ -91,9 +91,77 @@ pub struct Open {
     pub slots: Vec<Option<ItemStack>>,
     /// Players with it open.
     pub viewers: Vec<u128>,
+    /// The slots hoppers changed since it was last stored (bit `i` for slot
+    /// `i`, all bits for slots past 63); stored at [`release`].
+    pub unsaved: u64,
 }
 
-pub type Containers = HashMap<(i32, i32, i32), Open>;
+/// The containers decoded in memory, by block (or [`entity_key`]): every
+/// one somebody has open, and while hoppers take their turns also every one
+/// they touched, so a chain of hoppers does not read the same `Items` again
+/// for each item. During the hopper turns changed `Items` are stored only
+/// at [`release`], so raw-NBT readers (such as the block entity query from
+/// the network thread) may see the data from before the tick until then.
+#[derive(Debug, Default)]
+pub struct Containers {
+    open: mc_tick::fast::FastMap<(i32, i32, i32), Open>,
+    /// Containers nobody has open stay here until [`release`].
+    keep: bool,
+    /// Item entities and vehicles by cell while hoppers take their turns.
+    pub nearby: crate::nearby::Nearby,
+}
+
+impl std::ops::Deref for Containers {
+    type Target = mc_tick::fast::FastMap<(i32, i32, i32), Open>;
+    fn deref(&self) -> &Self::Target {
+        &self.open
+    }
+}
+
+impl std::ops::DerefMut for Containers {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.open
+    }
+}
+
+/// From now until [`release`], containers that hoppers read or change stay
+/// decoded (see [`Containers`]).
+pub fn keep(ctx: &ServerContext) {
+    // Built aside, so the two locks are never held together.
+    let mut nearby = std::mem::take(&mut ctx.containers.lock().expect("containers lock").nearby);
+    nearby.build(&ctx.entities.lock().expect("entities lock"));
+    let mut all = ctx.containers.lock().expect("containers lock");
+    all.nearby = nearby;
+    all.keep = true;
+}
+
+/// Stores what hoppers changed since [`keep`] and forgets the containers
+/// nobody has open.
+pub fn release(ctx: &ServerContext) {
+    let mut all = ctx.containers.lock().expect("containers lock");
+    all.keep = false;
+    all.nearby.clear();
+    all.open.retain(|&(x, y, z), open| {
+        if open.unsaved != 0 {
+            let p = Position::new(x, y, z);
+            // A block that is no longer this container keeps nothing.
+            let still = entity_of(p).is_some()
+                || ctx
+                    .world
+                    .block(p, &ctx.data.blocks)
+                    .and_then(|s| ctx.data.blocks.block_name(s))
+                    .is_some_and(|name| {
+                        name == "minecraft:decorated_pot"
+                            || kind_of(name).is_some_and(|k| k.entity == open.kind.entity)
+                    });
+            if still {
+                store_changed(ctx, p, open);
+            }
+            open.unsaved = 0;
+        }
+        !open.viewers.is_empty()
+    });
+}
 
 /// Players with an ender chest's menu open, by block. The chest holds
 /// nothing itself (the items are the player's); only the lid is shared.
@@ -182,7 +250,10 @@ pub fn set_entity_slots(ctx: &ServerContext, id: i32, slots: &[Option<ItemStack>
                 *d = s.clone();
             }
         }
-        return;
+        // Only kept for hoppers (see `Containers`): stored as well.
+        if !open.viewers.is_empty() {
+            return;
+        }
     }
     drop(all);
     ctx.entity_items
@@ -269,20 +340,113 @@ pub fn read_items(ctx: &ServerContext, data: &Compound, size: usize) -> Vec<Opti
 
 /// The `Items` list of `slots`, as chunk files keep it.
 pub fn write_items(ctx: &ServerContext, slots: &[Option<ItemStack>]) -> Tag {
-    let mut list = Vec::new();
+    let mut list = Vec::with_capacity(slots.iter().flatten().count());
     for (i, slot) in slots.iter().enumerate() {
-        let Some(stack) = slot else { continue };
-        let Some(name) = item_name(ctx, stack.item) else {
-            continue;
-        };
-        let mut e = Compound::new();
-        e.insert("Slot", Tag::Byte(i as i8));
-        for (k, v) in stack.to_nbt_with(&name).iter() {
-            e.insert(k, v.clone());
+        if let Some(entry) = slot.as_ref().and_then(|s| item_entry(ctx, i, s)) {
+            list.push(entry);
         }
-        list.push(Tag::Compound(e));
     }
     Tag::List(list)
+}
+
+/// Writes the slots hoppers changed back to the stored data: only their
+/// entries of `Items` where the list is as [`write_items`] makes it (in slot
+/// order, one entry for each stack), else the whole list.
+fn store_changed(ctx: &ServerContext, p: Position, open: &Open) {
+    if open.unsaved == u64::MAX
+        || open.slots.len() > 64
+        || open.kind.entity == "minecraft:decorated_pot"
+    {
+        return store(ctx, p, open);
+    }
+    let edit = |data: &mut Compound| -> bool {
+        let Some(Tag::List(list)) = data.get_mut("Items") else {
+            return false;
+        };
+        if !as_written(list, &open.slots, open.unsaved) {
+            return false;
+        }
+        for (i, stack) in open.slots.iter().enumerate() {
+            if open.unsaved & (1 << i) == 0 {
+                continue;
+            }
+            let at = list.partition_point(|e| entry_slot(e).is_some_and(|s| s < i));
+            let here = list.get(at).and_then(entry_slot) == Some(i);
+            match stack.as_ref().and_then(|s| item_entry(ctx, i, s)) {
+                Some(entry) if here => list[at] = entry,
+                Some(entry) => list.insert(at, entry),
+                None if here => {
+                    list.remove(at);
+                }
+                None => {}
+            }
+        }
+        true
+    };
+    let done = match entity_of(p) {
+        Some(id) => ctx
+            .entity_items
+            .lock()
+            .expect("entity items lock")
+            .get_mut(&id)
+            .is_some_and(edit),
+        None => ctx
+            .world
+            .edit_block_entity(p, &ctx.data.blocks, |be| edit(&mut be.data))
+            .unwrap_or(false),
+    };
+    if !done {
+        store(ctx, p, open);
+    }
+}
+
+/// The `Slot` of an `Items` entry.
+fn entry_slot(entry: &Tag) -> Option<usize> {
+    match entry {
+        Tag::Compound(e) => match e.get("Slot") {
+            Some(Tag::Byte(slot)) => Some(*slot as u8 as usize),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether `list` is what [`write_items`] would write for `slots` apart from
+/// the slots in `changed`: in slot order, and an entry exactly for each
+/// stack that was read from it.
+fn as_written(list: &[Tag], slots: &[Option<ItemStack>], changed: u64) -> bool {
+    let mut last = None;
+    // Entries of slots that did not change, each for a stack.
+    let mut kept = 0;
+    for entry in list {
+        let Some(slot) = entry_slot(entry) else {
+            return false;
+        };
+        if last.is_some_and(|l| l >= slot) || slot >= slots.len() {
+            return false;
+        }
+        if changed & (1 << slot) == 0 {
+            if slots[slot].is_none() {
+                return false;
+            }
+            kept += 1;
+        }
+        last = Some(slot);
+    }
+    // In slot order, so no stack has two: then every stack has one.
+    let stacks = (0..slots.len())
+        .filter(|&i| changed & (1 << i) == 0 && slots[i].is_some())
+        .count();
+    kept == stacks
+}
+
+/// One `Items` entry: the stack in slot `slot`.
+fn item_entry(ctx: &ServerContext, slot: usize, stack: &ItemStack) -> Option<Tag> {
+    let name = ctx.items.name(stack.item)?;
+    let mut e = Compound::new();
+    e.insert("Slot", Tag::Byte(slot as i8));
+    stack.write_nbt(name, &mut e);
+    Some(Tag::Compound(e))
 }
 
 /// Writes the slots back to the block entity.
@@ -296,23 +460,34 @@ fn store(ctx: &ServerContext, p: Position, open: &Open) {
             .insert("Items", write_items(ctx, &open.slots));
         return;
     }
-    let blocks = &ctx.data.blocks;
-    let mut be = ctx
-        .world
-        .block_entity(p, blocks)
-        .unwrap_or(mc_world::BlockEntity {
-            x: p.x,
-            y: p.y,
-            z: p.z,
-            id: open.kind.entity.to_owned(),
-            data: Compound::new(),
-        });
     if open.kind.entity == "minecraft:decorated_pot" {
         crate::pots::write_stored(ctx, p, open.slots.first().cloned().flatten());
         return;
     }
-    be.data.insert("Items", write_items(ctx, &open.slots));
-    ctx.world.set_block_entity(be, blocks);
+    let blocks = &ctx.data.blocks;
+    let mut items = Some(write_items(ctx, &open.slots));
+    let edited = ctx.world.edit_block_entity(p, blocks, |be| {
+        if let Some(items) = items.take() {
+            be.data.insert("Items", items);
+        }
+        true
+    });
+    if edited.is_none()
+        && let Some(items) = items
+    {
+        let mut data = Compound::new();
+        data.insert("Items", items);
+        ctx.world.set_block_entity(
+            mc_world::BlockEntity {
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                id: open.kind.entity.to_owned(),
+                data,
+            },
+            blocks,
+        );
+    }
 }
 
 /// How full the container at `p` is, as a comparator reads it
@@ -339,6 +514,34 @@ pub fn signal(ctx: &ServerContext, p: Position) -> Option<u8> {
     Some(fullness(ctx, &slots))
 }
 
+/// Whether the container at `p` holds nothing ([`signal`] is 0), read
+/// without copying its slots. `None` if there is no container there.
+pub fn empty(ctx: &ServerContext, p: Position) -> Option<bool> {
+    let state = ctx.world.block(p, &ctx.data.blocks)?;
+    let name = ctx.data.blocks.block_name(state)?;
+    if name == crate::crafter::ID || ctx.shapes.chest_partner(state).is_some() {
+        return signal(ctx, p).map(|s| s == 0);
+    }
+    let kind = kind_of(name)?;
+    Some(with_slots(ctx, p, kind, |slots| {
+        slots.iter().all(Option::is_none)
+    }))
+}
+
+/// Whether every slot of the container block at `p` holds a stack as large
+/// as its item stacks (vanilla `HopperBlockEntity.inventoryFull`). `None`
+/// if there is no container there.
+pub fn full(ctx: &ServerContext, p: Position) -> Option<bool> {
+    let state = ctx.world.block(p, &ctx.data.blocks)?;
+    let kind = kind_of(ctx.data.blocks.block_name(state)?)?;
+    Some(with_slots(ctx, p, kind, |slots| {
+        slots.iter().all(|s| {
+            s.as_ref()
+                .is_some_and(|s| s.count >= ctx.items.max_stack(s.item))
+        })
+    }))
+}
+
 /// The comparator reading of these slots (see [`signal`]).
 pub fn fullness(ctx: &ServerContext, slots: &[Option<ItemStack>]) -> u8 {
     let total = slots.len().max(1);
@@ -357,20 +560,58 @@ pub fn fullness(ctx: &ServerContext, slots: &[Option<ItemStack>]) -> u8 {
 
 /// The slots of the container at `p` as they are now.
 pub fn slots(ctx: &ServerContext, p: Position, kind: Kind) -> Vec<Option<ItemStack>> {
+    with_slots(ctx, p, kind, <[_]>::to_vec)
+}
+
+/// Looks at the slots of the container at `p` as they are now, without
+/// copying them. `f` runs under the containers' lock: it must not reach
+/// containers again.
+pub fn with_slots<R>(
+    ctx: &ServerContext,
+    p: Position,
+    kind: Kind,
+    f: impl FnOnce(&[Option<ItemStack>]) -> R,
+) -> R {
     // Hoppers and comparators look inside a minecart too: that rolls its loot.
     if entity_of(p).is_some() {
         let _ = unpack_loot(ctx, p, kind.slots);
     }
-    if let Some(open) = ctx.containers.lock().expect("containers lock").get(&key(p)) {
-        return open.slots.clone();
+    let mut all = ctx.containers.lock().expect("containers lock");
+    if let Some(open) = all.get(&key(p)) {
+        return f(&open.slots);
     }
-    if kind.entity == "minecraft:decorated_pot" {
-        return vec![crate::pots::stored(ctx, p)];
+    let slots = if kind.entity == "minecraft:decorated_pot" {
+        vec![crate::pots::stored(ctx, p)]
+    } else {
+        stored_slots(ctx, p, kind.slots)
+    };
+    if !all.keep {
+        return f(&slots);
     }
-    match stored_data(ctx, p) {
-        Some(data) => read_items(ctx, &data, kind.slots),
-        None => vec![None; kind.slots],
-    }
+    let open = all.entry(key(p)).or_insert(Open {
+        kind,
+        slots,
+        viewers: Vec::new(),
+        unsaved: 0,
+    });
+    f(&open.slots)
+}
+
+/// The slots kept in the stored data of the container at `p` (see
+/// [`stored_data`]), read where they are.
+fn stored_slots(ctx: &ServerContext, p: Position, size: usize) -> Vec<Option<ItemStack>> {
+    let read = match entity_of(p) {
+        Some(id) => ctx
+            .entity_items
+            .lock()
+            .expect("entity items lock")
+            .get(&id)
+            .map(|data| read_items(ctx, data, size)),
+        None => ctx
+            .world
+            .read_block_entity(p, &ctx.data.blocks, |be| read_items(ctx, &be.data, size)),
+    };
+    read.unwrap_or_else(|| vec![None; size])
 }
 
 /// Changes slots of the container at `p` (commands, furnaces): stored, seen
@@ -381,15 +622,13 @@ pub fn put(ctx: &ServerContext, p: Position, kind: Kind, changes: &[(usize, Opti
         let slots = if kind.entity == "minecraft:decorated_pot" {
             vec![crate::pots::stored(ctx, p)]
         } else {
-            match stored_data(ctx, p) {
-                Some(data) => read_items(ctx, &data, kind.slots),
-                None => vec![None; kind.slots],
-            }
+            stored_slots(ctx, p, kind.slots)
         };
         Open {
             kind,
             slots,
             viewers: Vec::new(),
+            unsaved: 0,
         }
     });
     for (slot, stack) in changes {
@@ -397,9 +636,18 @@ pub fn put(ctx: &ServerContext, p: Position, kind: Kind, changes: &[(usize, Opti
             open.slots[*slot] = stack.clone();
         }
     }
-    store(ctx, p, open);
+    let keep = all.keep;
+    let open = all.get_mut(&key(p)).expect("inserted above");
+    if keep {
+        // Hoppers are moving items: stored once, at `release`.
+        for (slot, _) in changes {
+            open.unsaved |= 1u64.checked_shl(*slot as u32).unwrap_or(u64::MAX);
+        }
+    } else {
+        store(ctx, p, open);
+    }
     let viewers = open.viewers.clone();
-    if open.viewers.is_empty() {
+    if open.viewers.is_empty() && !keep {
         all.remove(&key(p));
     }
     drop(all);
@@ -625,6 +873,7 @@ pub fn open(ctx: &ServerContext, uuid: u128, p: Position, kind: Kind) -> Vec<Opt
             kind,
             slots,
             viewers: Vec::new(),
+            unsaved: 0,
         }
     });
     let first = !open.viewers.contains(&uuid);
