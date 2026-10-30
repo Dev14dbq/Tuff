@@ -1235,9 +1235,7 @@ fn phantoms(
 ) {
     // The clock counts every tick the rules allow, in any dimension and
     // with or without players to visit, and one to two minutes apart.
-    if !clock.advance(now, phantoms_on(ctx), || {
-        (60 + i64::from(below(60))) * 20
-    }) {
+    if !clock.advance(now, phantoms_on(ctx), || (60 + i64::from(below(60))) * 20) {
         return;
     }
     // Only under a sky that turns night, or where there is no sky at all.

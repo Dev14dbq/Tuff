@@ -92,6 +92,7 @@ pub(super) fn life(m: &mut Mob, b: &mut Body, s: &Senses, out: &mut Vec<MobEvent
             out.push(MobEvent::Status(18));
         }
     }
+    m.universal = (m.universal - 1).max(0);
     if m.anger > 0 {
         m.anger -= 1;
         if m.anger == 0 {

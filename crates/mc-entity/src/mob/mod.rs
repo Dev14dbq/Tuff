@@ -690,6 +690,9 @@ pub struct Mob {
     /// A player hurt it since the world last looked (neutral mobs under
     /// the `universal_anger` game rule turn on every player then).
     pub provoked: bool,
+    /// Piglins: ticks left of anger at every player in sight (their
+    /// `universal_anger` memory), after a player hurt one under the game rule.
+    pub universal: i32,
     /// Ghasts charge and blazes burn before shooting.
     pub charge: i32,
     /// Zombies raise their arms while chasing.
@@ -813,6 +816,7 @@ impl Mob {
             walked: 0.0,
             hurt_by_player: None,
             provoked: false,
+            universal: 0,
             charge: 0,
             arms_up: false,
             boss: match species {
