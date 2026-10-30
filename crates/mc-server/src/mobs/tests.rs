@@ -63,6 +63,7 @@ fn join(ctx: &ServerContext, pos: [f64; 3]) -> u128 {
             game_mode: 0,
             entity_id: 7000,
             skin_parts: 0,
+            text_filtering: false,
             pose: Some(crate::context::Pose {
                 x: pos[0],
                 y: pos[1],

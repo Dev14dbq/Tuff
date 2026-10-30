@@ -29,7 +29,7 @@ pub enum Note {
     /// Somebody logged in; at most one per 30 seconds (see [`Bus`]).
     Activity,
     WorldUpgradeStarted,
-    /// Progress of a world upgrade, 0 to 100.
+    /// Progress of a world upgrade, as the share done (0 to 1).
     WorldUpgradeProgress(f32),
     WorldUpgradeFinished,
     WorldUpgradeFailed(String),

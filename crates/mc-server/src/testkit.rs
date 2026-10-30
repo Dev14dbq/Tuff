@@ -36,6 +36,7 @@ pub fn join(ctx: &ServerContext, uuid: u128, entity_id: i32, pos: [f64; 3], mode
             game_mode: mode,
             entity_id,
             skin_parts: 0,
+            text_filtering: false,
             pose: Some(Pose {
                 x: pos[0],
                 y: pos[1],

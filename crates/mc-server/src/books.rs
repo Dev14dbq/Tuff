@@ -1,13 +1,24 @@
 //! Books: writing in a book and quill and signing it (`edit_book`).
 
 use mc_nbt::{Compound, Tag};
+use mc_protocol::filter::FilteredText;
 use mc_protocol::packets::play::ItemStack;
 
 use crate::context::ServerContext;
 
-fn raw(text: &str) -> Tag {
+/// A page or title as the book stores it: what was written and, when the
+/// text filter changed it, what others see. An editor who has text filtering
+/// on only gets the filtered text.
+fn filterable(text: &FilteredText, editor_filtering: bool) -> Tag {
     let mut c = Compound::new();
-    c.insert("raw", Tag::String(text.to_owned()));
+    if editor_filtering {
+        c.insert("raw", Tag::String(text.filtered_or_empty()));
+    } else {
+        c.insert("raw", Tag::String(text.raw.clone()));
+        if text.is_filtered() {
+            c.insert("filtered", Tag::String(text.filtered_or_empty()));
+        }
+    }
     Tag::Compound(c)
 }
 
@@ -72,22 +83,26 @@ pub fn edit(
     ctx: &ServerContext,
     stack: &mut ItemStack,
     author: &str,
-    pages: Vec<String>,
-    title: Option<String>,
+    pages: &[FilteredText],
+    title: Option<&FilteredText>,
+    editor_filtering: bool,
 ) -> bool {
     if ctx.items.name(stack.item) != Some("minecraft:writable_book") {
         return false;
     }
-    if pages.len() > MAX_PAGES || pages.iter().any(|p| p.chars().count() > MAX_PAGE_CHARS) {
+    if pages.len() > MAX_PAGES || pages.iter().any(|p| p.raw.chars().count() > MAX_PAGE_CHARS) {
         return false;
     }
-    if title.as_ref().is_some_and(|t| {
-        let n = t.trim().chars().count();
+    if title.is_some_and(|t| {
+        let n = t.raw.trim().chars().count();
         n == 0 || n > MAX_TITLE_CHARS
     }) {
         return false;
     }
-    let pages: Vec<Tag> = pages.iter().map(|p| raw(p)).collect();
+    let pages: Vec<Tag> = pages
+        .iter()
+        .map(|p| filterable(p, editor_filtering))
+        .collect();
     match title {
         Some(title) => {
             let Some(written) = ctx.items.id("minecraft:written_book") else {
@@ -96,7 +111,7 @@ pub fn edit(
             stack.item = written;
             stack.components.reset("writable_book_content");
             let mut content = Compound::new();
-            content.insert("title", raw(title.trim()));
+            content.insert("title", filterable(title, editor_filtering));
             content.insert("author", Tag::String(author.to_owned()));
             if !pages.is_empty() {
                 content.insert("pages", Tag::List(pages));
@@ -131,6 +146,110 @@ mod tests {
         ServerContext::new(crate::Config::new(dir), data).ok()
     }
 
+    fn text(s: &str) -> FilteredText {
+        FilteredText::pass_through(s)
+    }
+
+    fn masked(raw: &str, bits: &[i64]) -> FilteredText {
+        let mut mask = mc_protocol::filter::FilterMask::partial();
+        for &b in bits {
+            mask.set_filtered(b).unwrap();
+        }
+        FilteredText {
+            raw: raw.to_owned(),
+            mask,
+        }
+    }
+
+    fn blank_book(ctx: &ServerContext) -> ItemStack {
+        ItemStack {
+            count: 1,
+            item: ctx.items.id("minecraft:writable_book").unwrap(),
+            damage: 0,
+            components: Default::default(),
+        }
+    }
+
+    fn pages_of(stack: &ItemStack, component: &str) -> Vec<Compound> {
+        let Some(Tag::Compound(content)) = stack.components.get(component) else {
+            panic!("no {component}");
+        };
+        let Some(Tag::List(pages)) = content.get("pages") else {
+            panic!("no pages");
+        };
+        pages
+            .iter()
+            .map(|p| match p {
+                Tag::Compound(c) => c.clone(),
+                other => panic!("page {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn filtered_pages_keep_what_was_written_and_what_others_see() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let pages = [masked("bad page", &[0, 1, 2]), text("fine")];
+        let mut stack = blank_book(&ctx);
+        assert!(edit(&ctx, &mut stack, "Steve", &pages, None, false));
+        let stored = pages_of(&stack, "writable_book_content");
+        assert_eq!(stored[0].get("raw"), Some(&Tag::from("bad page")));
+        assert_eq!(stored[0].get("filtered"), Some(&Tag::from("### page")));
+        // Nothing changed, nothing extra stored.
+        assert_eq!(stored[1].get("raw"), Some(&Tag::from("fine")));
+        assert!(stored[1].get("filtered").is_none());
+
+        // An editor with text filtering on never keeps the raw text.
+        let mut stack = blank_book(&ctx);
+        assert!(edit(&ctx, &mut stack, "Steve", &pages, None, true));
+        let stored = pages_of(&stack, "writable_book_content");
+        assert_eq!(stored[0].get("raw"), Some(&Tag::from("### page")));
+        assert!(stored[0].get("filtered").is_none());
+
+        // A fully filtered page is empty for them.
+        let hidden = [FilteredText::fully_filtered("bad")];
+        let mut stack = blank_book(&ctx);
+        assert!(edit(&ctx, &mut stack, "Steve", &hidden, None, true));
+        assert_eq!(
+            pages_of(&stack, "writable_book_content")[0].get("raw"),
+            Some(&Tag::from(""))
+        );
+        let mut stack = blank_book(&ctx);
+        assert!(edit(&ctx, &mut stack, "Steve", &hidden, None, false));
+        let page = &pages_of(&stack, "writable_book_content")[0];
+        assert_eq!(page.get("raw"), Some(&Tag::from("bad")));
+        assert_eq!(page.get("filtered"), Some(&Tag::from("")));
+    }
+
+    #[test]
+    fn a_signed_title_is_filtered_too() {
+        let Some(ctx) = context() else {
+            eprintln!("skipped: no game data");
+            return;
+        };
+        let mut stack = blank_book(&ctx);
+        let title = masked("Badtitle", &[0, 1, 2]);
+        assert!(edit(
+            &ctx,
+            &mut stack,
+            "Steve",
+            &[text("x")],
+            Some(&title),
+            false
+        ));
+        let Some(Tag::Compound(content)) = stack.components.get("written_book_content") else {
+            panic!("not signed");
+        };
+        let Some(Tag::Compound(t)) = content.get("title") else {
+            panic!("no title");
+        };
+        assert_eq!(t.get("raw"), Some(&Tag::from("Badtitle")));
+        assert_eq!(t.get("filtered"), Some(&Tag::from("###title")));
+    }
+
     #[test]
     fn a_book_past_the_limits_is_left_alone() {
         let Some(ctx) = context() else {
@@ -144,30 +263,28 @@ mod tests {
             damage: 0,
             components: Default::default(),
         };
-        let page = "a".repeat(MAX_PAGE_CHARS + 1);
-        assert!(!edit(&ctx, &mut stack, "Steve", vec![page], None));
+        let page = text(&"a".repeat(MAX_PAGE_CHARS + 1));
+        assert!(!edit(&ctx, &mut stack, "Steve", &[page], None, false));
         assert!(stack.components.get("writable_book_content").is_none());
+        let ok = vec![text("ok"); MAX_PAGES + 1];
+        assert!(!edit(&ctx, &mut stack, "Steve", &ok, None, false));
+        let long = text(&"t".repeat(MAX_TITLE_CHARS + 1));
         assert!(!edit(
             &ctx,
             &mut stack,
             "Steve",
-            vec!["ok".into(); MAX_PAGES + 1],
-            None
-        ));
-        assert!(!edit(
-            &ctx,
-            &mut stack,
-            "Steve",
-            vec!["hi".into()],
-            Some("t".repeat(MAX_TITLE_CHARS + 1)),
+            &[text("hi")],
+            Some(&long),
+            false
         ));
         assert_eq!(stack.item, book);
         assert!(edit(
             &ctx,
             &mut stack,
             "Steve",
-            vec!["hi".into()],
-            Some("Diary".into()),
+            &[text("hi")],
+            Some(&text("Diary")),
+            false
         ));
         assert_eq!(ctx.items.name(stack.item), Some("minecraft:written_book"));
     }

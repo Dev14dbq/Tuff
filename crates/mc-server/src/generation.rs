@@ -372,6 +372,8 @@ pub struct NewWorld {
     pub hardcore: bool,
     /// A superflat overworld (`level-type=flat`) instead of the noise one.
     pub flat: Option<FlatSettings>,
+    /// The packs it runs with, written to level.dat.
+    pub packs: crate::packconfig::LevelPacks,
 }
 
 pub fn create(
@@ -401,9 +403,6 @@ pub fn create(
     version_tag.insert("Name", s(&data.version.name));
     version_tag.insert("Series", s("main"));
     version_tag.insert("Snapshot", Tag::Byte(0));
-    let mut packs = Compound::new();
-    packs.insert("Enabled", Tag::List(vec![s("vanilla")]));
-    packs.insert("Disabled", Tag::List(Vec::new()));
     let mut level = Compound::new();
     level.insert("DataVersion", Tag::Int(version));
     level.insert(
@@ -421,7 +420,7 @@ pub fn create(
     level.insert("version", Tag::Int(19133));
     level.insert("Version", Tag::Compound(version_tag));
     level.insert("version_history", Tag::List(vec![Tag::Int(version)]));
-    level.insert("DataPacks", Tag::Compound(packs));
+    new.packs.write(&mut level);
     level.insert("ServerBrands", Tag::List(vec![s(crate::BRAND)]));
     level.insert("WasModded", Tag::Byte(1));
     level.insert("LastPlayed", Tag::Long(0));

@@ -26,6 +26,8 @@ use crate::tick::{Action, Request};
 
 #[path = "configure.rs"]
 mod configure;
+#[path = "filtered.rs"]
+mod filtered;
 #[path = "windows.rs"]
 mod windows;
 use crate::util::{offline_uuid, random_u64, random_uuid, uuid_string, valid_player_name};
@@ -294,6 +296,7 @@ async fn login(
             .map_or(ctx.default_game_mode(), |s| s.game_mode),
         entity_id: ctx.next_entity_id(),
         skin_parts: 0,
+        text_filtering: false,
         pose: None,
         dimension: saved
             .as_ref()
@@ -688,6 +691,7 @@ async fn play(
     update_player(&ctx, uuid, |p| {
         p.pose = Some(pose);
         p.skin_parts = session.skin_parts;
+        p.text_filtering = session.text_filtering;
     });
     send_bars(writer, &ctx, uuid, &mut dots, false)?;
     let _ = ctx.events.send(Event::PlayerMoved {
@@ -778,6 +782,8 @@ async fn play(
         send_scoreboard(writer, p)?;
     }
     let mut text_filtering = session.text_filtering;
+    let (lane, mut judged_rx) = filtered::Lane::new(&ctx, uuid, &me.profile.name);
+    lane.join();
     let (replies_tx, mut replies) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
     // Non-player entities this client has been told about.
     let mut seen_entities: HashSet<i32> = HashSet::new();
@@ -795,6 +801,15 @@ async fn play(
     }
     loop {
         tokio::select! {
+                Some(judged) = judged_rx.recv() => {
+                    let who = filtered::Writer {
+                        ctx: &ctx,
+                        actor: Actor { uuid, entity_id, game_mode, pose, sneaking },
+                        name: &me.profile.name,
+                        filtering: text_filtering,
+                    };
+                    filtered::apply(&who, writer, &mut windows, judged)?;
+                }
                 Some(mut outcome) = replies.recv() => {
                     if let Some((position, kind)) = outcome.open.take() {
                         windows.open_container(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, position, kind)?;
@@ -879,12 +894,16 @@ async fn play(
                                 let line = text::translate("multiplayer.disconnect.unsigned_chat", vec![]);
                                 let _ = ctx.events.send(Event::Message { uuid, line, overlay: false });
                             } else {
-                                // `text_filtering` asks for a profanity pass. There is
-                                // no external filter; the line is delivered as written.
-                                trace!(text_filtering, "chat delivered as written");
                                 info!("<{}> {}", me.profile.name, chat.message);
-                                let line = text::translate("chat.type.text", vec![text::plain(&me.profile.name), text::plain(&chat.message)]);
-                                let _ = ctx.events.send(Event::Chat(line));
+                                if let Some(judged) = lane.chat(chat.message) {
+                                    let who = filtered::Writer {
+                                        ctx: &ctx,
+                                        actor: Actor { uuid, entity_id, game_mode, pose, sneaking },
+                                        name: &me.profile.name,
+                                        filtering: text_filtering,
+                                    };
+                                    filtered::apply(&who, writer, &mut windows, judged)?;
+                                }
                             }
                         }
                         play::Serverbound::ChatCommand { command } => {
@@ -961,20 +980,14 @@ async fn play(
                             windows.slot_state(writer, windows::Who { ctx: &ctx, uuid, entity_id, pose }, window, slot, enabled)?;
                         }
                         play::Serverbound::EditBook { slot, pages, title } => {
-                            let index = match slot {
-                                0..=8 => 36 + slot as usize,
-                                40 => 45,
-                                _ => usize::MAX,
-                            };
-                            let mut changed = None;
-                            change_hands(&ctx, uuid, entity_id, |hands| {
-                                let Some(Some(stack)) = hands.slots.get_mut(index) else { return };
-                                if crate::books::edit(&ctx, stack, &me.profile.name, pages, title) {
-                                    changed = Some(stack.clone());
-                                }
-                            });
-                            if let Some(stack) = changed {
-                                windows.inventory_slot(writer, index as i16, Some(stack))?;
+                            if let Some(judged) = lane.book(slot, pages, title) {
+                                let who = filtered::Writer {
+                                    ctx: &ctx,
+                                    actor: Actor { uuid, entity_id, game_mode, pose, sneaking },
+                                    name: &me.profile.name,
+                                    filtering: text_filtering,
+                                };
+                                filtered::apply(&who, writer, &mut windows, judged)?;
                             }
                         }
                         play::Serverbound::RenameItem { name } => {
@@ -1400,15 +1413,23 @@ async fn play(
                             let _ = ctx.actions.send(Request { dim: ctx.dim, actor, action, reply: replies_tx.clone() });
                         }
                         play::Serverbound::SignUpdate { position, front, lines } => {
-                            let actor = Actor { uuid, entity_id, game_mode, pose, sneaking };
-                            if let Some(event) = crate::interact::sign_update(&ctx, actor, position, front, lines) {
-                                let _ = ctx.events.send(event);
+                            if let Some(judged) = lane.sign(position, front, lines) {
+                                let who = filtered::Writer {
+                                    ctx: &ctx,
+                                    actor: Actor { uuid, entity_id, game_mode, pose, sneaking },
+                                    name: &me.profile.name,
+                                    filtering: text_filtering,
+                                };
+                                filtered::apply(&who, writer, &mut windows, judged)?;
                             }
                         }
                         play::Serverbound::ClientInformation(info) => {
                             text_filtering = info.text_filtering;
                             writer.queue(&skin_parts_metadata(entity_id, info.skin_parts))?;
-                            update_player(&ctx, uuid, |p| p.skin_parts = info.skin_parts);
+                            update_player(&ctx, uuid, |p| {
+                                p.skin_parts = info.skin_parts;
+                                p.text_filtering = info.text_filtering;
+                            });
                             let _ = ctx.events.send(Event::SkinParts {
                                 uuid,
                                 entity_id,
@@ -1490,6 +1511,13 @@ async fn play(
                     match event {
                         Ok(Event::Chat(content)) => {
                             writer.queue(&play::SystemChat { content, overlay: false })?;
+                        }
+                        Ok(Event::FilteredChat { sender, sender_filtering, full, filtered }) => {
+                            // The sender always reads their own words.
+                            let hidden = sender != uuid && (sender_filtering || text_filtering);
+                            if let Some(content) = if hidden { filtered } else { Some(full) } {
+                                writer.queue(&play::SystemChat { content, overlay: false })?;
+                            }
                         }
                         Ok(Event::Time(packet)) => writer.queue(&packet)?,
                         Ok(Event::LightChanged(chunks)) => {

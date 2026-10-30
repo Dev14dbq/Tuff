@@ -242,11 +242,14 @@ async fn run() -> Result<()> {
     )
     .map_err(anyhow::Error::msg)?
     .map(std::sync::Arc::new);
-    if !props.get("text-filtering-config").trim().is_empty() {
-        tracing::warn!(
-            "text-filtering-config is set; chat is delivered as written, with no external filter"
-        );
-    }
+    config.initial_packs = Some(mc_server::InitialPacks::from_properties(
+        props.get("initial-enabled-packs"),
+        props.get("initial-disabled-packs"),
+    ));
+    config.text_filter = mc_server::textfilter::TextFilter::from_properties(
+        props.int("text-filtering-version").unwrap_or(0),
+        props.get("text-filtering-config"),
+    );
     config.white_list = props.bool("white-list");
     config.op_permission_level = props.int("op-permission-level").unwrap_or(4).clamp(0, 4) as i32;
     config.spawn_protection = props.int("spawn-protection").unwrap_or(16).max(0) as i32;
@@ -326,6 +329,10 @@ async fn run() -> Result<()> {
         secret: props.get("management-server-secret").to_owned(),
         tls: props.bool("management-server-tls-enabled"),
     };
+    // Made before the world is opened, so what the upgrade announces and the
+    // management server later serves are one stream.
+    let notes = mc_server::notify::Bus::new();
+    config.management_bus = Some(notes.clone());
     let level_name = props.get("level-name").to_owned();
     let flat = props.get("level-type").contains("flat");
     config.level_dir = Some(server_dir.join(&level_name));
@@ -341,7 +348,7 @@ async fn run() -> Result<()> {
     let world = server_dir.join(&level_name);
     if world.is_dir() {
         let version = mc_data::McData::read_version(&config.data_dir)?;
-        mc_server::prepare_world(&world, version.world_version, &version.name)?;
+        mc_server::prepare_world(&world, version.world_version, &version.name, &notes)?;
         if force_upgrade {
             info!("Forcing world upgrade");
             let report = mc_server::upgrade_world(&world, version.world_version, erase_cache)?;

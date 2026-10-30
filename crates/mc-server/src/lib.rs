@@ -72,9 +72,11 @@ mod menus;
 mod mob_effects;
 mod mobs;
 mod nearby;
-mod notify;
+pub mod notify;
 pub mod oldlists;
+mod packconfig;
 mod packs;
+pub use packconfig::InitialPacks;
 mod persist;
 mod pipeline;
 mod players;
@@ -104,6 +106,7 @@ mod summon;
 mod test_blocks;
 #[cfg(test)]
 mod testkit;
+pub mod textfilter;
 mod tick;
 mod tickets;
 mod trading;
@@ -158,6 +161,15 @@ pub struct Config {
     /// The code of conduct shown during configuration, read from
     /// `codeofconduct/` when `enable-code-of-conduct` is on.
     pub code_of_conduct: Option<std::sync::Arc<serverlist::CodeOfConduct>>,
+    /// The external moderation service chat, signs and books go through
+    /// (`text-filtering-config`); `None` delivers text as written.
+    pub text_filter: Option<textfilter::TextFilter>,
+    /// The packs a new world starts with (`initial-enabled-packs`,
+    /// `initial-disabled-packs`); `None` leaves every pack on.
+    pub initial_packs: Option<InitialPacks>,
+    /// The bus management notifications go out on, when something that runs
+    /// before the server starts (the world upgrade) has already used it.
+    pub management_bus: Option<notify::Bus>,
     /// Base URL of the session server (Mojang's by default).
     pub session_server: String,
     /// A world folder saved by vanilla 26.3; `None` for a superflat test world.
@@ -255,6 +267,9 @@ impl Config {
             enforce_secure_profile: false,
             status_heartbeat_interval: 0,
             code_of_conduct: None,
+            text_filter: None,
+            initial_packs: None,
+            management_bus: None,
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
             world: None,
             level_dir: None,
@@ -596,7 +611,8 @@ fn save(ctx: &ServerContext) {
     ctx.scoreboard.lock().expect("scoreboard lock").save();
     ctx.storage.lock().expect("storage lock").save();
     crate::maps::save(ctx);
-    if let Err(err) = ctx.world.save_time(&time) {
+    let level_packs = ctx.packs.lock().expect("packs lock").level_packs();
+    if let Err(err) = ctx.world.save_time(&time, &level_packs) {
         tracing::warn!("saving the time: {err:#}");
     }
     let online: Vec<u128> = ctx

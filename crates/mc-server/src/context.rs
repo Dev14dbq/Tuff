@@ -32,6 +32,10 @@ pub struct OnlinePlayer {
     pub entity_id: i32,
     /// Displayed skin parts, sent to others as entity metadata.
     pub skin_parts: u8,
+    /// The client's "only show filtered chat" option (Client Information
+    /// `text_filtering`): it gets filtered text, and so do the others when
+    /// they write to it.
+    pub text_filtering: bool,
     /// Where the player is; `None` until they spawn in play.
     pub pose: Option<Pose>,
     /// The dimension they are in.
@@ -124,6 +128,16 @@ pub struct EntityTypes {
 #[derive(Clone, Debug)]
 pub enum Event {
     Chat(Tag),
+    /// A chat line the external text filter changed. `full` is as written;
+    /// `filtered` is the same with the removed characters hidden, or `None`
+    /// when all of it was. A recipient other than the sender gets `filtered`
+    /// when the sender or the recipient has text filtering on, else `full`.
+    FilteredChat {
+        sender: u128,
+        sender_filtering: bool,
+        full: Tag,
+        filtered: Option<Tag>,
+    },
     PlayerJoined(OnlinePlayer),
     PlayerLeft {
         uuid: u128,
@@ -910,6 +924,7 @@ impl ServerContext {
     }
 
     pub fn new(config: Config, data: McData) -> Result<Arc<Self>> {
+        let management_bus = config.management_bus.clone().unwrap_or_default();
         let mut ids = PacketIds::new();
         for packet in &data.packets {
             if let (Some(state), Some(direction)) = (
@@ -921,7 +936,12 @@ impl ServerContext {
         }
 
         let commands = crate::commands::Commands::load(&config.data_dir);
-        let packs = crate::packs::Packs::load(config.level_dir.as_deref(), &commands);
+        let packs = crate::packs::Packs::load_with(
+            config.level_dir.as_deref(),
+            &commands,
+            config.initial_packs.as_ref(),
+        );
+        let level_packs = packs.level_packs();
         data.set_pack_layers(packs.layer_roots());
         let pack = data.data_pack();
         // Network ids of data-driven registry entries are their position in our list.
@@ -1035,6 +1055,7 @@ impl ServerContext {
                         flat: config
                             .new_world_flat
                             .then(crate::generation::FlatSettings::classic),
+                        packs: level_packs.clone(),
                     },
                 )?
             }
@@ -1152,7 +1173,7 @@ impl ServerContext {
             shown_motd: Mutex::new(shown_motd),
             player_limit: std::sync::atomic::AtomicUsize::new(player_limit),
             view_distance: std::sync::atomic::AtomicU8::new(view_distance),
-            management_bus: crate::notify::Bus::new(),
+            management_bus,
             pregen: Mutex::new(pregen),
             explosion_particle: data
                 .builtin

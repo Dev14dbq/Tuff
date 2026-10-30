@@ -6,6 +6,7 @@
 pub mod codec;
 pub mod components;
 pub mod crypto;
+pub mod filter;
 pub mod frame;
 pub mod ids;
 pub mod packets;

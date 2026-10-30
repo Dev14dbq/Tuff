@@ -12,6 +12,7 @@ use mc_nbt::Tag;
 use tracing::warn;
 
 use crate::commands::Commands;
+use crate::packconfig::{self, Candidate, InitialPacks, LevelPacks, VANILLA_FLAG};
 
 /// Vanilla's feature packs, which need flags the world does not have.
 pub const FEATURE_PACKS: [&str; 3] = [
@@ -109,6 +110,12 @@ pub struct Packs {
     /// Feature flags this world has on: `minecraft:vanilla`, plus any
     /// stored with the world. Empty until [`Packs::load`].
     world_flags: Vec<String>,
+    /// Built-in feature packs the world has selected (they carry no data
+    /// here, but level.dat keeps them).
+    feature_selected: Vec<String>,
+    /// Flags level.dat keeps whatever the packs ask for: those it was
+    /// saved with.
+    forced: Vec<String>,
 }
 
 /// Why `/datapack enable` or `disable` is refused.
@@ -134,15 +141,123 @@ fn vanilla() -> Pack {
 
 impl Packs {
     pub fn load(world: Option<&Path>, commands: &Commands) -> Self {
+        Self::load_with(world, commands, None)
+    }
+
+    /// Opens the packs of `world`. A world with a level.dat runs the packs it
+    /// stored; one without it is new and starts from `initial`, if given.
+    pub fn load_with(
+        world: Option<&Path>,
+        commands: &Commands,
+        initial: Option<&InitialPacks>,
+    ) -> Self {
         let mut p = Packs {
             folder: world.map(|w| w.join("datapacks")),
             world_flags: world_flags(world),
             ..Packs::default()
         };
         p.scan();
-        p.enabled = p.all.iter().map(|k| k.id.clone()).collect();
+        let candidates = p.candidates();
+        let stored = world.and_then(stored_config);
+        let selection = match (&stored, initial, world) {
+            (None, Some(init), Some(_)) => {
+                let s =
+                    packconfig::configure(&candidates, &init.enabled, &init.disabled, None, &[]);
+                for flag in &s.features {
+                    push_flag(&mut p.world_flags, flag);
+                }
+                s
+            }
+            _ => {
+                let default = InitialPacks::default();
+                let (enabled, disabled, flags) = stored.unwrap_or((
+                    default.enabled,
+                    default.disabled,
+                    vec![VANILLA_FLAG.to_owned()],
+                ));
+                p.forced = flags;
+                packconfig::configure(
+                    &candidates,
+                    &enabled,
+                    &disabled,
+                    Some(&p.world_flags),
+                    &p.forced,
+                )
+            }
+        };
+        p.feature_selected = selection
+            .enabled
+            .iter()
+            .filter(|id| FEATURE_PACKS.contains(&id.as_str()))
+            .cloned()
+            .collect();
+        p.enabled = selection
+            .enabled
+            .into_iter()
+            .filter(|id| p.all.iter().any(|k| &k.id == id))
+            .collect();
         p.reload(commands);
         p
+    }
+
+    /// Every pack the world could run, by id: vanilla, the built-in feature
+    /// packs and those in the world folder.
+    fn candidates(&self) -> Vec<Candidate> {
+        let mut out: Vec<Candidate> = self
+            .all
+            .iter()
+            .map(|k| Candidate {
+                id: k.id.clone(),
+                flags: if k.id == "vanilla" {
+                    vec![VANILLA_FLAG.to_owned()]
+                } else {
+                    k.features.clone()
+                },
+                auto: k.id != "vanilla",
+            })
+            .collect();
+        for name in FEATURE_PACKS {
+            out.push(Candidate {
+                id: name.to_owned(),
+                flags: vec![format!("minecraft:{name}")],
+                auto: false,
+            });
+        }
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
+    }
+
+    /// What level.dat should say about the packs now.
+    pub fn level_packs(&self) -> LevelPacks {
+        let mut enabled = self.enabled.clone();
+        let at = enabled
+            .iter()
+            .position(|i| i == "vanilla")
+            .map_or(0, |i| i + 1);
+        for (k, name) in self.feature_selected.iter().enumerate() {
+            enabled.insert((at + k).min(enabled.len()), name.clone());
+        }
+        let candidates = self.candidates();
+        let mut features = self.forced.clone();
+        for id in &enabled {
+            if let Some(c) = candidates.iter().find(|c| &c.id == id) {
+                for f in &c.flags {
+                    if !features.contains(f) {
+                        features.push(f.clone());
+                    }
+                }
+            }
+        }
+        features.sort();
+        LevelPacks {
+            disabled: candidates
+                .iter()
+                .filter(|c| !enabled.contains(&c.id))
+                .map(|c| c.id.clone())
+                .collect(),
+            enabled,
+            features,
+        }
     }
 
     /// Finds the packs in the folder again (new ones stay disabled).
@@ -394,6 +509,38 @@ impl Packs {
         }
         roots
     }
+}
+
+/// level.dat's choice of packs: enabled ids, disabled ids and the flags the
+/// world was saved with (`minecraft:vanilla` when it names none). `None`
+/// without a readable level.dat.
+fn stored_config(world: &Path) -> Option<(Vec<String>, Vec<String>, Vec<String>)> {
+    let root = crate::world::read_nbt_gz(&world.join("level.dat")).ok()?;
+    let Some(Tag::Compound(data)) = root.get("Data") else {
+        return None;
+    };
+    let strings = |tag: Option<&Tag>| -> Option<Vec<String>> {
+        match tag {
+            Some(Tag::List(list)) => Some(
+                list.iter()
+                    .filter_map(|t| match t {
+                        Tag::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        }
+    };
+    let (mut enabled, mut disabled) = (vec!["vanilla".to_owned()], Vec::new());
+    if let Some(Tag::Compound(packs)) = data.get("DataPacks") {
+        enabled = strings(packs.get("Enabled")).unwrap_or(enabled);
+        disabled = strings(packs.get("Disabled")).unwrap_or(disabled);
+    }
+    let flags = strings(data.get("enabled_features"))
+        .map(|l| l.iter().map(|f| flag_id(f)).collect())
+        .unwrap_or_else(|| vec![VANILLA_FLAG.to_owned()]);
+    Some((enabled, disabled, flags))
 }
 
 /// `minecraft:vanilla`, plus flags recorded on the world.
@@ -711,6 +858,46 @@ mod tests {
         );
         assert!(packs.enabled.iter().any(|id| id == "file/plain"));
         assert!(packs.enabled.iter().any(|id| id == "vanilla"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_new_world_starts_from_the_initial_packs_and_level_dat_follows_them() {
+        let tmp = std::env::temp_dir().join(format!("mc-pack-initial-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pack = tmp.join("datapacks/rebalance");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(
+            pack.join("pack.mcmeta"),
+            r#"{"pack":{"description":"r"},"features":{"enabled":["minecraft:trade_rebalance"]}}"#,
+        )
+        .unwrap();
+        let commands = crate::commands::Commands::load(&tmp.join("no-data"));
+        // A new world may use any flag, so the pack is found and its flag kept.
+        let initial = InitialPacks::default();
+        let packs = Packs::load_with(Some(&tmp), &commands, Some(&initial));
+        assert!(packs.enabled.iter().any(|id| id == "file/rebalance"));
+        let level = packs.level_packs();
+        assert_eq!(level.enabled, ["vanilla", "file/rebalance"]);
+        assert_eq!(
+            level.disabled,
+            [
+                "minecart_improvements",
+                "redstone_experiments",
+                "trade_rebalance"
+            ]
+        );
+        assert_eq!(
+            level.features,
+            ["minecraft:trade_rebalance", "minecraft:vanilla"]
+        );
+        // The same world told to leave the pack out.
+        let initial = InitialPacks::from_properties("vanilla", "file/rebalance");
+        let packs = Packs::load_with(Some(&tmp), &commands, Some(&initial));
+        let level = packs.level_packs();
+        assert_eq!(level.enabled, ["vanilla"]);
+        assert!(level.disabled.contains(&"file/rebalance".to_owned()));
+        assert_eq!(level.features, ["minecraft:vanilla"]);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

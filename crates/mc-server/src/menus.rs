@@ -1023,6 +1023,7 @@ impl Machine {
                 if !creative {
                     pay_levels(ctx, uuid, cost.min(levels_of(ctx, uuid)));
                 }
+                self.report_name(ctx, uuid);
                 self.slots[0] = None;
                 if self.used > 0 {
                     take_one(&mut self.slots[1], self.used);
@@ -1036,6 +1037,35 @@ impl Machine {
                 self.name = None;
             }
             _ => {}
+        }
+    }
+
+    /// A new name given to an item goes to the text filter service for its
+    /// records; nobody waits for the answer.
+    fn report_name(&self, ctx: &ServerContext, uuid: u128) {
+        let Some(filter) = &ctx.config.text_filter else {
+            return;
+        };
+        let Some(name) = self.name.as_deref().filter(|n| !n.trim().is_empty()) else {
+            return;
+        };
+        let current = self.slots.first().and_then(Option::as_ref).and_then(|i| {
+            match i.components.get("custom_name") {
+                Some(Tag::String(s)) => Some(s.as_str()),
+                _ => None,
+            }
+        });
+        if current == Some(name) {
+            return;
+        }
+        let player = ctx
+            .players
+            .lock()
+            .expect("players lock")
+            .get(&uuid)
+            .map(|p| p.profile.name.clone());
+        if let Some(player) = player {
+            filter.report(uuid, &player, name);
         }
     }
 
