@@ -164,14 +164,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
         if !crate::tickets::blocks_run(ctx, at.x >> 4, at.z >> 4) {
             continue;
         }
-        let is_hopper = ctx
-            .world
-            .block(p, &ctx.data.blocks)
-            .and_then(|s| ctx.data.blocks.block_name(s))
-            == Some("minecraft:hopper");
-        if is_hopper {
-            mc_tick::hopper::tick(level, logic, at);
-        } else {
+        if !mc_tick::hopper::tick(level, logic, at) {
             lock(&ctx.hoppers).remove(at);
         }
     }

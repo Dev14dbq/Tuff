@@ -35,7 +35,7 @@ pub struct WorldLevel<'a> {
     /// Minecarts: id, box, and what a minecart holding items opens.
     pub minecarts: Vec<(i32, mc_entity::Aabb, Option<crate::containers::Kind>)>,
     /// Hoppers that have had their turn this tick.
-    ticked_hoppers: std::collections::HashSet<BlockPos>,
+    ticked_hoppers: mc_tick::fast::FastSet<BlockPos>,
     /// The tick's state, for the commands command blocks run (a fresh one
     /// when the level was made outside the tick).
     pub control: Option<&'a mut crate::tick::TickControl>,
@@ -385,6 +385,10 @@ impl Level for WorldLevel<'_> {
         crate::containers::signal(self.ctx, to_position(p))
     }
 
+    fn container_empty(&self, p: BlockPos) -> Option<bool> {
+        crate::containers::empty(self.ctx, to_position(p))
+    }
+
     fn comparator_output(&self, p: BlockPos) -> u8 {
         let be = self
             .ctx
@@ -645,6 +649,13 @@ impl Level for WorldLevel<'_> {
 
     fn set_hopper_cooldown(&mut self, p: BlockPos, ticks: i32) {
         crate::hoppers::set_cooldown(self.ctx, to_position(p), ticks);
+    }
+
+    fn count_down_hopper(&mut self, p: BlockPos) -> i32 {
+        mc_tick::block_entity::transfer::count_down(
+            &mut crate::block_entities::Host::new(self.ctx),
+            p,
+        )
     }
 
     fn hopper_ticked(&self, p: BlockPos) -> bool {

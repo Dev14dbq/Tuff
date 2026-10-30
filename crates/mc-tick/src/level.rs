@@ -146,6 +146,12 @@ pub trait Level {
         None
     }
 
+    /// Whether the container at `p` holds nothing, as a comparator reading
+    /// of 0 says (`None` if it is not a container).
+    fn container_empty(&self, p: BlockPos) -> Option<bool> {
+        self.container_signal(p).map(|s| s == 0)
+    }
+
     /// What a comparator reads from the block entity at `p` when the block
     /// state alone does not tell (chiseled bookshelves, lecterns,
     /// jukeboxes); `None` to read it as a container.
@@ -229,6 +235,16 @@ pub trait Level {
     }
 
     fn set_hopper_cooldown(&mut self, _p: BlockPos, _ticks: i32) {}
+
+    /// One tick of the hopper's rest goes by: it is one less if it was
+    /// more than 0. Returns what it was.
+    fn count_down_hopper(&mut self, p: BlockPos) -> i32 {
+        let ticks = self.hopper_cooldown(p);
+        if ticks > 0 {
+            self.set_hopper_cooldown(p, ticks - 1);
+        }
+        ticks
+    }
 
     /// Whether the hopper at `p` has had its turn already this game tick.
     fn hopper_ticked(&self, _p: BlockPos) -> bool {

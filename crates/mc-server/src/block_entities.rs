@@ -59,9 +59,12 @@ fn holder(name: &str) -> Holder {
 
 /// The container block at `p` and its name.
 fn kind_at(ctx: &ServerContext, p: Position) -> Option<(Kind, &str)> {
-    let blocks = &ctx.data.blocks;
-    let state = ctx.world.block(p, blocks)?;
-    let name = blocks.block_name(state)?;
+    kind_of_state(ctx, ctx.world.block(p, &ctx.data.blocks)?)
+}
+
+/// The container a block state is and its name.
+fn kind_of_state(ctx: &ServerContext, state: u32) -> Option<(Kind, &str)> {
+    let name = ctx.data.blocks.block_name(state)?;
     if name == "minecraft:decorated_pot" {
         return Some((crate::pots::KIND, name));
     }
@@ -114,6 +117,17 @@ impl Blocks for Host<'_> {
             .is_some()
     }
 
+    fn change_block_entity(
+        &mut self,
+        p: BlockPos,
+        f: &mut dyn FnMut(&mut Compound) -> bool,
+    ) -> bool {
+        self.ctx
+            .world
+            .edit_block_entity(to_position(p), &self.ctx.data.blocks, |be| f(&mut be.data))
+            .unwrap_or(false)
+    }
+
     fn edit_block_entity(
         &mut self,
         p: BlockPos,
@@ -125,7 +139,10 @@ impl Blocks for Host<'_> {
         if self
             .ctx
             .world
-            .edit_block_entity(at, blocks, |be| edit(&mut be.data))
+            .edit_block_entity(at, blocks, |be| {
+                edit(&mut be.data);
+                true
+            })
             .is_some()
         {
             return;
@@ -147,8 +164,13 @@ impl Containers for Host<'_> {
     type Kind = Kind;
 
     fn store_at(&mut self, p: BlockPos) -> Option<Store<Kind>> {
+        let state = self.ctx.world.block(to_position(p), &self.ctx.data.blocks);
+        self.store_in(p, state)
+    }
+
+    fn store_in(&mut self, p: BlockPos, state: Option<u32>) -> Option<Store<Kind>> {
         let ctx = self.ctx;
-        if let Some((kind, name)) = kind_at(ctx, to_position(p)) {
+        if let Some((kind, name)) = state.and_then(|s| kind_of_state(ctx, s)) {
             return Some(Self::store(to_position(p), kind, name));
         }
         let (lo, hi) = (
@@ -173,8 +195,11 @@ impl Containers for Host<'_> {
                     .then_some((e.id, kind))
             })
             .collect();
+        if found.is_empty() {
+            return None;
+        }
         // One of them, at random.
-        let pick = found.get((crate::util::random_u64() % found.len().max(1) as u64) as usize)?;
+        let pick = found.get((crate::util::random_u64() % found.len() as u64) as usize)?;
         Some(Self::entity_store(pick.0, pick.1))
     }
 
@@ -185,6 +210,10 @@ impl Containers for Host<'_> {
 
     fn slots(&self, store: &Store<Kind>) -> Slots {
         containers::slots(self.ctx, to_position(store.at), store.kind)
+    }
+
+    fn with_slots(&self, store: &Store<Kind>, f: &mut dyn FnMut(&[Option<ItemStack>])) {
+        containers::with_slots(self.ctx, to_position(store.at), store.kind, f);
     }
 
     fn put(&mut self, store: &Store<Kind>, changes: &[(usize, Option<ItemStack>)]) {

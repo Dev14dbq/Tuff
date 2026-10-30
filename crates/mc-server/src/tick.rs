@@ -656,9 +656,11 @@ pub(crate) fn run_scheduled_ticks_with<'a>(
     mc_tick::pistons::tick(&mut level, logic);
     crate::profile::add(crate::profile::redstone(), redstone_at);
     let hoppers_at = crate::profile::mark();
+    crate::containers::keep(ctx);
     crate::hoppers::tick(ctx, &mut level);
     crate::profile::add(crate::profile::block_entities(), hoppers_at);
     crate::hoppers::tick_carts(ctx);
+    crate::containers::release(ctx);
     let (changes, spawned) = level.finish();
     if !changes.is_empty() {
         let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });

@@ -20,7 +20,7 @@
 //! (`min(sim, view + 1)`). A chunk of level 32 waits with its water, lava
 //! and fire while a neighbour is only a border.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use mc_nbt::{Compound, Tag};
 use mc_protocol::Position;
@@ -76,7 +76,7 @@ pub struct Map {
     timed: Vec<Timed>,
     /// Players who already received the spawn ticket for this visit.
     seen: HashSet<u128>,
-    levels: HashMap<(i32, i32), i32>,
+    levels: mc_tick::fast::FastMap<(i32, i32), i32>,
     random: HashSet<(i32, i32)>,
     /// The game loop has started applying levels. Before that, every loaded
     /// chunk still ticks, so tests that never run a tick are unchanged.

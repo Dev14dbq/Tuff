@@ -132,22 +132,18 @@ pub fn block_tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos, kind: u32) {
 }
 
 /// One game tick of the hopper at `p` (the host calls it for every hopper
-/// that exists in loaded chunks).
-pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
+/// that exists in loaded chunks). `false` if there is no hopper there.
+pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos) -> bool {
     let state = level.block(p);
     if !is_hopper(ctx, state) {
-        return;
+        return false;
     }
     level.mark_hopper_ticked(p);
-    let cooldown = level.hopper_cooldown(p);
-    if cooldown > 0 {
-        level.set_hopper_cooldown(p, cooldown - 1);
-        if cooldown > 1 {
-            return;
-        }
+    if level.count_down_hopper(p) > 1 {
+        return true;
     }
     if !flag(ctx, state, "enabled") {
-        return;
+        return true;
     }
     let facing = ctx
         .shapes
@@ -178,11 +174,12 @@ pub fn tick(level: &mut dyn Level, ctx: Ctx, p: BlockPos) {
     if moved {
         level.set_hopper_cooldown(p, HOPPER_COOLDOWN);
     }
+    true
 }
 
 /// Whether `p` is a hopper with nothing in it.
 pub fn empty_hopper(level: &dyn Level, ctx: Ctx, p: BlockPos) -> bool {
-    is_hopper(ctx, level.block(p)) && level.container_signal(p) == Some(0)
+    is_hopper(ctx, level.block(p)) && level.container_empty(p) == Some(true)
 }
 
 /// Two containers changed: comparators look again.

@@ -1614,23 +1614,26 @@ impl World {
     }
 
     /// Changes the block entity at `p` where it is (it keeps its place in
-    /// the chunk's list); `None` if there is none. The chunk is marked
-    /// changed as by [`World::set_block_entity`]. `f` runs under the world's
-    /// lock: it must not touch the world.
-    pub fn edit_block_entity<R>(
+    /// the chunk's list); `None` if there is none, else whether `f` said it
+    /// changed something. Then the chunk is marked changed as by
+    /// [`World::set_block_entity`]. `f` runs under the world's lock: it must
+    /// not touch the world.
+    pub fn edit_block_entity(
         &self,
         p: Position,
         blocks: &Blocks,
-        f: impl FnOnce(&mut mc_world::BlockEntity) -> R,
-    ) -> Option<R> {
+        f: impl FnOnce(&mut mc_world::BlockEntity) -> bool,
+    ) -> Option<bool> {
         self.with_slot(p.x >> 4, p.z >> 4, blocks, |slot| {
             let chunk = slot.chunk.as_mut()?;
             let i = slot.be_index.find(&chunk.block_entities, (p.x, p.y, p.z))?;
-            let out = f(&mut chunk.block_entities[i]);
-            slot.frame = None;
-            slot.changes += 1;
-            slot.dirty = true;
-            Some(out)
+            let changed = f(&mut chunk.block_entities[i]);
+            if changed {
+                slot.frame = None;
+                slot.changes += 1;
+                slot.dirty = true;
+            }
+            Some(changed)
         })
     }
 
