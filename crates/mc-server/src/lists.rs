@@ -353,6 +353,14 @@ impl Lists {
     }
 }
 
+/// `forever`, or a date in the past.
+fn expired(expires: &str) -> bool {
+    if expires.is_empty() || expires == "forever" {
+        return false;
+    }
+    parse_date(expires).is_some_and(|t| t < now_secs())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,12 +398,4 @@ mod tests {
         assert!(lists.whitelisted(0, "Alex"));
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
-
-/// `forever`, or a date in the past.
-fn expired(expires: &str) -> bool {
-    if expires.is_empty() || expires == "forever" {
-        return false;
-    }
-    parse_date(expires).is_some_and(|t| t < now_secs())
 }

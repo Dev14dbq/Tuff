@@ -432,15 +432,15 @@ pub fn step(ctx: &crate::context::ServerContext) {
     target.world.save(&target.data.blocks);
     let dropped = target.world.unload_unused();
     crate::persist::unloaded(&target, &dropped);
-    if let Some(progress) = report {
-        if finished || progress.done.is_multiple_of(256) {
-            let text = format!(
-                "Pregen {}/{} chunks in {dimension}",
-                progress.done, progress.total
-            );
-            tracing::info!("{text}");
-            tell(ctx, &text);
-        }
+    if let Some(progress) = report
+        && (finished || progress.done.is_multiple_of(256))
+    {
+        let text = format!(
+            "Pregen {}/{} chunks in {dimension}",
+            progress.done, progress.total
+        );
+        tracing::info!("{text}");
+        tell(ctx, &text);
     }
 }
 
