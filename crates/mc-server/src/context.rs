@@ -936,7 +936,12 @@ impl ServerContext {
         }
 
         let commands = crate::commands::Commands::load(&config.data_dir);
-        let packs = crate::packs::Packs::load(config.level_dir.as_deref(), &commands);
+        let packs = crate::packs::Packs::load_with(
+            config.level_dir.as_deref(),
+            &commands,
+            config.initial_packs.as_ref(),
+        );
+        let level_packs = packs.level_packs();
         data.set_pack_layers(packs.layer_roots());
         let pack = data.data_pack();
         // Network ids of data-driven registry entries are their position in our list.
@@ -1050,6 +1055,7 @@ impl ServerContext {
                         flat: config
                             .new_world_flat
                             .then(crate::generation::FlatSettings::classic),
+                        packs: level_packs.clone(),
                     },
                 )?
             }

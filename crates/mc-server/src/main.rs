@@ -242,6 +242,10 @@ async fn run() -> Result<()> {
     )
     .map_err(anyhow::Error::msg)?
     .map(std::sync::Arc::new);
+    config.initial_packs = Some(mc_server::InitialPacks::from_properties(
+        props.get("initial-enabled-packs"),
+        props.get("initial-disabled-packs"),
+    ));
     config.text_filter = mc_server::textfilter::TextFilter::from_properties(
         props.int("text-filtering-version").unwrap_or(0),
         props.get("text-filtering-config"),

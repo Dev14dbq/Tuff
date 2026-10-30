@@ -1890,7 +1890,7 @@ impl World {
 
     /// Writes the age into level.dat (keeping the previous file as
     /// level.dat_old, as vanilla does) and the clocks into world_clocks.dat.
-    pub fn save_time(&self, time: &WorldTime) -> Result<()> {
+    pub fn save_time(&self, time: &WorldTime, packs: &crate::packconfig::LevelPacks) -> Result<()> {
         let Some(dir) = &self.folder else {
             return Ok(());
         };
@@ -1902,6 +1902,7 @@ impl World {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_millis() as i64);
             data.insert("LastPlayed", Tag::Long(now));
+            packs.write(data);
         }
         std::fs::copy(&level_path, dir.join("level.dat_old"))?;
         write_gz(&level_path, &level)?;

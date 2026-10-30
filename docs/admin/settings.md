@@ -39,7 +39,8 @@ JSON-RPC (`motd`, `max-players`, `view-distance`, `white-list`, см. [ADMIN.md]
 | `broadcast-rcon-to-ops` | `true` | Операторы видят, что делают через RCON. |
 | `enable-query`, `query.port` | `false`, `25565` | GameSpy4 Query (UDP). |
 | `management-server-enabled`, `management-server-host`, `management-server-port`, `management-server-secret`, `management-server-tls-enabled` | `false`, `localhost`, `0`, пусто, `true` | Сервер управления JSON-RPC, см. [ADMIN.md](../ADMIN.md). |
-| `text-filtering-config` | пусто | Не поддерживается: если задан, в лог пишется предупреждение, чат идёт без фильтра. |
+| `text-filtering-config`, `text-filtering-version` | пусто, `0` | Внешний фильтр текста для чата, табличек и книг (JSON как в ваниле). Версия 0 работает; версия 1 (Azure, вход по сертификату) разбирается, но запросы не шлются: в лог пишется предупреждение, текст идёт без фильтра. |
+| `initial-enabled-packs`, `initial-disabled-packs` | `vanilla`, пусто | Паки нового мира; `DataPacks` и `enabled_features` пишутся в `level.dat` как в ваниле. |
 
 ## Ключи Tuff
 
@@ -70,7 +71,7 @@ JSON-RPC (`motd`, `max-players`, `view-distance`, `white-list`, см. [ADMIN.md]
 | `player-idle-timeout` | Бездействующих не кикает (`/setidletimeout` отвечает, но таймер не работает). |
 | `pause-when-empty-seconds` | Пустой сервер не ставит тик на паузу. |
 | `region-file-compression` | Чанки пишутся в zlib, как при значении `deflate`. |
-| `function-permission-level`, `max-world-size`, `max-chained-neighbor-updates`, `entity-broadcast-range-percentage`, `sync-chunk-writes`, `initial-enabled-packs`, `initial-disabled-packs`, `broadcast-console-to-ops`, `log-ips`, `prevent-proxy-connections`, `chat-spam-threshold-seconds`, `command-spam-threshold-seconds`, `status-heartbeat-interval`, `text-filtering-version`, `use-native-transport`, `enable-jmx-monitoring`, `management-server-allowed-origins`, `management-server-tls-keystore`, `management-server-tls-keystore-password` | Не читаются. |
+| `function-permission-level`, `max-world-size`, `max-chained-neighbor-updates`, `entity-broadcast-range-percentage`, `sync-chunk-writes`, `broadcast-console-to-ops`, `log-ips`, `prevent-proxy-connections`, `chat-spam-threshold-seconds`, `command-spam-threshold-seconds`, `status-heartbeat-interval`, `use-native-transport`, `enable-jmx-monitoring`, `management-server-allowed-origins`, `management-server-tls-keystore`, `management-server-tls-keystore-password` | Не читаются. |
 
 ## Аргументы командной строки
 

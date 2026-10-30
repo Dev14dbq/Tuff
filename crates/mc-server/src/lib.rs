@@ -73,7 +73,9 @@ mod mob_effects;
 mod mobs;
 pub mod notify;
 pub mod oldlists;
+mod packconfig;
 mod packs;
+pub use packconfig::InitialPacks;
 mod persist;
 mod pipeline;
 mod players;
@@ -161,6 +163,9 @@ pub struct Config {
     /// The external moderation service chat, signs and books go through
     /// (`text-filtering-config`); `None` delivers text as written.
     pub text_filter: Option<textfilter::TextFilter>,
+    /// The packs a new world starts with (`initial-enabled-packs`,
+    /// `initial-disabled-packs`); `None` leaves every pack on.
+    pub initial_packs: Option<InitialPacks>,
     /// The bus management notifications go out on, when something that runs
     /// before the server starts (the world upgrade) has already used it.
     pub management_bus: Option<notify::Bus>,
@@ -262,6 +267,7 @@ impl Config {
             status_heartbeat_interval: 0,
             code_of_conduct: None,
             text_filter: None,
+            initial_packs: None,
             management_bus: None,
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
             world: None,
@@ -604,7 +610,8 @@ fn save(ctx: &ServerContext) {
     ctx.scoreboard.lock().expect("scoreboard lock").save();
     ctx.storage.lock().expect("storage lock").save();
     crate::maps::save(ctx);
-    if let Err(err) = ctx.world.save_time(&time) {
+    let level_packs = ctx.packs.lock().expect("packs lock").level_packs();
+    if let Err(err) = ctx.world.save_time(&time, &level_packs) {
         tracing::warn!("saving the time: {err:#}");
     }
     let online: Vec<u128> = ctx
