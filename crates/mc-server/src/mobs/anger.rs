@@ -15,6 +15,7 @@ use mc_entity::{Entity, Kind, Species};
 use crate::context::ServerContext;
 use crate::tick::lock;
 
+use super::aftermath::Note;
 use super::dist_sq;
 
 /// Vanilla's `NeutralMob`s, plus piglins, whose anger at a dead player is
@@ -48,21 +49,19 @@ fn anger_time(m: &mut mc_entity::Mob) -> i32 {
 /// A player died at `at`. Applied on the next mob tick, which holds the
 /// entity list.
 pub fn note_death(ctx: &ServerContext, entity_id: i32, at: [f64; 3]) {
-    ctx.mobs
-        .deaths
-        .lock()
-        .expect("deaths")
-        .push((ctx.dim, entity_id, at));
+    super::aftermath::push(
+        ctx,
+        super::aftermath::Note::PlayerDied { id: entity_id, at },
+    );
 }
 
 /// Forgives deaths recorded since the last tick, then runs universal anger.
-pub fn finish(ctx: &ServerContext, entities: &mut [Entity]) {
-    let deaths: Vec<_> = lock(&ctx.mobs.deaths)
-        .extract_if(.., |(dim, _, _)| *dim == ctx.dim)
-        .collect();
+pub fn finish(ctx: &ServerContext, entities: &mut [Entity], notes: &[Note]) {
     if ctx.game_rule_bool("forgive_dead_players") {
-        for (_, id, at) in deaths {
-            forgive(entities, id, at);
+        for note in notes {
+            if let Note::PlayerDied { id, at } = note {
+                forgive(entities, *id, *at);
+            }
         }
     }
     if ctx.game_rule_bool("universal_anger") {
@@ -208,6 +207,11 @@ mod tests {
     use crate::rules::Value;
     use crate::testkit::{flat, join};
 
+    fn settle(ctx: &ServerContext, entities: &mut [Entity]) {
+        let notes = crate::mobs::aftermath::take(ctx);
+        finish(ctx, entities, &notes);
+    }
+
     fn mob(e: &Entity) -> &mc_entity::Mob {
         let Kind::Mob(m) = &e.kind else {
             panic!("not a mob")
@@ -239,13 +243,13 @@ mod tests {
         let far_kin = new_mob(&ctx, Species::ZombifiedPiglin, [3.0, -45.0, 0.5]);
         let other = new_mob(&ctx, Species::Wolf, [3.0, -60.0, 1.5]);
         let mut entities = vec![hit, kin, far_kin, other];
-        finish(&ctx, &mut entities);
+        settle(&ctx, &mut entities);
         assert!(mob(&entities[0]).anger > 0 && mob(&entities[1]).anger > 0);
         assert_eq!(mob(&entities[2]).anger, 0, "more than 10 blocks below");
         assert_eq!(mob(&entities[3]).anger, 0, "another kind");
         assert!(!mob(&entities[0]).provoked);
         for _ in 0..200 {
-            finish(&ctx, &mut entities);
+            settle(&ctx, &mut entities);
         }
         // Not the hitter, not the creative player: the nearest survival one.
         assert_eq!(mob(&entities[0]).target, Some(7001));
@@ -265,7 +269,7 @@ mod tests {
         }
         let kin = new_mob(&ctx, Species::Enderman, [3.0, -60.0, 0.5]);
         let mut entities = vec![hit, kin];
-        finish(&ctx, &mut entities);
+        settle(&ctx, &mut entities);
         assert!(mob(&entities[0]).anger > 0);
         assert_eq!(mob(&entities[1]).anger, 0);
     }
@@ -283,7 +287,7 @@ mod tests {
         }
         let kin = new_mob(&ctx, Species::ZombifiedPiglin, [3.0, -60.0, 0.5]);
         let mut entities = vec![hit, kin];
-        finish(&ctx, &mut entities);
+        settle(&ctx, &mut entities);
         assert_eq!(mob(&entities[0]).target, Some(7000));
         assert_eq!(mob(&entities[1]).anger, 0);
     }
@@ -309,7 +313,7 @@ mod tests {
         // Off by default? No: vanilla's default is on.
         assert!(ctx.game_rule_bool("forgive_dead_players"));
         note_death(&ctx, 7000, [0.5, -60.0, 0.5]);
-        finish(&ctx, &mut entities);
+        settle(&ctx, &mut entities);
         assert_eq!(mob(&entities[0]).anger, 0);
         assert_eq!(mob(&entities[0]).target, None);
         assert!(mob(&entities[1]).anger > 0, "past 32 blocks");
@@ -317,7 +321,7 @@ mod tests {
 
         lock(&ctx.game_rules).set("forgive_dead_players", Value::Bool(false));
         note_death(&ctx, 7001, [0.5, -60.0, 0.5]);
-        finish(&ctx, &mut entities);
+        settle(&ctx, &mut entities);
         assert_eq!(mob(&entities[2]).target, Some(7001), "the rule is off");
     }
 }

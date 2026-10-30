@@ -10,6 +10,7 @@
 //! - [`meta`]: metadata and equipment for clients;
 //! - [`nbt`]: mobs as `/summon` and `/data` see them.
 
+pub mod aftermath;
 pub mod air;
 pub mod anger;
 pub mod aqua;
@@ -137,7 +138,7 @@ pub struct MobState {
     /// the villagers that saw (see [`village::witnesses`]).
     murders: Mutex<Vec<(usize, u128, [f64; 3])>>,
     /// Players who died this tick: dimension, entity id and where.
-    pub(crate) deaths: Mutex<Vec<(usize, i32, [f64; 3])>>,
+    pub(crate) deaths: Mutex<Vec<(usize, aftermath::Note)>>,
 }
 
 impl MobState {
@@ -638,6 +639,7 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     };
     let mut events = Vec::new();
     crowd::tick(ctx, &mut entities, &targets);
+    crowd::crush_players(ctx, &entities, &targets);
     let mut seen = others(&entities);
     for i in 0..entities.len() {
         let e = &mut entities[i];
@@ -866,7 +868,9 @@ pub fn tick(ctx: &ServerContext, level: &mut WorldLevel) {
     }
     entities.append(&mut out.fresh);
     aqua::carry(ctx, &mut entities);
-    anger::finish(ctx, &mut entities);
+    let notes = aftermath::take(ctx);
+    aftermath::apply(ctx, level, &mut entities, &notes);
+    anger::finish(ctx, &mut entities, &notes);
     let mut stored = lock(&ctx.entities);
     entities.append(&mut stored);
     *stored = entities;

@@ -1,6 +1,7 @@
 use super::*;
 use crate::combat::Blow;
 
+mod aftermath;
 mod air;
 mod critters;
 // Aquatic (Claude)

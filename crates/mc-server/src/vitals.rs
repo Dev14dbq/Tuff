@@ -579,6 +579,13 @@ pub fn try_hurt_by_entity(
     };
     // A hurt sleeper wakes.
     crate::useblocks::wake(ctx, uuid);
+    let infested = lock(&ctx.vitals)
+        .get(&uuid)
+        .is_some_and(|v| v.effects.active.contains_key("infested"));
+    let pose = lock(&ctx.players).get(&uuid).and_then(|p| p.pose);
+    if let (true, Some(pose)) = (infested, pose) {
+        crate::mobs::aftermath::infested(ctx, [pose.x, pose.y, pose.z], 1.8, pose.yaw, pose.pitch);
+    }
     for (stat, n) in ["damage_taken", "damage_absorbed", "damage_resisted"]
         .into_iter()
         .zip(tally)
@@ -612,6 +619,10 @@ pub fn try_hurt_by_entity(
             .map(|p| [p.x, p.y, p.z])
             .unwrap_or([0.0; 3]);
         crate::mobs::anger::note_death(ctx, entity_id, at);
+        let carried = lock(&ctx.vitals).get(&uuid).map(|v| v.effects.clone());
+        if let Some(effects) = carried {
+            crate::mobs::aftermath::killed(ctx, entity_id, at, (0.6, 1.8), true, &effects);
+        }
         crate::stats::died(ctx, uuid, attacker);
         let _ = ctx.events.send(Event::Died {
             uuid,

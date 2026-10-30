@@ -9,6 +9,7 @@ use mc_entity::{Entity, Kind};
 
 use super::hurt;
 use crate::context::ServerContext;
+use crate::tick::lock;
 
 /// How hard two overlapping bodies push apart each tick (vanilla's 0.05).
 const PUSH: f64 = 0.05;
@@ -42,6 +43,95 @@ fn push_from(me: [f64; 3], other: [f64; 3]) -> Option<[f64; 2]> {
     d = d.sqrt();
     let f = (1.0 / d).min(1.0);
     Some([dx / d * f * PUSH, dz / d * f * PUSH])
+}
+
+/// Players crowded by mobs and other players are crushed just as mobs are:
+/// with more than `max_entity_cramming - 1` others (alive, not spectating,
+/// not riding anything) in their space, one tick in four they take 6
+/// damage. A player on a team that never collides is left alone.
+pub fn crush_players(ctx: &ServerContext, entities: &[Entity], targets: &[Target]) {
+    let limit = ctx
+        .game_rules
+        .lock()
+        .expect("game rules lock")
+        .int("minecraft:max_entity_cramming");
+    if limit <= 0 {
+        return;
+    }
+    let rides: std::collections::HashSet<i32> = entities
+        .iter()
+        .filter_map(|e| match &e.kind {
+            Kind::Mob(m) => Some(m.riders.iter().copied()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let bodies: Vec<Body> = entities
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| !e.removed && !rides.contains(&e.id))
+        .filter(|(_, e)| match &e.kind {
+            Kind::Mob(m) => m.dying.is_none() && !m.is_dead(),
+            Kind::Merchant(_) => true,
+            _ => false,
+        })
+        .map(|(i, e)| {
+            let (w, h) = e.size();
+            Body {
+                i,
+                pos: e.pos,
+                half: w / 2.0,
+                height: h,
+            }
+        })
+        .collect();
+    let never = |uuid: u128| {
+        let name = lock(&ctx.players)
+            .get(&uuid)
+            .map(|p| p.profile.name.clone());
+        name.is_some_and(|n| {
+            lock(&ctx.scoreboard)
+                .team_of(&n)
+                .is_some_and(|t| crate::scoreboard::COLLISION[t.collision] == "never")
+        })
+    };
+    let present: Vec<&Target> = targets.iter().filter(|t| t.present).collect();
+    for me in &present {
+        let a = Body {
+            i: usize::MAX,
+            pos: me.pos,
+            half: PLAYER_WIDTH / 2.0,
+            height: PLAYER_HEIGHT,
+        };
+        let mut others = bodies.iter().filter(|b| overlap(&a, b)).count();
+        others += present
+            .iter()
+            .filter(|o| o.uuid != me.uuid)
+            .filter(|o| {
+                overlap(
+                    &a,
+                    &Body {
+                        i: usize::MAX,
+                        pos: o.pos,
+                        half: PLAYER_WIDTH / 2.0,
+                        height: PLAYER_HEIGHT,
+                    },
+                )
+            })
+            .count();
+        if mc_entity::aftermath::is_crushed(limit, others)
+            && crate::util::random_u64().is_multiple_of(4)
+            && !never(me.uuid)
+        {
+            crate::vitals::hurt(
+                ctx,
+                me.uuid,
+                6.0,
+                "minecraft:cramming",
+                "death.attack.cramming",
+            );
+        }
+    }
 }
 
 /// Pushes overlapping mobs apart and crushes crowds. Ridden mobs and their
@@ -126,7 +216,8 @@ pub fn tick(ctx: &ServerContext, entities: &mut [Entity], targets: &[Target]) {
         e.vel[2] += pushes[k][1];
         // More than `limit - 1` others in its space: one tick in four it is
         // crushed.
-        if limit > 0 && crowd[k] > limit as usize - 1 && crate::util::random_u64().is_multiple_of(4)
+        if mc_entity::aftermath::is_crushed(limit, crowd[k])
+            && crate::util::random_u64().is_multiple_of(4)
         {
             hurt::harm(ctx, e, &hurt::Harm::new(6.0, "minecraft:cramming"));
         }
