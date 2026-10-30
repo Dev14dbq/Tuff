@@ -10,6 +10,7 @@
 pub mod config;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use mc_protocol::filter::FilteredText;
@@ -60,7 +61,7 @@ impl TextFilter {
             0 => match Settings::parse_legacy(config) {
                 Ok(settings) => Some(Self::new(settings, None)),
                 Err(e) => {
-                    warn!("Failed to parse chat filter config {config}: {e}");
+                    warn!("Failed to parse chat filter config: {e}");
                     None
                 }
             },
@@ -68,7 +69,7 @@ impl TextFilter {
                 let settings = match Settings::parse_safety(config) {
                     Ok(s) => s,
                     Err(e) => {
-                        warn!("Failed to parse chat filter config {config}: {e}");
+                        warn!("Failed to parse chat filter config: {e}");
                         return None;
                     }
                 };
@@ -129,8 +130,15 @@ impl TextFilter {
     /// tokio runtime.
     pub fn context(&self, id: u128, name: &str) -> PlayerFilter {
         let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(run_queue(self.shared.clone(), id, name.to_owned(), rx));
-        PlayerFilter { tx }
+        let pending = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(run_queue(
+            self.shared.clone(),
+            id,
+            name.to_owned(),
+            rx,
+            pending.clone(),
+        ));
+        PlayerFilter { tx, pending }
     }
 }
 
@@ -161,7 +169,17 @@ enum Job {
 #[derive(Debug)]
 pub struct PlayerFilter {
     tx: mpsc::UnboundedSender<Job>,
+    /// Text jobs sent and not yet judged.
+    pending: Arc<AtomicUsize>,
 }
+
+/// How many text jobs one player may have waiting. A client flooding chat or
+/// book edits while the service is slow gets the rest filtered out instead of
+/// growing the queue without end.
+const MAX_PENDING: usize = 64;
+
+/// The most of a filter answer that is read.
+const MAX_ANSWER: u64 = 64 * 1024;
 
 impl PlayerFilter {
     /// Tells the service the player is here (version 0 only).
@@ -177,7 +195,19 @@ impl PlayerFilter {
     /// Judges `texts` one after the other, then calls `done` with the
     /// verdicts in the same order (from the filter's own task, so it must be
     /// quick). A text that could not be judged comes back fully filtered.
+    /// Past [`MAX_PENDING`] waiting jobs `done` is called at once, with every
+    /// text fully filtered.
     pub fn texts(&self, texts: Vec<String>, done: impl FnOnce(Vec<FilteredText>) + Send + 'static) {
+        if self.pending.fetch_add(1, Ordering::Relaxed) >= MAX_PENDING {
+            self.pending.fetch_sub(1, Ordering::Relaxed);
+            done(
+                texts
+                    .iter()
+                    .map(|t| FilteredText::fully_filtered(t))
+                    .collect(),
+            );
+            return;
+        }
         let _ = self.tx.send(Job::Texts(texts, Box::new(done)));
     }
 }
@@ -187,6 +217,7 @@ async fn run_queue(
     id: u128,
     name: String,
     mut jobs: mpsc::UnboundedReceiver<Job>,
+    pending: Arc<AtomicUsize>,
 ) {
     while let Some(job) = jobs.recv().await {
         match job {
@@ -209,6 +240,7 @@ async fn run_queue(
                 for text in texts {
                     verdicts.push(judge(&shared, id, &name, text).await);
                 }
+                pending.fetch_sub(1, Ordering::Relaxed);
                 done(verdicts);
             }
         }
@@ -269,6 +301,8 @@ fn post(shared: &Shared, url: &str, body: &Value) -> Result<Option<Value>, Strin
     }
     let text = response
         .body_mut()
+        .with_config()
+        .limit(MAX_ANSWER)
         .read_to_string()
         .map_err(|e| e.to_string())?;
     serde_json::from_str(&text)
