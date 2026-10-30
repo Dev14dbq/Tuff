@@ -244,13 +244,13 @@ fn move_one<H: Containers + Recipes>(
 
 /// The rest a hopper still has (its block entity's `TransferCooldown`).
 pub fn cooldown(host: &impl Blocks, p: BlockPos) -> i32 {
-    match host
-        .block_entity(p)
-        .and_then(|data| data.get("TransferCooldown").cloned())
-    {
-        Some(Tag::Int(v)) => v,
-        _ => 0,
-    }
+    let mut ticks = 0;
+    host.read_block_entity(p, &mut |data| {
+        if let Some(Tag::Int(v)) = data.get("TransferCooldown") {
+            ticks = *v;
+        }
+    });
+    ticks
 }
 
 pub fn set_cooldown(host: &mut impl Blocks, p: BlockPos, ticks: i32) {

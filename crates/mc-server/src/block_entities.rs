@@ -107,6 +107,13 @@ impl Blocks for Host<'_> {
             .map(|be| be.data)
     }
 
+    fn read_block_entity(&self, p: BlockPos, f: &mut dyn FnMut(&Compound)) -> bool {
+        self.ctx
+            .world
+            .read_block_entity(to_position(p), &self.ctx.data.blocks, |be| f(&be.data))
+            .is_some()
+    }
+
     fn edit_block_entity(
         &mut self,
         p: BlockPos,
@@ -115,16 +122,21 @@ impl Blocks for Host<'_> {
     ) {
         let blocks = &self.ctx.data.blocks;
         let at = to_position(p);
-        let mut be = match (self.ctx.world.block_entity(at, blocks), create) {
-            (Some(be), _) => be,
-            (None, Some(id)) => mc_world::BlockEntity {
-                x: p.x,
-                y: p.y,
-                z: p.z,
-                id: id.to_owned(),
-                data: Compound::new(),
-            },
-            (None, None) => return,
+        if self
+            .ctx
+            .world
+            .edit_block_entity(at, blocks, |be| edit(&mut be.data))
+            .is_some()
+        {
+            return;
+        }
+        let Some(id) = create else { return };
+        let mut be = mc_world::BlockEntity {
+            x: p.x,
+            y: p.y,
+            z: p.z,
+            id: id.to_owned(),
+            data: Compound::new(),
         };
         edit(&mut be.data);
         self.ctx.world.set_block_entity(be, blocks);

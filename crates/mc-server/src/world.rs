@@ -223,6 +223,45 @@ struct Slot {
     dirty: bool,
     /// Players whose client has this chunk.
     viewers: u32,
+    /// Where each block entity is in the chunk's list, built when first
+    /// needed (see [`BlockEntityIndex`]).
+    be_index: BlockEntityIndex,
+}
+
+/// The place of each block entity in a chunk's list, so finding one does
+/// not walk the list (a chunk full of hoppers has 256). Rebuilt whenever the
+/// list's length is not the one it was built for; changes that keep the
+/// length (replacing one in place) leave the positions as they were.
+#[derive(Debug, Default)]
+struct BlockEntityIndex {
+    /// The list's length when built; `None` before the first use.
+    len: Option<usize>,
+    at: mc_tick::fast::FastMap<(i32, i32, i32), u32>,
+}
+
+impl BlockEntityIndex {
+    /// Where the block entity at `p` is in `list`.
+    fn find(&mut self, list: &[mc_world::BlockEntity], p: (i32, i32, i32)) -> Option<usize> {
+        if self.len != Some(list.len()) {
+            self.at.clear();
+            for (i, be) in list.iter().enumerate() {
+                self.at.insert((be.x, be.y, be.z), i as u32);
+            }
+            self.len = Some(list.len());
+        }
+        let i = *self.at.get(&p)? as usize;
+        // A list changed without changing its length is caught here.
+        if list.get(i).is_some_and(|be| (be.x, be.y, be.z) == p) {
+            Some(i)
+        } else {
+            self.len = None;
+            list.iter().position(|be| (be.x, be.y, be.z) == p)
+        }
+    }
+
+    fn forget(&mut self) {
+        self.len = None;
+    }
 }
 
 /// The stored heightmaps and the blocks each one counts.
@@ -680,6 +719,7 @@ impl World {
             // A generated chunk is saved like a changed one.
             dirty: generated,
             viewers: 0,
+            be_index: BlockEntityIndex::default(),
         };
         if !generated {
             let mut chunks = self.chunks.lock().expect("chunks lock");
@@ -710,6 +750,7 @@ impl World {
                             changes: slot.changes,
                             dirty: false,
                             viewers: 0,
+                            be_index: BlockEntityIndex::default(),
                         },
                     );
                 }
@@ -1544,13 +1585,42 @@ impl World {
 
     /// The block entity at `p` (chest contents, sign text...).
     pub fn block_entity(&self, p: Position, blocks: &Blocks) -> Option<mc_world::BlockEntity> {
+        self.read_block_entity(p, blocks, mc_world::BlockEntity::clone)
+    }
+
+    /// Looks at the block entity at `p` where it is, without copying it.
+    /// `f` runs under the world's lock: it must not touch the world.
+    pub fn read_block_entity<R>(
+        &self,
+        p: Position,
+        blocks: &Blocks,
+        f: impl FnOnce(&mc_world::BlockEntity) -> R,
+    ) -> Option<R> {
         self.with_slot(p.x >> 4, p.z >> 4, blocks, |slot| {
-            slot.chunk
-                .as_ref()?
-                .block_entities
-                .iter()
-                .find(|be| (be.x, be.y, be.z) == (p.x, p.y, p.z))
-                .cloned()
+            let chunk = slot.chunk.as_ref()?;
+            let i = slot.be_index.find(&chunk.block_entities, (p.x, p.y, p.z))?;
+            Some(f(&chunk.block_entities[i]))
+        })
+    }
+
+    /// Changes the block entity at `p` where it is (it keeps its place in
+    /// the chunk's list); `None` if there is none. The chunk is marked
+    /// changed as by [`World::set_block_entity`]. `f` runs under the world's
+    /// lock: it must not touch the world.
+    pub fn edit_block_entity<R>(
+        &self,
+        p: Position,
+        blocks: &Blocks,
+        f: impl FnOnce(&mut mc_world::BlockEntity) -> R,
+    ) -> Option<R> {
+        self.with_slot(p.x >> 4, p.z >> 4, blocks, |slot| {
+            let chunk = slot.chunk.as_mut()?;
+            let i = slot.be_index.find(&chunk.block_entities, (p.x, p.y, p.z))?;
+            let out = f(&mut chunk.block_entities[i]);
+            slot.frame = None;
+            slot.changes += 1;
+            slot.dirty = true;
+            Some(out)
         })
     }
 
@@ -1581,6 +1651,7 @@ impl World {
                 .block_entities
                 .retain(|other| (other.x, other.y, other.z) != (be.x, be.y, be.z));
             chunk.block_entities.push(be);
+            slot.be_index.forget();
             slot.frame = None;
             slot.changes += 1;
             slot.dirty = true;
@@ -1615,6 +1686,7 @@ impl World {
                 chunk
                     .block_entities
                     .retain(|be| (be.x, be.y, be.z) != (p.x, p.y, p.z));
+                slot.be_index.forget();
             }
             let poi_block = |s| blocks.block_name(s).is_some_and(crate::poi::is_poi_block);
             if poi_block(old) || poi_block(state) {
@@ -2223,6 +2295,7 @@ fn light_alone(chunk: &mut Chunk, tables: &mc_light::Tables) {
             changes: 0,
             dirty: false,
             viewers: 0,
+            be_index: BlockEntityIndex::default(),
         },
     );
     light_new(&mut slot, tables, (x, z), min_y, top);
@@ -2763,6 +2836,7 @@ mod tests {
                             changes: 0,
                             dirty: false,
                             viewers: 0,
+                            be_index: BlockEntityIndex::default(),
                         },
                     );
                     order.push((cx, cz));
@@ -2797,6 +2871,7 @@ mod tests {
                         changes: 0,
                         dirty: false,
                         viewers: 0,
+                        be_index: BlockEntityIndex::default(),
                     },
                 );
             }

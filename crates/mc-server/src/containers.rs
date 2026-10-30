@@ -296,23 +296,33 @@ fn store(ctx: &ServerContext, p: Position, open: &Open) {
             .insert("Items", write_items(ctx, &open.slots));
         return;
     }
-    let blocks = &ctx.data.blocks;
-    let mut be = ctx
-        .world
-        .block_entity(p, blocks)
-        .unwrap_or(mc_world::BlockEntity {
-            x: p.x,
-            y: p.y,
-            z: p.z,
-            id: open.kind.entity.to_owned(),
-            data: Compound::new(),
-        });
     if open.kind.entity == "minecraft:decorated_pot" {
         crate::pots::write_stored(ctx, p, open.slots.first().cloned().flatten());
         return;
     }
-    be.data.insert("Items", write_items(ctx, &open.slots));
-    ctx.world.set_block_entity(be, blocks);
+    let blocks = &ctx.data.blocks;
+    let mut items = Some(write_items(ctx, &open.slots));
+    let edited = ctx.world.edit_block_entity(p, blocks, |be| {
+        if let Some(items) = items.take() {
+            be.data.insert("Items", items);
+        }
+    });
+    if edited.is_none()
+        && let Some(items) = items
+    {
+        let mut data = Compound::new();
+        data.insert("Items", items);
+        ctx.world.set_block_entity(
+            mc_world::BlockEntity {
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                id: open.kind.entity.to_owned(),
+                data,
+            },
+            blocks,
+        );
+    }
 }
 
 /// How full the container at `p` is, as a comparator reads it
@@ -367,10 +377,24 @@ pub fn slots(ctx: &ServerContext, p: Position, kind: Kind) -> Vec<Option<ItemSta
     if kind.entity == "minecraft:decorated_pot" {
         return vec![crate::pots::stored(ctx, p)];
     }
-    match stored_data(ctx, p) {
-        Some(data) => read_items(ctx, &data, kind.slots),
-        None => vec![None; kind.slots],
-    }
+    stored_slots(ctx, p, kind.slots)
+}
+
+/// The slots kept in the stored data of the container at `p` (see
+/// [`stored_data`]), read where they are.
+fn stored_slots(ctx: &ServerContext, p: Position, size: usize) -> Vec<Option<ItemStack>> {
+    let read = match entity_of(p) {
+        Some(id) => ctx
+            .entity_items
+            .lock()
+            .expect("entity items lock")
+            .get(&id)
+            .map(|data| read_items(ctx, data, size)),
+        None => ctx
+            .world
+            .read_block_entity(p, &ctx.data.blocks, |be| read_items(ctx, &be.data, size)),
+    };
+    read.unwrap_or_else(|| vec![None; size])
 }
 
 /// Changes slots of the container at `p` (commands, furnaces): stored, seen
@@ -381,10 +405,7 @@ pub fn put(ctx: &ServerContext, p: Position, kind: Kind, changes: &[(usize, Opti
         let slots = if kind.entity == "minecraft:decorated_pot" {
             vec![crate::pots::stored(ctx, p)]
         } else {
-            match stored_data(ctx, p) {
-                Some(data) => read_items(ctx, &data, kind.slots),
-                None => vec![None; kind.slots],
-            }
+            stored_slots(ctx, p, kind.slots)
         };
         Open {
             kind,
