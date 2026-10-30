@@ -2867,6 +2867,9 @@ async fn locate_finds_what_vanilla_finds() {
     config.world = Some(dir.clone());
     config.seed = Some(12345);
     config.ops = vec!["Seeker".into()];
+    // The bot sits quiet while a slow /locate runs; a real client never
+    // goes 30 seconds without sending.
+    config.read_timeout = Duration::from_secs(120);
     let (addr, ctx, stop) = running(config).await;
     let (mut seeker, _) = join_offline(addr, ctx.ids.clone(), "Seeker").await;
     // What a vanilla 26.3 server says for this seed (`cargo xtask
