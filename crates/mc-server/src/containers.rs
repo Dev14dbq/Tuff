@@ -106,6 +106,8 @@ pub struct Containers {
     open: mc_tick::fast::FastMap<(i32, i32, i32), Open>,
     /// Containers nobody has open stay here until [`release`].
     keep: bool,
+    /// Item entities and vehicles by cell while hoppers take their turns.
+    pub nearby: crate::nearby::Nearby,
 }
 
 impl std::ops::Deref for Containers {
@@ -124,7 +126,12 @@ impl std::ops::DerefMut for Containers {
 /// From now until [`release`], containers that hoppers read or change stay
 /// decoded (see [`Containers`]).
 pub fn keep(ctx: &ServerContext) {
-    ctx.containers.lock().expect("containers lock").keep = true;
+    // Built aside, so the two locks are never held together.
+    let mut nearby = std::mem::take(&mut ctx.containers.lock().expect("containers lock").nearby);
+    nearby.build(&ctx.entities.lock().expect("entities lock"));
+    let mut all = ctx.containers.lock().expect("containers lock");
+    all.nearby = nearby;
+    all.keep = true;
 }
 
 /// Stores what hoppers changed since [`keep`] and forgets the containers
@@ -132,6 +139,7 @@ pub fn keep(ctx: &ServerContext) {
 pub fn release(ctx: &ServerContext) {
     let mut all = ctx.containers.lock().expect("containers lock");
     all.keep = false;
+    all.nearby.clear();
     all.open.retain(|&(x, y, z), open| {
         if open.unsaved != 0 {
             let p = Position::new(x, y, z);
@@ -516,6 +524,20 @@ pub fn empty(ctx: &ServerContext, p: Position) -> Option<bool> {
     let kind = kind_of(name)?;
     Some(with_slots(ctx, p, kind, |slots| {
         slots.iter().all(Option::is_none)
+    }))
+}
+
+/// Whether every slot of the container block at `p` holds a stack as large
+/// as its item stacks (vanilla `HopperBlockEntity.inventoryFull`). `None`
+/// if there is no container there.
+pub fn full(ctx: &ServerContext, p: Position) -> Option<bool> {
+    let state = ctx.world.block(p, &ctx.data.blocks)?;
+    let kind = kind_of(ctx.data.blocks.block_name(state)?)?;
+    Some(with_slots(ctx, p, kind, |slots| {
+        slots.iter().all(|s| {
+            s.as_ref()
+                .is_some_and(|s| s.count >= ctx.items.max_stack(s.item))
+        })
     }))
 }
 

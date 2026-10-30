@@ -181,8 +181,18 @@ impl Containers for Host<'_> {
                 f64::from(p.z) + 1.0,
             ],
         );
-        let found: Vec<(i32, Kind)> = lock(&ctx.entities)
-            .iter()
+        let mut near = Vec::new();
+        let len = lock(&ctx.containers)
+            .nearby
+            .vehicles((p.x, p.y, p.z), &mut near);
+        let entities = lock(&ctx.entities);
+        let all: &mut dyn Iterator<Item = &mc_entity::Entity> = match len {
+            Some(len) if crate::nearby::still(len, &entities, &near) => {
+                &mut near.iter().map(|&(i, _)| &entities[i as usize])
+            }
+            _ => &mut entities.iter(),
+        };
+        let found: Vec<(i32, Kind)> = all
             .filter(|e| !e.removed)
             .filter_map(|e| {
                 let mc_entity::Kind::Vehicle(v) = &e.kind else {
@@ -223,9 +233,16 @@ impl Containers for Host<'_> {
 
 impl ItemEntities for Host<'_> {
     fn items_in(&self, min: [f64; 3], max: [f64; 3]) -> Vec<(i32, ItemStack)> {
-        lock(&self.ctx.entities)
-            .iter()
-            .filter(|e| !e.removed && !(0..3).any(|i| e.pos[i] < min[i] || e.pos[i] >= max[i]))
+        let mut near = Vec::new();
+        let len = lock(&self.ctx.containers).nearby.items(min, max, &mut near);
+        let entities = lock(&self.ctx.entities);
+        let all: &mut dyn Iterator<Item = &mc_entity::Entity> = match len {
+            Some(len) if crate::nearby::still(len, &entities, &near) => {
+                &mut near.iter().map(|&(i, _)| &entities[i as usize])
+            }
+            _ => &mut entities.iter(),
+        };
+        all.filter(|e| !e.removed && !(0..3).any(|i| e.pos[i] < min[i] || e.pos[i] >= max[i]))
             .filter_map(|e| Some((e.id, e.kind.as_stack()?)))
             .collect()
     }

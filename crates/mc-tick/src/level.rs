@@ -152,6 +152,12 @@ pub trait Level {
         self.container_signal(p).map(|s| s == 0)
     }
 
+    /// Whether every slot of the container at `p` holds a full stack
+    /// (`None` if it is not a container, or the host cannot tell).
+    fn container_full(&self, _p: BlockPos) -> Option<bool> {
+        None
+    }
+
     /// What a comparator reads from the block entity at `p` when the block
     /// state alone does not tell (chiseled bookshelves, lecterns,
     /// jukeboxes); `None` to read it as a container.

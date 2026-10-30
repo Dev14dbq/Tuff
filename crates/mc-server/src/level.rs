@@ -389,6 +389,10 @@ impl Level for WorldLevel<'_> {
         crate::containers::empty(self.ctx, to_position(p))
     }
 
+    fn container_full(&self, p: BlockPos) -> Option<bool> {
+        crate::containers::full(self.ctx, to_position(p))
+    }
+
     fn comparator_output(&self, p: BlockPos) -> u8 {
         let be = self
             .ctx
