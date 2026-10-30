@@ -111,6 +111,16 @@ pub struct Packs {
     world_flags: Vec<String>,
 }
 
+/// Why `/datapack enable` or `disable` is refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToggleError {
+    Unknown,
+    /// Already enabled (when enabling) or already disabled (when disabling).
+    State,
+    /// Flags the world lacks, joined for the message.
+    NoFlags(String),
+}
+
 fn vanilla() -> Pack {
     Pack {
         id: "vanilla".into(),
@@ -309,6 +319,32 @@ impl Packs {
             deny.push(id.clone());
         }
         self.enabled.retain(|id| !deny.iter().any(|d| d == id));
+    }
+
+    /// The pack `/datapack enable` or `disable` is about, checked in
+    /// vanilla's order: unknown, then already in the wanted state, then (only
+    /// when enabling) missing feature flags.
+    pub fn check_toggle(&self, name: &str, enabling: bool) -> Result<&Pack, ToggleError> {
+        let enabled = self.enabled.iter().any(|id| id == name);
+        let Some(pack) = self.pack(name) else {
+            // Vanilla's built-in feature packs exist but are off here.
+            if FEATURE_PACKS.contains(&name) {
+                return Err(if enabling {
+                    ToggleError::NoFlags(format!("minecraft:{name}"))
+                } else {
+                    ToggleError::State
+                });
+            }
+            return Err(ToggleError::Unknown);
+        };
+        if enabling == enabled {
+            return Err(ToggleError::State);
+        }
+        let missing = self.missing_flags(pack);
+        if enabling && !missing.is_empty() {
+            return Err(ToggleError::NoFlags(missing.join(", ")));
+        }
+        Ok(pack)
     }
 
     /// Flags the pack needs that this world does not have, as vanilla
@@ -569,7 +605,7 @@ mod tests {
         }
         std::fs::write(
             pack.join("pack.mcmeta"),
-            r#"{"pack":{"description":"o","min_format":1,"max_format":200},"overlays":{"entries":[{"directory":"old","formats":[10,20]},{"directory":"new","min_format":121,"max_format":121}]}}"#,
+            r#"{"pack":{"description":"o","min_format":1,"max_format":200},"overlays":{"entries":[{"directory":"old","min_format":122,"max_format":130},{"directory":"new","min_format":121,"max_format":121}]}}"#,
         )
         .unwrap();
         std::fs::write(tmp.join("datapacks/bad.mcmeta"), "").unwrap();
@@ -591,6 +627,44 @@ mod tests {
             "unknown flag: unreadable"
         );
         assert_eq!(packs.enabled_features(), vec!["minecraft:vanilla"]);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn toggling_checks_state_before_flags() {
+        let tmp = std::env::temp_dir().join(format!("mc-pack-toggle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pack = tmp.join("datapacks/rebalance");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(
+            pack.join("pack.mcmeta"),
+            r#"{"pack":{"description":"r"},"features":{"enabled":["minecraft:trade_rebalance"]}}"#,
+        )
+        .unwrap();
+        let commands = crate::commands::Commands::load(&tmp.join("no-data"));
+        let packs = Packs::load(Some(&tmp), &commands);
+        // Not enabled and missing a flag: disabling is "already disabled".
+        assert_eq!(
+            packs.check_toggle("file/rebalance", false).err(),
+            Some(ToggleError::State)
+        );
+        assert_eq!(
+            packs.check_toggle("file/rebalance", true).err(),
+            Some(ToggleError::NoFlags("minecraft:trade_rebalance".into()))
+        );
+        assert_eq!(
+            packs.check_toggle("vanilla", true).err(),
+            Some(ToggleError::State)
+        );
+        assert!(packs.check_toggle("vanilla", false).is_ok());
+        assert_eq!(
+            packs.check_toggle("nope", false).err(),
+            Some(ToggleError::Unknown)
+        );
+        assert_eq!(
+            packs.check_toggle("trade_rebalance", false).err(),
+            Some(ToggleError::State)
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
