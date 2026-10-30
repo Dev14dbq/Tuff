@@ -10,3 +10,7 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    ignore:
+      # The compiler version lives in rust-toolchain.toml; the build image
+      # moves with it by hand, so new Rust versions are a deliberate step.
+      - dependency-name: rust
