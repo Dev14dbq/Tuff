@@ -698,6 +698,11 @@ impl Event {
     /// player, the chat, the tab list...) rather than those in the
     /// dimension it happened in.
     pub fn is_global(&self) -> bool {
+        // Effects happen at a place in this dimension (or to an entity in
+        // it), except a level event everyone hears.
+        if let Event::Fx(fx) = self {
+            return matches!(fx, crate::fx::Fx::Heard { .. });
+        }
         !matches!(
             self,
             Event::PlayerMoved { .. }

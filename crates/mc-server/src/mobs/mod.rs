@@ -943,6 +943,7 @@ fn handle(
                 by: None,
                 fire: false,
                 respawn: None,
+                block: false,
             });
         }
         MobEvent::Lay { item } => hurt::lay(ctx, &entities[i], item),

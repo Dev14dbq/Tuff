@@ -97,6 +97,7 @@ pub fn tick_all(ctx: &ServerContext, level: &mut WorldLevel, entities: &mut Vec<
                     by: None,
                     fire: false,
                     respawn: None,
+                    block: true,
                 });
             }
             destroyed.push((e.uuid, e.id, e.pos, by));

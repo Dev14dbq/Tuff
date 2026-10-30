@@ -1018,6 +1018,7 @@ fn rebuild_spike(
         by: None,
         fire: false,
         respawn: None,
+        block: true,
     };
     crate::explosion::explode_all(ctx, level, entities, &[blast]);
     build_spike(ctx, level, s);

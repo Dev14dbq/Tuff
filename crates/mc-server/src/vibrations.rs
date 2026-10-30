@@ -701,7 +701,7 @@ pub fn shriek(ctx: &ServerContext, p: Position, player: u128) -> bool {
     {
         return false;
     }
-    let summons = blocks.property(state, "can_summon") == Some("true");
+    let summons = responds(ctx, state);
     let at = centre(p);
     let mut warning = 0;
     if summons {
@@ -749,17 +749,6 @@ pub fn shriek(ctx: &ServerContext, p: Position, player: u128) -> bool {
     }
     emit_at(ctx, "shriek", p, Source::player(ctx, player), None);
     if summons {
-        if let Some(darkness) = effects::kind_of("darkness") {
-            for u in players_near(ctx, at, 40.0) {
-                let long = lock(&ctx.vitals)
-                    .get(&u)
-                    .and_then(|v| v.effects.active.get("darkness"))
-                    .is_some_and(|i| i.duration > 200);
-                if !long {
-                    effects::give(ctx, u, darkness, Instance::new(0, DARKNESS_TICKS, false));
-                }
-            }
-        }
         let now = lock(&ctx.time).age;
         lock(&ctx.vibrations)
             .answers
@@ -795,28 +784,66 @@ fn below(n: i32) -> i32 {
     (random_u64() % n.max(1) as u64) as i32
 }
 
-/// The shrieker's answer: a warden's sound from afar, nearer each level;
-/// at the fourth, a warden.
+/// Whether a shrieker in this state warns and answers (vanilla's "can
+/// respond"): a natural one (`can_summon`), off peaceful, with the game rule
+/// `spawn_wardens` on. Any other shrieks and does no more.
+fn responds(ctx: &ServerContext, state: u32) -> bool {
+    ctx.data.blocks.property(state, "can_summon") == Some("true")
+        && ctx.difficulty() > 0
+        && ctx.game_rule_bool("spawn_wardens")
+}
+
+/// The shrieker's answer when its shriek ends (looked at again then): at
+/// the fourth level a warden, else, or if no warden fits, a warden's sound
+/// from up to 10 blocks off, nearer each level; and Darkness for the
+/// players within 40 blocks.
 fn answer(ctx: &ServerContext, p: Position, warning: i32) {
-    let at = centre(p);
-    if warning >= 4 {
-        if ctx.difficulty() > 0 && ctx.game_rule_bool("spawn_wardens") {
-            summon(ctx, p);
-        }
+    let Some(state) = ctx.world.block_if_loaded(p) else {
+        return;
+    };
+    if ctx.data.blocks.block_name(state) != Some(SHRIEKER) || !responds(ctx, state) || warning <= 0
+    {
         return;
     }
-    let sound = match warning {
-        1 => "entity.warden.nearby_close",
-        2 => "entity.warden.nearby_closer",
-        3 => "entity.warden.nearby_closest",
-        _ => return,
+    let at = centre(p);
+    if warning < 4 || summon(ctx, p).is_none() {
+        let sound = match warning {
+            1 => "entity.warden.nearby_close",
+            2 => "entity.warden.nearby_closer",
+            3 => "entity.warden.nearby_closest",
+            _ => "entity.warden.listening_angry",
+        };
+        let from = [
+            f64::from(p.x + below(21) - 10),
+            f64::from(p.y + below(21) - 10),
+            f64::from(p.z + below(21) - 10),
+        ];
+        crate::fx::sound(ctx, sound, crate::fx::category::HOSTILE, from, 5.0, 1.0);
+    }
+    darkness_around(ctx, at, 40.0);
+}
+
+/// Darkness for survival and adventure players closer than `range`, unless
+/// theirs lasts 200 ticks or more yet.
+fn darkness_around(ctx: &ServerContext, at: [f64; 3], range: f64) {
+    let Some(darkness) = effects::kind_of("darkness") else {
+        return;
     };
-    let from = [
-        at[0] + f64::from(below(21) - 10),
-        at[1] + f64::from(below(7) - 3),
-        at[2] + f64::from(below(21) - 10),
-    ];
-    crate::fx::sound(ctx, sound, crate::fx::category::HOSTILE, from, 5.0, 1.0);
+    let near: Vec<u128> = lock(&ctx.players)
+        .values()
+        .filter(|p| p.dimension == ctx.world.dimension && matches!(p.game_mode, 0 | 2))
+        .filter(|p| p.pose.is_some_and(|q| dist([q.x, q.y, q.z], at) < range))
+        .map(|p| p.profile.uuid)
+        .collect();
+    for u in near {
+        let long = lock(&ctx.vitals)
+            .get(&u)
+            .and_then(|v| v.effects.active.get("darkness"))
+            .is_some_and(|i| i.duration >= 200);
+        if !long {
+            effects::give(ctx, u, darkness, Instance::new(0, DARKNESS_TICKS, false));
+        }
+    }
 }
 
 /// Twenty tries at a spot within 5 blocks sideways and 6 up or down: the

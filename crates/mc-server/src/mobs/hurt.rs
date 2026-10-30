@@ -193,6 +193,7 @@ pub fn harm(ctx: &ServerContext, e: &mut Entity, h: &Harm) -> bool {
     };
     if let Some(p) = h.player {
         m.hurt_by_player = Some((p, 100));
+        m.provoked = true;
     }
     if h.fire > 0 {
         m.burning = m.burning.max(h.fire * 20);
