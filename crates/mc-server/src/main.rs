@@ -30,7 +30,11 @@ Vanilla options:
   --forceUpgrade         rewrite stored chunks before the server starts
 
 Other options:
-  --data <dir>           extracted game data (default: cache/mcdata/<version> found upwards)
+  --data <dir>           extracted game data (default: cache/mcdata/<version> found
+                         upwards, else prepared in <server>/cache on the first start)
+  --reports <zip>        generated tables for that (default: tuff-reports-<version>.zip
+                         next to tuff or in the server folder, else downloaded from
+                         this Tuff release)
   --seed <seed>          seed of a new world (overrides level-seed)
   --op <name>            add an operator to ops.json (repeatable)
   --offline              online-mode=false for this run
@@ -85,8 +89,14 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Game data: given, or found above the server folder or the program.
-fn data_dir(given: Option<PathBuf>, server_dir: &Path) -> Result<PathBuf> {
+/// Game data: given, found above the server folder or the program, or
+/// prepared in `<server>/cache` from Mojang's `server.jar` and the tables of
+/// this release.
+async fn data_dir(
+    given: Option<PathBuf>,
+    reports: Option<PathBuf>,
+    server_dir: &Path,
+) -> Result<PathBuf> {
     if let Some(d) = given {
         return Ok(d);
     }
@@ -94,11 +104,44 @@ fn data_dir(given: Option<PathBuf>, server_dir: &Path) -> Result<PathBuf> {
         return Ok(d);
     }
     let exe = std::env::current_exe()?;
-    find_data_dir(exe.parent().unwrap_or(&exe))
+    let exe_dir = exe.parent().unwrap_or(&exe).to_path_buf();
+    if let Ok(d) = find_data_dir(&exe_dir) {
+        return Ok(d);
+    }
+    let version = mc_protocol::VERSION_NAME;
+    let name = mc_bootstrap::tables_name(version);
+    let tables = match reports {
+        Some(zip) => mc_bootstrap::Tables::File(zip),
+        None => [exe_dir.join(&name), server_dir.join(&name)]
+            .into_iter()
+            .find(|p| p.is_file())
+            .map_or_else(
+                || mc_bootstrap::Tables::Release {
+                    base: format!(
+                        "{}/releases/download/v{}",
+                        env!("CARGO_PKG_REPOSITORY"),
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                },
+                mc_bootstrap::Tables::File,
+            ),
+    };
+    let cache = server_dir.join("cache");
+    tokio::task::spawn_blocking(move || {
+        mc_bootstrap::prepare(&mc_bootstrap::Prepare {
+            version,
+            protocol: mc_protocol::PROTOCOL_VERSION,
+            cache: &cache,
+            tables,
+        })
+    })
+    .await?
+    .context("preparing game data (or pass --data <dir> made by `cargo xtask extract-data`)")
 }
 
 async fn run() -> Result<()> {
     let mut data: Option<PathBuf> = None;
+    let mut reports: Option<PathBuf> = None;
     let mut universe: Option<PathBuf> = None;
     let mut world_name: Option<String> = None;
     let mut port: Option<u16> = None;
@@ -134,6 +177,7 @@ async fn run() -> Result<()> {
             "--port" => port = Some(value()?.parse().context("--port")?),
             "--bind" => bind = Some(value()?.parse().context("--bind")?),
             "--data" => data = Some(value()?.into()),
+            "--reports" => reports = Some(value()?.into()),
             "--seed" => seed_arg = Some(value()?),
             "--op" => ops.push(value()?),
             "--offline" => offline = true,
@@ -161,7 +205,7 @@ async fn run() -> Result<()> {
         props.set("level-name", name);
     }
 
-    let mut config = Config::new(data_dir(data, &server_dir)?);
+    let mut config = Config::new(data_dir(data, reports, &server_dir).await?);
     config.server_dir = Some(server_dir.clone());
     let ip = props.get("server-ip").trim().to_owned();
     config.bind = if let Some(addr) = bind {

@@ -471,6 +471,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-bootstrap"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sha1_smol",
+ "sha2",
+ "tracing",
+ "ureq",
+ "zip",
+]
+
+[[package]]
 name = "mc-command"
 version = "0.1.0"
 dependencies = [
@@ -538,6 +551,7 @@ dependencies = [
  "chrono",
  "flate2",
  "hmac",
+ "mc-bootstrap",
  "mc-command",
  "mc-data",
  "mc-entity",
@@ -1450,6 +1464,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flate2",
+ "mc-bootstrap",
  "mc-data",
  "mc-nbt",
  "mc-protocol",
@@ -1457,7 +1472,6 @@ dependencies = [
  "mc-world",
  "mc-worldgen",
  "serde_json",
- "sha1_smol",
  "zip",
 ]
 

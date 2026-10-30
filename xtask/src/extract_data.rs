@@ -11,14 +11,14 @@
 //! ```
 
 use std::fs::{self, File};
-use std::io::{self, BufReader, Cursor, Read};
+use std::io::{self, BufReader};
 use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail, ensure};
+use mc_bootstrap::jar;
 use serde_json::{Map, Value, json};
-use zip::ZipArchive;
 
 pub fn run(args: &[String]) -> Result<()> {
     let mut version = None;
@@ -43,7 +43,7 @@ pub fn run(args: &[String]) -> Result<()> {
     let expected_sha1 = meta["downloads"]["server"]["sha1"]
         .as_str()
         .context("version JSON has no downloads.server.sha1")?;
-    let sha1 = sha1_of_file(&server_jar)?;
+    let sha1 = jar::sha1_of_file(&server_jar)?;
     ensure!(
         sha1 == expected_sha1,
         "{} has SHA1 {sha1}, the version JSON expects {expected_sha1}",
@@ -67,8 +67,8 @@ pub fn run(args: &[String]) -> Result<()> {
     remove_dir_if_exists(&staging)?;
     fs::create_dir_all(&staging)?;
 
-    let inner_jar = read_bundled_server_jar(&server_jar, &version)?;
-    let (files, bytes) = extract_matching(&inner_jar, &staging, |name| {
+    let inner_jar = jar::read_bundled_server_jar(&server_jar, &version)?;
+    let (files, bytes) = jar::extract_matching(&inner_jar, &staging, |name| {
         // The English names the server's console prints.
         name == "version.json"
             || name.starts_with("data/")
@@ -147,20 +147,6 @@ fn newest_reference_version(reference: &Path) -> Result<String> {
     })
 }
 
-fn sha1_of_file(path: &Path) -> Result<String> {
-    let mut file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-    let mut hasher = sha1_smol::Sha1::new();
-    let mut buf = vec![0; 1 << 20];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hasher.digest().to_string())
-}
-
 fn java_major_version() -> Result<u64> {
     let output = Command::new("java")
         .arg("-version")
@@ -180,73 +166,6 @@ fn java_major_version() -> Result<u64> {
     } else {
         first
     })
-}
-
-/// Since 1.18 `server.jar` is a bundler; the real server jar is stored inside it
-/// under `META-INF/versions/`, listed in `META-INF/versions.list`.
-fn read_bundled_server_jar(bundler: &Path, version: &str) -> Result<Vec<u8>> {
-    let file = File::open(bundler).with_context(|| format!("cannot open {}", bundler.display()))?;
-    let mut archive = ZipArchive::new(BufReader::new(file))?;
-
-    let mut list = String::new();
-    archive
-        .by_name("META-INF/versions.list")
-        .context("server.jar has no META-INF/versions.list (not a bundler jar, pre-1.18?)")?
-        .read_to_string(&mut list)?;
-    // Each line: `<sha256>\t<id>\t<path relative to META-INF/versions/>`.
-    let entries: Vec<(&str, &str)> = list
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split('\t');
-            let _sha256 = fields.next()?;
-            Some((fields.next()?, fields.next()?))
-        })
-        .collect();
-    let path = match entries.as_slice() {
-        [(_, path)] => *path,
-        _ => entries
-            .iter()
-            .find(|(id, _)| *id == version)
-            .map(|(_, path)| *path)
-            .with_context(|| format!("versions.list has no entry for {version}"))?,
-    };
-
-    let mut jar = Vec::new();
-    archive
-        .by_name(&format!("META-INF/versions/{path}"))?
-        .read_to_end(&mut jar)?;
-    Ok(jar)
-}
-
-/// Extracts the files of `jar` whose names pass `filter` into `dest`.
-/// Returns the number of files and bytes written.
-fn extract_matching(
-    jar: &[u8],
-    dest: &Path,
-    filter: impl Fn(&str) -> bool,
-) -> Result<(usize, u64)> {
-    let mut archive = ZipArchive::new(Cursor::new(jar))?;
-    let (mut files, mut bytes) = (0, 0);
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index)?;
-        if entry.is_dir() {
-            continue;
-        }
-        let name = entry.name()?.into_owned();
-        if !filter(&name) {
-            continue;
-        }
-        let relative = entry
-            .enclosed_name()
-            .with_context(|| format!("unsafe path in jar: {name}"))?;
-        let path = dest.join(relative);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        bytes += io::copy(&mut entry, &mut File::create(&path)?)?;
-        files += 1;
-    }
-    Ok((files, bytes))
 }
 
 /// Runs Mojang's built-in data generator. The bundler unpacks its libraries into

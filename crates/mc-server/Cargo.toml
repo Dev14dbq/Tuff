@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
+repository.workspace = true
 autobins = false
 
 [[bin]]
@@ -24,6 +25,7 @@ mc-entity.workspace = true
 mc-tick.workspace = true
 mc-storage.workspace = true
 mc-command.workspace = true
+mc-bootstrap.workspace = true
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync", "signal"] }
 anyhow = "1.0.104"
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
