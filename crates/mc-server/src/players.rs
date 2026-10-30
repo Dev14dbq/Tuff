@@ -568,7 +568,7 @@ impl Store {
         }
         let tmp = path.with_extension("dat_tmp");
         std::fs::write(&tmp, encoder.finish()?)?;
-        std::fs::rename(&tmp, &path)?;
+        mc_storage::fsx::rename(&tmp, &path)?;
         Ok(())
     }
 }

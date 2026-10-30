@@ -1,6 +1,7 @@
 //! Anvil region files and chunk serialization.
 
 pub mod chunk;
+pub mod fsx;
 pub mod region;
 pub mod upgrade;
 

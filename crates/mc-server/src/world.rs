@@ -2687,7 +2687,7 @@ fn write_gz(path: &Path, root: &mc_nbt::Compound) -> Result<()> {
     let compressed = encoder.finish()?;
     let tmp = path.with_extension("dat_tmp");
     std::fs::write(&tmp, compressed)?;
-    std::fs::rename(&tmp, path)?;
+    mc_storage::fsx::rename(&tmp, path)?;
     Ok(())
 }
 

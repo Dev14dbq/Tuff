@@ -120,7 +120,7 @@ pub fn write_gz(path: &Path, root: &Compound) -> io::Result<()> {
         gz.write_all(&bytes)?;
         gz.finish()?.sync_all()?;
     }
-    std::fs::rename(&tmp, path)?;
+    crate::fsx::rename(&tmp, path)?;
     sync_parent(path)
 }
 
@@ -177,7 +177,7 @@ fn paper_dimensions(dir: &Path, report: &mut FileReport) -> io::Result<()> {
                 if let Some(p) = to.parent() {
                     create_dirs(p)?;
                 }
-                std::fs::rename(&from, &to)?;
+                crate::fsx::rename(&from, &to)?;
                 sync_parent(&from)?;
                 sync_parent(&to)?;
                 report.paper.push(from.clone());
@@ -201,7 +201,7 @@ fn mv(from: &Path, to: &Path, report: &mut FileReport) -> io::Result<()> {
     if let Some(p) = to.parent() {
         create_dirs(p)?;
     }
-    std::fs::rename(from, to)?;
+    crate::fsx::rename(from, to)?;
     sync_parent(from)?;
     sync_parent(to)?;
     report.moved.push((from.to_owned(), to.to_owned()));
