@@ -1,38 +1,25 @@
-//! Jukeboxes (minecraft.wiki, "Jukebox"): a disc plays once, for the length
-//! its song has in the `jukebox_song` registry, and the jukebox gives a
-//! redstone signal of 15 while it does. The disc stays in until it is
-//! taken out; a comparator reads the song's `comparator_output` all the
-//! while. Hoppers and droppers put discs in; a hopper below takes the disc
-//! out once the signal is off. The block entity keeps the disc as
-//! `RecordItem` and `ticks_since_song_started` while a song plays.
+//! Jukeboxes on the server: the rules are in
+//! `mc_tick::block_entity::jukebox`; this reads songs from the
+//! `jukebox_song` registry and keeps the jukeboxes with a song playing.
 
 use std::collections::HashMap;
 
-use mc_nbt::{Compound, Tag};
 use mc_protocol::Position;
+#[cfg(test)]
 use mc_protocol::packets::play::ItemStack;
+use mc_tick::BlockPos;
+use mc_tick::block_entity::jukebox;
 
-use crate::context::{Event, ServerContext};
-use crate::fx;
+use crate::block_entities::Host;
+use crate::context::ServerContext;
+use crate::level::to_pos;
 use crate::tick::lock;
+
+pub use mc_tick::block_entity::jukebox::Song;
 
 /// Jukeboxes with a song playing: their position, the song's length in
 /// ticks and the ticks played.
 pub type Playing = HashMap<(i32, i32, i32), (i64, i64)>;
-
-const ID: &str = "minecraft:jukebox";
-const TICKS_KEY: &str = "ticks_since_song_started";
-
-/// What the `jukebox_song` registry says about a song.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Song {
-    /// Its place in the registry, as clients were told.
-    pub index: i32,
-    /// How long it plays, in ticks.
-    pub length: i64,
-    /// What a comparator reads.
-    pub comparator: u8,
-}
 
 /// The song of a music disc item (`minecraft:music_disc_13`).
 pub fn song_of(ctx: &ServerContext, item: &str) -> Option<Song> {
@@ -57,21 +44,9 @@ pub fn song_of(ctx: &ServerContext, item: &str) -> Option<Song> {
 }
 
 /// The disc in the jukebox at `p`: its item name.
-pub fn record(ctx: &ServerContext, p: Position) -> Option<String> {
-    let be = ctx.world.block_entity(p, &ctx.data.blocks)?;
-    match be.data.get("RecordItem") {
-        Some(Tag::Compound(c)) => match c.get("id") {
-            Some(Tag::String(id)) => Some(id.clone()),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn is_jukebox(ctx: &ServerContext, p: Position) -> Option<bool> {
-    let blocks = &ctx.data.blocks;
-    let state = ctx.world.block(p, blocks)?;
-    (blocks.block_name(state)? == ID).then(|| blocks.property(state, "has_record") == Some("true"))
+#[cfg(test)]
+fn record(ctx: &ServerContext, p: Position) -> Option<String> {
+    jukebox::record(&Host::new(ctx), to_pos(p))
 }
 
 /// Whether the jukebox at `p` has a song playing (it gives a signal).
@@ -79,194 +54,43 @@ pub fn playing(ctx: &ServerContext, p: Position) -> bool {
     lock(&ctx.jukeboxes).contains_key(&(p.x, p.y, p.z))
 }
 
-fn centre_top(p: Position) -> [f64; 3] {
-    [
-        f64::from(p.x) + 0.5,
-        f64::from(p.y) + 1.2,
-        f64::from(p.z) + 0.5,
-    ]
-}
-
-fn write_ticks(ctx: &ServerContext, p: Position, ticks: Option<i64>) {
-    let blocks = &ctx.data.blocks;
-    let Some(mut be) = ctx.world.block_entity(p, blocks) else {
-        return;
-    };
-    match ticks {
-        Some(t) => {
-            be.data.insert(TICKS_KEY, Tag::Long(t));
-        }
-        None => {
-            be.data.remove(TICKS_KEY);
-        }
-    }
-    ctx.world.set_block_entity(be, blocks);
-}
-
-/// The disc in the jukebox at `p` starts to play: clients are told, and the
-/// jukebox gives its signal (the caller sets `has_record`, which lets the
-/// neighbours know).
+/// The disc in the jukebox at `p` starts to play (see `jukebox::start`).
 pub fn start(ctx: &ServerContext, p: Position) {
-    let Some(song) = record(ctx, p).and_then(|d| song_of(ctx, &d)) else {
-        return;
-    };
-    lock(&ctx.jukeboxes).insert((p.x, p.y, p.z), (song.length, 0));
-    write_ticks(ctx, p, Some(0));
-    fx::level_event(
-        ctx,
-        1010,
-        [f64::from(p.x), f64::from(p.y), f64::from(p.z)],
-        song.index,
-    );
+    jukebox::start(&mut Host::new(ctx), to_pos(p));
 }
 
 /// The music at `p` stops, as it does when the disc comes out or the
 /// jukebox breaks. Clients are told either way.
 pub fn stop(ctx: &ServerContext, p: Position) {
-    lock(&ctx.jukeboxes).remove(&(p.x, p.y, p.z));
-    write_ticks(ctx, p, None);
-    fx::level_event(
-        ctx,
-        1011,
-        [f64::from(p.x), f64::from(p.y), f64::from(p.z)],
-        0,
-    );
+    jukebox::stop(&mut Host::new(ctx), to_pos(p));
 }
 
 /// A jukebox block entity was loaded: if its song was playing, it goes on.
 pub fn wake(ctx: &ServerContext, p: Position) {
-    let Some(be) = ctx.world.block_entity(p, &ctx.data.blocks) else {
-        return;
-    };
-    let Some(Tag::Long(ticks)) = be.data.get(TICKS_KEY) else {
-        return;
-    };
-    if let Some(song) = record(ctx, p).and_then(|d| song_of(ctx, &d)) {
-        lock(&ctx.jukeboxes).insert((p.x, p.y, p.z), (song.length, *ticks));
-    }
-}
-
-/// Lets the neighbours of `p` (and theirs) look again at the signal.
-fn refresh(ctx: &ServerContext, p: Position) {
-    let mut level = crate::level::WorldLevel::new(ctx);
-    let logic = level.logic();
-    let at = crate::level::to_pos(p);
-    mc_tick::redstone::update_neighbors_at(&mut level, logic, at);
-    for d in mc_tick::Dir::NC_ORDER {
-        mc_tick::redstone::update_neighbors_at(&mut level, logic, at.offset(d));
-    }
-    let changes = level.into_changes();
-    if !changes.is_empty() {
-        let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
-    }
+    jukebox::wake(&mut Host::new(ctx), to_pos(p));
 }
 
 /// One tick of every jukebox with a song playing.
 pub fn tick(ctx: &ServerContext) {
     let active: Vec<_> = lock(&ctx.jukeboxes).iter().map(|(k, v)| (*k, *v)).collect();
+    let mut host = Host::new(ctx);
     for (key, (length, ticks)) in active {
-        let p = Position::new(key.0, key.1, key.2);
-        // Gone, or emptied without the music being stopped.
-        if is_jukebox(ctx, p) != Some(true) {
-            lock(&ctx.jukeboxes).remove(&key);
-            continue;
-        }
-        let ticks = ticks + 1;
-        if ticks >= length {
-            // The song is over; the disc stays.
-            lock(&ctx.jukeboxes).remove(&key);
-            write_ticks(ctx, p, None);
-            fx::level_event(
-                ctx,
-                1011,
-                [f64::from(p.x), f64::from(p.y), f64::from(p.z)],
-                0,
-            );
-            refresh(ctx, p);
-            continue;
-        }
-        if let Some(entry) = lock(&ctx.jukeboxes).get_mut(&key) {
-            entry.1 = ticks;
-        }
-        if ticks % 20 == 0 {
-            write_ticks(ctx, p, Some(ticks));
-            fx::particles(
-                ctx,
-                "minecraft:note",
-                centre_top(p),
-                0.0,
-                crate::hits::rnd() as f32 / 24.0,
-                0,
-            );
-        }
+        let p = BlockPos::new(key.0, key.1, key.2);
+        jukebox::tick(&mut host, &ctx.data.blocks, p, length, ticks);
     }
 }
 
 /// A disc put in by a hopper or a dropper: `false` if the jukebox is full
 /// or the item is not a disc.
-pub fn insert(ctx: &ServerContext, p: Position, stack: &ItemStack) -> bool {
-    if is_jukebox(ctx, p) != Some(false) {
-        return false;
-    }
-    let Some(name) = ctx.items.name(stack.item) else {
-        return false;
-    };
-    if song_of(ctx, name).is_none() {
-        return false;
-    }
-    let blocks = &ctx.data.blocks;
-    let mut item = Compound::new();
-    item.insert("id", Tag::String(name.to_owned()));
-    item.insert("count", Tag::Int(1));
-    let mut data = Compound::new();
-    data.insert("RecordItem", Tag::Compound(item));
-    ctx.world.set_block_entity(
-        mc_world::BlockEntity {
-            x: p.x,
-            y: p.y,
-            z: p.z,
-            id: ID.into(),
-            data,
-        },
-        blocks,
-    );
-    start(ctx, p);
-    set_has_record(ctx, p, true);
-    true
+#[cfg(test)]
+fn insert(ctx: &ServerContext, p: Position, stack: &ItemStack) -> bool {
+    jukebox::insert(&mut Host::new(ctx), &ctx.data.blocks, to_pos(p), stack)
 }
 
 /// The disc a hopper took out of the jukebox at `p`.
-pub fn take(ctx: &ServerContext, p: Position) -> Option<ItemStack> {
-    let disc = record(ctx, p)?;
-    let item = ctx.items.id(&disc)?;
-    stop(ctx, p);
-    ctx.world.set_block_entity(
-        mc_world::BlockEntity {
-            x: p.x,
-            y: p.y,
-            z: p.z,
-            id: ID.into(),
-            data: Compound::new(),
-        },
-        &ctx.data.blocks,
-    );
-    set_has_record(ctx, p, false);
-    Some(ItemStack::new(item, 1))
-}
-
-fn set_has_record(ctx: &ServerContext, p: Position, has: bool) {
-    let blocks = &ctx.data.blocks;
-    let Some(state) = ctx.world.block(p, blocks) else {
-        return;
-    };
-    let mut level = crate::level::WorldLevel::new(ctx);
-    level.set_block(
-        p,
-        ctx.shapes
-            .with(state, "has_record", if has { "true" } else { "false" }),
-    );
-    let changes = level.into_changes();
-    let _ = ctx.events.send(Event::BlocksChanged { by: 0, changes });
+#[cfg(test)]
+fn take(ctx: &ServerContext, p: Position) -> Option<ItemStack> {
+    jukebox::take(&mut Host::new(ctx), &ctx.data.blocks, to_pos(p))
 }
 
 #[cfg(test)]

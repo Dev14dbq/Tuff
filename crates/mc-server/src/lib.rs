@@ -9,6 +9,7 @@ mod archaeology;
 mod auth;
 mod backup;
 mod beacons;
+mod block_entities;
 mod blocks;
 mod blockuse;
 mod books;
