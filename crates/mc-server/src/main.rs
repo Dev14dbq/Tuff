@@ -176,7 +176,12 @@ async fn run() -> Result<()> {
     };
     config.online_mode = props.bool("online-mode") && !offline;
     config.enforce_secure_profile = props.bool("enforce-secure-profile");
-    config.enable_code_of_conduct = props.bool("enable-code-of-conduct");
+    config.code_of_conduct = mc_server::serverlist::CodeOfConduct::load(
+        props.bool("enable-code-of-conduct"),
+        Some(&server_dir),
+    )
+    .map_err(anyhow::Error::msg)?
+    .map(std::sync::Arc::new);
     if !props.get("text-filtering-config").trim().is_empty() {
         tracing::warn!(
             "text-filtering-config is set; chat is delivered as written, with no external filter"

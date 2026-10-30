@@ -149,6 +149,8 @@ struct Session {
     /// Client Information `text_filtering`. Kept for the client; chat is not
     /// passed to an external filter.
     text_filtering: bool,
+    /// Client Information `locale` (`en_us`), which picks the code of conduct.
+    language: String,
     /// Where the client connects from.
     peer: SocketAddr,
 }
@@ -367,6 +369,7 @@ async fn login(
         view_distance: i32::from(ctx.view_distance.load(std::sync::atomic::Ordering::Relaxed)),
         skin_parts: 0,
         text_filtering: false,
+        language: "en_us".into(),
         peer,
     };
     // From here on the player is registered; remove them if login fails.
@@ -459,6 +462,7 @@ fn note_client_info(session: &mut Session, info: &configuration::ClientInformati
     session.view_distance = i32::from(info.view_distance).clamp(2, max_view);
     session.skin_parts = info.skin_parts;
     session.text_filtering = info.text_filtering;
+    session.language = info.locale.clone();
 }
 
 /// Returns `Ok(false)` if the client was refused during configuration.
@@ -496,6 +500,9 @@ async fn configure(
         channel: "minecraft:brand".into(),
         data: brand,
     })?;
+    if let Some(links) = crate::serverlist::server_links(ctx.config.server_dir.as_deref()) {
+        writer.queue(&configuration::ServerLinks { links })?;
+    }
     writer.queue(&configuration::UpdateEnabledFeatures {
         flags: vec!["minecraft:vanilla".into()],
     })?;
@@ -528,8 +535,22 @@ async fn configure(
         writer.queue(registry)?;
     }
     writer.queue(&ctx.tags)?;
-    if let Some(links) = crate::serverlist::server_links(ctx.config.server_dir.as_deref()) {
-        writer.queue(&configuration::ServerLinks { links })?;
+    // Vanilla runs the code of conduct task before the resource pack task.
+    if let Some(conduct) = ctx.config.code_of_conduct.clone() {
+        let text = conduct.for_language(&session.language).to_owned();
+        writer.send(&configuration::CodeOfConduct { text }).await?;
+        loop {
+            match reader.next(State::Configuration).await? {
+                Packet::Configuration(configuration::Serverbound::AcceptCodeOfConduct) => break,
+                Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
+                    note_client_info(session, &info, max_view);
+                }
+                Packet::Configuration(configuration::Serverbound::KeepAlive(id)) => {
+                    writer.send(&configuration::KeepAlive { id }).await?;
+                }
+                other => trace!("configuration: {other:?}"),
+            }
+        }
     }
     if let Some(pack) = &ctx.config.resource_pack {
         writer.queue(&configuration::ResourcePackPush {
@@ -569,24 +590,6 @@ async fn configure(
                 }
                 Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
                     note_client_info(session, &info, max_view);
-                }
-                other => trace!("configuration: {other:?}"),
-            }
-        }
-    }
-    if let Some(text) = crate::serverlist::code_of_conduct(
-        ctx.config.enable_code_of_conduct,
-        ctx.config.server_dir.as_deref(),
-    ) {
-        writer.send(&configuration::CodeOfConduct { text }).await?;
-        loop {
-            match reader.next(State::Configuration).await? {
-                Packet::Configuration(configuration::Serverbound::AcceptCodeOfConduct) => break,
-                Packet::Configuration(configuration::Serverbound::ClientInformation(info)) => {
-                    note_client_info(session, &info, max_view);
-                }
-                Packet::Configuration(configuration::Serverbound::KeepAlive(id)) => {
-                    writer.send(&configuration::KeepAlive { id }).await?;
                 }
                 other => trace!("configuration: {other:?}"),
             }

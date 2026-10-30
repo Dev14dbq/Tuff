@@ -148,8 +148,9 @@ pub struct Config {
     /// Refuse unsigned chat (`enforce-secure-profile`). Off in [`Config::new`]
     /// so tests keep today's chat; `server.properties` still defaults to true.
     pub enforce_secure_profile: bool,
-    /// Show `codeofconduct.txt` during configuration (`enable-code-of-conduct`).
-    pub enable_code_of_conduct: bool,
+    /// The code of conduct shown during configuration, read from
+    /// `codeofconduct/` when `enable-code-of-conduct` is on.
+    pub code_of_conduct: Option<std::sync::Arc<serverlist::CodeOfConduct>>,
     /// Base URL of the session server (Mojang's by default).
     pub session_server: String,
     /// A world folder saved by vanilla 26.3; `None` for a superflat test world.
@@ -225,7 +226,7 @@ impl Config {
             compression_threshold: Some(256),
             online_mode: true,
             enforce_secure_profile: false,
-            enable_code_of_conduct: false,
+            code_of_conduct: None,
             session_server: auth::MOJANG_SESSION_SERVER.to_owned(),
             world: None,
             level_dir: None,

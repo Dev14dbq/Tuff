@@ -154,6 +154,12 @@ pub fn server_links(server_dir: Option<&Path>) -> Option<Vec<mc_protocol::packet
     let has_bug = links
         .iter()
         .any(|link| matches!(link.label, ServerLinkLabel::BuiltIn(0)));
+    let bug = if bug.is_empty() || untrusted_url_ok(&bug) {
+        bug
+    } else {
+        tracing::warn!("Failed to parse bug link {bug}");
+        String::new()
+    };
     if !bug.is_empty() && !has_bug {
         links.insert(
             0,
@@ -164,6 +170,19 @@ pub fn server_links(server_dir: Option<&Path>) -> Option<Vec<mc_protocol::packet
         );
     }
     if links.is_empty() { None } else { Some(links) }
+}
+
+/// Vanilla only sends links with an `http` or `https` scheme and no
+/// characters a URI cannot hold.
+pub fn untrusted_url_ok(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once(':') else {
+        return false;
+    };
+    matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https")
+        && !rest.is_empty()
+        && !url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "<>\"{}|\\^`".contains(c))
 }
 
 fn parse_link_file(path: &Path, text: &str) -> Vec<mc_protocol::packets::ServerLink> {
@@ -187,6 +206,10 @@ fn parse_link_file(path: &Path, text: &str) -> Vec<mc_protocol::packets::ServerL
             continue;
         };
         let url = url.to_owned();
+        if !untrusted_url_ok(&url) {
+            tracing::warn!("{} entry {i} has an unsupported url", path.display());
+            continue;
+        }
         if let Some(name) = entry.get("builtin").and_then(|v| v.as_str()) {
             match builtin_id(name) {
                 Some(id) => links.push(ServerLink {
@@ -225,63 +248,96 @@ fn property_line(path: &Path, key: &str) -> String {
     String::new()
 }
 
-/// The code of conduct to show, or nothing. The flag off never sends it,
-/// even when `codeofconduct.txt` is there. The flag on with a missing or
-/// empty file logs a warning and continues without the packet.
-pub fn code_of_conduct(enabled: bool, server_dir: Option<&Path>) -> Option<String> {
-    if !enabled {
-        return None;
+/// The texts of `codeofconduct/<language>.txt`, one per client language,
+/// as vanilla reads them at start when `enable-code-of-conduct` is on.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CodeOfConduct {
+    /// Lower-case language code to text, sorted by code.
+    texts: Vec<(String, String)>,
+}
+
+impl CodeOfConduct {
+    /// Reads the folder. Off means nothing is read. A missing folder or an
+    /// unreadable file is an error that stops the start, as in vanilla; a
+    /// folder with no `.txt` file means no code of conduct is shown.
+    pub fn load(enabled: bool, server_dir: Option<&Path>) -> Result<Option<Self>, String> {
+        if !enabled {
+            return Ok(None);
+        }
+        let dir = server_dir
+            .unwrap_or_else(|| Path::new("."))
+            .join("codeofconduct");
+        if !dir.is_dir() {
+            return Err(format!(
+                "Code of Conduct folder does not exist: {}",
+                dir.display()
+            ));
+        }
+        let real_dir = std::fs::canonicalize(&dir)
+            .map_err(|e| format!("Failed to read Code of Conduct folder: {e}"))?;
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|e| format!("Failed to read Code of Conduct folder: {e}"))?;
+        let mut texts = Vec::new();
+        for entry in entries.flatten() {
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let Some(language) = file_name.strip_suffix(".txt") else {
+                continue;
+            };
+            let path = entry.path();
+            let inside = std::fs::canonicalize(&path)
+                .ok()
+                .and_then(|p| p.parent().map(|p| p == real_dir))
+                .unwrap_or(false);
+            if !inside {
+                return Err(format!(
+                    "Failed to read Code of Conduct file \"{file_name}\" because it links to a file outside the allowed directory"
+                ));
+            }
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read Code of Conduct file {file_name}: {e}"))?;
+            texts.push((
+                language.to_lowercase(),
+                strip_color(&text.lines().collect::<Vec<_>>().join("\n")),
+            ));
+        }
+        if texts.is_empty() {
+            return Ok(None);
+        }
+        texts.sort();
+        Ok(Some(Self { texts }))
     }
-    let Some(dir) = server_dir else {
-        tracing::warn!(
-            "enable-code-of-conduct is true, but there is no server folder for codeofconduct.txt"
-        );
-        return None;
-    };
-    let path = dir.join("codeofconduct.txt");
-    match std::fs::read_to_string(&path) {
-        Ok(text) if !text.is_empty() => Some(cap_text(text, 32767)),
-        Ok(_) => {
-            tracing::warn!(
-                "enable-code-of-conduct is true, but {} is empty",
-                path.display()
-            );
-            None
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tracing::warn!(
-                "enable-code-of-conduct is true, but {} is missing",
-                path.display()
-            );
-            None
-        }
-        Err(e) => {
-            tracing::warn!(
-                "enable-code-of-conduct is true, but {} could not be read: {e}",
-                path.display()
-            );
-            None
-        }
+
+    /// The text for a client's language: its own, else `en_us`, else any.
+    pub fn for_language(&self, language: &str) -> &str {
+        let find = |code: &str| {
+            self.texts
+                .iter()
+                .find(|(l, _)| l == code)
+                .map(|(_, t)| t.as_str())
+        };
+        find(&language.to_lowercase())
+            .or_else(|| find("en_us"))
+            .unwrap_or(&self.texts[0].1)
     }
 }
 
-/// Protocol strings count UTF-16 code units.
-fn cap_text(text: String, max_utf16: usize) -> String {
-    if text.encode_utf16().count() <= max_utf16 {
-        return text;
-    }
-    tracing::warn!("codeofconduct.txt is longer than {max_utf16} characters; the rest is left out");
-    let mut units = 0;
-    let mut end = text.len();
-    for (i, ch) in text.char_indices() {
-        let n = ch.len_utf16();
-        if units + n > max_utf16 {
-            end = i;
-            break;
+/// Removes formatting codes (the section sign and one of `0-9a-fk-or`),
+/// the way vanilla cleans the text.
+pub fn strip_color(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{a7}'
+            && chars.peek().is_some_and(
+                |n| matches!(n.to_ascii_lowercase(), '0'..='9' | 'a'..='f' | 'k'..='o' | 'r'),
+            )
+        {
+            chars.next();
+            continue;
         }
-        units += n;
+        out.push(c);
     }
-    text[..end].to_owned()
+    out
 }
 
 /// A name-based (version 3) UUID of some bytes, as vanilla makes a pack's
@@ -418,18 +474,60 @@ mod tests {
         assert_eq!(pack.id, 0x0b4b5f7c_0000_4000_8000_000000000001);
         let _ = std::fs::remove_dir_all(dir);
     }
+    #[test]
+    fn code_of_conduct_reads_one_file_per_language() {
+        let dir = std::env::temp_dir().join(format!("mc-conduct-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let folder = dir.join("codeofconduct");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("en_US.txt"), "Be kind.\r\n\u{a7}cNo spam.\n").unwrap();
+        std::fs::write(folder.join("de_de.txt"), "Sei nett.").unwrap();
+        std::fs::write(folder.join("notes.md"), "ignored").unwrap();
+        assert_eq!(CodeOfConduct::load(false, Some(&dir)), Ok(None));
+        let conduct = CodeOfConduct::load(true, Some(&dir)).unwrap().unwrap();
+        assert_eq!(conduct.for_language("de_DE"), "Sei nett.");
+        assert_eq!(conduct.for_language("en_us"), "Be kind.\nNo spam.");
+        assert_eq!(conduct.for_language("fr_fr"), "Be kind.\nNo spam.");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
-    fn code_of_conduct_is_not_sent_when_the_flag_is_false() {
-        let dir = std::env::temp_dir().join(format!("mc-conduct-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("codeofconduct.txt"), "Be kind.").unwrap();
-        assert!(code_of_conduct(false, Some(&dir)).is_none());
-        assert_eq!(
-            code_of_conduct(true, Some(&dir)).as_deref(),
-            Some("Be kind.")
-        );
+    fn code_of_conduct_without_en_us_falls_back_to_any_text() {
+        let dir = std::env::temp_dir().join(format!("mc-conduct-any-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("codeofconduct")).unwrap();
+        std::fs::write(dir.join("codeofconduct/de_de.txt"), "Sei nett.").unwrap();
+        let conduct = CodeOfConduct::load(true, Some(&dir)).unwrap().unwrap();
+        assert_eq!(conduct.for_language("ja_jp"), "Sei nett.");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn code_of_conduct_folder_missing_is_a_start_error() {
+        let dir = std::env::temp_dir().join(format!("mc-conduct-none-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(CodeOfConduct::load(true, Some(&dir)).is_err());
+        std::fs::create_dir_all(dir.join("codeofconduct")).unwrap();
+        assert_eq!(CodeOfConduct::load(true, Some(&dir)), Ok(None));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_http_links_are_sent() {
+        assert!(untrusted_url_ok("https://example.com/a?b=c"));
+        assert!(untrusted_url_ok("HTTP://example.com"));
+        assert!(!untrusted_url_ok("ftp://example.com"));
+        assert!(!untrusted_url_ok("example.com"));
+        assert!(!untrusted_url_ok("https://exa mple.com"));
+    }
+
+    #[test]
+    fn color_codes_are_stripped_like_vanilla() {
+        assert_eq!(
+            strip_color("\u{a7}aGreen \u{a7}Kx \u{a7}zkeep \u{a7}"),
+            "Green x \u{a7}zkeep \u{a7}"
+        );
     }
 
     #[test]
