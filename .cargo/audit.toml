@@ -1,0 +1,6 @@
+# cargo audit settings. Keep in step with [advisories] in deny.toml.
+
+[advisories]
+# rsa: Marvin timing side channel, no fixed release; the 26.3 login protocol
+# requires RSA PKCS#1 v1.5. See deny.toml.
+ignore = ["RUSTSEC-2023-0071"]

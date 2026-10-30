@@ -471,8 +471,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-bootstrap"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sha1_smol",
+ "sha2",
+ "tracing",
+ "ureq",
+ "zip",
+]
+
+[[package]]
 name = "mc-command"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-nbt",
  "mc-protocol",
@@ -481,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "mc-data"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-nbt",
  "serde_json",
@@ -489,7 +502,7 @@ dependencies = [
 
 [[package]]
 name = "mc-entity"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-data",
  "mc-nbt",
@@ -499,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "mc-features"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "flate2",
  "mc-data",
@@ -511,18 +524,18 @@ dependencies = [
 
 [[package]]
 name = "mc-light"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-world",
 ]
 
 [[package]]
 name = "mc-nbt"
-version = "0.0.0"
+version = "0.1.0"
 
 [[package]]
 name = "mc-protocol"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "aes",
  "flate2",
@@ -532,12 +545,13 @@ dependencies = [
 
 [[package]]
 name = "mc-server"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
  "flate2",
  "hmac",
+ "mc-bootstrap",
  "mc-command",
  "mc-data",
  "mc-entity",
@@ -561,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "mc-storage"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "flate2",
  "lz4_flex",
@@ -572,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "mc-tick"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-data",
  "mc-entity",
@@ -584,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "mc-world"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-data",
  "mc-nbt",
@@ -592,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "mc-worldgen"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mc-data",
  "mc-world",
@@ -883,9 +897,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -1298,9 +1312,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -1448,10 +1462,11 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "flate2",
+ "mc-bootstrap",
  "mc-data",
  "mc-nbt",
  "mc-protocol",
@@ -1459,7 +1474,6 @@ dependencies = [
  "mc-world",
  "mc-worldgen",
  "serde_json",
- "sha1_smol",
  "zip",
 ]
 

@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -12,10 +15,12 @@ jobs:
     name: Clean-room guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: No Mojang code, jars or decompiler in git
         run: |
-          tracked=$(git ls-files -- reference tools cache '*.jar' '*.class')
+          tracked=$(git ls-files -- reference tools cache run '*.jar' '*.class')
           if [ -n "$tracked" ]; then
             echo "::error::Proprietary or third-party files are tracked (see README, clean-room):"
             echo "$tracked"
@@ -30,10 +35,12 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install toolchain from rust-toolchain.toml
         run: rustup toolchain install || rustup show
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked

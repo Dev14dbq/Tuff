@@ -18,7 +18,22 @@ or `.class` file. CI will reject it anyway.
 
 ## Getting set up
 
-Follow "Running it" in the [README](README.md). To decompile the server for reading:
+You need Rust and Java 25+. Tests and dev tools read game data from `cache/mcdata/`, made
+from Mojang's `server.jar` (none of it is ever committed):
+
+```bash
+git clone https://github.com/Dev14dbq/tuff && cd tuff
+cargo xtask fetch-server-jar       # reference/26.3/server.jar from Mojang, SHA1 checked
+cargo xtask extract-data           # -> cache/mcdata/26.3 (runs Mojang's data generator)
+cargo build --release -p mc-server
+mkdir -p run && cd run && ../target/release/tuff --op YourName --offline
+```
+
+Some tables come from watching a running vanilla server (`cargo xtask observe-commands`,
+`cargo xtask observe <fact>`); they need Mojang's EULA accepted in
+`cache/vanilla-server/26.3/eula.txt`.
+
+To decompile the server for reading:
 
 ```bash
 unzip -p reference/26.3/server.jar META-INF/versions/26.3/server-26.3.jar > reference/26.3/server-26.3.jar
