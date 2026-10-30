@@ -84,6 +84,24 @@ pub struct Map {
     imported: bool,
     idle: i32,
     last_age: i64,
+    /// What `levels`, `random` and `pin` were last built from; while it is
+    /// the same the next rebuild would give the same result and is skipped.
+    /// `None` after anything painted on its own (a granted ticket).
+    built_from: Option<Painted>,
+    /// The chunks kept in memory by the last build.
+    pin: HashSet<(i32, i32)>,
+}
+
+/// Everything a rebuild of the levels reads (see [`Map::built_from`]).
+#[derive(Debug, PartialEq)]
+struct Painted {
+    holders: Vec<(i32, i32)>,
+    sim: i32,
+    view: i32,
+    forced: Vec<(i32, i32)>,
+    pearls: Vec<(i32, i32)>,
+    dragon: bool,
+    timed: Vec<(i32, i32, i32, i32)>,
 }
 
 impl Map {
@@ -110,6 +128,7 @@ impl Map {
 
     fn grant(&mut self, kind: Kind, x: i32, z: i32, level: i32, radius: i32, left: i32) {
         self.add(kind, x, z, level, radius, left);
+        self.built_from = None;
         // Visible immediately. The next tick rebuilds levels from `timed`,
         // so a one-tick ticket added after this tick's rebuild still applies
         // until that rebuild drops it.
@@ -342,6 +361,27 @@ fn sync(ctx: &ServerContext, expire: bool) {
             map.grant(Kind::Spawn, x, z, SPAWN_LEVEL, SPAWN_RADIUS, SPAWN_TICKS);
         }
     }
+    let painted = Painted {
+        holders: src.holders.clone(),
+        sim: src.sim,
+        view: src.view,
+        forced: forced_chunks.clone(),
+        pearls: src.pearls.clone(),
+        dragon: src.dragon,
+        timed: map
+            .timed
+            .iter()
+            .map(|t| (t.x, t.z, t.level, t.radius))
+            .collect(),
+    };
+    if map.built_from.as_ref() == Some(&painted) {
+        // The same tickets paint the same levels.
+        map.live = map.live || expire;
+        let pin = map.pin.clone();
+        drop(map);
+        ctx.world.set_pinned(pin);
+        return;
+    }
     map.levels.clear();
     let s = src.sim.min(src.view).max(0);
     let player_chunks = &src.holders;
@@ -377,6 +417,8 @@ fn sync(ctx: &ServerContext, expire: bool) {
         .filter(|(_, level)| **level <= BORDER)
         .map(|(&c, _)| c)
         .collect();
+    map.pin = pin.clone();
+    map.built_from = Some(painted);
     drop(map);
     ctx.world.set_pinned(pin);
 }
