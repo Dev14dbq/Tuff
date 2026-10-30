@@ -39,3 +39,22 @@ fn the_phantom_clock_waits_a_minute_or_two_and_stands_still_with_the_rule_off() 
         "the held time counted"
     );
 }
+
+#[test]
+fn an_insomniac_in_the_nether_gets_no_phantoms() {
+    let overworld = flat().expect("game data");
+    let ctx = overworld
+        .in_dimension("minecraft:the_nether")
+        .expect("the Nether");
+    ctx.difficulty
+        .store(3, std::sync::atomic::Ordering::Relaxed);
+    lock(&ctx.time).age = 3_000_000;
+    let _ = join(&ctx, [0.5, 70.0, 0.5]);
+    if let Some(p) = lock(&ctx.players).get_mut(&STEVE) {
+        p.dimension = "minecraft:the_nether".into();
+    }
+    crate::stats::load(&ctx, STEVE);
+    crate::stats::custom(&ctx, STEVE, "time_since_rest", 1_000_000_000);
+    run(&ctx, 40);
+    assert!(mobs_of(&ctx, Species::Phantom).is_empty());
+}

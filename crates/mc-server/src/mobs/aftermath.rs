@@ -214,6 +214,14 @@ pub fn infested(ctx: &ServerContext, pos: [f64; 3], height: f64, yaw: f32, pitch
             m.yaw = (crate::util::random_f64() * 360.0) as f32;
         }
         let _ = ctx.events.send(Event::EntitySpawned(fish.clone()));
+        fx::sound(
+            ctx,
+            "entity.silverfish.hurt",
+            fx::category::HOSTILE,
+            fish.pos,
+            1.0,
+            1.0,
+        );
         lock(&ctx.entities).push(fish);
     }
 }

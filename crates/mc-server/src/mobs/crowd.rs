@@ -72,7 +72,8 @@ pub fn crush_players(ctx: &ServerContext, entities: &[Entity], targets: &[Target
         .filter(|(_, e)| !e.removed && !rides.contains(&e.id))
         .filter(|(_, e)| match &e.kind {
             Kind::Mob(m) => m.dying.is_none() && !m.is_dead(),
-            Kind::Merchant(_) => true,
+            // Boats and minecarts are pushable; armor stands are not.
+            Kind::Merchant(_) | Kind::Vehicle(_) => true,
             _ => false,
         })
         .map(|(i, e)| {
@@ -137,6 +138,21 @@ pub fn crush_players(ctx: &ServerContext, entities: &[Entity], targets: &[Target
 /// Pushes overlapping mobs apart and crushes crowds. Ridden mobs and their
 /// riders are left alone.
 pub fn tick(ctx: &ServerContext, entities: &mut [Entity], targets: &[Target]) {
+    // Boats and minecarts are not pushed here but crowd what they touch.
+    let vehicles: Vec<Body> = entities
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| !e.removed && matches!(e.kind, Kind::Vehicle(_)))
+        .map(|(i, e)| {
+            let (w, h) = e.size();
+            Body {
+                i,
+                pos: e.pos,
+                half: w / 2.0,
+                height: h,
+            }
+        })
+        .collect();
     let mut bodies = Vec::new();
     for (i, e) in entities.iter().enumerate() {
         if let Kind::Mob(m) = &e.kind
@@ -191,6 +207,7 @@ pub fn tick(ctx: &ServerContext, entities: &mut [Entity], targets: &[Target]) {
                 }
             }
         }
+        crowd[k] += vehicles.iter().filter(|v| overlap(a, v)).count();
         // Players walking into it.
         for t in targets.iter().filter(|t| t.present) {
             let player = Body {

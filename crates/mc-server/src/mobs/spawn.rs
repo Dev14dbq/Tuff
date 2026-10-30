@@ -1233,12 +1233,16 @@ fn phantoms(
     difficulty: i32,
     out: &mut Vec<Entity>,
 ) {
-    // The clock counts every tick the rules allow, in any dimension and
-    // with or without players to visit, and one to two minutes apart.
+    // Only the overworld has the spawner. Its clock counts every tick the
+    // rules allow, with or without players to visit, one to two minutes
+    // apart.
+    if ctx.world.dimension != "minecraft:overworld" {
+        return;
+    }
     if !clock.advance(now, phantoms_on(ctx), || (60 + i64::from(below(60))) * 20) {
         return;
     }
-    // Only under a sky that turns night, or where there is no sky at all.
+    // Only under a sky that turns night (or an overworld without a sky).
     if difficulty == 0 || spots.sky && spots.darken < 5 {
         return;
     }
