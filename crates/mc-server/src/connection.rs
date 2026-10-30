@@ -170,6 +170,8 @@ struct Session {
     /// Client Information `text_filtering`. Kept for the client; chat is not
     /// passed to an external filter.
     text_filtering: bool,
+    /// Client Information `locale` (`en_us`), which picks the code of conduct.
+    language: String,
     /// Where the client connects from.
     peer: SocketAddr,
 }
@@ -390,6 +392,7 @@ async fn login(
         view_distance: i32::from(ctx.view_distance.load(std::sync::atomic::Ordering::Relaxed)),
         skin_parts: 0,
         text_filtering: false,
+        language: "en_us".into(),
         peer,
     }))
 }
@@ -465,6 +468,8 @@ async fn authenticate(
     let profile = auth::has_joined(&writer.ctx.config.session_server, name, &hash).await?;
     if profile.is_none() {
         warn!("session server did not verify {name}");
+    } else {
+        writer.ctx.management_bus.report_login_activity();
     }
     Ok(profile)
 }
@@ -473,6 +478,7 @@ fn note_client_info(session: &mut Session, info: &configuration::ClientInformati
     session.view_distance = i32::from(info.view_distance).clamp(2, max_view);
     session.skin_parts = info.skin_parts;
     session.text_filtering = info.text_filtering;
+    session.language = info.locale.clone();
 }
 
 /// The end of login: compression, Login Finished, and the client's

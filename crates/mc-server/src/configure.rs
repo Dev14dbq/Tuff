@@ -65,9 +65,11 @@ pub(super) async fn configure(
         channel: "minecraft:brand".into(),
         data: brand,
     })?;
-    writer.queue(&configuration::UpdateEnabledFeatures {
-        flags: vec!["minecraft:vanilla".into()],
-    })?;
+    if let Some(links) = crate::serverlist::server_links(ctx.config.server_dir.as_deref()) {
+        writer.queue(&configuration::ServerLinks { links })?;
+    }
+    let flags = ctx.packs.lock().expect("packs lock").enabled_features();
+    writer.queue(&configuration::UpdateEnabledFeatures { flags })?;
     writer.queue(&configuration::SelectKnownPacks {
         packs: vec![ctx.core_pack.clone()],
     })?;
@@ -97,8 +99,19 @@ pub(super) async fn configure(
         writer.queue(registry)?;
     }
     writer.queue(&ctx.tags)?;
-    if let Some(links) = crate::serverlist::server_links(ctx.config.server_dir.as_deref()) {
-        writer.queue(&configuration::ServerLinks { links })?;
+    // Vanilla runs the code of conduct task before the resource pack task.
+    if let Some(conduct) = ctx.config.code_of_conduct.clone() {
+        let text = conduct.for_language(&session.language).to_owned();
+        writer.send(&configuration::CodeOfConduct { text }).await?;
+        loop {
+            match next(reader, writer, &mut keep_alive).await? {
+                configuration::Serverbound::AcceptCodeOfConduct => break,
+                configuration::Serverbound::ClientInformation(info) => {
+                    note_client_info(session, &info, max_view);
+                }
+                other => trace!("configuration: {other:?}"),
+            }
+        }
     }
     if let Some(pack) = &ctx.config.resource_pack {
         writer.queue(&configuration::ResourcePackPush {
@@ -134,21 +147,6 @@ pub(super) async fn configure(
                         break;
                     }
                 }
-                configuration::Serverbound::ClientInformation(info) => {
-                    note_client_info(session, &info, max_view);
-                }
-                other => trace!("configuration: {other:?}"),
-            }
-        }
-    }
-    if let Some(text) = crate::serverlist::code_of_conduct(
-        ctx.config.enable_code_of_conduct,
-        ctx.config.server_dir.as_deref(),
-    ) {
-        writer.send(&configuration::CodeOfConduct { text }).await?;
-        loop {
-            match next(reader, writer, &mut keep_alive).await? {
-                configuration::Serverbound::AcceptCodeOfConduct => break,
                 configuration::Serverbound::ClientInformation(info) => {
                     note_client_info(session, &info, max_view);
                 }

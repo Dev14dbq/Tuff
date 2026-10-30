@@ -234,7 +234,14 @@ async fn run() -> Result<()> {
     };
     config.online_mode = props.bool("online-mode") && !offline;
     config.enforce_secure_profile = props.bool("enforce-secure-profile");
-    config.enable_code_of_conduct = props.bool("enable-code-of-conduct");
+    config.status_heartbeat_interval =
+        props.int("status-heartbeat-interval").unwrap_or(0).max(0) as u64;
+    config.code_of_conduct = mc_server::serverlist::CodeOfConduct::load(
+        props.bool("enable-code-of-conduct"),
+        Some(&server_dir),
+    )
+    .map_err(anyhow::Error::msg)?
+    .map(std::sync::Arc::new);
     if !props.get("text-filtering-config").trim().is_empty() {
         tracing::warn!(
             "text-filtering-config is set; chat is delivered as written, with no external filter"
@@ -242,6 +249,20 @@ async fn run() -> Result<()> {
     }
     config.white_list = props.bool("white-list");
     config.op_permission_level = props.int("op-permission-level").unwrap_or(4).clamp(0, 4) as i32;
+    {
+        use mc_server::oldlists::{
+            MojangResolver, OfflineResolver, RETRY_DELAY, Resolver, convert,
+        };
+        let mut resolver: Box<dyn Resolver + Send> = if config.online_mode {
+            Box::new(MojangResolver)
+        } else {
+            Box::new(OfflineResolver)
+        };
+        let (dir, level) = (server_dir.clone(), config.op_permission_level);
+        tokio::task::spawn_blocking(move || convert(&dir, level, resolver.as_mut(), RETRY_DELAY))
+            .await?
+            .map_err(anyhow::Error::msg)?;
+    }
     config.new_world_game_mode = game_mode(props.get("gamemode"));
     config.new_world_difficulty = difficulty(props.get("difficulty"));
     config.seed = seed(seed_arg.as_deref().unwrap_or(props.get("level-seed")));

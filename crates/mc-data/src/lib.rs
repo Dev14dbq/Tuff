@@ -13,6 +13,7 @@ use serde_json::Value;
 
 mod json_nbt;
 mod map_color;
+pub mod packmeta;
 
 pub use json_nbt::json_to_nbt;
 

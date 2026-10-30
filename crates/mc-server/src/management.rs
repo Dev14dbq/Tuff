@@ -457,8 +457,11 @@ fn request_id(obj: &Map<String, Value>) -> Value {
 /// `ManagementHooks::player_count` when `ManagementHooks::player_names` returned
 /// at least that many names. Names we do not have are not invented.
 fn status_result(hooks: &ManagementHooks) -> Value {
-    let count = (hooks.player_count)();
-    let names = (hooks.player_names)();
+    server_state((hooks.player_count)(), (hooks.player_names)())
+}
+
+/// The server state object of `server/status` and of the heartbeat.
+pub fn server_state(count: usize, names: Vec<String>) -> Value {
     let players: Vec<Value> = names
         .into_iter()
         .take(count)

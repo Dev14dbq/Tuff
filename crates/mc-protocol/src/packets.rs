@@ -87,6 +87,37 @@ fn read_payload<'a>(r: &mut Reader<'a>, max: usize) -> Result<&'a [u8]> {
     Ok(r.rest())
 }
 
+/// Largest `custom_click_action` payload, length-prefixed, as vanilla.
+pub const MAX_CLICK_PAYLOAD_LEN: usize = 65536;
+/// Memory budget and nesting depth of that payload's NBT, as vanilla.
+const CLICK_NBT_LIMITS: mc_nbt::Limits = mc_nbt::Limits {
+    quota: 32768,
+    depth: 16,
+};
+
+/// A `custom_click_action`: the id, then an optional NBT payload in a
+/// length-prefixed slice of at most 65536 bytes whose NBT may cost 32768
+/// bytes of memory and nest 16 deep. Anything else is a decode error, which
+/// ends the connection. The payload is returned as the NBT bytes (empty
+/// for none).
+fn read_click_action(r: &mut Reader) -> Result<(String, Vec<u8>)> {
+    let id = r.identifier()?;
+    let len = r.length_prefix()?;
+    if len > MAX_CLICK_PAYLOAD_LEN {
+        return Err(crate::codec::DecodeError::Invalid(
+            "click payload too large",
+        ));
+    }
+    let slice = r.bytes(len)?;
+    match slice.first() {
+        None | Some(0) => Ok((id, Vec::new())),
+        Some(_) => {
+            mc_nbt::read_network_with(slice, CLICK_NBT_LIMITS)?;
+            Ok((id, slice.to_vec()))
+        }
+    }
+}
+
 fn read_known_packs(r: &mut Reader) -> Result<Vec<KnownPack>> {
     let count = r.length_prefix()?;
     if count > MAX_KNOWN_PACKS {
@@ -379,6 +410,11 @@ pub mod configuration {
         },
         /// The player accepted `minecraft:code_of_conduct`. No fields.
         AcceptCodeOfConduct,
+        /// A dialog button with a custom action (id and raw NBT payload).
+        CustomClickAction {
+            id: String,
+            payload: Vec<u8>,
+        },
         Other(String),
     }
 
@@ -459,6 +495,10 @@ pub mod configuration {
                     result: r.varint()?,
                 },
                 "minecraft:accept_code_of_conduct" => Serverbound::AcceptCodeOfConduct,
+                "minecraft:custom_click_action" => {
+                    let (id, payload) = super::read_click_action(r)?;
+                    Serverbound::CustomClickAction { id, payload }
+                }
                 other => Serverbound::Other(other.to_owned()),
             })
         }
@@ -624,6 +664,27 @@ pub mod configuration {
         fn encode(&self, out: &mut Vec<u8>) {
             super::put_server_links(out, &self.links);
         }
+    }
+
+    /// Show Dialog, configuration phase. The context-free codec has no
+    /// registry id: the dialog is always written out as NBT.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ShowDialog {
+        pub dialog: Tag,
+    }
+    packet!(ShowDialog, Configuration, "minecraft:show_dialog");
+    impl Encode for ShowDialog {
+        fn encode(&self, out: &mut Vec<u8>) {
+            put_nbt(out, &self.dialog);
+        }
+    }
+
+    /// Clear Dialog, configuration phase. No fields.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ClearDialog;
+    packet!(ClearDialog, Configuration, "minecraft:clear_dialog");
+    impl Encode for ClearDialog {
+        fn encode(&self, _out: &mut Vec<u8>) {}
     }
 }
 
@@ -931,6 +992,12 @@ pub mod play {
         /// The player started (0x02) or stopped flying.
         PlayerAbilities {
             flags: u8,
+        },
+        /// A dialog button with a custom action (id and raw NBT payload).
+        /// Vanilla only logs it at debug level.
+        CustomClickAction {
+            id: String,
+            payload: Vec<u8>,
         },
         Other(String),
     }
@@ -1328,6 +1395,10 @@ pub mod play {
                     }
                 }
                 "minecraft:player_abilities" => Serverbound::PlayerAbilities { flags: r.u8()? },
+                "minecraft:custom_click_action" => {
+                    let (id, payload) = super::read_click_action(r)?;
+                    Serverbound::CustomClickAction { id, payload }
+                }
                 // Read only to hold it to vanilla's size limit.
                 "minecraft:custom_payload" => {
                     r.identifier()?;
@@ -4186,6 +4257,101 @@ mod tests {
         expected.extend_from_slice(&uuid.to_be_bytes());
         expected.extend_from_slice(b"\x06Probe2\x00\x00\x00\x01\x00\x00\x00\x01");
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn dialog_packets_of_the_configuration_phase() {
+        let mut out = Vec::new();
+        configuration::ClearDialog.encode(&mut out);
+        assert!(out.is_empty());
+        let mut out = Vec::new();
+        configuration::ShowDialog {
+            dialog: Tag::Compound(mc_nbt::Compound::new()),
+        }
+        .encode(&mut out);
+        // Network NBT: the compound tag id, no name, then the end tag.
+        assert_eq!(out, vec![0x0a, 0x00]);
+        assert_eq!(configuration::ShowDialog::NAME, "minecraft:show_dialog");
+        assert_eq!(configuration::ClearDialog::NAME, "minecraft:clear_dialog");
+    }
+
+    fn click_body(payload: &[u8]) -> Vec<u8> {
+        let mut body = vec![0x0e];
+        body.extend_from_slice(b"example:button");
+        let mut len = payload.len();
+        loop {
+            let byte = (len & 0x7f) as u8;
+            len >>= 7;
+            if len == 0 {
+                body.push(byte);
+                break;
+            }
+            body.push(byte | 0x80);
+        }
+        body.extend_from_slice(payload);
+        body
+    }
+
+    fn click(payload: &[u8]) -> Result<play::Serverbound> {
+        play::Serverbound::decode(
+            "minecraft:custom_click_action",
+            &mut Reader::new(&click_body(payload)),
+        )
+    }
+
+    #[test]
+    fn custom_click_actions_keep_id_and_payload() {
+        let payload = vec![0x0a, 0x00];
+        let body = click_body(&payload);
+        let id = "example:button".to_owned();
+        assert_eq!(
+            click(&payload).unwrap(),
+            play::Serverbound::CustomClickAction {
+                id: id.clone(),
+                payload: payload.clone()
+            }
+        );
+        assert_eq!(
+            configuration::Serverbound::decode(
+                "minecraft:custom_click_action",
+                &mut Reader::new(&body)
+            )
+            .unwrap(),
+            configuration::Serverbound::CustomClickAction { id, payload }
+        );
+        // A lone end tag is "no payload".
+        assert_eq!(
+            click(&[0x00]).unwrap(),
+            play::Serverbound::CustomClickAction {
+                id: "example:button".into(),
+                payload: Vec::new()
+            }
+        );
+    }
+
+    #[test]
+    fn custom_click_action_payloads_are_held_to_vanillas_limits() {
+        // Longer than 65536 bytes.
+        assert!(click(&vec![0u8; MAX_CLICK_PAYLOAD_LEN + 1]).is_err());
+        // 17 compounds deep is refused, 16 is fine.
+        let nested = |depth: usize| {
+            let mut v = vec![0x0a];
+            for _ in 1..depth {
+                v.extend_from_slice(&[0x0a, 0x00, 0x01, b'a']);
+            }
+            v.extend(std::iter::repeat_n(0u8, depth));
+            v
+        };
+        assert!(click(&nested(17)).is_err());
+        assert!(click(&nested(16)).is_ok());
+        // A byte array costing more than 32768 bytes of NBT memory.
+        let n: u32 = 40_000;
+        let mut big = vec![0x07];
+        big.extend_from_slice(&n.to_be_bytes());
+        big.extend(std::iter::repeat_n(1u8, n as usize));
+        assert!(click(&big).is_err());
+        // Cut off inside the slice.
+        assert!(click(&[0x0a]).is_err());
     }
 
     #[test]
