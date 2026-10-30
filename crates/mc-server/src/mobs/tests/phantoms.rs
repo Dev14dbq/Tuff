@@ -9,7 +9,10 @@ fn rule(ctx: &ServerContext, name: &str, value: Value) {
 
 #[test]
 fn the_phantom_clock_waits_a_minute_or_two_and_stands_still_with_the_rule_off() {
-    let ctx = flat().expect("game data");
+    let Some(ctx) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
     ctx.difficulty
         .store(3, std::sync::atomic::Ordering::Relaxed);
     lock(&ctx.time).age = 3_000_000;
@@ -42,7 +45,10 @@ fn the_phantom_clock_waits_a_minute_or_two_and_stands_still_with_the_rule_off() 
 
 #[test]
 fn an_insomniac_in_the_nether_gets_no_phantoms() {
-    let overworld = flat().expect("game data");
+    let Some(overworld) = flat() else {
+        eprintln!("skipped: no game data");
+        return;
+    };
     let ctx = overworld
         .in_dimension("minecraft:the_nether")
         .expect("the Nether");
