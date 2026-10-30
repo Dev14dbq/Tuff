@@ -539,7 +539,8 @@ pub fn fix_world(dir: &Path, target: i32, version_name: &str) -> Result<FileRepo
     sync_dir(dir)?;
     let old = dir.join("level.dat_old");
     std::fs::copy(&level_path, &old)?;
-    std::fs::File::open(&old)?.sync_all()?;
+    // Windows flushes only a handle opened for writing.
+    std::fs::OpenOptions::new().write(true).open(&old)?.sync_all()?;
     write_gz(&level_path, &root)?;
     Ok(report)
 }
