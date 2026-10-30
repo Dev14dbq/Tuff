@@ -978,10 +978,10 @@ impl ServerContext {
             None => crate::items::Items::default(),
         };
         let fuels = match data.builtin.get("minecraft:item") {
-            Some(ids) => crate::furnaces::Fuels::load(&data, &items, ids),
+            Some(ids) => crate::furnaces::load_fuels(&data, &items, ids),
             None => crate::furnaces::Fuels::default(),
         };
-        let brewing = crate::brewing::Mixes::load(&data, &items);
+        let brewing = crate::brewing::load_mixes(&data, &items);
         let warned_observed = std::cell::Cell::new(false);
         let observed = |file: &str| {
             let path = config.data_dir.join("observed").join(file);
