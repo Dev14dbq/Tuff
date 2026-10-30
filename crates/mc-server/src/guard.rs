@@ -107,10 +107,10 @@ pub struct Throttle {
 }
 
 impl Throttle {
-    /// Chat and commands: 20 a message, kicked at 200 (vanilla's default of
-    /// ten seconds' worth).
-    pub fn chat() -> Self {
-        Self::new(20, 200)
+    /// Chat or commands: 20 a message, kicked at 20 per second of
+    /// `chat-spam-threshold-seconds` (or `command-…`); 0 or less never kicks.
+    pub fn chat(seconds: i32) -> Self {
+        Self::new(20, u32::try_from(seconds).unwrap_or(0).saturating_mul(20))
     }
 
     /// Items thrown out of the creative inventory: 20 a drop, ignored from
@@ -141,7 +141,7 @@ impl Throttle {
     pub fn said(&mut self, now: Instant) -> bool {
         self.decay(now);
         self.count = self.count.saturating_add(self.step);
-        self.count >= self.threshold
+        self.threshold > 0 && self.count >= self.threshold
     }
 
     /// An event at `now` that is let through (and counted) only while
@@ -184,6 +184,69 @@ impl Suggestions {
         let request = self.waiting.take()?;
         self.last = Some(now);
         Some(request)
+    }
+
+    /// The answer due now for `source`, if a request's turn has come.
+    pub fn answer(
+        &mut self,
+        ctx: &ServerContext,
+        source: &crate::commands::Source,
+        now: Instant,
+    ) -> Option<mc_protocol::packets::play::CommandSuggestions> {
+        let (id, text) = self.take(now)?;
+        crate::commands::suggest(ctx, source, id, &text)
+    }
+}
+
+/// Configuration keep-alives, as vanilla's: one every 15 seconds, and a
+/// client that has not answered by the next one is timed out.
+#[derive(Debug)]
+pub struct KeepAlive {
+    sent: Instant,
+    pending: Option<i64>,
+}
+
+/// What [`KeepAlive::step`] asks for.
+#[derive(Debug, PartialEq, Eq)]
+pub enum KeepAliveStep {
+    Send(i64),
+    TimedOut,
+    Wait,
+}
+
+impl KeepAlive {
+    const INTERVAL: Duration = Duration::from_secs(15);
+
+    pub fn new(now: Instant) -> Self {
+        Self {
+            sent: now,
+            pending: None,
+        }
+    }
+
+    /// When [`KeepAlive::step`] next has something to do.
+    pub fn due(&self) -> Instant {
+        self.sent + Self::INTERVAL
+    }
+
+    pub fn step(&mut self, now: Instant) -> KeepAliveStep {
+        if now < self.due() {
+            return KeepAliveStep::Wait;
+        }
+        if self.pending.is_some() {
+            return KeepAliveStep::TimedOut;
+        }
+        let id = (crate::util::random_u64() >> 1) as i64;
+        self.sent = now;
+        self.pending = Some(id);
+        KeepAliveStep::Send(id)
+    }
+
+    /// The client answered with `id`; anything but the challenge is ignored.
+    pub fn answered(&mut self, id: i64) {
+        if self.pending == Some(id) {
+            self.pending = None;
+        }
     }
 }
 
@@ -333,22 +396,55 @@ mod tests {
     fn ten_messages_at_once_are_spam_but_a_tick_apart_they_wear_off() {
         // Vanilla counts first and kicks once the count reaches 200.
         let t0 = Instant::now();
-        let mut s = Throttle::chat();
+        let mut s = Throttle::chat(10);
         for _ in 0..9 {
             assert!(!s.said(t0));
         }
         assert!(s.said(t0));
         // A message a second never piles up.
-        let mut s = Throttle::chat();
+        let mut s = Throttle::chat(10);
         for i in 0..100 {
             assert!(!s.said(t0 + Duration::from_secs(i)));
         }
         // Gaps shorter than a tick still add up to ticks.
-        let mut s = Throttle::chat();
+        let mut s = Throttle::chat(10);
         s.said(t0);
         s.decay(t0 + Duration::from_millis(30));
         s.decay(t0 + Duration::from_millis(60));
         assert_eq!(s.count, 19);
+    }
+
+    #[test]
+    fn spam_thresholds_follow_the_properties() {
+        let t0 = Instant::now();
+        // `chat-spam-threshold-seconds=2`: 40, two messages at once.
+        let mut s = Throttle::chat(2);
+        assert!(!s.said(t0));
+        assert!(s.said(t0));
+        // 0 or less never kicks.
+        for seconds in [0, -5] {
+            let mut s = Throttle::chat(seconds);
+            assert!((0..1000).all(|_| !s.said(t0)));
+        }
+    }
+
+    #[test]
+    fn configuration_keep_alives_every_15_seconds() {
+        let t0 = Instant::now();
+        let s = Duration::from_secs;
+        let mut k = KeepAlive::new(t0);
+        assert_eq!(k.step(t0 + s(14)), KeepAliveStep::Wait);
+        let KeepAliveStep::Send(id) = k.step(t0 + s(15)) else {
+            panic!("a keep-alive is due");
+        };
+        // A wrong answer does not count; the right one does.
+        k.answered(id ^ 1);
+        k.answered(id);
+        assert_eq!(k.due(), t0 + s(30));
+        assert!(matches!(k.step(t0 + s(30)), KeepAliveStep::Send(_)));
+        // Unanswered for a whole interval: timed out.
+        assert_eq!(k.step(t0 + s(40)), KeepAliveStep::Wait);
+        assert_eq!(k.step(t0 + s(45)), KeepAliveStep::TimedOut);
     }
 
     #[test]

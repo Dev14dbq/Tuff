@@ -207,6 +207,14 @@ pub struct Config {
     /// Silence after which a connection is dropped: vanilla's 30 seconds
     /// (tests shorten it).
     pub read_timeout: std::time::Duration,
+    /// How long the login state may take: vanilla's 600 ticks. Configuration
+    /// that follows has no limit (tests shorten it).
+    pub login_timeout: std::time::Duration,
+    /// `chat-spam-threshold-seconds` and `command-spam-threshold-seconds`:
+    /// how many seconds' worth of messages a player may send at once
+    /// before the spam kick; 0 or less turns it off.
+    pub chat_spam_seconds: i32,
+    pub command_spam_seconds: i32,
     /// A tick taking longer than this stops the server with a crash report
     /// (`max-tick-time`; `None` for -1).
     pub max_tick_time: Option<std::time::Duration>,
@@ -261,6 +269,9 @@ impl Config {
             connection_throttle: std::time::Duration::ZERO,
             max_pending_per_ip: 0,
             read_timeout: std::time::Duration::from_secs(30),
+            login_timeout: std::time::Duration::from_secs(30),
+            chat_spam_seconds: 10,
+            command_spam_seconds: 10,
             max_tick_time: None,
             backup_minutes: 0,
             backup_keep: 5,
